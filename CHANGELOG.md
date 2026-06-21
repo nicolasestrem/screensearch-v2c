@@ -25,4 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cargo fmt`/`clippy -D warnings`/`build`/`test`, and a ts-rs binding-drift guard.
 - Generated application icons from `assets/icon-source.png`.
 
+### Fixed (post-P0 review)
+- `doctor`: load `vulkan-1.dll` with `LOAD_LIBRARY_SEARCH_SYSTEM32` so the Windows
+  loader resolves it only from System32 — prevents DLL search-order hijacking
+  without trusting the (manipulable) `SystemRoot` env var or a hardcoded path.
+- UI: issue the independent `ping` / `get_readiness` IPC calls in parallel.
+- CI: Claude review now actually posts — added the `--comment` flag (the skill
+  produces a review but only posts with it) and granted the workflows write
+  permissions (posts were silently denied before); `concurrency` added; actions
+  bumped to Node-24 majors.
+
 _Scaffold only — no capture, storage, embeddings, or inference yet (P1–P4)._
