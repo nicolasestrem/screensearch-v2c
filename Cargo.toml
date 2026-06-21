@@ -55,6 +55,12 @@ blake3 = "1"
 # imaging (capture/embeddings share the same image type)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+# in-process embeddings: fastembed (ONNX via `ort`, no Python — 01 §5, 03 §3).
+# 5.17 ships the `EmbeddingGemma300MQ` text variant (768-dim, quantized) and the
+# `NomicEmbedVisionV15` image variant (MODEL_REGISTRY §3). Pulls a prebuilt ONNX
+# Runtime at build time and downloads models from HuggingFace on first use.
+fastembed = "5.17"
+
 # Windows-native APIs (P2: WGC capture, WinRT Media.Ocr, foreground/lock probes).
 # Version only here; each crate enables the feature modules it needs, under a
 # `[target.'cfg(windows)'.dependencies]` block (Windows-only by design, 04 guardrails).

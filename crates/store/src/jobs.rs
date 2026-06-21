@@ -96,13 +96,16 @@ impl SqliteStore {
         }
         let tokens: Vec<&'static str> = kinds.iter().map(|k| kind_token(*k)).collect();
         let placeholders = vec!["?"; tokens.len()].join(",");
-        // params, in order: now (updated_at), now (not_before), kinds…, limit
-        let mut binds: Vec<Value> = vec![Value::Integer(now), Value::Integer(now)];
+        // `now` (caller-supplied) drives only the `not_before` runnability filter;
+        // `updated_at` is stamped with the DB clock (`unixepoch()*1000`) — the same
+        // clock the stale-job sweep compares against — so the two never mix clocks.
+        // params, in order: now (not_before), kinds…, limit.
+        let mut binds: Vec<Value> = vec![Value::Integer(now)];
         binds.extend(tokens.iter().map(|t| Value::Text((*t).to_string())));
         binds.push(Value::Integer(i64::from(limit)));
 
         let sql = format!(
-            "UPDATE jobs SET state = 'running', updated_at = ?
+            "UPDATE jobs SET state = 'running', updated_at = (unixepoch()*1000)
              WHERE id IN (
                  SELECT id FROM jobs
                  WHERE state = 'pending' AND not_before <= ? AND kind IN ({placeholders})
@@ -167,6 +170,38 @@ impl SqliteStore {
                 bail!("fail_job: no job with id {id}");
             }
             Ok(())
+        })
+        .await
+    }
+
+    /// Requeues jobs stuck in `running` that a worker abandoned mid-job — there is
+    /// no lease (`03 §6` "restart + requeue"; `07` gap #6). Resets them to `pending`
+    /// so they are reclaimable; returns the count requeued. Does **not** touch
+    /// `attempts` (a crash is not a logical failure).
+    ///
+    /// - `older_than_ms <= 0` — the **startup sweep**: with no worker live, requeue
+    ///   *every* `running` job **unconditionally** (no `updated_at` comparison, so it
+    ///   is immune to any sub-second clock skew — a job marked running in the last
+    ///   fraction of a second before a crash is never missed).
+    /// - `older_than_ms > 0` — the **periodic visibility sweep**: requeue jobs whose
+    ///   `updated_at` (stamped by `claim` with the `unixepoch()*1000` DB clock) is at
+    ///   least that far in the past. Same clock on both sides, so no mismatch.
+    pub async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
+        self.with_conn(move |conn| {
+            let changed = if older_than_ms <= 0 {
+                conn.execute(
+                    "UPDATE jobs SET state = 'pending', updated_at = (unixepoch()*1000)
+                     WHERE state = 'running'",
+                    [],
+                )?
+            } else {
+                conn.execute(
+                    "UPDATE jobs SET state = 'pending', updated_at = (unixepoch()*1000)
+                     WHERE state = 'running' AND updated_at <= (unixepoch()*1000 - ?1)",
+                    rusqlite::params![older_than_ms],
+                )?
+            };
+            Ok(changed as u64)
         })
         .await
     }

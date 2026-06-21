@@ -154,3 +154,64 @@
   the `#[ignore]`d `e2e_capture` test drove the real Kernel (WGC + WinRT OCR + on-disk store) and
   stored a frame + OCR row + JPEG and enqueued an `embed_text` job (no `vision_tag`), 3.55s; real
   WGC and WinRT OCR smoke tests also pass locally on Win11 26200.
+
+## 2026-06-21 — P3 Deferred Enrichment (`p3-enrichment` branch)
+- **Change:** Lit up the deferred half of the system — the `embed_text` jobs P2 enqueues are now
+  drained into vectors and hybrid search returns them.
+  - `embeddings::FastEmbedProvider` — the real `EmbeddingProvider` via **fastembed 5.17.2** (ONNX,
+    no Python): text `EmbeddingGemma300MQ` (768-dim, embeds one-at-a-time), optional image
+    `NomicEmbedVisionV15`; lanes behind `Arc<Mutex>` run inside `spawn_blocking`; models load
+    eagerly into `<app-data>/models/fastembed`.
+  - `kernel::worker_pool` — a bounded pool (N = `enrich.worker_concurrency`) that claims/runs/
+    completes `embed_text` + `embed_image` jobs with exponential backoff, an idle poll, a periodic
+    + startup stale-`running` sweep (gap #6), graceful shutdown, and a `job_progress` event. Public
+    `process_job` lets tests drive one job deterministically. **Never** handles `vision_tag` (P4).
+  - `store` — `embedder` made runtime-settable (`Arc<RwLock<Option<…>>>` + `set_embedder`);
+    `frame_enrichment_input` (lightweight worker read); `reset_stale_running_jobs`. Three matching
+    `Store` trait methods (`set_embedder` defaulted no-op). Vector arm of `hybrid_search` now goes
+    live the moment the embedder is attached.
+  - `kernel` — `attach_embedder`/`start_workers`/`stop_workers`/`set_embed_readiness`; capture loop
+    enqueues `embed_image` when `enrich.image_embeddings`; `KernelEvent::JobProgress`.
+  - `src-tauri` — loads the model off the launch thread (start never blocks on the download),
+    flips `embed_model` readiness, `attach_embedder`s; adds the `search` command; forwards
+    `job_progress`; stops workers on exit (best-effort).
+  - `traits` — `FrameEnrichmentInput`; `Store::{get_enrichment_input, reset_stale_running_jobs,
+    set_embedder}`; `EmbeddingProvider::{text_model_name, image_model_name}` (defaulted).
+- **Why:** P3 per `02 §5` / `04 §3` — embedding worker (fastembed) + hybrid search end-to-end,
+  satisfying DoD `03 §13.2` (deferred embeddings populate vectors via the job queue) and `13.4`
+  (hybrid FTS5+vec→RRF returns correct frames < ~200 ms). First phase to exercise the durable queue
+  end-to-end, proving the worker pattern before P4 adds the sidecar.
+- **Decisions (user-confirmed):** vision fully deferred to P4; `search` backend command only (UI
+  P5); model loads at launch with background workers (`02 §5`). Engineering: symmetric `embed_texts`
+  for index+query (gap logged); runtime `set_embedder` via `RwLock` (no new dep); single shared
+  model handle; backoff `1 s·2^attempts` cap 60 s; 5-min stale-job visibility timeout. New `07`
+  entries for the prompt asymmetry, `onnxruntime.dll` bundling, and the shared-handle trade-off;
+  gaps #6 and #7 resolved.
+- **Verification:** `fmt`/`clippy --workspace --all-targets -D warnings` clean; `cargo test
+  --workspace` all pass (0 failed) — store 27, traits 28, kernel 5+3, screensearch 2; `ui npm run
+  build` clean, no ts-rs drift. **Observed running** — `embeddings -- --ignored` loaded the real
+  EmbeddingGemma300MQ and produced deterministic 768-dim vectors (9.96 s); `store --test perf --
+  --ignored` measured **p95 = 32.6 ms over 10 000 frames** (DoD 13.4 ✓); the `attach_embedder`
+  integration test drove the real worker pool draining a job and the vector arm then finding the
+  frame via a non-FTS-matching query.
+
+## 2026-06-21 — P3 review fixes (PR #7)
+- **Change:** Addressed the three findings from the PR #7 code review (gemini-code-assist):
+  1. **Stale-job sweep clock precision (high).** `reset_stale_running_jobs` now branches: the
+     **startup sweep** (`older_than_ms <= 0`) requeues *every* `running` job unconditionally (no
+     `updated_at` comparison, so it can't miss a job marked running in the last fraction of a second
+     before a crash); the periodic sweep keeps the time filter. Additionally, `claim_jobs` now stamps
+     `updated_at` with the `unixepoch()*1000` **DB clock** (not the caller's `now`), so the periodic
+     sweep compares like-for-like — removing the Rust-ms-vs-SQLite-second mismatch at the root.
+  2. **Image-load retries (medium).** `embed_image` no longer dead-letters on *any* load error — a
+     transient Windows sharing violation (AV / indexer / backup briefly holding the JPEG) now
+     **retries** (the file still `exists()`); only a genuinely missing file is dead-lettered.
+  3. **`WorkerPool` Drop safety (medium).** Added `impl Drop for WorkerPool` that signals stop, so a
+     pool dropped without a graceful `shutdown` (panic / early return) doesn't leave detached workers
+     draining the whole queue; `shutdown` uses `mem::take` to avoid moving out of a `Drop` type.
+- **Why:** robustness of the durable queue and the Windows file path under real conditions; review
+  follow-through (`04 §5/§6`). The claude code-review action found no issues.
+- **Verification:** `fmt`/`clippy --workspace --all-targets -D warnings` clean; `cargo test
+  --workspace` all pass (0 failed) — kernel enrichment **7** (added two `embed_image` worker tests:
+  load-from-disk happy path + missing-file dead-letter), store 27, the existing sweep tests still
+  green. Also merged the updated `claude-code-review` workflow from `main`.

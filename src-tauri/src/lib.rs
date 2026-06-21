@@ -1,21 +1,24 @@
 //! ScreenSearch V2c — Tauri 2 desktop shell and **composition root** (`03 §2`).
 //!
 //! This crate is the only place that wires concrete module impls into the kernel.
-//! P2 wires the **capture happy path**: it opens the data spine (P1), spawns the
+//! P2 wired the **capture happy path**: it opens the data spine (P1), spawns the
 //! WinRT OCR worker and the WGC capture factory, builds the [`Kernel`], forwards
 //! kernel events to the WebView2 UI, and exposes `capture_control` / `get_frame`.
-//! Embeddings (P3) and the sidecar (P4) are registered in later phases.
+//! P3 loads the fastembed model off the launch thread, attaches it to the kernel
+//! (starting the enrichment workers + lighting the vector arm), and adds `search`.
+//! The inference sidecar lands in P4.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
     CaptureControl, CaptureSource, CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail,
-    JobStats, OcrProvider, OcrResult, Readiness, Store,
+    JobStats, OcrProvider, OcrResult, Readiness, SearchHit, SearchQuery, Store,
 };
 
+use embeddings::FastEmbedProvider;
 use kernel::{CaptureFactory, Kernel, KernelEvent};
 use store::SqliteStore;
 
@@ -72,6 +75,18 @@ async fn get_frame(
     store.get_frame(frame_id).await.map_err(|e| e.to_string())
 }
 
+/// Hybrid search over OCR text + (once embeddings exist) vectors, fused via RRF
+/// (`search`, `03 §7/§13.4`). The vector arm is live once the embedder has loaded;
+/// before that it degrades to FTS-only.
+#[tauri::command]
+async fn search(query: SearchQuery, state: State<'_, AppState>) -> Result<Vec<SearchHit>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store.hybrid_search(&query).await.map_err(|e| e.to_string())
+}
+
 /// Start/stop the always-on capture loop (`capture_control`, `03 §7`). Capture is
 /// off until the user starts it (privacy-first, `07`).
 #[tauri::command]
@@ -126,11 +141,19 @@ pub fn run() {
                 ))
             });
 
-            // Forward kernel events (capture_tick / readiness_changed) to the UI.
-            if let Some(kernel) = &kernel {
+            // Forward kernel events to the UI, and kick off the off-thread embedding
+            // model load (P3) — app launch is never blocked on the first-run download.
+            if let (Some(kernel), Some(store)) = (&kernel, &store) {
                 let handle = app.handle().clone();
-                let kernel = kernel.clone();
-                tauri::async_runtime::spawn(forward_events(kernel, handle));
+                tauri::async_runtime::spawn(forward_events(kernel.clone(), handle));
+
+                kernel.set_embed_readiness(
+                    ComponentStatus::Initializing,
+                    Some("loading embedding model".to_string()),
+                );
+                let models_dir = data_dir.join("models").join("fastembed");
+                let dyn_store: Arc<dyn Store> = store.clone();
+                tauri::async_runtime::spawn(init_embeddings(kernel.clone(), dyn_store, models_dir));
             }
 
             app.manage(AppState {
@@ -145,10 +168,58 @@ pub fn run() {
             get_readiness,
             get_job_stats,
             get_frame,
+            search,
             capture_control
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // On exit, stop the worker pool so an in-flight embed finishes cleanly.
+            // Best-effort only: a job left `running` is requeued by the startup
+            // stale-job sweep on the next launch (`03 §6`).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                if let Some(kernel) = state.kernel.clone() {
+                    tauri::async_runtime::block_on(kernel.stop_workers());
+                }
+            }
+        });
+}
+
+/// Loads the fastembed model off the launch thread and attaches it to the kernel —
+/// which lights up the store's vector arm and starts the worker pool that drains the
+/// `embed_text` backlog (`03 §5`). App start never blocks on the multi-hundred-MB
+/// first-run download; `embed_model` readiness reflects progress
+/// (Initializing → Ready / Unavailable / Disabled). Skips loading entirely when both
+/// text and image embeddings are off.
+async fn init_embeddings(kernel: Arc<Kernel>, store: Arc<dyn Store>, models_dir: PathBuf) {
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    if !settings.enrich_embed_text && !settings.enrich_image_embeddings {
+        kernel.set_embed_readiness(
+            ComponentStatus::Disabled,
+            Some("embeddings disabled in settings".to_string()),
+        );
+        return;
+    }
+    let with_image = settings.enrich_image_embeddings;
+    match tokio::task::spawn_blocking(move || FastEmbedProvider::new(models_dir, with_image)).await
+    {
+        Ok(Ok(provider)) => {
+            tracing::info!("embedding model loaded; attaching to kernel");
+            kernel.attach_embedder(Arc::new(provider)).await;
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "embedding model load failed");
+            kernel.set_embed_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "embedding model load task panicked");
+            kernel.set_embed_readiness(
+                ComponentStatus::Unavailable,
+                Some("model load task panicked".to_string()),
+            );
+        }
+    }
 }
 
 /// Forwards [`KernelEvent`]s onto the Tauri event bus for the WebView2 UI (`03 §7`).
@@ -162,6 +233,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             }
             Ok(KernelEvent::ReadinessChanged(readiness)) => {
                 let _ = app.emit("readiness_changed", readiness);
+            }
+            Ok(KernelEvent::JobProgress(stats)) => {
+                let _ = app.emit("job_progress", stats);
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")

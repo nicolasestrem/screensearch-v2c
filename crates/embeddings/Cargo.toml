@@ -10,3 +10,9 @@ repository.workspace = true
 
 [dependencies]
 traits.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+image.workspace = true
+fastembed.workspace = true
