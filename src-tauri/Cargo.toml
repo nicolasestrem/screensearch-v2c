@@ -1,0 +1,22 @@
+[package]
+name = "screensearch"
+description = "ScreenSearch V2c — Tauri 2 desktop shell + composition root. See specs/03 §2."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "screensearch_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+traits.workspace = true

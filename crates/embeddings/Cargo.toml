@@ -1,0 +1,12 @@
+[package]
+name = "embeddings"
+description = "EmbeddingProvider via fastembed (in-process ONNX, no Python). See specs/03 §3, MODEL_REGISTRY §3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+traits.workspace = true

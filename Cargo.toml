@@ -1,0 +1,63 @@
+# Workspace root — ScreenSearch V2c
+# Layout & dependency rule: see specs/03_MASTER_PRODUCTION_SPEC.md §2.
+# `kernel` and module crates depend on `traits` (contracts), never on each
+# other's concrete impls. `src-tauri` is the composition root that wires impls.
+
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/traits",
+    "crates/kernel",
+    "crates/store",
+    "crates/capture",
+    "crates/ocr",
+    "crates/embeddings",
+    "crates/inference",
+    "crates/doctor",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["Nicolas Estrem <nicolas.estrem@gmail.com>"]
+repository = "https://github.com/nicolasestrem/screensearch-v2c"
+
+# Centralized dependency versions — crates reference these with
+# `dep = { workspace = true }` so versions never drift across the workspace.
+[workspace.dependencies]
+# core async + error handling
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures = "0.3"
+
+# serialization + typed IPC
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ts-rs = "10"
+
+# imaging (capture/embeddings share the same image type)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# logging / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# internal crates
+traits = { path = "crates/traits" }
+kernel = { path = "crates/kernel" }
+store = { path = "crates/store" }
+capture = { path = "crates/capture" }
+ocr = { path = "crates/ocr" }
+embeddings = { path = "crates/embeddings" }
+inference = { path = "crates/inference" }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,17 @@
+[package]
+name = "traits"
+description = "Module contracts + shared domain types for ScreenSearch V2c (no impls). See specs/03 §3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true
+image.workspace = true
+ts-rs.workspace = true

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build & test (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Frontend first: src-tauri's generate_context! embeds ui/dist, which
+      #     is git-ignored, so the UI must be built before any cargo step. ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: UI install
+        working-directory: ui
+        run: npm ci
+      - name: UI lint (Rules-of-Hooks gate at error level)
+        working-directory: ui
+        run: npm run lint
+      - name: UI build (creates ui/dist)
+        working-directory: ui
+        run: npm run build
+
+      # --- Rust workspace ---
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace
+      - name: test
+        run: cargo test --workspace
+
+      # --- Typed-IPC contract guard: cargo test regenerates the ts-rs bindings;
+      #     if they differ from what's committed, the contract drifted. ---
+      - name: verify ts-rs bindings are committed & current
+        shell: bash
+        run: git diff --exit-code -- ui/src/bindings
+
+      - name: environment doctor (informational)
+        run: cargo run -p doctor
+
+# NOTE: the packaging/artifact job (Inno Setup installer + portable ZIP, 00 §G)
+# is added in P5 — see specs/02 §5. P0 CI gates fmt, clippy, build, test, UI
+# build/lint, and binding freshness.

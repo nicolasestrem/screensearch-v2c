@@ -1,0 +1,12 @@
+[package]
+name = "capture"
+description = "CaptureSource via Windows.Graphics.Capture (WGC) + diff gate. See specs/03 §3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+traits.workspace = true
