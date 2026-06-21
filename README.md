@@ -28,7 +28,7 @@ on-device, no cloud.
 - **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine).
 - **Inference:** a single supervised, model-agnostic **llama.cpp sidecar** (Vulkan GPU + CPU
   fallback), **bound to the app via a Windows Job Object** so it can never orphan after a crash.
-- **ML runtime:** Rust-only (fastembed for embeddings) — **no Python**.
+- **ML runtime:** Rust-only (fastembed for embeddings) — **no Python in the runtime** (Python is fine for build/dev tooling).
 
 ### Models (user-selectable, 3 tiers per lane)
 

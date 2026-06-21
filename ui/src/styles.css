@@ -1,0 +1,60 @@
+/* Minimal P0 scaffold styling. The token system (tokens.css) and the full
+   Scanline-Timeline identity arrive in P5 (specs/UI_REFERENCE.md). */
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0b0d10;
+  color: #e6e8eb;
+}
+
+.app {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2rem;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  margin: 0.25rem 0 2rem;
+  color: #8b929b;
+}
+
+.error {
+  color: #ff6b6b;
+}
+
+.readiness {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.readiness li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #1c2128;
+}
+
+.status {
+  text-transform: capitalize;
+  color: #8b929b;
+}
+
+.status-ready {
+  color: #5dd39e;
+}
+
+.status-error,
+.status-unavailable {
+  color: #ff6b6b;
+}

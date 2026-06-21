@@ -1,0 +1,12 @@
+[package]
+name = "store"
+description = "Store + JobQueue on SQLite + sqlite-vec + FTS5. See specs/03 §4/§5."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+traits.workspace = true

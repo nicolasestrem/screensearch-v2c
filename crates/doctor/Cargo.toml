@@ -1,0 +1,25 @@
+[package]
+name = "doctor"
+description = "Environment smoke-check for ScreenSearch V2c: WebView2 / Vulkan / llama-server (02 §5 P0)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "doctor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "doctor"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+libloading = "0.8"

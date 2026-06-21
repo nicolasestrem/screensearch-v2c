@@ -34,7 +34,9 @@ Re-read each session — the files are the source of truth, not your memory.
   If blocked, stop and ask.
 - **Windows-only by design** — use Windows-native APIs (WGC, WinRT OCR, WebView2); do not add
   cross-platform abstractions or stub them away.
-- **Rust-only ML, no Python.** Embeddings via fastembed; inference via the local llama.cpp sidecar.
+- **Rust-only ML runtime.** The shipped app's ML is Rust-only — embeddings via fastembed,
+  inference via the local llama.cpp sidecar; no Python *ML sidecar* in the runtime (the V1 approach
+  that failed). Python is fine for build/dev tooling (model prep, the `hf` CLI, CI scripts).
   No cloud calls (localhost + model downloads only).
 - **No real-time vision** — vision runs on-demand / timer / idle only (`03 §5`).
 - **Sidecar must never orphan** — implement the Job-Object lifecycle exactly (`03 §6`); do not ship

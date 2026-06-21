@@ -1,0 +1,12 @@
+[package]
+name = "inference"
+description = "VisionProvider + AnswerProvider (llama.cpp sidecar HTTP client) + supervisor. See specs/03 §6."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+traits.workspace = true

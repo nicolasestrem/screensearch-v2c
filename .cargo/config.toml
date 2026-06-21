@@ -1,0 +1,8 @@
+# Cargo config for the workspace.
+#
+# ts-rs note: ts-rs maps Rust 64-bit integers (i64/u64) to TypeScript `bigint` by
+# default, but Tauri's IPC serializes over serde_json where they arrive as JS
+# `number`. We need `number` in the bindings to match the wire. The documented
+# `TS_RS_LARGE_INT` env override is NOT honored by ts-rs 10.1's proc-macro here, so
+# instead every i64/u64 IPC field carries `#[ts(type = "number")]` (see
+# crates/traits/src/ipc.rs and jobs.rs). This file is kept for future cargo config.
