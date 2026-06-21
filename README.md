@@ -41,8 +41,10 @@ on-device, no cloud.
 ## Repository layout
 
 ```
-specs/   spec-engineering pipeline (00 intake → 04 build prompt → 05+ build/review)
-         + UI_REFERENCE.md (frontend identity, tokens, screens, state matrix)
+CLAUDE.md   agent entry point — mandatory reading order + hard rules
+specs/      spec-engineering pipeline (00 intake → 04 build prompt → 05–08 build/review)
+            + UI_REFERENCE.md   (frontend identity, tokens, screens, state matrix)
+            + MODEL_REGISTRY.md (exact HF repos / quants / mmproj per model tier)
 ```
 
 ## Platform

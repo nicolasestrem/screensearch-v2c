@@ -1,0 +1,28 @@
+# Normalize line endings: store LF in the repo, check out native on each platform.
+* text=auto eol=lf
+
+# Explicit text types
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.md       text eol=lf
+*.json     text eol=lf
+*.ts       text eol=lf
+*.tsx      text eol=lf
+*.css      text eol=lf
+*.html     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+
+# Windows-specific scripts keep CRLF
+*.ps1      text eol=crlf
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+
+# Binary (never normalize)
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.ico      binary
+*.gguf     binary
+*.onnx     binary
+*.safetensors binary
