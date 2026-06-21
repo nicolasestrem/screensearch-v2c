@@ -178,7 +178,9 @@ async fn insert_vision_then_get_frame_has_analysis() {
     let vision = detail.vision.expect("vision present");
     assert_eq!(vision.description, "a code editor showing Rust");
     assert_eq!(vision.activity_type.as_deref(), Some("coding"));
-    assert_eq!(detail.activity_type.as_deref(), None); // frames.activity_type untouched by insert_vision
+    // 03 §4: frames.activity_type is "filled by vision" — insert_vision mirrors the
+    // classification onto the frame for fast timeline filtering.
+    assert_eq!(detail.activity_type.as_deref(), Some("coding"));
 }
 
 #[tokio::test]
@@ -579,6 +581,14 @@ async fn fail_without_retry_at_dead_letters_immediately() {
     // retry_at = None → terminal even though attempts remain
     store.fail_job(id, "fatal", None).await.unwrap();
     assert_eq!(store.job_stats().await.unwrap().dead, 1);
+}
+
+#[tokio::test]
+async fn completing_or_failing_an_unknown_job_is_an_error() {
+    // a write that changes no rows is a programming error, not a silent no-op
+    let store = SqliteStore::open_in_memory().unwrap();
+    assert!(store.complete_job(999).await.is_err());
+    assert!(store.fail_job(999, "boom", Some(10)).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

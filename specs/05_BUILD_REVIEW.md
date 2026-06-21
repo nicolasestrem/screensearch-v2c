@@ -158,3 +158,15 @@ $ git status --porcelain -- ui/src/bindings                    # empty (no ts-rs
 - RRF `k`/pool and the vec-arm time-range **post-filter** (over-fetch `pool`, then filter) are
   reasonable defaults but untuned against a realistic DB; revisit when P3 has real embeddings and
   the `03 §13` "< ~200 ms" target can be measured.
+
+### Post-review fixes (PR #4 — Gemini + `@claude`)
+All findings verified against the codebase/spec before applying (none warranted pushback):
+- **[correctness]** `open_state`: a failed post-open `schema_version()` probe now → `db = Error` +
+  `store = None` (was silently `Ready`). **[correctness]** `complete_job`/`fail_job` now error on a
+  zero-row update (unknown id) instead of a silent no-op.
+- **[spec]** `insert_vision` now also fills `frames.activity_type` (`03 §4`), in one txn with the
+  `vision_analysis` write.
+- **[perf]** `hydrate` N+1 → two bulk `IN` queries. **[maint]** `f32_blob`/`dedup_keep_order` made
+  `pub(crate)` and reused in `search.rs`.
+- **Verification:** +1 job test, updated the vision test; `fmt`/`clippy -D warnings` clean;
+  `cargo test --workspace` **54 passed, 0 failed** (store 24, traits 28, screensearch 2).

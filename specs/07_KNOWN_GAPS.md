@@ -37,6 +37,11 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
 - **Inherent store reads beyond `03 §3` (P1):** `get_frame` (backs the P5 `get_frame` command) and
   `delete_frame` (retention-purge primitive) — real APIs, not test-only, that also make the write
   paths observable.
+- **`frames.activity_type` (P1, post-review):** `03 §4` documents it "filled by vision", so
+  `insert_vision` now writes it (denormalized copy of `vision_analysis.activity_type`) in the same
+  transaction — lets the timeline filter by activity without a join. (PR #4 review.)
+- **Job no-op guard (P1, post-review):** `complete_job`/`fail_job` error on a zero-row update
+  (unknown/stale id) rather than silently succeeding — upholds `03 §5`'s "never silently dropped".
 
 Manual steps still required (e.g. signing certs, first-run model download, CI secrets):
 - **First-run model download** (vision/answer GGUF + mmproj, embedding models) — P3/P4, per

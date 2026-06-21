@@ -5,6 +5,7 @@
 //! silently dropped). Claims are a single atomic `UPDATE … RETURNING` so no job is
 //! handed to two workers.
 
+use anyhow::bail;
 use rusqlite::{named_params, params_from_iter, types::Value};
 use traits::{Job, JobKind, JobState, JobStats, NewJob, Result};
 
@@ -125,13 +126,17 @@ impl SqliteStore {
         .await
     }
 
-    /// Marks a job `done` (`03 §5`).
+    /// Marks a job `done` (`03 §5`). Errors if no such job exists (a zero-row
+    /// update means a stale id — surfaced rather than silently dropped).
     pub async fn complete_job(&self, id: i64) -> Result<()> {
         self.with_conn(move |conn| {
-            conn.execute(
+            let changed = conn.execute(
                 "UPDATE jobs SET state = 'done', updated_at = (unixepoch()*1000) WHERE id = ?1",
                 rusqlite::params![id],
             )?;
+            if changed == 0 {
+                bail!("complete_job: no job with id {id}");
+            }
             Ok(())
         })
         .await
@@ -144,7 +149,7 @@ impl SqliteStore {
     pub async fn fail_job(&self, id: i64, err: &str, retry_at: Option<i64>) -> Result<()> {
         let err = err.to_string();
         self.with_conn(move |conn| {
-            conn.execute(
+            let changed = conn.execute(
                 "UPDATE jobs SET
                    attempts = attempts + 1,
                    last_error = :err,
@@ -158,6 +163,9 @@ impl SqliteStore {
                  WHERE id = :id",
                 named_params! { ":err": err, ":retry": retry_at, ":id": id },
             )?;
+            if changed == 0 {
+                bail!("fail_job: no job with id {id}");
+            }
             Ok(())
         })
         .await

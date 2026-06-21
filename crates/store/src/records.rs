@@ -54,7 +54,8 @@ impl SqliteStore {
     /// Stores (or replaces) the deferred vision analysis for a frame (`03 §5`).
     pub async fn insert_vision(&self, frame_id: i64, v: VisionAnalysis) -> Result<()> {
         self.with_conn(move |conn| {
-            conn.execute(
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
                 "INSERT INTO vision_analysis
                    (frame_id, description, activity_type, app_hint, confidence, model)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -73,6 +74,14 @@ impl SqliteStore {
                     v.model,
                 ],
             )?;
+            // 03 §4: frames.activity_type is "filled by vision" — mirror the
+            // classification onto the frame so the timeline can filter by activity
+            // without joining vision_analysis.
+            tx.execute(
+                "UPDATE frames SET activity_type = ?2 WHERE id = ?1",
+                params![frame_id, v.activity_type],
+            )?;
+            tx.commit()?;
             Ok(())
         })
         .await

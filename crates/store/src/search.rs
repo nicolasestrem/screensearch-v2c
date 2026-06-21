@@ -7,9 +7,10 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, params_from_iter};
 use traits::{Result, SearchHit, SearchQuery};
 
+use crate::embeddings::{dedup_keep_order, f32_blob};
 use crate::SqliteStore;
 
 /// RRF damping constant (the conventional value). A larger `k` flattens the
@@ -140,10 +141,7 @@ impl SqliteStore {
         start: i64,
         end: i64,
     ) -> Result<Vec<i64>> {
-        let mut blob = Vec::with_capacity(query.len() * 4);
-        for f in &query {
-            blob.extend_from_slice(&f.to_le_bytes());
-        }
+        let blob = f32_blob(&query);
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT m.frame_id FROM (
@@ -160,57 +158,101 @@ impl SqliteStore {
                     r.get::<_, i64>(0)
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            let mut seen = std::collections::HashSet::new();
-            Ok(ids.into_iter().filter(|id| seen.insert(*id)).collect())
+            Ok(dedup_keep_order(ids))
         })
         .await
     }
 
     /// Resolves fused `(frame_id, score)` rows into [`SearchHit`]s, preferring the
-    /// FTS snippet and falling back to a truncated OCR-text snippet.
+    /// FTS snippet and falling back to a truncated OCR-text snippet. Frame context
+    /// and fallback snippets are fetched in two bulk `IN` queries (not per-row), so
+    /// hydration is at most two round-trips regardless of result count.
     async fn hydrate(
         &self,
         fused: Vec<(i64, f64)>,
         snippets: HashMap<i64, String>,
     ) -> Result<Vec<SearchHit>> {
+        if fused.is_empty() {
+            return Ok(Vec::new());
+        }
         self.with_conn(move |conn| {
-            let mut frame_stmt =
-                conn.prepare("SELECT captured_at, image_path, app_hint FROM frames WHERE id = ?1")?;
-            let mut text_stmt = conn.prepare("SELECT text FROM ocr_text WHERE frame_id = ?1")?;
+            let ids: Vec<i64> = fused.iter().map(|(id, _)| *id).collect();
 
+            // bulk-fetch frame context for every candidate
+            let frames_sql = format!(
+                "SELECT id, captured_at, image_path, app_hint FROM frames WHERE id IN ({})",
+                placeholders(ids.len())
+            );
+            let frames: HashMap<i64, (i64, String, Option<String>)> = conn
+                .prepare(&frames_sql)?
+                .query_map(params_from_iter(ids.iter()), |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        (
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                        ),
+                    ))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+
+            // bulk-fetch OCR text only for hits lacking an FTS snippet (the fallback)
+            let need_text: Vec<i64> = ids
+                .iter()
+                .copied()
+                .filter(|id| !snippets.contains_key(id))
+                .collect();
+            let texts: HashMap<i64, String> = if need_text.is_empty() {
+                HashMap::new()
+            } else {
+                let ocr_sql = format!(
+                    "SELECT frame_id, text FROM ocr_text WHERE frame_id IN ({})",
+                    placeholders(need_text.len())
+                );
+                conn.prepare(&ocr_sql)?
+                    .query_map(params_from_iter(need_text.iter()), |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+
+            // assemble in fused (RRF) order; skip frames that vanished between arms
             let mut hits = Vec::with_capacity(fused.len());
             for (frame_id, score) in fused {
-                let base = frame_stmt
-                    .query_row(params![frame_id], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, Option<String>>(2)?,
-                        ))
-                    })
-                    .optional()?;
-                let Some((captured_at, image_path, app_hint)) = base else {
-                    continue; // frame deleted between arms and hydration
+                let Some((captured_at, image_path, app_hint)) = frames.get(&frame_id) else {
+                    continue;
                 };
                 let snippet = match snippets.get(&frame_id) {
                     Some(s) => s.clone(),
-                    None => text_stmt
-                        .query_row(params![frame_id], |r| r.get::<_, String>(0))
-                        .optional()?
-                        .map(|t| truncate_snippet(&t))
+                    None => texts
+                        .get(&frame_id)
+                        .map(|t| truncate_snippet(t))
                         .unwrap_or_default(),
                 };
                 hits.push(SearchHit {
                     frame_id,
-                    captured_at,
+                    captured_at: *captured_at,
                     snippet,
                     score: score as f32,
-                    image_path,
-                    app_hint,
+                    image_path: image_path.clone(),
+                    app_hint: app_hint.clone(),
                 });
             }
             Ok(hits)
         })
         .await
     }
+}
+
+/// `?,?,…,?` — a comma-joined run of `n` positional placeholders for an `IN (…)`.
+fn placeholders(n: usize) -> String {
+    let mut s = String::with_capacity(n * 2);
+    for i in 0..n {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('?');
+    }
+    s
 }

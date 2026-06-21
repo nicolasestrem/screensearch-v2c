@@ -78,6 +78,29 @@
   (WAL active) and `logs/screensearch.log.2026-06-21` containing
   `INFO store: applied store migration schema_version=1` and `INFO screensearch_lib: store opened`.
 
+## 2026-06-21 — P1 review fixes (PR #4, `p1-data-spine`)
+- **Change:** Addressed all PR #4 review findings (Gemini + `@claude`):
+  - **Correctness** — `open_state` now treats a `schema_version()` failure (after a successful
+    open) as `db = Error` + `store = None`, instead of silently reporting `Ready` with a path-only
+    detail. No more "Ready but unqueryable" state.
+  - **Correctness** — `complete_job` / `fail_job` now error on a zero-row update (stale/unknown id)
+    rather than silently no-op'ing, matching the queue's "never silently dropped" contract.
+  - **Spec alignment** — `insert_vision` now also fills `frames.activity_type` (the `03 §4` column
+    documented "filled by vision"), in one transaction with the `vision_analysis` write, so the
+    timeline can filter by activity without a join.
+  - **Performance** — `hybrid_search`'s `hydrate` replaced its per-hit N+1 queries with two bulk
+    `IN (…)` queries (frame context + fallback OCR snippets), ≤2 round-trips regardless of result
+    count.
+  - **Maintainability** — `f32_blob` and `dedup_keep_order` made `pub(crate)` and reused in
+    `search.rs` (removed the duplicated LE-serialization and inline-dedup).
+- **Why:** external review (be skeptical, verify) — each finding was checked against the codebase
+  and the spec; all four were valid for this stack, none warranted pushback.
+- **Verification:** added 1 test (`completing_or_failing_an_unknown_job_is_an_error`) + updated the
+  `insert_vision` test to assert `frames.activity_type`; the N+1/blob/dedup changes are
+  behavior-preserving and covered by the existing search tests. `cargo fmt --all -- --check`
+  (exit 0); `cargo clippy --workspace --all-targets -- -D warnings` (exit 0);
+  `cargo test --workspace` (store **24**, traits 28, screensearch 2 = 54 passed, 0 failed).
+
 ## 2026-06-21 — CI fix: Claude review couldn't post (read-only token)
 - **Change:** Granted `pull-requests: write` + `issues: write` to `claude-code-review.yml`
   (and `claude.yml`); added `concurrency` (cancel-in-progress) to the review workflow; bumped

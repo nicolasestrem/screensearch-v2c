@@ -68,13 +68,17 @@ pub fn run() {
 /// Opens the store and builds the initial [`AppState`] + readiness. A DB open
 /// failure is surfaced as `db = Error` rather than crashing the shell.
 fn open_state(db_path: &Path) -> AppState {
-    match store::SqliteStore::open_path(db_path) {
-        Ok(s) => {
-            let detail = match s.schema_version() {
-                Ok(v) => format!("schema v{v} ({})", db_path.display()),
-                Err(_) => db_path.display().to_string(),
-            };
-            tracing::info!(db = %db_path.display(), "store opened");
+    // A DB error at either step (open, or the schema-version probe that confirms
+    // the connection is usable) surfaces as `db = Error` with no store — never a
+    // Ready store the UI can't actually query.
+    let result = store::SqliteStore::open_path(db_path).and_then(|s| {
+        let version = s.schema_version()?;
+        Ok((s, version))
+    });
+    match result {
+        Ok((s, version)) => {
+            let detail = format!("schema v{version} ({})", db_path.display());
+            tracing::info!(db = %db_path.display(), schema_version = version, "store opened");
             AppState {
                 store: Some(Arc::new(s)),
                 readiness: Readiness {
@@ -84,7 +88,7 @@ fn open_state(db_path: &Path) -> AppState {
             }
         }
         Err(e) => {
-            tracing::error!(error = %e, db = %db_path.display(), "failed to open store");
+            tracing::error!(error = %e, db = %db_path.display(), "store unavailable");
             AppState {
                 store: None,
                 readiness: Readiness {

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (post-P1 review, PR #4)
+- `open_state` reports `db = Error` (not `Ready`) if the post-open schema-version
+  probe fails — no "ready but unqueryable" store reaches the UI.
+- `complete_job` / `fail_job` now error on an unknown job id instead of silently
+  doing nothing (consistent with the queue's no-silent-loss contract).
+- `insert_vision` also fills `frames.activity_type` (`03 §4`: "filled by vision")
+  so the timeline can filter by activity without a join.
+- Hybrid-search hydration uses two bulk `IN` queries instead of per-hit queries
+  (removes an N+1 pattern); shared `f32_blob` / `dedup_keep_order` helpers.
+
 ### Added — P1 Data Spine (2026-06-21)
 - `store` crate — the durable data spine on SQLite (WAL) + sqlite-vec (`vec0`) + FTS5
   (`03 §4/§5`): forward-only schema migrations tracked in `schema_version`, and the

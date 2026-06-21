@@ -14,7 +14,7 @@ use traits::{ChunkSource, Embedding, Result};
 use crate::{SqliteStore, EMBEDDING_DIM};
 
 /// Packs an f32 vector into the little-endian byte blob `vec0` stores/queries.
-fn f32_blob(v: &[f32]) -> Vec<u8> {
+pub(crate) fn f32_blob(v: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(v.len() * 4);
     for f in v {
         bytes.extend_from_slice(&f.to_le_bytes());
@@ -31,7 +31,7 @@ fn source_token(source: ChunkSource) -> &'static str {
 }
 
 /// De-duplicates frame ids preserving first-seen (nearest-first) order.
-fn dedup_keep_order(ids: Vec<i64>) -> Vec<i64> {
+pub(crate) fn dedup_keep_order(ids: Vec<i64>) -> Vec<i64> {
     let mut seen = std::collections::HashSet::new();
     ids.into_iter().filter(|id| seen.insert(*id)).collect()
 }
