@@ -30,3 +30,21 @@
   `cargo run -p doctor` (WebView2 OK v149, Vulkan OK, llama-server WARN); `ui npm run build`
   (✓ built) + `npm run lint` (exit 0); `git diff --exit-code ui/src/bindings` (exit 0);
   `npx tauri dev` window observed rendering "Kernel says: pong" + readiness list.
+
+## 2026-06-21 — P0 refinements (post-review, user decisions)
+- **Change:**
+  - Vision scheduling: replaced the single `enrich.vision_mode` enum with independent **opt-in
+    toggles** — `enrich_vision_timer_enabled` (false) + `_interval_ms` (60 min) and
+    `enrich_vision_idle_enabled` (false) + `_idle_secs` (5 min); removed `VisionMode`. On-demand
+    is always available. (`06` patch #1; `03 §8` updated.)
+  - Bundle identifier → `app.screensearchv2c.desktop` (`app.screensearch.desktop` was taken).
+  - Readiness contract: defined `ComponentStatus { Unknown, Disabled, Initializing, Ready,
+    Unavailable, Error }` + `ComponentReadiness { status, detail? }`; `Readiness` now carries one
+    per subsystem; UI renders status + detail. (`07` gap #3; `03 §7` updated.)
+  - `doctor` refactored into a **library + thin CLI** with a structured `Report` and a `--json`
+    mode (reusable by CI and, later, the app). (`07` gap #4.)
+- **Why:** user direction + closing the `07` silent-spec gaps with the spec kept authoritative.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace
+  --all-targets -- -D warnings` (exit 0); `cargo test --workspace` (traits 28 passed, 0 failed);
+  `cargo run -p doctor` text + `--json` both OK; `ui npm run build` (✓ built) + `npm run lint`
+  (exit 0).

@@ -5,7 +5,7 @@
 //! commands (`ping`, `get_readiness`) that prove the Tauri bridge + `ts-rs`
 //! bindings work end-to-end. Phases P1–P4 register the real modules here.
 
-use traits::ipc::{ComponentStatus, Readiness};
+use traits::ipc::Readiness;
 
 /// Liveness probe for the typed IPC bridge (P0 smoke test).
 #[tauri::command]
@@ -15,17 +15,12 @@ fn ping() -> String {
 
 /// Current subsystem readiness (`03 §7`).
 ///
-/// In P0 nothing is wired yet, so every component honestly reports `Unknown`;
-/// later phases flip these as impls land — db (P1), capture (P2), embed model
-/// (P3), sidecar (P4).
+/// In P0 nothing is wired yet, so every component honestly reports `Unknown`
+/// (`Readiness::default()`); later phases flip these as impls land — db (P1),
+/// capture (P2), embed model (P3), sidecar (P4).
 #[tauri::command]
 fn get_readiness() -> Readiness {
-    Readiness {
-        capture: ComponentStatus::Unknown,
-        db: ComponentStatus::Unknown,
-        embed_model: ComponentStatus::Unknown,
-        sidecar: ComponentStatus::Unknown,
-    }
+    Readiness::default()
 }
 
 /// Application entry point (called from `main.rs`).

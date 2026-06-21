@@ -54,10 +54,13 @@ export function App() {
             Kernel says: <strong>{state.data.ping}</strong>
           </p>
           <ul className="readiness">
-            {Object.entries(state.data.readiness).map(([component, status]) => (
+            {Object.entries(state.data.readiness).map(([component, cr]) => (
               <li key={component}>
                 <span>{component}</span>
-                <span className={`status status-${status}`}>{status}</span>
+                <span className={`status status-${cr.status}`}>
+                  {cr.status}
+                  {cr.detail ? ` — ${cr.detail}` : ""}
+                </span>
               </li>
             ))}
           </ul>

@@ -142,19 +142,13 @@ pub enum CaptureControl {
     Stop,
 }
 
-/// When deferred vision tagging is allowed to run (`03 §5/§8`).
-/// Never real-time — only on-demand, on a timer, or when the user is idle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../../ui/src/bindings/")]
-pub enum VisionMode {
-    OnDemand,
-    Timer,
-    Idle,
-}
-
 /// User-facing settings (`get_settings`/`set_settings`). Field defaults mirror
 /// `03 §8`; persisted as key/value rows in the `settings` table.
+///
+/// Deferred vision tagging is never real-time (`03 §5`). On-demand tagging
+/// (UI-triggered) is always available; **timed** and **idle** enrichment are each
+/// independent opt-in toggles, off by default, with a user-set threshold. (This
+/// replaces `03 §8`'s single `enrich.vision_mode` enum — see specs/06_PATCH_PLAN.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct Settings {
@@ -168,8 +162,11 @@ pub struct Settings {
     pub storage_retention_days: u32,
     pub enrich_embed_text: bool,
     pub enrich_image_embeddings: bool,
-    pub enrich_vision_mode: VisionMode,
+    /// Opt-in: tag up to a batch of untagged frames every `vision_timer_interval_ms`.
+    pub enrich_vision_timer_enabled: bool,
     pub enrich_vision_timer_interval_ms: u32,
+    /// Opt-in: tag while the user has been idle for at least `vision_idle_secs`.
+    pub enrich_vision_idle_enabled: bool,
     pub enrich_vision_idle_secs: u32,
     pub enrich_worker_concurrency: u32,
     pub models_vision_tier: ModelTier,
@@ -192,11 +189,13 @@ impl Default for Settings {
             storage_retention_days: 0,
             enrich_embed_text: true,
             enrich_image_embeddings: false,
-            enrich_vision_mode: VisionMode::OnDemand,
-            // NOTE: `03 §8` lists these two keys without a default value — provisional,
-            // confirm before P3/P4 vision scheduling. Tracked in specs/07_KNOWN_GAPS.md.
-            enrich_vision_timer_interval_ms: 300_000, // 5 min
-            enrich_vision_idle_secs: 300,             // 5 min
+            // Timed/idle vision enrichment are opt-in (off by default); on-demand is
+            // always available. Thresholds chosen with the user (07 gap #1), used only
+            // when the matching toggle is enabled. All user-adjustable in settings.
+            enrich_vision_timer_enabled: false,
+            enrich_vision_timer_interval_ms: 3_600_000, // 60 min
+            enrich_vision_idle_enabled: false,
+            enrich_vision_idle_secs: 300, // 5 min
             enrich_worker_concurrency: 2,
             models_vision_tier: ModelTier::Default,
             models_answer_tier: ModelTier::Default,
@@ -213,26 +212,72 @@ impl Default for Settings {
     }
 }
 
-/// Readiness of a single subsystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// Readiness state of a single subsystem.
+///
+/// `03 §7` returns a `Readiness` but does not define this enum (07 gap #3). The
+/// states below are a closed set chosen so the UI's readiness panel can show a
+/// truthful, actionable status for every subsystem without inventing per-screen
+/// vocabulary:
+/// - `Unknown` — not yet probed (the honest pre-init value).
+/// - `Disabled` — intentionally off via settings (e.g. capture stopped, image
+///   embeddings disabled, vision in `on_demand` and idle). Not an error.
+/// - `Initializing` — coming up (DB migrating, model downloading/loading, sidecar
+///   spawning).
+/// - `Ready` — operational (or, for the lazily-evicted sidecar, able to serve on
+///   demand).
+/// - `Unavailable` — a prerequisite is missing (model not downloaded, sidecar
+///   binary absent, no capturable monitor). Actionable by the user.
+/// - `Error` — a failure occurred; see `detail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum ComponentStatus {
+    #[default]
     Unknown,
+    Disabled,
     Initializing,
     Ready,
     Unavailable,
     Error,
 }
 
-/// Aggregate readiness (`get_readiness` output / `readiness_changed` event).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// Readiness of one subsystem: a [`ComponentStatus`] plus optional human-readable
+/// `detail` (e.g. "model downloading 40%", "sidecar evicted (idle)", "WebView2
+/// runtime missing") so the UI can explain *why* without a separate lookup.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ComponentReadiness {
+    pub status: ComponentStatus,
+    pub detail: Option<String>,
+}
+
+impl ComponentReadiness {
+    /// A status with no extra detail.
+    pub fn of(status: ComponentStatus) -> Self {
+        Self {
+            status,
+            detail: None,
+        }
+    }
+
+    /// A status with a human-readable explanation.
+    pub fn with_detail(status: ComponentStatus, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            detail: Some(detail.into()),
+        }
+    }
+}
+
+/// Aggregate readiness of the four subsystems (`get_readiness` output /
+/// `readiness_changed` event, `03 §7`). [`Default`] is every component `Unknown`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct Readiness {
-    pub capture: ComponentStatus,
-    pub db: ComponentStatus,
-    pub embed_model: ComponentStatus,
-    pub sidecar: ComponentStatus,
+    pub capture: ComponentReadiness,
+    pub db: ComponentReadiness,
+    pub embed_model: ComponentReadiness,
+    pub sidecar: ComponentReadiness,
 }
 
 /// A streamed chunk of an answer (`answer_delta` event / `AnswerProvider` channel).

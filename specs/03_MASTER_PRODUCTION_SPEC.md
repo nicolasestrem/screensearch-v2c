@@ -278,13 +278,19 @@ duplicates). **Commands** (UI → core):
 **Events** (core → UI): `capture_tick`, `job_progress`, `answer_delta`, `sidecar_status`,
 `readiness_changed`, `toast`.
 
+**`Readiness` shape** (defined 2026-06-21, was silent — see `07` gap #3): each of
+`capture | db | embed_model | sidecar` is a `ComponentReadiness { status, detail? }`, where
+`status ∈ { unknown, disabled, initializing, ready, unavailable, error }` and `detail` is an
+optional human-readable explanation.
+
 ## 8. Configuration / settings (keys in `settings`)
 
 `capture.interval_ms` (3000) · `capture.monitors` ([]=all) · `capture.diff_threshold` (0.006) ·
 `storage.jpeg_quality` (80) · `storage.max_width` (1280) · `storage.retention_days` (0=keep) ·
 `enrich.embed_text` (true) · `enrich.image_embeddings` (false) ·
-`enrich.vision_mode` (`on_demand`|`timer`|`idle`) · `enrich.vision_timer_interval_ms` ·
-`enrich.vision_idle_secs` · `enrich.worker_concurrency` (2) ·
+`enrich.vision_timer_enabled` (false) · `enrich.vision_timer_interval_ms` (3600000) ·
+`enrich.vision_idle_enabled` (false) · `enrich.vision_idle_secs` (300) ·
+`enrich.worker_concurrency` (2) ·
 `models.vision_tier` (`default`) · `models.answer_tier` (`default`) ·
 `answer.thinking` (true) · `sidecar.idle_ttl_secs` (180) · `sidecar.ngl` (99) ·
 `privacy.excluded_apps` (["1Password","KeePass","Bitwarden"]) · `privacy.pause_on_lock` (true).
