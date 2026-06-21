@@ -84,3 +84,89 @@ $ git diff --exit-code -- ui/src/bindings   # exit 0 (committed bindings current
   resolved via the platform optional-dependency). Could matter on locked-down dev machines.
 - `forbid(unsafe_code)` is intentionally **absent** on `capture`/`ocr`/`inference` (P2/P4 need
   `unsafe` FFI) and present on the pure crates.
+
+---
+
+## Pass 2 — 2026-06-21 — P1 Data Spine
+
+**Branch:** `p1-data-spine`. Stack added: `rusqlite` 0.40 (bundled, FTS5), `sqlite-vec` 0.1.9,
+`blake3` 1, `tracing-appender` 0.2.
+
+### Implemented (with verbatim verification)
+- **`store` crate** — full `Store` (`03 §3`) on SQLite (WAL) + sqlite-vec + FTS5:
+  - **Schema/migrations** (`schema.rs`): forward-only runner keyed on `schema_version`; v1 = the
+    `03 §4` DDL verbatim + the FTS5 external-content sync triggers and the vec0 cleanup triggers
+    the spec describes in prose. `vec0` virtual tables created (extension auto-registered once).
+  - **Records** (`records.rs`): `insert_frame` / `insert_ocr` (FTS kept in sync by trigger) /
+    `insert_vision`, plus `get_frame` assembling `FrameDetail` (frame + OCR + vision + tags).
+  - **Embeddings** (`embeddings.rs`): `upsert_text_embedding` / `upsert_image_embedding` with
+    atomic metadata-+-`vec0`-shadow writes (insert *and* in-place replace), dim validated == 768;
+    cosine-KNN building blocks; `delete_frame` (retention primitive) → FK cascade + triggers purge
+    the vec0 shadows (proven by test).
+  - **Search** (`search.rs`): `hybrid_search` fuses the FTS5 BM25 arm and the cosine-KNN arm via
+    **RRF** (k=60, per-arm pool = max(limit·5, 50)); honors `time_range`; FTS-highlighted snippets
+    with a truncated-OCR fallback. Vector arm active only when an `Arc<dyn EmbeddingProvider>` is
+    injected.
+  - **Jobs** (`jobs.rs`): durable queue — `enqueue_job`, atomic `claim_jobs`
+    (`UPDATE … RETURNING`, priority-ordered, `not_before`/kind filtered), `complete_job`,
+    `fail_job` (attempts++; retry+backoff or dead-letter at `max_attempts`), `job_stats`.
+  - **Settings** (`settings.rs`): key/value upsert + read.
+- **Composition root** (`src-tauri`): opens `screensearch.db` at the app-data dir on launch
+  (managed state), `get_readiness` reports real `db` Ready/Error, daily-rotating **file log**
+  (`03 §9`, deferred-from-P0 sink), `get_job_stats` IPC command.
+
+Verbatim verification (run 2026-06-21):
+```
+$ cargo fmt --all -- --check                                   # exit 0 (no diff)
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.93s   # exit 0
+$ cargo test --workspace
+    store    tests\store.rs   test result: ok. 23 passed; 0 failed
+    traits   (lib)            test result: ok. 28 passed; 0 failed
+    screensearch (lib)        test result: ok.  2 passed; 0 failed       # 53 total, 0 failed
+$ cd ui && npm run build                                       # ✓ built in 388ms (tsc clean), exit 0
+$ git status --porcelain -- ui/src/bindings                    # empty (no ts-rs drift)
+```
+- **Observed running:** `cargo run -p screensearch` launched the app, which created
+  `%APPDATA%\app.screensearchv2c.desktop\screensearch.db` + `-wal` + `-shm` (WAL mode active on
+  the file DB) and `logs\screensearch.log.2026-06-21`. The log contained:
+  `INFO store: applied store migration schema_version=1` and
+  `INFO screensearch_lib: store opened db=…\screensearch.db` — proving the migration ran and the
+  store is wired, with no screen/OCR content logged (privacy, `03 §9`).
+
+### Skipped / deferred (intentional, by phase)
+- Live `search` / `ask` / `get_timeline` / `enqueue_vision` IPC commands → P2+ (no data to serve
+  until capture exists); only `get_job_stats` wired now as a liveness proof.
+- The vector arm of `hybrid_search` runs against an **injected** embedder; in P1 none is wired, so
+  the live path is FTS-only. The full FTS+vec+RRF code is implemented and tested with a fake
+  embedder; fastembed is injected in P3.
+- Stuck-`running` job recovery (lease/visibility timeout) — belongs to the kernel worker (P3),
+  see `07` gap #6.
+
+### Hallucinated / corrected
+- Assumed `rusqlite` needs an `fts5` feature for FTS5 — it does **not** in 0.40 (the `bundled`
+  amalgamation enables FTS5); removed the feature.
+- Assumed the latest `sqlite-vec` (0.1.10-alpha.4) would build — its amalgamation references a
+  missing `sqlite-vec-diskann.c` and fails `cc`. Pinned to the latest stable **0.1.9**.
+- `u64` is not a rusqlite `FromSql` type — read `COUNT(*)` as `i64` and cast.
+
+### Still risky / to watch
+- **Single-connection** store (Mutex + `spawn_blocking`): correct and simple (SQLite single-writer)
+  but serializes reads too; revisit with a read pool if search latency needs it. The concurrent
+  job-claim test passes because the atomic SQL + serialization both guarantee no double-claim — it
+  does not exercise true multi-connection WAL contention.
+- RRF `k`/pool and the vec-arm time-range **post-filter** (over-fetch `pool`, then filter) are
+  reasonable defaults but untuned against a realistic DB; revisit when P3 has real embeddings and
+  the `03 §13` "< ~200 ms" target can be measured.
+
+### Post-review fixes (PR #4 — Gemini + `@claude`)
+All findings verified against the codebase/spec before applying (none warranted pushback):
+- **[correctness]** `open_state`: a failed post-open `schema_version()` probe now → `db = Error` +
+  `store = None` (was silently `Ready`). **[correctness]** `complete_job`/`fail_job` now error on a
+  zero-row update (unknown id) instead of a silent no-op.
+- **[spec]** `insert_vision` now also fills `frames.activity_type` (`03 §4`), in one txn with the
+  `vision_analysis` write.
+- **[perf]** `hydrate` N+1 → two bulk `IN` queries. **[maint]** `f32_blob`/`dedup_keep_order` made
+  `pub(crate)` and reused in `search.rs`.
+- **Verification:** +1 job test, updated the vision test; `fmt`/`clippy -D warnings` clean;
+  `cargo test --workspace` **54 passed, 0 failed** (store 24, traits 28, screensearch 2).

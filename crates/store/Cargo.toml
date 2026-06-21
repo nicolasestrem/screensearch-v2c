@@ -10,3 +10,16 @@ repository.workspace = true
 
 [dependencies]
 traits.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rusqlite.workspace = true
+sqlite-vec.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+# the fake EmbeddingProvider used to drive the vector arm of hybrid_search in
+# tests names `image::RgbaImage` (the trait signature); async-trait + anyhow come
+# transitively from the normal dependencies above.
+image.workspace = true
