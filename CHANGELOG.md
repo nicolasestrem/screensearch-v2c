@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `doctor`: load `vulkan-1.dll` from an absolute System32 path instead of by bare
   name, avoiding DLL search-order hijacking.
 - UI: issue the independent `ping` / `get_readiness` IPC calls in parallel.
-- CI: Claude review/`@claude` workflows now have write permissions so they can post
-  (were silently denied); `concurrency` added; actions bumped to Node-24 majors.
+- CI: Claude review now actually posts — added the `--comment` flag (the skill
+  produces a review but only posts with it) and granted the workflows write
+  permissions (posts were silently denied before); `concurrency` added; actions
+  bumped to Node-24 majors.
 
 _Scaffold only — no capture, storage, embeddings, or inference yet (P1–P4)._
