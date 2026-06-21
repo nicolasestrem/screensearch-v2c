@@ -24,8 +24,11 @@ export function App() {
     let active = true;
     (async () => {
       try {
-        const ping = await invoke<string>("ping");
-        const readiness = await invoke<Readiness>("get_readiness");
+        // Independent calls — issue them in parallel.
+        const [ping, readiness] = await Promise.all([
+          invoke<string>("ping"),
+          invoke<Readiness>("get_readiness"),
+        ]);
         if (active) setState({ status: "ready", data: { ping, readiness } });
       } catch (e) {
         if (active) setState({ status: "error", message: String(e) });

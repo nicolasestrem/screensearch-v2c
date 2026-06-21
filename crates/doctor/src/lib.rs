@@ -112,10 +112,19 @@ mod win {
 
     /// Whether the Vulkan loader is present and exposes a core entry point.
     pub fn vulkan() -> Check {
-        // SAFETY: loading a well-known system DLL by name and resolving a symbol;
-        // we never call into it, only check presence of the loader.
+        // Resolve the loader by absolute System32 path rather than bare name, so a
+        // rogue `vulkan-1.dll` in the working/app directory can't be picked up via
+        // the DLL search order (hijacking). vulkan-1.dll lives in System32.
+        let dll = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("C:\\Windows"))
+            .join("System32")
+            .join("vulkan-1.dll");
+
+        // SAFETY: loading a known system DLL from an absolute path and resolving a
+        // symbol; we never call into it, only check presence of the loader.
         let (level, detail) = unsafe {
-            match libloading::Library::new("vulkan-1.dll") {
+            match libloading::Library::new(&dll) {
                 Ok(lib) => {
                     let sym: Result<libloading::Symbol<unsafe extern "system" fn() -> i32>, _> =
                         lib.get(b"vkEnumerateInstanceVersion\0");
