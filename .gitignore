@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/target/
+*.pdb
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Models & data (downloaded at runtime — never commit)
+.models/
+*.gguf
+*.onnx
+*.safetensors
+
+# Local databases, logs, captures
+*.db
+*.db-wal
+*.db-shm
+*.log
+captures/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
