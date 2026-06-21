@@ -85,7 +85,14 @@ impl SqliteStore {
         let snippets: HashMap<i64, String> = fts.into_iter().collect();
 
         // --- vector arm (only when an embedder is present and the query is non-blank) ---
-        let vec_ids = match (&self.embedder, q.text.trim().is_empty()) {
+        // Clone the Arc out from under the lock first — the read guard must never be
+        // held across the `.await` on `embed_texts`.
+        let embedder = self
+            .embedder
+            .read()
+            .expect("store embedder lock poisoned")
+            .clone();
+        let vec_ids = match (embedder, q.text.trim().is_empty()) {
             (Some(embedder), false) => {
                 let mut embs = embedder.embed_texts(std::slice::from_ref(&q.text)).await?;
                 let query_emb = embs

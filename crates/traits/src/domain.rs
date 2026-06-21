@@ -98,6 +98,16 @@ pub struct NewFrame {
     pub browser_url: Option<String>,
 }
 
+/// The minimal frame inputs an enrichment worker needs to embed a frame: the
+/// stored JPEG's relative path and the OCR text (if any was recognized). One cheap
+/// read for the embedding worker (`03 §5`), vs the full [`FrameDetail`] the
+/// `get_frame` command assembles. `ocr_text` is `None` when no OCR row exists yet.
+#[derive(Debug, Clone)]
+pub struct FrameEnrichmentInput {
+    pub image_path: String,
+    pub ocr_text: Option<String>,
+}
+
 /// Configuration handed to a [`CaptureSource`](crate::CaptureSource) at
 /// construction. The kernel derives it from [`Settings`](crate::Settings) when
 /// capture starts (`03 §8`); it is shared here so the kernel can build it and the

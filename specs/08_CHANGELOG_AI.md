@@ -154,3 +154,43 @@
   the `#[ignore]`d `e2e_capture` test drove the real Kernel (WGC + WinRT OCR + on-disk store) and
   stored a frame + OCR row + JPEG and enqueued an `embed_text` job (no `vision_tag`), 3.55s; real
   WGC and WinRT OCR smoke tests also pass locally on Win11 26200.
+
+## 2026-06-21 — P3 Deferred Enrichment (`p3-enrichment` branch)
+- **Change:** Lit up the deferred half of the system — the `embed_text` jobs P2 enqueues are now
+  drained into vectors and hybrid search returns them.
+  - `embeddings::FastEmbedProvider` — the real `EmbeddingProvider` via **fastembed 5.17.2** (ONNX,
+    no Python): text `EmbeddingGemma300MQ` (768-dim, embeds one-at-a-time), optional image
+    `NomicEmbedVisionV15`; lanes behind `Arc<Mutex>` run inside `spawn_blocking`; models load
+    eagerly into `<app-data>/models/fastembed`.
+  - `kernel::worker_pool` — a bounded pool (N = `enrich.worker_concurrency`) that claims/runs/
+    completes `embed_text` + `embed_image` jobs with exponential backoff, an idle poll, a periodic
+    + startup stale-`running` sweep (gap #6), graceful shutdown, and a `job_progress` event. Public
+    `process_job` lets tests drive one job deterministically. **Never** handles `vision_tag` (P4).
+  - `store` — `embedder` made runtime-settable (`Arc<RwLock<Option<…>>>` + `set_embedder`);
+    `frame_enrichment_input` (lightweight worker read); `reset_stale_running_jobs`. Three matching
+    `Store` trait methods (`set_embedder` defaulted no-op). Vector arm of `hybrid_search` now goes
+    live the moment the embedder is attached.
+  - `kernel` — `attach_embedder`/`start_workers`/`stop_workers`/`set_embed_readiness`; capture loop
+    enqueues `embed_image` when `enrich.image_embeddings`; `KernelEvent::JobProgress`.
+  - `src-tauri` — loads the model off the launch thread (start never blocks on the download),
+    flips `embed_model` readiness, `attach_embedder`s; adds the `search` command; forwards
+    `job_progress`; stops workers on exit (best-effort).
+  - `traits` — `FrameEnrichmentInput`; `Store::{get_enrichment_input, reset_stale_running_jobs,
+    set_embedder}`; `EmbeddingProvider::{text_model_name, image_model_name}` (defaulted).
+- **Why:** P3 per `02 §5` / `04 §3` — embedding worker (fastembed) + hybrid search end-to-end,
+  satisfying DoD `03 §13.2` (deferred embeddings populate vectors via the job queue) and `13.4`
+  (hybrid FTS5+vec→RRF returns correct frames < ~200 ms). First phase to exercise the durable queue
+  end-to-end, proving the worker pattern before P4 adds the sidecar.
+- **Decisions (user-confirmed):** vision fully deferred to P4; `search` backend command only (UI
+  P5); model loads at launch with background workers (`02 §5`). Engineering: symmetric `embed_texts`
+  for index+query (gap logged); runtime `set_embedder` via `RwLock` (no new dep); single shared
+  model handle; backoff `1 s·2^attempts` cap 60 s; 5-min stale-job visibility timeout. New `07`
+  entries for the prompt asymmetry, `onnxruntime.dll` bundling, and the shared-handle trade-off;
+  gaps #6 and #7 resolved.
+- **Verification:** `fmt`/`clippy --workspace --all-targets -D warnings` clean; `cargo test
+  --workspace` all pass (0 failed) — store 27, traits 28, kernel 5+3, screensearch 2; `ui npm run
+  build` clean, no ts-rs drift. **Observed running** — `embeddings -- --ignored` loaded the real
+  EmbeddingGemma300MQ and produced deterministic 768-dim vectors (9.96 s); `store --test perf --
+  --ignored` measured **p95 = 32.6 ms over 10 000 frames** (DoD 13.4 ✓); the `attach_embedder`
+  integration test drove the real worker pool draining a job and the vector arm then finding the
+  frame via a non-FTS-matching query.

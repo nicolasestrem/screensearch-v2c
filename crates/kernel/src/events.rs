@@ -5,7 +5,7 @@
 //! forwards them to the WebView2 UI as Tauri events. The kernel never knows about
 //! Tauri.
 
-use traits::{CaptureTick, Readiness};
+use traits::{CaptureTick, JobStats, Readiness};
 
 /// An event the kernel emits for the UI (forwarded to Tauri events by `src-tauri`).
 ///
@@ -18,4 +18,7 @@ pub enum KernelEvent {
     /// A subsystem's readiness changed — drives the readiness strip
     /// (`readiness_changed`, `03 §7`).
     ReadinessChanged(Readiness),
+    /// Queue depth changed after a worker finished a job — drives the job-queue
+    /// indicator (`job_progress`, `03 §7`).
+    JobProgress(JobStats),
 }

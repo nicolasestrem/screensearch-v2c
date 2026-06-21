@@ -11,9 +11,9 @@
 | 3 | 2026-06-21 | `03 §7` `get_readiness` returns a `Readiness` but `03` didn't define the per-component status enum. | **Resolved:** defined `ComponentStatus { Unknown, Disabled, Initializing, Ready, Unavailable, Error }` + `ComponentReadiness { status, detail? }`; `Readiness` now holds one per subsystem so the UI can show *why*. `03 §7` updated. | agent | ✅ done |
 | 4 | 2026-06-21 | `02 §5` "WebView2/Vulkan/llama smoke-check" doesn't specify the form. | **Resolved:** `crates/doctor` is now a **library + thin CLI** (`cargo run -p doctor [-- --json]`) returning a structured `Report` — reusable by CI and (later) the app's readiness panel. Diagnostic only (never fails CI). | agent | ✅ done |
 | 5 | 2026-06-21 | `03 §3` `Store::hybrid_search` takes only query **text**, but the vector arm needs the query *embedded* — and the store must not depend on the embeddings impl. The spec is silent on how the query vector reaches the store. | **Resolved (engineering):** `SqliteStore` optionally holds `Arc<dyn EmbeddingProvider>` (a **trait** → modularity intact). P1 builds & tests the full FTS+vec+RRF path (vector arm driven by a fake embedder); the live path is FTS-only until **P3** injects fastembed. No trait/IPC signature change. | agent | ✅ P1; fastembed P3 |
-| 6 | 2026-06-21 | `03 §5` defines claim→`running` and fail→retry/dead, but not recovery for a job stuck in `running` after a worker dies mid-job (no lease / visibility timeout). | **Deferred:** the store implements exactly per spec (claim sets `running`; `fail_job` increments attempts). Re-queuing stale `running` jobs is the **kernel worker**'s concern (`03 §6` "restart + requeue") — to add a lease/heartbeat sweep in P3. Logged so it isn't lost. | agent | P3 |
-| 7 | 2026-06-21 | `03 §13` DoD requires hybrid search "< ~200 ms on a realistic DB", but P1 only tests tiny `:memory:` fixtures — the latency target is **unverified**. | **Deferred (tracked):** correct for P1 (no real embeddings or data volume until P3). When P3 wires fastembed, add a realistic-DB perf fixture and measure against the `< ~200 ms` bar; tune RRF `k`/pool if needed. Surfaced from `05` Pass 2 "Still risky" so it has an owner. | agent | P3 |
-| 8 | 2026-06-21 | The vector arm post-filters `time_range` *after* the KNN (over-fetch `pool`, then filter on the join), so in-range matches that fall beyond the top-`pool` nearest vectors can be **missed** (recall under-counts on tight time windows). | **Deferred (tracked):** acceptable for P1 (FTS arm is unaffected and carries the live path; vec arm is dark until P3). Revisit in P3 with real embeddings — e.g. push the time filter into the KNN via a `vec0` partition/metadata column, or widen the pool adaptively. | agent | P3 |
+| 6 | 2026-06-21 | `03 §5` defines claim→`running` and fail→retry/dead, but not recovery for a job stuck in `running` after a worker dies mid-job (no lease / visibility timeout). | **Deferred:** the store implements exactly per spec (claim sets `running`; `fail_job` increments attempts). Re-queuing stale `running` jobs is the **kernel worker**'s concern (`03 §6` "restart + requeue") — to add a lease/heartbeat sweep in P3. Logged so it isn't lost. **Done (P3):** `Store::reset_stale_running_jobs(older_than_ms)` + a startup sweep (requeue all `running`) and a periodic 60 s sweep with a 5-min visibility timeout in `kernel::worker_pool`. No lease column added. | agent | ✅ P3 |
+| 7 | 2026-06-21 | `03 §13` DoD requires hybrid search "< ~200 ms on a realistic DB", but P1 only tests tiny `:memory:` fixtures — the latency target is **unverified**. | **Deferred (tracked):** correct for P1 (no real embeddings or data volume until P3). When P3 wires fastembed, add a realistic-DB perf fixture and measure against the `< ~200 ms` bar; tune RRF `k`/pool if needed. Surfaced from `05` Pass 2 "Still risky" so it has an owner. **Done (P3):** `crates/store/tests/perf.rs` (`#[ignore]`d) seeds 10 000 frames + 768-dim vectors and measures `hybrid_search` — **p95 = 32.6 ms** (median 30.9 ms), well under 200 ms. | agent | ✅ P3 |
+| 8 | 2026-06-21 | The vector arm post-filters `time_range` *after* the KNN (over-fetch `pool`, then filter on the join), so in-range matches that fall beyond the top-`pool` nearest vectors can be **missed** (recall under-counts on tight time windows). | **Deferred (tracked):** acceptable for P1 (FTS arm is unaffected and carries the live path; vec arm is dark until P3). Revisit in P3 with real embeddings — e.g. push the time filter into the KNN via a `vec0` partition/metadata column, or widen the pool adaptively. **P3 update:** left open — unobserved to cause a problem at the perf-fixture scale (32.6 ms p95 with `pool = max(limit·5, 50)`); revisit only if recall on tight time windows proves insufficient with real data. | agent | open (P3→P5) |
 | 9 | 2026-06-21 | **P2 capture start behaviour** — `03 §7` defines `capture_control{start\|stop}` but is silent on whether capture is on at launch. | **Resolved (user):** capture is **off until the user starts it** (privacy-first). `capture` readiness = `Disabled` until `capture_control(Start)`. | user | ✅ done |
 | 10 | 2026-06-21 | **P2 WGC implementation** — `03 §3` mandates WGC but not raw `windows-rs` vs the `windows-capture` wrapper (`02 §6` permits a simpler fallback). | **Resolved (user):** raw **`windows-rs` 0.62** (full control of the diff-gate at the GPU-copy boundary). `windows-capture` remains a permitted fallback if WGC proves unstable. | user | ✅ done |
 | 11 | 2026-06-21 | **P2 UI scope** — `02 §5` lists a "live timeline in the UI" for P2, but `03 §13` DoD has no UI requirement. | **Resolved (user):** ship a **minimal live timeline** (Start/Stop + readiness + `capture_tick` stream); the full Command-Deck UI lands in P5. | user | ✅ done |
@@ -73,10 +73,32 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
 - **OCR fallback (P2):** if the WinRT engine can't be created (no language pack), the composition
   root substitutes an `UnavailableOcr` that errors per frame (logged) so the app still runs and
   capture readiness/logs surface the problem — never a silent half-working state.
+- **fastembed model variant (P3):** confirmed `fastembed` 5.17.2 exposes
+  `EmbeddingModel::EmbeddingGemma300MQ` (768-dim, quantized — the `MODEL_REGISTRY §3` name is exact)
+  and `ImageEmbeddingModel::NomicEmbedVisionV15`; both verified by the real-model `#[ignore]` test.
+  Built clean on rust-version 1.82 — no MSRV bump for `ort` 2.0.0-rc.12.
+- **Query/document prompt asymmetry (P3):** EmbeddingGemma is prompt-instructed (`query:` vs
+  document prefixes improve retrieval), but the `EmbeddingProvider` trait has only `embed_texts`,
+  used symmetrically for both indexing and the query. Kept symmetric for P3 (simplest correct, no
+  trait change); a `query_embed` path is a later retrieval-quality refinement if needed.
+- **Embedder injection (P3):** `SqliteStore.embedder` is `Arc<RwLock<Option<Arc<dyn
+  EmbeddingProvider>>>>` with a runtime `set_embedder`, so the composition root attaches the model
+  *after* the off-thread load without rebuilding the store (no new dep; the search hot path clones
+  the `Arc` out before the `.await`). `Store::set_embedder` is a defaulted no-op on the trait.
+- **Worker pool (P3):** one shared `Arc<Mutex<TextEmbedding>>` (concurrent embeds serialize on the
+  lock — fine for the cheap text model; per-worker handles would 2× RAM, deferred). Backoff
+  `1 s·2^attempts` capped 60 s; idle poll 250 ms→2 s. Workers start at `attach_embedder`, independent
+  of capture (`02 §5` background trigger); stop-on-exit is best-effort (the startup sweep is the
+  real safety net). `embed_text` embeds the whole OCR text as one chunk (`chunk_index = 0`);
+  chunking is a non-breaking later addition.
 
 Manual steps still required (e.g. signing certs, first-run model download, CI secrets):
-- **First-run model download** (vision/answer GGUF + mmproj, embedding models) — P3/P4, per
-  `MODEL_REGISTRY §4`. Not bundled.
+- **First-run model download** — embedding models (P3) now auto-download via fastembed on first
+  use into `<app-data>/models/fastembed` (`embed_model` readiness shows Initializing→Ready, no
+  progress %); vision/answer GGUF + mmproj remain P4 per `MODEL_REGISTRY §4`. Not bundled.
+- **`onnxruntime.dll` bundling (P3→P5):** `fastembed` → `ort` fetches a prebuilt ONNX Runtime at
+  build time and ships `onnxruntime.dll`; the Inno Setup installer / portable ZIP must bundle it
+  (P5 packaging). Verify it's present beside the exe in the `tauri build` artifact.
 - **Code-signing certificate** for the installer — P5 packaging. Recommended path for this MIT OSS
   project (cheapest → most turnkey): **SignPath Foundation** (free Authenticode signing for
   qualifying OSS) → **Azure Trusted Signing** (~US$10/mo, Microsoft-run, builds SmartScreen

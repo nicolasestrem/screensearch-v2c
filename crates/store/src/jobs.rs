@@ -171,6 +171,26 @@ impl SqliteStore {
         .await
     }
 
+    /// Requeues jobs stuck in `running` whose `updated_at` is older than
+    /// `older_than_ms` before now — a worker died mid-job and there is no lease
+    /// (`03 §6` "restart + requeue"; `07` gap #6). Resets them to `pending` so they
+    /// are reclaimable; returns the count requeued. Does **not** touch `attempts` (a
+    /// crash is not a logical failure). The `unixepoch()*1000` DB clock is the same
+    /// one `claim`/`complete` stamp `updated_at` with, so the comparison is
+    /// monotonic. `older_than_ms == 0` requeues every `running` job — the startup
+    /// sweep, when by definition no worker is live.
+    pub async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
+        self.with_conn(move |conn| {
+            let changed = conn.execute(
+                "UPDATE jobs SET state = 'pending', updated_at = (unixepoch()*1000)
+                 WHERE state = 'running' AND updated_at <= (unixepoch()*1000 - ?1)",
+                rusqlite::params![older_than_ms],
+            )?;
+            Ok(changed as u64)
+        })
+        .await
+    }
+
     /// Aggregate queue counts by state for the diagnostics surface (`03 §7`).
     pub async fn job_stats(&self) -> Result<JobStats> {
         self.with_conn(move |conn| {

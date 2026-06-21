@@ -300,3 +300,75 @@ $ cargo test -p screensearch --test e2e_capture -- --ignored
 - Lock detection is an `OpenInputDesktop` heuristic (`07`); verify behaviour if ever run elevated.
 - Continuous per-monitor WGC sessions sample every `interval_ms` — fine, but idle GPU work could be
   trimmed with single-shot capture later.
+
+---
+
+## Pass 5 — 2026-06-21 — P3 Deferred Enrichment
+
+**Branch:** `p3-enrichment`. New external dep: `fastembed` 5.17.2 (pulls `ort` 2.0.0-rc.12 / ONNX
+Runtime). Built clean on the pinned toolchain (rust-version 1.82) — **no MSRV bump needed**.
+
+### Implemented (with verbatim verification)
+- **`embeddings::FastEmbedProvider`** — the real `EmbeddingProvider` (`03 §3`): text via
+  `EmbeddingModel::EmbeddingGemma300MQ` (768-dim, quantized → embeds one input at a time per
+  `MODEL_REGISTRY §5`), optional image via `ImageEmbeddingModel::NomicEmbedVisionV15`. Each lane is
+  `Arc<Mutex<…>>` accessed inside `spawn_blocking` (no thread affinity, unlike OCR). Models load
+  eagerly off the launch thread into `<app-data>/models/fastembed`.
+- **Bounded worker pool (`kernel::worker_pool`)** — N = `enrich.worker_concurrency` workers each
+  `claim_jobs`→`process_job`→`complete`/`fail` with exponential backoff (`1 s·2^attempts`, cap 60 s);
+  idle poll 250 ms→2 s; graceful `watch`-channel shutdown. Handles `embed_text` + (when enabled)
+  `embed_image`; **never** `vision_tag` (P4). Empty-OCR / purged-frame → complete (no-op); missing
+  `frame_id` / missing JPEG → dead-letter; embed/upsert error → retry.
+- **Stale-`running` recovery (`03 §6`, gap #6)** — `Store::reset_stale_running_jobs`; startup sweep
+  (requeue all `running`) + periodic 60 s sweep (5-min visibility timeout).
+- **Vector arm live end-to-end** — `SqliteStore` embedder made runtime-settable
+  (`Arc<RwLock<Option<…>>>` + `set_embedder`); the composition root loads the model off-thread, then
+  `Kernel::attach_embedder` injects it (lighting the vector arm) and starts the pool — independent of
+  capture (`02 §5` background trigger). `embed_model` readiness flows Initializing→Ready/Unavailable/
+  Disabled; new `job_progress` event drives queue depth.
+- **`search` command** (`SearchQuery`→`SearchHit[]`, `03 §7`) so hybrid search is reachable; the
+  capture loop now also enqueues `embed_image` when `enrich.image_embeddings` is on.
+
+Verbatim verification (run 2026-06-21):
+```
+cargo fmt --all -- --check                            → exit 0
+cargo clippy --workspace --all-targets -- -D warnings → exit 0 (Finished in 19.68s)
+cargo test --workspace                                → all pass, 0 failed
+    store        27 passed   (incl. enrichment-input + stale-sweep)
+    traits       28 passed
+    kernel       5 passed (enrichment) + 3 passed (pipeline)
+    screensearch 2 passed
+    (ocr 1 / e2e_capture 1 / embeddings real-model 1 / store perf 1  → #[ignore]d)
+cargo test -p store --test perf -- --ignored
+    → hybrid_search over 10000 frames: median = 30.9ms, p95 = 32.6ms (20 queries)  [DoD 13.4 ✓]
+cargo test -p embeddings -- --ignored
+    → loads_and_embeds_text ... ok  (real EmbeddingGemma300MQ: 768-dim, deterministic) in 9.96s
+npm --prefix ui run build  → tsc --noEmit clean; vite built in 393ms; no ts-rs binding drift
+```
+
+### Skipped / deferred (intentional, by phase)
+- **All vision scheduling → P4** (user-confirmed): no `vision_tag` enqueue, no timer/idle scheduler,
+  no `enqueue_vision` command — the consumer needs the P4 sidecar.
+- **Text chunking** — one chunk per frame (`chunk_index = 0`); the schema's `UNIQUE(frame_id,
+  chunk_index)` already supports multi-chunk as a non-breaking later addition.
+- **Query/document prompt asymmetry** — `embed_texts` is used symmetrically for index and query (the
+  trait has only `embed_texts`); an EmbeddingGemma `query:`/document-prefix path is a later
+  retrieval-quality refinement (`07`).
+- **Search UI** → P5 (backend command only this phase).
+
+### Hallucinated / corrected
+- Pre-flight worry that fastembed lacked a quantized EmbeddingGemma variant — **false**: docs.rs
+  confirmed `EmbeddingModel::EmbeddingGemma300MQ` exists in 5.17.2; the `MODEL_REGISTRY §3` name is
+  correct. The build proved it (real-model test passed).
+- Expected a possible `ort` MSRV bump — not needed; built on 1.82.
+
+### Still risky / to watch
+- **`onnxruntime.dll` bundling** — `ort` fetches a prebuilt ONNX Runtime at build time; the
+  installer must bundle the DLL (P5 packaging, logged in `07`).
+- **Single shared model handle** serializes concurrent embeds on the `Mutex` (fine for the cheap text
+  model; per-worker handles would 2× RAM — deferred).
+- **Perf bar** measured on an in-memory DB (the query-algorithm cost, not disk); 32.6 ms p95 leaves
+  wide margin, but a future on-disk fixture at scale is worth adding. Gap #8 (vec arm post-KNN time
+  filter) stays open — unobserved here, revisit if recall on tight windows matters.
+- **Stop-workers-on-exit** is best-effort (`block_on` in the Tauri exit hook); correctness does not
+  depend on it (the startup sweep requeues any interrupted job).

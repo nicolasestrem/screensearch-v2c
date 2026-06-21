@@ -3,7 +3,7 @@
 //! (`03 §3/§4/§7`).
 
 use rusqlite::{params, OptionalExtension};
-use traits::{FrameDetail, NewFrame, OcrResult, Result, VisionAnalysis};
+use traits::{FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, VisionAnalysis};
 
 use crate::SqliteStore;
 
@@ -83,6 +83,34 @@ impl SqliteStore {
             )?;
             tx.commit()?;
             Ok(())
+        })
+        .await
+    }
+
+    /// The minimal inputs the embedding worker needs to enrich a frame — the stored
+    /// JPEG's relative path and the OCR text (if recognized) — in one round-trip, or
+    /// `None` if the frame no longer exists (`03 §5`). Lighter than [`Self::get_frame`]
+    /// (no vision/tags), so the worker doesn't pay for context it won't embed.
+    pub async fn frame_enrichment_input(
+        &self,
+        frame_id: i64,
+    ) -> Result<Option<FrameEnrichmentInput>> {
+        self.with_conn(move |conn| {
+            let row = conn
+                .query_row(
+                    "SELECT f.image_path, o.text
+                     FROM frames f LEFT JOIN ocr_text o ON o.frame_id = f.id
+                     WHERE f.id = ?1",
+                    params![frame_id],
+                    |r| {
+                        Ok(FrameEnrichmentInput {
+                            image_path: r.get(0)?,
+                            ocr_text: r.get(1)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(row)
         })
         .await
     }

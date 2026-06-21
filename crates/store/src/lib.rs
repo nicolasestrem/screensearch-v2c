@@ -18,13 +18,13 @@
 //! FTS-only; P3 injects the real fastembed provider. (`07` engineering note.)
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, RwLock};
 
 use async_trait::async_trait;
 use rusqlite::Connection;
 use traits::{
-    ChunkSource, Embedding, EmbeddingProvider, Job, JobKind, JobStats, NewFrame, NewJob, OcrResult,
-    Result, SearchHit, SearchQuery, VisionAnalysis,
+    ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, Job, JobKind, JobStats,
+    NewFrame, NewJob, OcrResult, Result, SearchHit, SearchQuery, VisionAnalysis,
 };
 
 mod embeddings;
@@ -45,7 +45,11 @@ pub use traits::Store;
 #[derive(Clone)]
 pub struct SqliteStore {
     conn: Arc<Mutex<Connection>>,
-    embedder: Option<Arc<dyn EmbeddingProvider>>,
+    /// Runtime-settable (`03 §5`): the composition root attaches the embedder *after*
+    /// the model finishes loading off the launch thread. Behind an `Arc<RwLock>` so
+    /// every clone shares it — injecting on one handle lights up every clone's vector
+    /// arm. `None` ⇒ search degrades to FTS-only.
+    embedder: Arc<RwLock<Option<Arc<dyn EmbeddingProvider>>>>,
 }
 
 /// Registers the sqlite-vec (`vec0`) loadable extension exactly once for the
@@ -130,17 +134,24 @@ impl SqliteStore {
     fn from_conn(conn: Connection) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
-            embedder: None,
+            embedder: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Injects the query-embedding provider that lights up the vector arm of
-    /// [`Self::hybrid_search`]. Without it, search is FTS-only (P1 default; P3
-    /// injects fastembed).
+    /// Builder form of [`Self::set_embedder`] — injects the query-embedding provider
+    /// that lights up the vector arm of [`Self::hybrid_search`]. Without it, search
+    /// is FTS-only (P1 default; P3 injects fastembed once it has loaded).
     #[must_use]
-    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
-        self.embedder = Some(embedder);
+    pub fn with_embedder(self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+        self.set_embedder(embedder);
         self
+    }
+
+    /// Injects (or replaces) the query-embedding provider at runtime (`03 §5`). Takes
+    /// effect immediately for every clone sharing this store — the composition root
+    /// calls this once the fastembed model has loaded off the launch thread.
+    pub fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
+        *self.embedder.write().expect("store embedder lock poisoned") = Some(embedder);
     }
 
     /// The DB's current (tracked) schema version (`03 §4`). Useful for the
@@ -216,6 +227,9 @@ impl Store for SqliteStore {
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
         SqliteStore::hybrid_search(self, q).await
     }
+    async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>> {
+        SqliteStore::frame_enrichment_input(self, frame_id).await
+    }
     async fn enqueue_job(&self, job: NewJob) -> Result<i64> {
         SqliteStore::enqueue_job(self, job).await
     }
@@ -231,10 +245,16 @@ impl Store for SqliteStore {
     async fn job_stats(&self) -> Result<JobStats> {
         SqliteStore::job_stats(self).await
     }
+    async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
+        SqliteStore::reset_stale_running_jobs(self, older_than_ms).await
+    }
     async fn get_setting(&self, key: &str) -> Result<Option<String>> {
         SqliteStore::get_setting(self, key).await
     }
     async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         SqliteStore::set_setting(self, key, value).await
+    }
+    fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
+        SqliteStore::set_embedder(self, embedder);
     }
 }

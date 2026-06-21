@@ -30,6 +30,9 @@ pub struct LoopCtx {
     pub events: broadcast::Sender<KernelEvent>,
     /// `enrich.embed_text` — whether each stored frame enqueues an `embed_text` job.
     pub enrich_embed_text: bool,
+    /// `enrich.image_embeddings` — whether each stored frame also enqueues an
+    /// `embed_image` job (optional visual recall, off by default).
+    pub enrich_image_embeddings: bool,
     /// `storage.jpeg_quality` (0–100).
     pub jpeg_quality: u8,
     /// `storage.max_width` — JPEGs wider than this are downscaled (aspect kept).
@@ -102,12 +105,24 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
 
     ctx.store.insert_ocr(frame_id, ocr).await?;
 
-    // After insert_ocr succeeds → enqueue embed_text (priority normal). vision_tag
-    // is NEVER auto-enqueued here (03 §5, 13.3).
+    // After insert_ocr succeeds → enqueue embed_text (priority normal), and
+    // embed_image when image embeddings are enabled. vision_tag is NEVER
+    // auto-enqueued here (03 §5, 13.3).
     if ctx.enrich_embed_text {
         ctx.store
             .enqueue_job(NewJob {
                 kind: JobKind::EmbedText,
+                frame_id: Some(frame_id),
+                priority: 0,
+                max_attempts: 3,
+                not_before: 0,
+            })
+            .await?;
+    }
+    if ctx.enrich_image_embeddings {
+        ctx.store
+            .enqueue_job(NewJob {
+                kind: JobKind::EmbedImage,
                 frame_id: Some(frame_id),
                 priority: 0,
                 max_attempts: 3,

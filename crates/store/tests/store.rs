@@ -666,3 +666,91 @@ async fn works_through_the_store_trait_object() {
     store.set_setting("k", "v").await.unwrap();
     assert_eq!(store.get_setting("k").await.unwrap(), Some("v".to_string()));
 }
+
+// --- enrichment-input read + stale-job recovery (P3, `03 §5/§6`) ---------------
+
+/// The embedding worker's lightweight read returns the JPEG path and, once OCR has
+/// run, the text — and `None` for a frame that no longer exists.
+#[tokio::test]
+async fn frame_enrichment_input_reads_path_and_optional_text() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let fid = store.insert_frame(frame_at(1_000)).await.unwrap();
+
+    // before OCR: image path present, text absent
+    let pre = store
+        .frame_enrichment_input(fid)
+        .await
+        .unwrap()
+        .expect("frame exists");
+    assert_eq!(pre.image_path, "frames/1000.jpg");
+    assert_eq!(pre.ocr_text, None);
+
+    // after OCR: text present
+    store
+        .insert_ocr(
+            fid,
+            OcrResult {
+                text: "hello world".to_string(),
+                mean_confidence: -1.0,
+                engine: "test".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+    let post = store.frame_enrichment_input(fid).await.unwrap().unwrap();
+    assert_eq!(post.ocr_text.as_deref(), Some("hello world"));
+
+    // missing frame → None
+    assert!(store.frame_enrichment_input(9_999).await.unwrap().is_none());
+}
+
+/// The startup sweep (`older_than == 0`) requeues a `running` job a dead worker
+/// left behind, *without* consuming an attempt — it is reclaimable again (`03 §6`).
+#[tokio::test]
+async fn reset_stale_running_jobs_requeues_running() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store
+        .enqueue_job(job(JobKind::EmbedText, 0, 3, 0))
+        .await
+        .unwrap();
+    // claim → running, stamped at a past time
+    let claimed = store
+        .claim_jobs(&[JobKind::EmbedText], 10, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    assert_eq!(store.reset_stale_running_jobs(0).await.unwrap(), 1);
+
+    let again = store
+        .claim_jobs(&[JobKind::EmbedText], 10, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].id, id);
+    assert_eq!(
+        again[0].attempts, 0,
+        "a crash sweep must not consume an attempt"
+    );
+}
+
+/// A job claimed `now` is within the visibility window — a 5-minute periodic sweep
+/// must not requeue it out from under a live worker.
+#[tokio::test]
+async fn reset_stale_running_jobs_spares_fresh_running() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    store
+        .enqueue_job(job(JobKind::EmbedText, 0, 3, 0))
+        .await
+        .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    store
+        .claim_jobs(&[JobKind::EmbedText], 10, now)
+        .await
+        .unwrap();
+
+    assert_eq!(store.reset_stale_running_jobs(5 * 60_000).await.unwrap(), 0);
+}
