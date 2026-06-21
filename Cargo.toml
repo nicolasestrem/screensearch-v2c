@@ -40,6 +40,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ts-rs = "10"
 
+# data spine: SQLite (bundled, FTS5) + sqlite-vec (vec0) + stable content hashing.
+# `bundled` compiles a recent SQLite so we never depend on a system libsqlite3 on
+# Windows; that amalgamation enables FTS5 (and FTS3/RTREE) by default, so the
+# porter-tokenized full-text index (03 §4) needs no extra feature. sqlite-vec
+# provides the `vec0` virtual table for cosine KNN; blake3 is the chunk
+# content-hash change-detector for `embeddings.content_hash`.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# Pinned to the latest stable (0.1.9). The 0.1.10-alpha line ships a broken
+# amalgamation (references sqlite-vec-diskann.c, which isn't in the package).
+sqlite-vec = "0.1.9"
+blake3 = "1"
+
 # imaging (capture/embeddings share the same image type)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 

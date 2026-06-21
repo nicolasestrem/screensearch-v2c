@@ -49,6 +49,35 @@
   `cargo run -p doctor` text + `--json` both OK; `ui npm run build` (✓ built) + `npm run lint`
   (exit 0).
 
+## 2026-06-21 — P1 Data Spine (`p1-data-spine` branch)
+- **Change:** Implemented the `store` crate end-to-end — the durable data spine (`03 §4/§5`):
+  - SQLite (WAL) on `rusqlite` (bundled) + `sqlite-vec` (`vec0`) + FTS5; forward-only migrations
+    tracked in `schema_version` (v1 = the full `03 §4` DDL, transcribed; FTS5 external-content
+    sync triggers + vec0 cleanup triggers added per the spec's prose).
+  - Full `Store` trait: frames / OCR / vision inserts, settings, text + image embedding upserts
+    with synchronized `vec0` shadows, the durable **job queue** (atomic `UPDATE … RETURNING`
+    claim, retry+backoff, dead-letter at `max_attempts`, stats), and **hybrid search**
+    (FTS5 BM25 ⊕ cosine-KNN → **RRF**, k=60). Plus inherent `get_frame` (backs the `get_frame`
+    command) and `delete_frame` (retention primitive).
+  - Wired the store into `src-tauri`: opens `screensearch.db` at the app-data dir on launch,
+    flips `db` readiness to Ready/Error, adds the daily-rotating **file log** (`03 §9`, the sink
+    deferred in P0), and exposes `get_job_stats` over typed IPC.
+- **Why:** P1 per `02 §5` / `04 §3` — build the data spine before any producer; *everything
+  writes here*.
+- **Decisions / corrections:** vector arm needs the query embedded but the store must stay
+  impl-agnostic → it optionally holds `Arc<dyn EmbeddingProvider>` (a trait; FTS+vec+RRF is fully
+  built and tested with a fake embedder, real fastembed injected in P3 — `07` gap #5).
+  Single-connection + `spawn_blocking` concurrency model; `sqlite-vec` pinned to **0.1.9** (the
+  0.1.10-alpha amalgamation is broken — missing `sqlite-vec-diskann.c`); `blake3` content-hash;
+  non-breaking `UNIQUE`/trigger schema additions; `JobState::Failed` left reserved. Stuck-`running`
+  recovery deferred to the kernel worker (`07` gap #6). No fakes/stubs in shipped code.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets
+  -- -D warnings` (exit 0); `cargo test --workspace` (store **23**, traits 28, screensearch 2 =
+  53 passed, 0 failed); `ui npm run build` (✓ built); `git status ui/src/bindings` (no drift);
+  **observed running** — `cargo run -p screensearch` created `screensearch.db` + `-wal`/`-shm`
+  (WAL active) and `logs/screensearch.log.2026-06-21` containing
+  `INFO store: applied store migration schema_version=1` and `INFO screensearch_lib: store opened`.
+
 ## 2026-06-21 — CI fix: Claude review couldn't post (read-only token)
 - **Change:** Granted `pull-requests: write` + `issues: write` to `claude-code-review.yml`
   (and `claude.yml`); added `concurrency` (cancel-in-progress) to the review workflow; bumped

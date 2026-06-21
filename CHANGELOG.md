@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P1 Data Spine (2026-06-21)
+- `store` crate — the durable data spine on SQLite (WAL) + sqlite-vec (`vec0`) + FTS5
+  (`03 §4/§5`): forward-only schema migrations tracked in `schema_version`, and the
+  full `Store` contract — frame / OCR / vision inserts, key-value settings, text &
+  image embedding upserts with synchronized vector shadows, and `get_frame` /
+  `delete_frame`.
+- Durable **job queue** — atomic claim (`UPDATE … RETURNING`), priority + scheduled
+  (`not_before`) dispatch, retry-with-backoff, and dead-lettering at `max_attempts`
+  (no silent loss).
+- **Hybrid search** — FTS5 (BM25) fused with sqlite-vec cosine-KNN via Reciprocal
+  Rank Fusion, with time-range filtering and highlighted snippets. The vector arm is
+  driven by an injected embedding provider (FTS-only until P3 wires fastembed).
+- App wiring — the desktop shell opens `screensearch.db` at the app-data dir on
+  launch, reports real `db` readiness, exposes a `get_job_stats` command, and writes
+  a daily-rotating file log under `<app-data>/logs/` (`03 §9`).
+
 ### Added — P0 Scaffold (2026-06-21)
 - Cargo workspace with a modular kernel layout (`03 §2`): `traits` (contracts +
   domain/jobs/IPC types) and skeleton crates `kernel`, `store`, `capture`, `ocr`,
@@ -35,4 +51,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permissions (posts were silently denied before); `concurrency` added; actions
   bumped to Node-24 majors.
 
-_Scaffold only — no capture, storage, embeddings, or inference yet (P1–P4)._
+_Data spine landed in P1; capture, embeddings, and inference still to come (P2–P4)._
