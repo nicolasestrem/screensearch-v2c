@@ -591,6 +591,11 @@ async fn completing_or_failing_an_unknown_job_is_an_error() {
     assert!(store.fail_job(999, "boom", Some(10)).await.is_err());
 }
 
+// Proves the *production* concurrency model: many async callers share one
+// `Mutex<Connection>`, so claims serialize through it and the atomic
+// `UPDATE … RETURNING` hands each job to exactly one caller — none lost, none
+// double-claimed. It does NOT exercise multi-connection WAL contention (the store
+// is single-connection by design; see `05` "Still risky" and `07`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_claims_never_double_claim() {
     let store = Arc::new(SqliteStore::open_in_memory().unwrap());

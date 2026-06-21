@@ -72,6 +72,8 @@ impl SqliteStore {
     pub async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
         let limit = (q.limit as usize).max(1);
         let pool = candidate_pool(limit);
+        // Half-open `[start, end)` per the `TimeRange` contract: both arms filter
+        // `captured_at >= start AND captured_at < end`. No range → the full line.
         let (start, end) = q
             .time_range
             .map(|t| (t.start, t.end))
