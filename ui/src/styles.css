@@ -58,3 +58,66 @@ h1 {
 .status-unavailable {
   color: #ff6b6b;
 }
+
+.status-initializing {
+  color: #e3b341;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid #2d333b;
+  border-radius: 0.375rem;
+  background: #161b22;
+  color: #e6e8eb;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: #3d444d;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.muted {
+  color: #8b929b;
+}
+
+.timeline {
+  margin-top: 1.5rem;
+}
+
+.timeline h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.ticks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticks li {
+  display: flex;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1c2128;
+}
+
+.tick-id {
+  color: #5dd39e;
+  min-width: 3.5rem;
+}

@@ -55,6 +55,11 @@ blake3 = "1"
 # imaging (capture/embeddings share the same image type)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+# Windows-native APIs (P2: WGC capture, WinRT Media.Ocr, foreground/lock probes).
+# Version only here; each crate enables the feature modules it needs, under a
+# `[target.'cfg(windows)'.dependencies]` block (Windows-only by design, 04 guardrails).
+windows = "0.62"
+
 # logging / observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,6 +1,6 @@
 [package]
 name = "capture"
-description = "CaptureSource via Windows.Graphics.Capture (WGC) + diff gate. See specs/03 §3."
+description = "CaptureSource via Windows.Graphics.Capture (WGC) + diff gate. See specs/03 §3, 01 §6."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,32 @@ repository.workspace = true
 
 [dependencies]
 traits.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+image.workspace = true
+blake3.workspace = true
+
+# Windows-only by design (04 guardrails): WGC + D3D11 readback, monitor
+# enumeration, foreground-window / lock probes for the privacy gate.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Foundation",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_Threading",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_WindowsAndMessaging",
+] }

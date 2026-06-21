@@ -14,6 +14,11 @@
 | 6 | 2026-06-21 | `03 §5` defines claim→`running` and fail→retry/dead, but not recovery for a job stuck in `running` after a worker dies mid-job (no lease / visibility timeout). | **Deferred:** the store implements exactly per spec (claim sets `running`; `fail_job` increments attempts). Re-queuing stale `running` jobs is the **kernel worker**'s concern (`03 §6` "restart + requeue") — to add a lease/heartbeat sweep in P3. Logged so it isn't lost. | agent | P3 |
 | 7 | 2026-06-21 | `03 §13` DoD requires hybrid search "< ~200 ms on a realistic DB", but P1 only tests tiny `:memory:` fixtures — the latency target is **unverified**. | **Deferred (tracked):** correct for P1 (no real embeddings or data volume until P3). When P3 wires fastembed, add a realistic-DB perf fixture and measure against the `< ~200 ms` bar; tune RRF `k`/pool if needed. Surfaced from `05` Pass 2 "Still risky" so it has an owner. | agent | P3 |
 | 8 | 2026-06-21 | The vector arm post-filters `time_range` *after* the KNN (over-fetch `pool`, then filter on the join), so in-range matches that fall beyond the top-`pool` nearest vectors can be **missed** (recall under-counts on tight time windows). | **Deferred (tracked):** acceptable for P1 (FTS arm is unaffected and carries the live path; vec arm is dark until P3). Revisit in P3 with real embeddings — e.g. push the time filter into the KNN via a `vec0` partition/metadata column, or widen the pool adaptively. | agent | P3 |
+| 9 | 2026-06-21 | **P2 capture start behaviour** — `03 §7` defines `capture_control{start\|stop}` but is silent on whether capture is on at launch. | **Resolved (user):** capture is **off until the user starts it** (privacy-first). `capture` readiness = `Disabled` until `capture_control(Start)`. | user | ✅ done |
+| 10 | 2026-06-21 | **P2 WGC implementation** — `03 §3` mandates WGC but not raw `windows-rs` vs the `windows-capture` wrapper (`02 §6` permits a simpler fallback). | **Resolved (user):** raw **`windows-rs` 0.62** (full control of the diff-gate at the GPU-copy boundary). `windows-capture` remains a permitted fallback if WGC proves unstable. | user | ✅ done |
+| 11 | 2026-06-21 | **P2 UI scope** — `02 §5` lists a "live timeline in the UI" for P2, but `03 §13` DoD has no UI requirement. | **Resolved (user):** ship a **minimal live timeline** (Start/Stop + readiness + `capture_tick` stream); the full Command-Deck UI lands in P5. | user | ✅ done |
+| 12 | 2026-06-21 | **P2 frame context columns** — `frames.app_hint`/`window_title` are nullable "context" with no producer specified for P2. | **Resolved (user):** **populate `app_hint` + `window_title`** from the foreground-window read the privacy gate already performs; `browser_url` stays null (needs UI Automation — deferred). | user | ✅ done |
+| 13 | 2026-06-21 | **OCR confidence unavailable** — WinRT `Media.Ocr` exposes no confidence, but `OcrResult.mean_confidence` requires one (`06` #2). | **Resolved (user):** sentinel **`-1.0` = "unknown"** for WinRT rows (`ocr::CONFIDENCE_UNKNOWN`); no fabricated score, no schema change. | user | ✅ done |
 
 Resolved engineering decisions (spec silent on *how*, recorded for traceability):
 - **ts-rs 64-bit ints → TS `number`** via per-field `#[ts(type = "number")]` (Tauri JSON wire);
@@ -44,6 +49,30 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
   transaction — lets the timeline filter by activity without a join. (PR #4 review.)
 - **Job no-op guard (P1, post-review):** `complete_job`/`fail_job` error on a zero-row update
   (unknown/stale id) rather than silently succeeding — upholds `03 §5`'s "never silently dropped".
+- **Diff gate (P2):** `capture.diff_threshold` is a normalized `[0,1]` mean-absolute **luma**
+  difference over a `32×32` nearest-neighbour grid (`diff.rs`); the first frame per monitor and any
+  resolution change always pass. `content_hash` = `blake3` of the raw RGBA bytes.
+- **Frame JPEG layout (P2):** `frames/day-<n>/<captured_at>-<monitor>.jpg` where
+  `n = captured_at / 86_400_000` — per-day sharding **without a calendar dependency** (chose this
+  over `YYYY/MM/DD` to avoid adding `chrono`/`time` in P2); stored as a path relative to app-data.
+- **`CapturedFrame` refinement (P2):** added `app_hint` / `window_title: Option<String>` (a
+  spec-permitted shape refinement) so the capturer carries the foreground context it already reads
+  for the privacy gate, without the kernel depending on the capture impl (`03 §2`).
+- **windows-rs (P2):** `windows = "0.62"`, features per crate under `cfg(windows)`. WinRT async
+  uses `IAsyncOperation::join()` (windows-future 0.3 renamed the old `.get()`); SoftwareBitmap from
+  bytes needs the `Storage_Streams` feature; `BOOL`/`MONITORINFOF_PRIMARY` moved namespaces.
+- **COM apartments (P2):** OCR runs on a dedicated **STA** thread (`COINIT_APARTMENTTHREADED`);
+  capture runs on a dedicated **MTA** thread (`COINIT_MULTITHREADED`) with a free-threaded WGC frame
+  pool. No `.await` ever runs inside COM code (bridged via channels + `spawn_blocking`).
+- **Lock detection (P2):** `privacy.pause_on_lock` uses an `OpenInputDesktop` heuristic — a
+  non-elevated process can't open the input (secure) desktop while locked, so a failed open ⇒
+  "locked" (`privacy.rs`). Simpler/robust enough vs. a `WTS` session-notification window.
+- **WGC sessions (P2):** per-monitor sessions stay running and are **sampled** each
+  `capture.interval_ms` (drain-to-latest + diff gate), rather than start/stop per tick. Simple and
+  correct; a single-shot-per-tick optimization to cut idle GPU work can come later.
+- **OCR fallback (P2):** if the WinRT engine can't be created (no language pack), the composition
+  root substitutes an `UnavailableOcr` that errors per frame (logged) so the app still runs and
+  capture readiness/logs surface the problem — never a silent half-working state.
 
 Manual steps still required (e.g. signing certs, first-run model download, CI secrets):
 - **First-run model download** (vision/answer GGUF + mmproj, embedding models) — P3/P4, per

@@ -224,3 +224,79 @@ $ git status --porcelain -- ui/src/bindings
 ```
 Behavior unchanged vs. Pass 2 (54 green, same counts) — confirming these were doc/comment-only
 edits, and that the merged-`main` state actually holds the green the docs claim.
+
+---
+
+## Pass 4 — 2026-06-21 — P2 Capture happy path (`p2-capture` branch)
+
+**Stack added:** `windows` 0.62 (WGC + D3D11 + WinRT Media.Ocr + Win32 foreground/lock), `image`
+(JPEG encode), `tempfile` (dev). Four spec-silent decisions resolved with the user up front
+(`07` #9–#13).
+
+### Implemented (with verbatim verification)
+- **`capture` crate** — `WgcCapture: CaptureSource` on raw `windows-rs`: per-monitor D3D11 device +
+  free-threaded WGC frame pool on a dedicated COM(MTA) thread, BGRA→RGBA staging readback; a pure
+  **diff gate** (`32×32` luma mean-abs-diff vs `capture.diff_threshold`, `blake3` content hash); a
+  **privacy gate** (`OpenInputDesktop` lock probe + foreground app/title match for
+  `privacy.excluded_apps`, also filling `app_hint`/`window_title`). `next_frame` paces by
+  `capture.interval_ms` and drains changed frames one at a time.
+- **`ocr` crate** — `WinRtOcr: OcrProvider` on a dedicated **STA** worker thread
+  (`CoInitializeEx`), one reusable `OcrEngine`, RGBA→`SoftwareBitmap(Bgra8)`,
+  `RecognizeAsync().join()`; `mean_confidence = -1.0` sentinel (engine gives none, `06` #2).
+- **`kernel` crate** — the capture loop (CaptureSource→OcrProvider→JPEG encode→`insert_frame`/
+  `insert_ocr`→enqueue `embed_text`→emit `capture_tick`), a typed `broadcast` event bus, a
+  typed-`Settings` loader over the key/value table, and `Kernel::start_capture`/`stop_capture`
+  (idempotent; off until started). **`vision_tag` is never auto-enqueued** (`13.3`).
+- **`src-tauri`** — wires the store + OCR worker + capture factory + kernel; adds `capture_control`
+  + `get_frame` commands; `get_readiness` is now live; forwards `capture_tick`/`readiness_changed`
+  to the WebView2 UI.
+- **`ui`** — a minimal **live timeline**: Start/Stop, a live readiness strip, and a row per stored
+  frame from `capture_tick` (all view states; typed `ts-rs` bindings; lint-clean).
+
+Verbatim verification (run 2026-06-21):
+```
+$ cargo fmt --all -- --check                                   # exit 0
+$ cargo clippy --workspace --all-targets -- -D warnings        # exit 0
+$ cargo build --workspace                                      # exit 0
+$ cargo test --workspace
+    capture  (lib)            test result: ok.  9 passed; 0 failed   # diff + privacy matchers
+    kernel   tests\pipeline    test result: ok.  3 passed; 0 failed   # fake capture→ocr→store→job
+    store    tests\store.rs   test result: ok. 24 passed; 0 failed
+    traits   (lib)            test result: ok. 28 passed; 0 failed
+    screensearch_lib (lib)    test result: ok.  2 passed; 0 failed
+    # 66 passed; 0 failed; 3 ignored (Windows-gated real-hardware tests below)
+$ cd ui && npm run build      # ✓ built in 334ms (tsc --noEmit clean), exit 0
+$ cd ui && npm run lint       # exit 0
+$ git status --porcelain -- ui/src/bindings   # empty (no ts-rs drift; no IPC type changed)
+```
+- **Observed running** (the P2 "done = observed" proof, `#[ignore]`d real-hardware tests run
+  locally on Win11 26200):
+```
+$ cargo test -p capture --test wgc_smoke -- --ignored          # 1 passed (real frame, correct dims)
+$ cargo test -p ocr -- --ignored                               # 1 passed (real WinRT OCR)
+$ cargo test -p screensearch --test e2e_capture -- --ignored
+    test capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs ... ok   # 1 passed in 3.55s
+```
+  The e2e test drives the **real** Kernel (WGC + WinRT OCR + on-disk store): a frame is captured,
+  OCR'd, written to `frames` + `ocr_text` with a JPEG on disk, and an `embed_text` job is enqueued —
+  while **no `vision_tag` job is** (`13.1` + `13.3`, demonstrated, not just compiled).
+
+### Skipped / deferred (intentional, by phase)
+- Embedding worker (P3) consumes the `embed_text` jobs P2 enqueues; vision/answer → P4.
+- Live `search`/`ask`/`get_timeline`/`enqueue_vision` IPC → P3+. Thumbnails in the timeline (needs
+  the Tauri asset protocol) + full Command-Deck UI → P5.
+- `storage.retention_days` purge → P5. Single-shot-per-tick WGC optimization → later (`07`).
+
+### Hallucinated / corrected
+- Assumed windows-rs `IAsyncOperation::get()` — windows-future 0.3 renamed it to `.join()`.
+- Assumed `SoftwareBitmap::CreateCopyFromBuffer` / `CryptographicBuffer::CreateFromByteArray` were
+  always available — both need the `Storage_Streams` feature.
+- Assumed `BOOL` in `Win32::Foundation` and `MONITORINFOF_PRIMARY` in `Graphics::Gdi` — moved to
+  `windows::core::BOOL` and `Win32::UI::WindowsAndMessaging`.
+
+### Still risky / to watch
+- WGC `TryGetNextFrame` null/empty handling on cold start is treated as "no frame this cycle"
+  (`Surface()` errors → `Ok(None)`); the first cycle or two on a fresh session may be skipped.
+- Lock detection is an `OpenInputDesktop` heuristic (`07`); verify behaviour if ever run elevated.
+- Continuous per-monitor WGC sessions sample every `interval_ms` — fine, but idle GPU work could be
+  trimmed with single-shot capture later.
