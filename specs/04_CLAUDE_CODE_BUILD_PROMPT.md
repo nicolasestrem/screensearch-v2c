@@ -16,6 +16,7 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 2. `02_STRATEGIC_PLAN.md` — what to build and in what phase order.
 3. `03_MASTER_PRODUCTION_SPEC.md` — exactly how (schema, traits, protocols, DoD).
 `00_PROJECT_INTAKE.md` is raw source material — consult for model tiers, distribution, license.
+**For any frontend work (P5):** also read `UI_REFERENCE.md` — it is authoritative for the UI.
 
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
@@ -25,6 +26,7 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 | Why are we doing this / scope / phases | `02` |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
+| UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
 | Model tiers, license, distribution, intake facts | `00` |
 | How to operate, build order, guardrails | this file |
 
@@ -53,6 +55,21 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
 - **Windows-native APIs are intentional** — do not add cross-platform abstractions or stub them
   away to "make it build" elsewhere.
 - **No unattributed config.** Every new setting goes in `settings` with a default in `03 §8`.
+
+### UI guardrails (P5 — enforce against `UI_REFERENCE.md`)
+- **Typed IPC only.** UI consumes `ts-rs`-generated types; never hand-write an API type
+  (no contract drift). Server-state goes through **TanStack Query** — no ad-hoc `useEffect` fetches.
+- **Every view defines all states** — `loading / empty / error / partial / populated`. **No mock
+  data, no dead ends, no "Coming Soon."** A screen with only a happy path is not done.
+- **Rules of Hooks gate.** `eslint-plugin-react-hooks` runs at error level in CI; all hooks before
+  any early return; conditionals in JSX, not around hooks. Every route has an error boundary.
+- **Tokens only.** No hardcoded hex / px font-size / magic spacing in components — reference
+  `tokens.css` (`UI_REFERENCE §2`).
+- **A11y is a gate**, not a polish step — AA contrast, visible focus, keyboard operation of every
+  screen (incl. the timeline), `prefers-reduced-motion` honored.
+- **Don't flatten the identity.** Keep the Scanline-Timeline signature and one-accent discipline
+  (`UI_REFERENCE §1`); if the UI starts reading as a generic dark dashboard, that's a regression.
+- **Verify by running + screenshotting** each screen in each state — not "it compiles."
 
 ## 5. The one rule that makes this work: STOP AT AMBIGUITY
 When you hit a decision:

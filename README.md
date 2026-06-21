@@ -42,6 +42,7 @@ on-device, no cloud.
 
 ```
 specs/   spec-engineering pipeline (00 intake → 04 build prompt → 05+ build/review)
+         + UI_REFERENCE.md (frontend identity, tokens, screens, state matrix)
 ```
 
 ## Platform
