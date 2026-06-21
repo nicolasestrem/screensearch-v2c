@@ -194,3 +194,24 @@
   --ignored` measured **p95 = 32.6 ms over 10 000 frames** (DoD 13.4 ✓); the `attach_embedder`
   integration test drove the real worker pool draining a job and the vector arm then finding the
   frame via a non-FTS-matching query.
+
+## 2026-06-21 — P3 review fixes (PR #7)
+- **Change:** Addressed the three findings from the PR #7 code review (gemini-code-assist):
+  1. **Stale-job sweep clock precision (high).** `reset_stale_running_jobs` now branches: the
+     **startup sweep** (`older_than_ms <= 0`) requeues *every* `running` job unconditionally (no
+     `updated_at` comparison, so it can't miss a job marked running in the last fraction of a second
+     before a crash); the periodic sweep keeps the time filter. Additionally, `claim_jobs` now stamps
+     `updated_at` with the `unixepoch()*1000` **DB clock** (not the caller's `now`), so the periodic
+     sweep compares like-for-like — removing the Rust-ms-vs-SQLite-second mismatch at the root.
+  2. **Image-load retries (medium).** `embed_image` no longer dead-letters on *any* load error — a
+     transient Windows sharing violation (AV / indexer / backup briefly holding the JPEG) now
+     **retries** (the file still `exists()`); only a genuinely missing file is dead-lettered.
+  3. **`WorkerPool` Drop safety (medium).** Added `impl Drop for WorkerPool` that signals stop, so a
+     pool dropped without a graceful `shutdown` (panic / early return) doesn't leave detached workers
+     draining the whole queue; `shutdown` uses `mem::take` to avoid moving out of a `Drop` type.
+- **Why:** robustness of the durable queue and the Windows file path under real conditions; review
+  follow-through (`04 §5/§6`). The claude code-review action found no issues.
+- **Verification:** `fmt`/`clippy --workspace --all-targets -D warnings` clean; `cargo test
+  --workspace` all pass (0 failed) — kernel enrichment **7** (added two `embed_image` worker tests:
+  load-from-disk happy path + missing-file dead-letter), store 27, the existing sweep tests still
+  green. Also merged the updated `claude-code-review` workflow from `main`.

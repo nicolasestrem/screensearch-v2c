@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P3 review (PR #7, 2026-06-21)
+- **Stale-job recovery** never misses a job now: the startup sweep requeues every
+  `running` job unconditionally, and `claim` + the periodic sweep share one DB clock
+  (no Rust-millisecond vs SQLite-second mismatch).
+- **Image embedding** retries on a transient file lock (AV / indexer / backup) and
+  only dead-letters a genuinely missing JPEG — robuster on Windows.
+- The worker pool now stops its background tasks even if its handle is dropped
+  without a graceful shutdown (`Drop` signals stop), so it can't keep draining the
+  queue after an unexpected teardown.
+
 ### Added — P3 Deferred enrichment (2026-06-21)
 - **Embedding worker, end-to-end** (`02 §5`, `03 §5/§13.2`): a bounded worker pool
   drains the `embed_text` jobs capture enqueues into vectors via **fastembed**

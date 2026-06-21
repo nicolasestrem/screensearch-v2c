@@ -68,7 +68,10 @@ impl EmbeddingProvider for MapEmbedder {
             .collect()
     }
     async fn embed_image(&self, _image: &RgbaImage) -> Result<Embedding> {
-        anyhow::bail!("image embedding unused in these tests")
+        if self.fail {
+            anyhow::bail!("forced embed failure");
+        }
+        Ok(one_hot(0))
     }
     fn text_model_name(&self) -> &str {
         "fake-text"
@@ -108,6 +111,16 @@ fn ocr(text: &str) -> OcrResult {
 fn embed_text_job(frame_id: Option<i64>, max_attempts: i64) -> NewJob {
     NewJob {
         kind: JobKind::EmbedText,
+        frame_id,
+        priority: 0,
+        max_attempts,
+        not_before: 0,
+    }
+}
+
+fn embed_image_job(frame_id: Option<i64>, max_attempts: i64) -> NewJob {
+    NewJob {
+        kind: JobKind::EmbedImage,
         frame_id,
         priority: 0,
         max_attempts,
@@ -247,6 +260,74 @@ async fn process_job_retries_then_dead_letters_on_persistent_embed_failure() {
     assert_eq!(stats.dead, 1);
     assert_eq!(stats.done, 0);
     assert_eq!(stats.pending, 0);
+}
+
+/// embed_image loads the stored JPEG from disk, embeds it, and upserts the image
+/// vector — the optional visual-recall path (`03 §4`).
+#[tokio::test]
+async fn process_job_embeds_image_from_disk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+
+    let concrete = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = concrete.clone();
+    let fid = store.insert_frame(new_frame(4_000)).await.unwrap(); // image_path = frames/4000.jpg
+    store
+        .enqueue_job(embed_image_job(Some(fid), 3))
+        .await
+        .unwrap();
+
+    // write a real JPEG where the worker resolves it: <data_dir>/frames/4000.jpg
+    let abs = data_dir.join("frames").join("4000.jpg");
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    let pixels = image::RgbaImage::from_pixel(8, 8, image::Rgba([120, 130, 140, 255]));
+    image::DynamicImage::ImageRgba8(pixels)
+        .to_rgb8()
+        .save(&abs)
+        .unwrap();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MapEmbedder::new());
+    let job = store
+        .claim_jobs(&[JobKind::EmbedImage], 1, 1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    process_job(&store, &embedder, &data_dir, job)
+        .await
+        .unwrap();
+
+    assert_eq!(store.job_stats().await.unwrap().done, 1);
+    assert_eq!(concrete.image_embedding_count().await.unwrap(), 1);
+}
+
+/// A missing JPEG (file genuinely gone, not just locked) dead-letters — it won't
+/// reappear. (A transient lock would `exists()` and so retry instead.)
+#[tokio::test]
+async fn process_job_dead_letters_embed_image_when_file_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let fid = store.insert_frame(new_frame(5_000)).await.unwrap(); // frames/5000.jpg never written
+    store
+        .enqueue_job(embed_image_job(Some(fid), 3))
+        .await
+        .unwrap();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MapEmbedder::new());
+    let job = store
+        .claim_jobs(&[JobKind::EmbedImage], 1, 1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    process_job(&store, &embedder, &data_dir, job)
+        .await
+        .unwrap();
+
+    let stats = store.job_stats().await.unwrap();
+    assert_eq!(stats.dead, 1, "a missing JPEG is unrecoverable");
+    assert_eq!(stats.done, 0);
 }
 
 // --- end-to-end: real worker pool drains the queue, vector arm finds the frame ---

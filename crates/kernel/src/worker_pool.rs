@@ -94,12 +94,25 @@ impl WorkerPool {
         }
     }
 
-    /// Signals every worker to stop and waits for in-flight jobs to finish.
-    pub(crate) async fn shutdown(self) {
+    /// Signals every worker to stop and waits for in-flight jobs to finish. Takes the
+    /// joins out via `mem::take` (rather than moving out of `self`) because
+    /// [`WorkerPool`] implements [`Drop`].
+    pub(crate) async fn shutdown(mut self) {
         let _ = self.stop.send(true);
-        for join in self.joins {
+        for join in std::mem::take(&mut self.joins) {
             let _ = join.await;
         }
+    }
+}
+
+impl Drop for WorkerPool {
+    /// Best-effort safety net: if the handle is dropped without a graceful
+    /// `shutdown` (an early return or a panic in the owner), still signal stop so the
+    /// detached `tokio::spawn` tasks exit their loops promptly instead of draining the
+    /// whole queue first. (`drop` can't `.await` the joins, but the signal alone ends
+    /// the loops.)
+    fn drop(&mut self) {
+        let _ = self.stop.send(true);
     }
 }
 
@@ -255,7 +268,17 @@ async fn embed_image_outcome(
     let abs = data_dir.join(&input.image_path);
     let image = match load_rgba(abs.clone()).await {
         Ok(img) => img,
-        Err(e) => return Outcome::DeadLetter(format!("load image {}: {e}", abs.display())),
+        // A transient IO / sharing violation (AV, search indexer, or backup briefly
+        // holding the file on Windows) clears on retry; a file that is genuinely gone
+        // won't reappear. (The FK cascade deletes a frame's jobs with the frame, so an
+        // existing job whose JPEG is missing means an out-of-band deletion.)
+        Err(e) => {
+            return if abs.exists() {
+                Outcome::Retry(format!("load image {}: {e}", abs.display()))
+            } else {
+                Outcome::DeadLetter(format!("image missing {}: {e}", abs.display()))
+            };
+        }
     };
     let emb = match embedder.embed_image(&image).await {
         Ok(e) => e,

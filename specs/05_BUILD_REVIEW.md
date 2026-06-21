@@ -372,3 +372,26 @@ npm --prefix ui run build  → tsc --noEmit clean; vite built in 393ms; no ts-rs
   filter) stays open — unobserved here, revisit if recall on tight windows matters.
 - **Stop-workers-on-exit** is best-effort (`block_on` in the Tauri exit hook); correctness does not
   depend on it (the startup sweep requeues any interrupted job).
+
+---
+
+## Pass 6 — 2026-06-21 — P3 review fixes (PR #7)
+
+Three findings from the PR #7 review (gemini-code-assist; the claude code-review action found no
+issues), all verified valid and fixed:
+
+- **Stale-job sweep clock precision (high)** — `reset_stale_running_jobs(older_than_ms <= 0)` now
+  requeues *all* `running` jobs unconditionally (the startup sweep can't miss a job marked running
+  in the last sub-second before a crash); and `claim_jobs` stamps `updated_at` with the
+  `unixepoch()*1000` DB clock, so the periodic sweep no longer mixes Rust-ms with SQLite-second time.
+- **Image-load retries (medium)** — `embed_image` retries on a transient file error when the JPEG
+  still `exists()` (Windows sharing violations from AV/indexer/backup), dead-lettering only a
+  genuinely missing file — instead of dead-lettering on any error.
+- **`WorkerPool` Drop (medium)** — `impl Drop` signals stop so a pool dropped without `shutdown`
+  doesn't leave detached workers draining the queue; `shutdown` uses `mem::take` (can't move out of a
+  `Drop` type). *Note: the reviewer's snippet kept `for join in self.joins`, which would not compile
+  once `Drop` is implemented — corrected with `mem::take`.*
+
+**Verification:** `fmt` + `clippy --workspace --all-targets -- -D warnings` clean; `cargo test
+--workspace` all pass (kernel enrichment **7** — two new `embed_image` tests added; store 27; all
+prior tests green). Merged the updated `claude-code-review` workflow from `main`.
