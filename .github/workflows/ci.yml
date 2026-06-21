@@ -15,11 +15,11 @@ jobs:
     name: build & test (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # --- Frontend first: src-tauri's generate_context! embeds ui/dist, which
       #     is git-ignored, so the UI must be built before any cargo step. ---
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
