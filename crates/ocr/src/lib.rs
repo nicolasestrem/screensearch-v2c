@@ -30,10 +30,11 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTME
 /// confidence, so we record "unknown" rather than inventing a number (`06`/`07`).
 pub const CONFIDENCE_UNKNOWN: f32 = -1.0;
 
-/// One OCR request handed to the STA worker. Carries owned RGBA bytes (Send) so no
+/// One OCR request handed to the STA worker. Carries owned **BGRA** bytes (already
+/// converted on the blocking pool, Send) so the STA worker does no pixel work and no
 /// WinRT object ever crosses the thread boundary.
 struct Request {
-    rgba: Vec<u8>,
+    bgra: Vec<u8>,
     width: u32,
     height: u32,
     resp: mpsc::Sender<Result<OcrResult>>,
@@ -71,15 +72,21 @@ impl WinRtOcr {
 #[async_trait]
 impl OcrProvider for WinRtOcr {
     async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult> {
-        // Copy the pixels out (Send) so the WinRT work stays on the STA thread.
-        let rgba = frame.pixels.as_raw().clone();
+        // Clone the Arc (cheap); the single full-frame copy + RGBA→BGRA swap happens
+        // on the blocking pool — never on the async executor or the STA worker.
+        let pixels = frame.pixels.clone();
         let (width, height) = (frame.width, frame.height);
         let tx = self.tx.lock().expect("ocr sender poisoned").clone();
 
         tokio::task::spawn_blocking(move || -> Result<OcrResult> {
+            // WinRT OCR wants BGRA8; the capture pipeline produces RGBA8.
+            let mut bgra = pixels.as_raw().clone();
+            for px in bgra.chunks_exact_mut(4) {
+                px.swap(0, 2);
+            }
             let (resp_tx, resp_rx) = mpsc::channel();
             tx.send(Request {
-                rgba,
+                bgra,
                 width,
                 height,
                 resp: resp_tx,
@@ -116,7 +123,7 @@ fn worker_main(rx: mpsc::Receiver<Request>, ready: mpsc::Sender<Result<()>>) {
     };
 
     while let Ok(req) = rx.recv() {
-        let result = recognize_blocking(&engine, &req.rgba, req.width, req.height);
+        let result = recognize_blocking(&engine, &req.bgra, req.width, req.height);
         let _ = req.resp.send(result);
     }
 
@@ -140,21 +147,16 @@ fn create_engine() -> Result<OcrEngine> {
     }
 }
 
-/// Runs OCR on the worker thread. Converts RGBA → BGRA8 `SoftwareBitmap`, awaits
-/// the recognizer synchronously (safe on the STA thread), and joins the lines.
+/// Runs OCR on the STA worker thread from a ready **BGRA8** buffer (the swap already
+/// happened on the blocking pool): wraps it in a `SoftwareBitmap`, awaits the
+/// recognizer synchronously (safe on the STA thread), and joins the lines.
 fn recognize_blocking(
     engine: &OcrEngine,
-    rgba: &[u8],
+    bgra: &[u8],
     width: u32,
     height: u32,
 ) -> Result<OcrResult> {
-    // WinRT OCR wants a BGRA8 bitmap; the capture pipeline produces RGBA8.
-    let mut bgra = rgba.to_vec();
-    for px in bgra.chunks_exact_mut(4) {
-        px.swap(0, 2);
-    }
-
-    let buffer = CryptographicBuffer::CreateFromByteArray(&bgra)?;
+    let buffer = CryptographicBuffer::CreateFromByteArray(bgra)?;
     let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
         &buffer,
         BitmapPixelFormat::Bgra8,

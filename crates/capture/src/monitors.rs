@@ -44,9 +44,14 @@ unsafe extern "system" fn proc(
     mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
     if GetMonitorInfoW(hmonitor, std::ptr::addr_of_mut!(mi) as *mut MONITORINFO).as_bool() {
         let rc = mi.monitorInfo.rcMonitor;
-        let name = String::from_utf16_lossy(&mi.szDevice)
-            .trim_end_matches('\0')
-            .to_string();
+        // Convert up to the first NUL only — bytes past the terminator may be
+        // uninitialized garbage that a trailing-NUL trim wouldn't remove.
+        let end = mi
+            .szDevice
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(mi.szDevice.len());
+        let name = String::from_utf16_lossy(&mi.szDevice[..end]);
         out.push(EnumeratedMonitor {
             info: MonitorInfo {
                 index: out.len() as u32,

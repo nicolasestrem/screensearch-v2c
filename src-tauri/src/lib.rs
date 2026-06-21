@@ -171,8 +171,8 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
     }
 }
 
-/// Spawns the WinRT OCR worker, falling back to an always-erroring provider if no
-/// OCR language is installed (logged; capture still runs, frames just lack text).
+/// Spawns the WinRT OCR worker, falling back to an empty-text provider if no OCR
+/// language is installed (logged; capture still runs, frames just lack text).
 fn spawn_ocr() -> Arc<dyn OcrProvider> {
     match ocr::WinRtOcr::spawn() {
         Ok(engine) => {
@@ -192,13 +192,20 @@ fn capture_factory() -> CaptureFactory {
     Arc::new(|config| Ok(Box::new(capture::WgcCapture::new(config)?) as Box<dyn CaptureSource>))
 }
 
-/// Fallback OCR used only when the WinRT engine can't be created.
+/// Fallback OCR used only when the WinRT engine can't be created. Returns **empty
+/// text** rather than an error, so capture still runs and frames are stored without
+/// OCR (the capture loop drops a frame on a *real* recognize error — missing OCR is
+/// not one). Surfaced via the warning logged in [`spawn_ocr`].
 struct UnavailableOcr;
 
 #[async_trait]
 impl OcrProvider for UnavailableOcr {
     async fn recognize(&self, _frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        anyhow::bail!("OCR engine unavailable")
+        Ok(OcrResult {
+            text: String::new(),
+            mean_confidence: ocr::CONFIDENCE_UNKNOWN,
+            engine: "unavailable".to_string(),
+        })
     }
 }
 
