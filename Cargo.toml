@@ -40,6 +40,27 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ts-rs = "10"
 
+# HTTP: the OpenAI-compatible llama.cpp sidecar client (localhost, plain HTTP) and
+# runtime downloads (GitHub release zip + HuggingFace GGUF). rustls so we never need
+# a system OpenSSL on Windows; `stream` for SSE answer streaming + large downloads.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+] }
+# dev-only: a localhost mock of the sidecar's OpenAI HTTP API for client tests.
+wiremock = "0.6"
+
+# Runtime model + binary downloads (Rust-only, no Python — 01 §5, MODEL_REGISTRY §4).
+# hf-hub pulls GGUF/mmproj from HuggingFace; zip unpacks the prebuilt llama.cpp Vulkan
+# release; base64 encodes captured frames into the vision lane's image data URLs.
+hf-hub = { version = "0.4", default-features = false, features = [
+    "tokio",
+    "rustls-tls",
+] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
+
 # data spine: SQLite (bundled, FTS5) + sqlite-vec (vec0) + stable content hashing.
 # `bundled` compiles a recent SQLite so we never depend on a system libsqlite3 on
 # Windows; that amalgamation enables FTS5 (and FTS3/RTREE) by default, so the

@@ -115,6 +115,40 @@ impl SqliteStore {
         .await
     }
 
+    /// Frame ids with no `vision_analysis` row yet, oldest first, capped at `limit`,
+    /// optionally within `[start, end)` capture time. Feeds the timer/idle vision
+    /// batch and the `enqueue_vision` range target (`03 §5`).
+    pub async fn untagged_frame_ids(
+        &self,
+        limit: u32,
+        range: Option<(i64, i64)>,
+    ) -> Result<Vec<i64>> {
+        self.with_conn(move |conn| {
+            // Build the query once, appending the optional time-window predicate and
+            // binding every value as an anonymous positional `?` (in push order).
+            let mut sql = String::from(
+                "SELECT f.id FROM frames f
+                 LEFT JOIN vision_analysis v ON v.frame_id = f.id
+                 WHERE v.frame_id IS NULL",
+            );
+            let mut args: Vec<i64> = Vec::new();
+            if let Some((start, end)) = range {
+                sql.push_str(" AND f.captured_at >= ? AND f.captured_at < ?");
+                args.push(start);
+                args.push(end);
+            }
+            sql.push_str(" ORDER BY f.captured_at ASC LIMIT ?");
+            args.push(i64::from(limit));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let ids = stmt
+                .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
+        .await
+    }
+
     /// Assembles the full per-frame detail (frame context + OCR text + vision +
     /// tags), or `None` if the frame does not exist. Backs the `get_frame`
     /// command (`03 §7`).

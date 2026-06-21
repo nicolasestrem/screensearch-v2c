@@ -19,6 +19,12 @@
 | 11 | 2026-06-21 | **P2 UI scope** — `02 §5` lists a "live timeline in the UI" for P2, but `03 §13` DoD has no UI requirement. | **Resolved (user):** ship a **minimal live timeline** (Start/Stop + readiness + `capture_tick` stream); the full Command-Deck UI lands in P5. | user | ✅ done |
 | 12 | 2026-06-21 | **P2 frame context columns** — `frames.app_hint`/`window_title` are nullable "context" with no producer specified for P2. | **Resolved (user):** **populate `app_hint` + `window_title`** from the foreground-window read the privacy gate already performs; `browser_url` stays null (needs UI Automation — deferred). | user | ✅ done |
 | 13 | 2026-06-21 | **OCR confidence unavailable** — WinRT `Media.Ocr` exposes no confidence, but `OcrResult.mean_confidence` requires one (`06` #2). | **Resolved (user):** sentinel **`-1.0` = "unknown"** for WinRT rows (`ocr::CONFIDENCE_UNKNOWN`); no fabricated score, no schema change. | user | ✅ done |
+| 14 | 2026-06-21 | **P4 `llama-server` binary acquisition** — `03 §6` assumes a `llama-server` child but never says where the binary comes from (doctor only warns "not on PATH"). | **Resolved (user):** **runtime auto-download** of the prebuilt llama.cpp **Vulkan** Windows release from GitHub into `<app-data>/sidecar/llama` (`inference::download::ensure_binary`); resolution order = `SSV2C_LLAMA_RELEASE_URL` env → existing install → download. Pinned to "latest" + a unit-tested `*-win-vulkan-x64.zip` asset selector. | user | ✅ done |
+| 15 | 2026-06-21 | **P4 GGUF acquisition at runtime** — `MODEL_REGISTRY §4` describes the dev-time `hf` CLI, which is Python (banned in the shipped runtime, `01 §5`). | **Resolved (user):** **runtime auto-download via Rust `hf-hub`** (no Python): list repo siblings, pick `*Q4_K_M*.gguf` (+ same-repo `mmproj*.gguf` for vision), copy into `<app-data>/models/<lane>/<tier>` lazily on first use. | user | ✅ done |
+| 16 | 2026-06-21 | **P4 acceptance bar** on a machine without the binary/models — `03 §10/§13` mix deterministic tests with a real-`llama-server` smoke. | **Resolved (user):** **lifecycle + mock-tested inference** must pass now (no-orphan Job-Object, reap, idle-evict decision, HTTP client vs a mock); real GPU end-to-end is a **`#[ignore]` smoke** (`tests/smoke.rs`), runnable manually. | user | ✅ done |
+| 17 | 2026-06-21 | **Reap sentinel** — `03 §6` says identify a stray sidecar by a "unique command-line sentinel arg", but `llama-server` rejects unknown flags. | **Resolved (agent):** use the child's **full image path** (always under our app-data `sidecar/llama`) as the sentinel, cross-checked against a pidfile, before `TerminateProcess` — never kills an unrelated PID. `KILL_ON_JOB_CLOSE` stays the primary no-orphan guarantee; reap is defense-in-depth. | agent | ✅ done |
+| 18 | 2026-06-21 | **Answer citations + retrieval depth** — `03 §7/§13.5` require citations + a grounded answer but don't define how citations are chosen or the retrieval K. | **Resolved (agent):** emit one `AnswerDelta::Citation` per **retrieved context frame** (the grounding set — reliable, not parsed from prose); `ask` retrieves **top-K = 8** hybrid hits and grounds on their OCR text. | agent | ✅ done |
+| 19 | 2026-06-21 | **Vision tagging details** spec-silent: timer/idle batch size, vision confidence fallback, no pending-job dedup, multi-GPU device choice. | **Resolved (agent):** timer/idle batch **N = 20** untagged frames/tick; non-JSON vision reply → raw text as description with the **`-1.0` "unknown"** confidence sentinel (consistent with #13); **no dedup** of pending `vision_tag` jobs (re-enqueue is harmless — `insert_vision` is an idempotent upsert); `-ngl 99` offloads to **Vulkan device 0** (a device-select env/flag may be needed on the AMD-iGPU + NVIDIA box — revisit if the wrong device is picked). | agent | open (revisit P5) |
 
 Resolved engineering decisions (spec silent on *how*, recorded for traceability):
 - **ts-rs 64-bit ints → TS `number`** via per-field `#[ts(type = "number")]` (Tauri JSON wire);
@@ -93,9 +99,12 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
   chunking is a non-breaking later addition.
 
 Manual steps still required (e.g. signing certs, first-run model download, CI secrets):
-- **First-run model download** — embedding models (P3) now auto-download via fastembed on first
-  use into `<app-data>/models/fastembed` (`embed_model` readiness shows Initializing→Ready, no
-  progress %); vision/answer GGUF + mmproj remain P4 per `MODEL_REGISTRY §4`. Not bundled.
+- **First-run model download** — embedding models (P3) auto-download via fastembed into
+  `<app-data>/models/fastembed`. **P4:** the `llama-server` Vulkan binary auto-downloads into
+  `<app-data>/sidecar/llama` at launch (off-thread; `sidecar` readiness Initializing→Ready/
+  Unavailable), and the vision/answer GGUF (+ mmproj) auto-download via `hf-hub` into
+  `<app-data>/models/<lane>/<tier>` **lazily on first request** (gaps #14/#15). Nothing is bundled.
+  No download-progress %% yet (readiness is coarse Initializing→Ready); a percentage is a P5 nicety.
 - **`onnxruntime.dll` bundling (P3→P5):** `fastembed` → `ort` fetches a prebuilt ONNX Runtime at
   build time and ships `onnxruntime.dll`; the Inno Setup installer / portable ZIP must bundle it
   (P5 packaging). Verify it's present beside the exe in the `tauri build` artifact.

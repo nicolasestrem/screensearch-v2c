@@ -215,3 +215,40 @@
   --workspace` all pass (0 failed) — kernel enrichment **7** (added two `embed_image` worker tests:
   load-from-disk happy path + missing-file dead-letter), store 27, the existing sweep tests still
   green. Also merged the updated `claude-code-review` workflow from `main`.
+
+---
+
+## 2026-06-21 — P4 Inference sidecar (`feat/p4-inference-sidecar` branch)
+- **Change:** Built the inference sidecar end-to-end. New `crates/inference` modules: `job_object` +
+  `process` (Windows Job Object `KILL_ON_JOB_CLOSE`; suspended `CreateProcessW` + assign-before-resume;
+  pidfile + image-path reap), `client` (reqwest OpenAI: non-stream vision + SSE answer), `supervisor`
+  (lazy spawn, idle-evict, `/health` gate, crash restart, startup reap, model switch, `Lease`
+  in-flight guard, `SidecarStatus` broadcast), `models` + `download` (tier→repo map, `Q4_K_M`+mmproj
+  pick, GitHub-release Vulkan binary + `hf-hub` GGUF downloaders — no Python), `vision` + `answer`
+  providers (`VisionProvider`/`AnswerProvider`; JSON-or-rawtext vision parse; `ThinkSplitter` for
+  inline `<think>` tags; one `Citation` per grounding frame). Wiring: kernel `attach_inference` + a
+  shared vision slot into the worker pool + the `vision_tag` branch; `vision_scheduler` (timer + idle,
+  opt-in); `Store::untagged_frame_ids`; `KernelEvent::SidecarStatus`→`sidecar` readiness;
+  `capture::user_idle_ms`; composition root resolves the binary off-thread, builds the supervisor +
+  providers, bridges status, attaches, shuts down on exit. New commands `ask` / `enqueue_vision` /
+  `set_model_tier`; new events `answer_delta` / `sidecar_status`.
+- **Why:** P4 per `02 §5` / `04 §3`, satisfying `03 §6` (sidecar lifecycle), `03 §5` (deferred vision),
+  `03 §13.5` (grounded thinking answers), `03 §13.6` (tiered models), and **DoD #7** (no orphan). Built
+  lifecycle-first: the Job-Object no-orphan binding before any real inference wiring.
+- **Decisions / corrections (user-confirmed + logged in `07`):** runtime auto-download of *both* the
+  `llama-server` binary (GitHub Vulkan release) and the GGUF models (`hf-hub`, no Python in runtime);
+  acceptance bar = lifecycle + mock-tested inference, with real GPU end-to-end as `#[ignore]` smokes.
+  Reap sentinel uses the child's full image path (under app-data) cross-checked with a pidfile — not
+  a custom flag `llama-server` would reject; `KILL_ON_JOB_CLOSE` remains the primary guarantee.
+  Citations = the retrieved context frames (reliable), not parsed from prose. Ask top-K = 8; vision
+  timer/idle batch N = 20; vision/answer confidence fallback uses the `-1.0` "unknown" sentinel
+  (consistent with the OCR-confidence decision). No new IPC types were needed — `ask`/`enqueue_vision`/
+  `set_model_tier`/`AnswerDelta`/`SidecarStatus`/`VisionTarget` all pre-existed from P0.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets --
+  -D warnings` (clean); `cargo build` (ok); `cargo test --workspace` all pass (0 failed) — inference
+  23 unit + no-orphan 1 + reap 2 + client 4 (+ 2 smoke ignored), kernel enrichment 9 (two new
+  `vision_tag` tests), store 28 (new `untagged_frame_ids` test), traits 28; `ui npm run build` ok
+  (`tsc --noEmit` clean, no binding diffs). The no-orphan gate
+  `killing_parent_terminates_job_bound_child` passes — DoD #7 demonstrated. Real vision-tag +
+  streamed-answer on the RTX 5060 Ti remain the gated manual smoke (`cargo test -p inference --test
+  smoke -- --ignored`).

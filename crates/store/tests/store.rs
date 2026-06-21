@@ -754,3 +754,45 @@ async fn reset_stale_running_jobs_spares_fresh_running() {
 
     assert_eq!(store.reset_stale_running_jobs(5 * 60_000).await.unwrap(), 0);
 }
+
+/// `untagged_frame_ids` returns frames with no vision row, oldest first, honoring the
+/// limit and the optional time window (the timer/idle batch + `enqueue_vision` range
+/// source, `03 §5`).
+#[tokio::test]
+async fn untagged_frame_ids_excludes_tagged_and_honors_range() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let f1 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f2 = store.insert_frame(frame_at(200)).await.unwrap();
+    let f3 = store.insert_frame(frame_at(300)).await.unwrap();
+
+    // Tag the middle frame; it must drop out of the untagged set.
+    store
+        .insert_vision(
+            f2,
+            VisionAnalysis {
+                description: "tagged".to_string(),
+                activity_type: None,
+                app_hint: None,
+                confidence: 0.5,
+                model: "m".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // All untagged, oldest first.
+    assert_eq!(
+        store.untagged_frame_ids(10, None).await.unwrap(),
+        vec![f1, f3]
+    );
+    // Limit caps the result.
+    assert_eq!(store.untagged_frame_ids(1, None).await.unwrap(), vec![f1]);
+    // Range [150, 350) excludes f1 (too early) and f2 (tagged) → only f3.
+    assert_eq!(
+        store
+            .untagged_frame_ids(10, Some((150, 350)))
+            .await
+            .unwrap(),
+        vec![f3]
+    );
+}

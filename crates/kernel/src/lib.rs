@@ -16,18 +16,32 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio::task::JoinHandle;
 use traits::{
-    CaptureConfig, CaptureSource, ComponentReadiness, ComponentStatus, EmbeddingProvider, JobKind,
-    OcrProvider, Readiness, Store,
+    AnswerProvider, CaptureConfig, CaptureSource, ComponentReadiness, ComponentStatus,
+    EmbeddingProvider, JobKind, NewJob, OcrProvider, Readiness, SidecarState, SidecarStatus, Store,
+    VisionProvider, VisionTarget,
 };
 
 mod capture_loop;
 mod events;
 pub mod settings;
+mod vision_scheduler;
 mod worker_pool;
 
 pub use capture_loop::{run_capture_loop, LoopCtx};
 pub use events::KernelEvent;
 pub use worker_pool::process_job;
+
+/// A platform idle-time source, injected by the composition root (the kernel forbids
+/// `unsafe`, so it can't query Win32 itself). Returns milliseconds since the last user
+/// input, or `None` if it can't be determined. Drives idle-triggered vision tagging
+/// (`03 §5`).
+pub type IdleSource = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// On-demand vision jobs outrank the background embedding backlog so a user's explicit
+/// "tag this" is serviced first (`03 §5`).
+const VISION_ONDEMAND_PRIORITY: i64 = 10;
+/// Upper bound on frames enqueued for one `enqueue_vision` range request.
+const VISION_RANGE_CAP: u32 = 1000;
 
 /// Builds a fresh [`CaptureSource`] from the current [`CaptureConfig`]. Supplied by
 /// the composition root so the kernel stays impl-agnostic; called on every
@@ -57,6 +71,13 @@ pub struct Kernel {
     embedder: Mutex<Option<Arc<dyn EmbeddingProvider>>>,
     /// The running enrichment worker pool; `None` until workers are started.
     workers: Mutex<Option<worker_pool::WorkerPool>>,
+    /// The vision provider, shared live with the worker pool so it can be attached
+    /// after the pool is running (`03 §6`). `None` until [`Kernel::attach_inference`].
+    vision: worker_pool::VisionSlot,
+    /// The answer provider (backs the `ask` command); `None` until attached.
+    answer: Mutex<Option<Arc<dyn AnswerProvider>>>,
+    /// The running timer/idle vision scheduler; `None` until inference is attached.
+    scheduler: Mutex<Option<vision_scheduler::SchedulerHandle>>,
 }
 
 impl Kernel {
@@ -85,6 +106,9 @@ impl Kernel {
             capture: Mutex::new(None),
             embedder: Mutex::new(None),
             workers: Mutex::new(None),
+            vision: Arc::new(RwLock::new(None)),
+            answer: Mutex::new(None),
+            scheduler: Mutex::new(None),
         }
     }
 
@@ -206,6 +230,10 @@ impl Kernel {
         if settings.enrich_image_embeddings {
             kinds.push(JobKind::EmbedImage);
         }
+        // Always claim vision_tag: such jobs only exist once a producer enqueues them
+        // (on-demand/timer/idle), and by then the provider is attached via the shared
+        // slot — so this doesn't depend on inference being up yet (`03 §6`).
+        kinds.push(JobKind::VisionTag);
         // `frames.image_path` is stored relative to the app-data root (`frames/…`).
         let data_dir = self
             .frames_dir
@@ -215,6 +243,7 @@ impl Kernel {
         let pool = worker_pool::WorkerPool::spawn(worker_pool::Shared {
             store: self.store.clone(),
             embedder,
+            vision: self.vision.clone(),
             data_dir,
             events: self.events.clone(),
             kinds,
@@ -242,5 +271,121 @@ impl Kernel {
             r.clone()
         };
         let _ = self.events.send(KernelEvent::ReadinessChanged(snapshot));
+    }
+
+    /// Attaches the inference providers (`03 §6`): the vision provider lights up the
+    /// `vision_tag` worker path via the shared slot (no pool restart needed), the
+    /// answer provider backs the `ask` command, and the timer/idle vision scheduler
+    /// starts. The composition root calls this once the sidecar binary + default model
+    /// are resolved off the launch thread.
+    pub async fn attach_inference(
+        &self,
+        vision: Arc<dyn VisionProvider>,
+        answer: Arc<dyn AnswerProvider>,
+        idle: Option<IdleSource>,
+    ) {
+        *self.vision.write().expect("vision slot lock") = Some(vision);
+        *self.answer.lock().await = Some(answer);
+        self.start_vision_scheduler(idle).await;
+        tracing::info!("inference providers attached");
+    }
+
+    /// The attached answer provider, if any (backs the `ask` command).
+    pub async fn answer_provider(&self) -> Option<Arc<dyn AnswerProvider>> {
+        self.answer.lock().await.clone()
+    }
+
+    /// Enqueues deferred vision tagging for a frame or a time range (`enqueue_vision`,
+    /// `03 §5/§7`). On-demand, so it is the one path that may tag without a timer/idle
+    /// trigger. Returns how many `vision_tag` jobs were enqueued. A single frame is
+    /// always (re)tagged; a range tags only its still-untagged frames.
+    pub async fn enqueue_vision(&self, target: VisionTarget) -> anyhow::Result<u64> {
+        let ids = match target {
+            VisionTarget::Frame { frame_id } => vec![frame_id],
+            VisionTarget::Range { start, end } => {
+                self.store
+                    .untagged_frame_ids(VISION_RANGE_CAP, Some((start, end)))
+                    .await?
+            }
+        };
+        let mut count = 0u64;
+        for frame_id in ids {
+            let job = NewJob {
+                kind: JobKind::VisionTag,
+                frame_id: Some(frame_id),
+                priority: VISION_ONDEMAND_PRIORITY,
+                max_attempts: 3,
+                not_before: 0,
+            };
+            match self.store.enqueue_job(job).await {
+                Ok(_) => count += 1,
+                Err(e) => tracing::warn!(frame_id, error = %e, "enqueue_vision: enqueue failed"),
+            }
+        }
+        tracing::info!(count, "enqueue_vision enqueued vision_tag jobs");
+        Ok(count)
+    }
+
+    /// Records a sidecar lifecycle transition: maps it onto `sidecar` readiness and
+    /// re-broadcasts both the readiness change and the raw status (`sidecar_status`,
+    /// `03 §6/§7`). The composition root bridges the supervisor's status channel here.
+    pub fn emit_sidecar_status(&self, status: SidecarStatus) {
+        let (component, detail) = sidecar_component(&status);
+        let snapshot = {
+            let mut r = self.readiness.write().expect("readiness lock poisoned");
+            r.sidecar = ComponentReadiness {
+                status: component,
+                detail,
+            };
+            r.clone()
+        };
+        let _ = self.events.send(KernelEvent::ReadinessChanged(snapshot));
+        let _ = self.events.send(KernelEvent::SidecarStatus(status));
+    }
+
+    /// Sets the `sidecar` readiness directly and broadcasts the change. Used by the
+    /// composition root while resolving the binary/model before the supervisor exists
+    /// (Initializing → Ready / Unavailable, `03 §7`).
+    pub fn set_sidecar_readiness(&self, status: ComponentStatus, detail: Option<String>) {
+        let snapshot = {
+            let mut r = self.readiness.write().expect("readiness lock poisoned");
+            r.sidecar = ComponentReadiness { status, detail };
+            r.clone()
+        };
+        let _ = self.events.send(KernelEvent::ReadinessChanged(snapshot));
+    }
+
+    /// Starts the timer/idle vision scheduler (idempotent). `idle` is `None` when no
+    /// platform idle source is available (timer-only).
+    async fn start_vision_scheduler(&self, idle: Option<IdleSource>) {
+        let mut guard = self.scheduler.lock().await;
+        if guard.is_some() {
+            return;
+        }
+        *guard = Some(vision_scheduler::spawn(self.store.clone(), idle));
+        tracing::info!("vision scheduler started");
+    }
+
+    /// Stops the vision scheduler (idempotent). Called on shutdown.
+    pub async fn stop_vision_scheduler(&self) {
+        if let Some(handle) = self.scheduler.lock().await.take() {
+            handle.stop().await;
+            tracing::info!("vision scheduler stopped");
+        }
+    }
+}
+
+/// Maps a sidecar lifecycle state to a `sidecar` readiness component (`03 §6/§7`). An
+/// evicted sidecar is still `Ready` — it can lazily respawn on the next request.
+fn sidecar_component(status: &SidecarStatus) -> (ComponentStatus, Option<String>) {
+    match status.state {
+        SidecarState::Starting => (ComponentStatus::Initializing, status.model.clone()),
+        SidecarState::Ready => (ComponentStatus::Ready, status.model.clone()),
+        SidecarState::Evicted => (
+            ComponentStatus::Ready,
+            Some("evicted (idle); respawns on demand".to_string()),
+        ),
+        SidecarState::Crashed => (ComponentStatus::Error, Some("sidecar crashed".to_string())),
+        SidecarState::Stopped => (ComponentStatus::Disabled, Some("stopped".to_string())),
     }
 }

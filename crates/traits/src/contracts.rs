@@ -102,6 +102,18 @@ pub trait Store: Send + Sync {
     /// text), or `None` if the frame no longer exists (`03 §5`).
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>>;
 
+    /// Frame ids that have **no** vision analysis yet (oldest first, capped at
+    /// `limit`), optionally restricted to a `[start, end)` capture window. The source
+    /// for the timer/idle vision batch and the `enqueue_vision` range target (`03 §5`).
+    /// Default returns empty for stores that don't track vision.
+    async fn untagged_frame_ids(
+        &self,
+        _limit: u32,
+        _range: Option<(i64, i64)>,
+    ) -> Result<Vec<i64>> {
+        Ok(Vec::new())
+    }
+
     // job queue (see `03 §5`)
     async fn enqueue_job(&self, job: NewJob) -> Result<i64>;
     async fn claim_jobs(&self, kinds: &[JobKind], limit: u32, now: i64) -> Result<Vec<Job>>;

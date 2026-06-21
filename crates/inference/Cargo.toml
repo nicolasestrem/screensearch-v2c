@@ -10,3 +10,31 @@ repository.workspace = true
 
 [dependencies]
 traits.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+hf-hub.workspace = true
+zip.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+wiremock.workspace = true
+
+# Windows-only by design (04 guardrails). The Job-Object lifecycle (03 §6) is the
+# core fault-isolation guarantee: a spawned llama-server is bound to a Job Object
+# with KILL_ON_JOB_CLOSE so it can never orphan. `Win32_System_Threading` also gates
+# the extended-limit job struct, so it is required alongside `Win32_System_JobObjects`.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

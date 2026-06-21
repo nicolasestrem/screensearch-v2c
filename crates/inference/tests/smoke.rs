@@ -1,0 +1,146 @@
+//! Real end-to-end sidecar smoke (`03 §6/§10/§13.5`, DoD #5). These are **`#[ignore]`d**
+//! because they download multi-GB GGUF models and run a real `llama-server` on a GPU —
+//! the gated manual verification, not part of the always-green suite (the lifecycle and
+//! provider logic are covered deterministically by the other tests).
+//!
+//! Run manually on a machine with a Vulkan GPU:
+//! ```text
+//! cargo test -p inference --test smoke -- --ignored --nocapture
+//! ```
+//! Set `SSV2C_SMOKE_DIR` to reuse a download cache across runs (default: a temp dir).
+
+#![cfg(windows)]
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use inference::download;
+use inference::models::{ModelLane, ModelTier};
+use inference::{AnswerSidecar, ModelSupervisor, SupervisorConfig, VisionSidecar};
+use tokio::sync::mpsc;
+use traits::{AnswerDelta, AnswerOpts, RetrievedChunk};
+
+fn smoke_dir() -> PathBuf {
+    std::env::var("SSV2C_SMOKE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("ssv2c-smoke"))
+}
+
+fn supervisor_for(
+    binary: PathBuf,
+    sidecar_dir: &std::path::Path,
+) -> std::sync::Arc<ModelSupervisor> {
+    ModelSupervisor::new(SupervisorConfig {
+        binary,
+        pidfile: sidecar_dir.join("llama-server.pid"),
+        idle_ttl: Duration::from_secs(60),
+        // First-run model load + GPU warmup can be slow; allow plenty of headroom.
+        health_timeout: Duration::from_secs(600),
+    })
+    .expect("build supervisor")
+}
+
+/// Downloads the default answer model and streams a real, grounded answer.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "downloads a multi-GB model and runs a real llama-server on a GPU"]
+async fn real_answer_streams_tokens() {
+    let dir = smoke_dir();
+    let sidecar_dir = dir.join("sidecar");
+    let models_root = dir.join("models");
+    std::fs::create_dir_all(&sidecar_dir).unwrap();
+
+    let binary = download::ensure_binary(&sidecar_dir)
+        .await
+        .expect("ensure llama-server binary");
+    download::ensure_model(&models_root, ModelLane::Answer, ModelTier::Default)
+        .await
+        .expect("ensure answer model");
+
+    let supervisor = supervisor_for(binary, &sidecar_dir);
+    let answer = AnswerSidecar::new(supervisor.clone(), models_root, ModelTier::Default, 99);
+
+    let context = vec![RetrievedChunk {
+        frame_id: 42,
+        text: "The deploy finished at 14:32 and all CI checks passed.".to_string(),
+        score: 1.0,
+        captured_at: 0,
+    }];
+    let (tx, mut rx) = mpsc::channel::<AnswerDelta>(256);
+    let task = tokio::spawn(async move {
+        use traits::AnswerProvider;
+        answer
+            .answer(
+                "When did the deploy finish?",
+                &context,
+                AnswerOpts {
+                    thinking: true,
+                    max_tokens: 256,
+                },
+                tx,
+            )
+            .await
+    });
+
+    let mut tokens = String::new();
+    let mut citations = Vec::new();
+    let mut done = false;
+    while let Some(delta) = rx.recv().await {
+        match delta {
+            AnswerDelta::Token { text } => tokens.push_str(&text),
+            AnswerDelta::Citation { frame_id } => citations.push(frame_id),
+            AnswerDelta::Done => done = true,
+            AnswerDelta::Error { message } => panic!("answer errored: {message}"),
+            AnswerDelta::Thinking { .. } => {}
+        }
+    }
+    task.await.unwrap().unwrap();
+
+    println!("ANSWER: {tokens}\nCITATIONS: {citations:?}");
+    assert!(done, "stream must end with Done");
+    assert!(!tokens.trim().is_empty(), "must produce answer tokens");
+    assert_eq!(citations, vec![42], "must cite the grounding frame");
+
+    supervisor.shutdown().await;
+}
+
+/// Downloads the default vision model (+ mmproj) and tags a generated image.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "downloads a multi-GB model + projector and runs a real llama-server on a GPU"]
+async fn real_vision_tags_an_image() {
+    let dir = smoke_dir();
+    let sidecar_dir = dir.join("sidecar");
+    let models_root = dir.join("models");
+    std::fs::create_dir_all(&sidecar_dir).unwrap();
+
+    let binary = download::ensure_binary(&sidecar_dir)
+        .await
+        .expect("ensure llama-server binary");
+    download::ensure_model(&models_root, ModelLane::Vision, ModelTier::Default)
+        .await
+        .expect("ensure vision model");
+
+    let supervisor = supervisor_for(binary, &sidecar_dir);
+    let vision = VisionSidecar::new(supervisor.clone(), models_root, ModelTier::Default, 99);
+
+    // A simple two-tone image — enough for the model to produce a description.
+    let image = image::RgbaImage::from_fn(320, 160, |x, _| {
+        if x < 160 {
+            image::Rgba([20, 30, 200, 255])
+        } else {
+            image::Rgba([220, 220, 220, 255])
+        }
+    });
+
+    use traits::VisionProvider;
+    let analysis = vision.analyze(&image).await.expect("vision analyze");
+    println!(
+        "VISION: {} | activity={:?} | conf={}",
+        analysis.description, analysis.activity_type, analysis.confidence
+    );
+    assert!(
+        !analysis.description.trim().is_empty(),
+        "must produce a description"
+    );
+
+    supervisor.shutdown().await;
+}

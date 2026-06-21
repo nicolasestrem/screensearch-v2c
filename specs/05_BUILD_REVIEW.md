@@ -395,3 +395,59 @@ issues), all verified valid and fixed:
 **Verification:** `fmt` + `clippy --workspace --all-targets -- -D warnings` clean; `cargo test
 --workspace` all pass (kernel enrichment **7** — two new `embed_image` tests added; store 27; all
 prior tests green). Merged the updated `claude-code-review` workflow from `main`.
+
+---
+
+## Pass 7 — 2026-06-21 — P4 Inference sidecar (`feat/p4-inference-sidecar` branch)
+
+Built the full P4 layer **lifecycle-first** (`04 §3`): the no-orphan Job-Object binding before any
+real inference wiring. User decisions taken up front (recorded in `07`): runtime auto-download of
+both the `llama-server` binary and the GGUF models, with the acceptance bar = lifecycle + mock-tested
+inference (real GPU end-to-end as a gated `#[ignore]` smoke).
+
+**Implemented (`crates/inference`, all new modules):**
+- `job_object` + `process` — `CreateJobObjectW(KILL_ON_JOB_CLOSE)`, suspended `CreateProcessW`,
+  **assign-before-resume**, pidfile, image-path reap predicate, liveness/terminate helpers. Raw
+  `windows-rs` (not `std::process`) because only that can spawn suspended and recover the thread
+  handle to resume.
+- `client` — `reqwest` OpenAI client: non-stream completion (vision) + SSE stream (answer),
+  normalizing `reasoning_content` and `content` deltas into neutral `StreamPiece`s.
+- `supervisor` — `ModelSupervisor`: lazy spawn, idle-evict, `/health` gating, crash restart, startup
+  reap, model switch; `SidecarStatus` broadcast; an RAII `Lease` counts in-flight requests so the
+  evictor never pulls a model out from under a live request.
+- `models` + `download` — tier→repo map (`MODEL_REGISTRY`), app-data layout, `Q4_K_M`+mmproj
+  selection; GitHub-release (Vulkan zip) + `hf-hub` downloaders (no Python), idempotent.
+- `vision` + `answer` — the two providers; JSON-or-rawtext vision parse; `ThinkSplitter` that splits
+  inline `<think>` tags across SSE chunk boundaries; one `Citation` per grounding frame.
+
+**Wired:** kernel `attach_inference` + a shared vision slot into the worker pool + the `vision_tag`
+branch; `vision_scheduler` (timer + idle, opt-in); `Store::untagged_frame_ids`;
+`KernelEvent::SidecarStatus` → `sidecar` readiness; `capture::user_idle_ms` (kernel forbids
+`unsafe`, so the idle probe is injected); composition root resolves the binary off-thread, builds the
+supervisor + providers, bridges sidecar status, attaches, and shuts the sidecar down on exit.
+New commands `ask` / `enqueue_vision` / `set_model_tier`; new events `answer_delta` / `sidecar_status`.
+
+**Verification (verbatim, this machine — RTX 5060 Ti + Vulkan, no binary/models present):**
+`cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` clean;
+`cargo build` ok; `cargo test --workspace` all pass — **inference 23 unit + no-orphan 1 + reap 2 +
+client 4 (+ 2 smoke ignored)**, **kernel enrichment 9** (two new `vision_tag` tests), **store 28**
+(new `untagged_frame_ids` test), traits 28; `ui npm run build` ok (`tsc --noEmit` clean, no binding
+changes — P4 added no new IPC types). The no-orphan gate
+(`killing_parent_terminates_job_bound_child`) passes — **DoD #7 met**.
+
+**Deferred / gated:**
+- Real vision-tag + streamed-answer on the GPU → the `#[ignore]` smoke (`tests/smoke.rs`); run
+  manually with `--ignored`. The lifecycle, HTTP client (mock), and provider logic are proven
+  deterministically without it.
+- `llama.cpp` release-asset name can drift; resolution is pinned to "latest" + a unit-tested
+  `*-win-vulkan-x64.zip` selector, overridable via `SSV2C_LLAMA_RELEASE_URL`.
+
+**Still risky / notes:**
+- No pending-job dedup for the timer/idle vision producers — a frame enqueued-but-not-yet-processed
+  can be re-enqueued next tick; harmless (`insert_vision` is an idempotent upsert) but wasteful.
+  Logged in `07`.
+- Multi-GPU (AMD iGPU + NVIDIA): `-ngl 99` offloads to Vulkan device 0; if the wrong device is
+  picked, a device-select env/flag may be needed (logged in `07`).
+- Sidecar readiness is set `Ready` after the binary resolves even though the model downloads lazily
+  on first request; a model-missing failure surfaces as a `Crashed`/`Error` status + an answer
+  `Error` delta rather than up-front.
