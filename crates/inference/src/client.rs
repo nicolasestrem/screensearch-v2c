@@ -201,13 +201,17 @@ impl SidecarClient {
             .context("sidecar returned an error status")?;
 
         let mut bytes = resp.bytes_stream();
-        let mut buf = String::new();
+        // Buffer raw bytes (not a lossy string): a chunk boundary can fall in the
+        // middle of a multi-byte UTF-8 character, so only convert *complete lines* —
+        // delimited by `\n`, which is ASCII and so always a safe split point.
+        let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk.context("sidecar stream chunk failed")?;
-            buf.push_str(&String::from_utf8_lossy(&chunk));
+            buf.extend_from_slice(&chunk);
             // Process complete lines; keep any partial trailing line in `buf`.
-            while let Some(nl) = buf.find('\n') {
-                let line: String = buf.drain(..=nl).collect();
+            while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = buf.drain(..=nl).collect();
+                let line = String::from_utf8_lossy(&line_bytes);
                 if let Some(done) = self.handle_sse_line(line.trim_end(), tx).await? {
                     if done {
                         return Ok(());

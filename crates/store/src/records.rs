@@ -2,6 +2,8 @@
 //! plus the assembled per-frame read used by the `get_frame` IPC command
 //! (`03 §3/§4/§7`).
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension};
 use traits::{FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, VisionAnalysis};
 
@@ -145,6 +147,33 @@ impl SqliteStore {
                 .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, i64>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(ids)
+        })
+        .await
+    }
+
+    /// Bulk-fetches OCR text for many frames in one `IN (…)` query (the `ask`
+    /// grounding hydrate, `03 §7/§13.5`). Only frames with non-empty text are returned.
+    pub async fn ocr_texts(&self, frame_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        if frame_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = frame_ids.to_vec();
+        self.with_conn(move |conn| {
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "SELECT frame_id, text FROM ocr_text
+                 WHERE frame_id IN ({placeholders}) AND text <> ''"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut map = HashMap::new();
+            for row in rows {
+                let (id, text) = row?;
+                map.insert(id, text);
+            }
+            Ok(map)
         })
         .await
     }

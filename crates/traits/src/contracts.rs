@@ -114,6 +114,16 @@ pub trait Store: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Bulk-fetch the OCR text for many frames in **one** round-trip (avoids an N+1
+    /// when hydrating grounding context for `ask`). Returns `frame_id → text` only for
+    /// frames that have non-empty OCR text. Default returns empty.
+    async fn ocr_texts(
+        &self,
+        _frame_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        Ok(std::collections::HashMap::new())
+    }
+
     // job queue (see `03 §5`)
     async fn enqueue_job(&self, job: NewJob) -> Result<i64>;
     async fn claim_jobs(&self, kinds: &[JobKind], limit: u32, now: i64) -> Result<Vec<Job>>;

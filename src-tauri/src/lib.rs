@@ -175,19 +175,22 @@ async fn ask(
         })
         .await
         .map_err(|e| e.to_string())?;
-    let mut context = Vec::with_capacity(hits.len());
-    for hit in hits {
-        let text = match store.get_enrichment_input(hit.frame_id).await {
-            Ok(Some(input)) => input.ocr_text.unwrap_or(hit.snippet),
-            _ => hit.snippet,
-        };
-        context.push(RetrievedChunk {
-            frame_id: hit.frame_id,
-            text,
-            score: hit.score,
-            captured_at: hit.captured_at,
-        });
-    }
+    // Hydrate grounding text in a single bulk query (avoid an N+1 over the hits),
+    // falling back to each hit's snippet when a frame has no OCR text.
+    let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    let ocr = store.ocr_texts(&frame_ids).await.unwrap_or_default();
+    let context: Vec<RetrievedChunk> = hits
+        .into_iter()
+        .map(|hit| {
+            let text = ocr.get(&hit.frame_id).cloned().unwrap_or(hit.snippet);
+            RetrievedChunk {
+                frame_id: hit.frame_id,
+                text,
+                score: hit.score,
+                captured_at: hit.captured_at,
+            }
+        })
+        .collect();
 
     // Stream: the provider sends typed deltas on `tx`; a forwarder emits each as an
     // `answer_delta` event. Both end when the provider finishes (tx drops → rx closes).

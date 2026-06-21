@@ -27,6 +27,10 @@ use crate::process;
 const EVICT_TICK: Duration = Duration::from_secs(5);
 /// How long to wait between `/health` polls while a model loads.
 const HEALTH_POLL: Duration = Duration::from_millis(250);
+/// Max time to wait for a killed sidecar to exit (so its VRAM is freed) on a switch.
+const PROCESS_EXIT_WAIT: Duration = Duration::from_secs(3);
+/// How many times to (re)spawn the sidecar before surfacing a startup failure.
+const SPAWN_ATTEMPTS: u32 = 3;
 
 /// Static configuration for a [`ModelSupervisor`].
 #[derive(Debug, Clone)]
@@ -129,10 +133,12 @@ impl ModelSupervisor {
         };
         if need_spawn {
             if let Some(old) = guard.take() {
-                old.child.kill();
-                let _ = std::fs::remove_file(&self.config.pidfile);
+                // Wait for the old process to fully exit before spawning the new model
+                // so its GPU memory is released first (avoids a VRAM-allocation race on
+                // model switch).
+                self.stop_child(old).await;
             }
-            let proc = self.spawn_for(&spec).await?;
+            let proc = self.spawn_with_retries(&spec).await?;
             *guard = Some(proc);
         }
         let client = guard
@@ -140,17 +146,51 @@ impl ModelSupervisor {
             .expect("sidecar present after ensure")
             .client
             .clone();
-        drop(guard);
-
+        // Count the request in-flight **while still holding the state lock**: the
+        // evictor re-checks `in_flight` under this same lock before killing, so it can
+        // never evict the sidecar we are handing out (closes the drop→fetch_add race).
         self.in_flight.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut g) = self.last_activity.lock() {
             *g = Instant::now();
         }
+        drop(guard);
+
         Ok(Lease {
             client,
             in_flight: self.in_flight.clone(),
             last_activity: self.last_activity.clone(),
         })
+    }
+
+    /// Kills a running sidecar and waits (bounded) for the OS to release it, so its GPU
+    /// memory is freed before the next model spawns. Polls rather than blocking the
+    /// executor on `WaitForSingleObject`.
+    async fn stop_child(&self, old: SidecarProcess) {
+        let pid = old.child.pid();
+        old.child.kill();
+        let deadline = Instant::now() + PROCESS_EXIT_WAIT;
+        while process::pid_alive(pid) && Instant::now() < deadline {
+            tokio::time::sleep(HEALTH_POLL).await;
+        }
+        let _ = std::fs::remove_file(&self.config.pidfile);
+    }
+
+    /// Spawns the sidecar, retrying a few times. Each attempt allocates a fresh port,
+    /// which also hardens against the (rare) race where the chosen ephemeral port is
+    /// taken between `free_port` and `llama-server` binding it. `spawn_for` kills the
+    /// child on any failure, so a retry never leaks a process.
+    async fn spawn_with_retries(&self, spec: &ModelSpec) -> Result<SidecarProcess> {
+        let mut last_err = None;
+        for attempt in 1..=SPAWN_ATTEMPTS {
+            match self.spawn_for(spec).await {
+                Ok(proc) => return Ok(proc),
+                Err(e) => {
+                    tracing::warn!(attempt, error = %e, "sidecar spawn failed; retrying");
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("sidecar spawn failed")))
     }
 
     /// Stops the sidecar and disables further eviction work (called on app exit).

@@ -796,3 +796,30 @@ async fn untagged_frame_ids_excludes_tagged_and_honors_range() {
         vec![f3]
     );
 }
+
+/// `ocr_texts` bulk-fetches non-empty OCR text for many frames in one query (the `ask`
+/// grounding hydrate). Frames without text — or with empty text — are omitted.
+#[tokio::test]
+async fn ocr_texts_bulk_fetches_nonempty_only() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let f1 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f2 = store.insert_frame(frame_at(200)).await.unwrap();
+    let f3 = store.insert_frame(frame_at(300)).await.unwrap();
+    let ocr = |text: &str| OcrResult {
+        text: text.to_string(),
+        mean_confidence: -1.0,
+        engine: "winrt".to_string(),
+    };
+    store.insert_ocr(f1, ocr("login screen")).await.unwrap();
+    store.insert_ocr(f2, ocr("")).await.unwrap(); // empty → omitted
+                                                  // f3 has no OCR row at all → omitted.
+
+    let map = store.ocr_texts(&[f1, f2, f3]).await.unwrap();
+    assert_eq!(map.len(), 1);
+    assert_eq!(map.get(&f1).map(String::as_str), Some("login screen"));
+    assert!(!map.contains_key(&f2));
+    assert!(!map.contains_key(&f3));
+
+    // Empty input is a no-op (no query).
+    assert!(store.ocr_texts(&[]).await.unwrap().is_empty());
+}

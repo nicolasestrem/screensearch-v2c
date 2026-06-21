@@ -151,8 +151,16 @@ async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()>
         .get(filename)
         .await
         .with_context(|| format!("download {filename}"))?;
-    std::fs::copy(&cached, &dest)
+    // Copy atomically: write to a temp file in the same dir, then rename. An
+    // interrupted copy must never leave a partial file at `dest` — the `dest.exists()`
+    // skip above would otherwise treat a corrupt GGUF as complete and crash the sidecar.
+    let tmp = dir.join(format!("{base}.partial"));
+    std::fs::copy(&cached, &tmp)
         .with_context(|| format!("copy {filename} into {}", dir.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("finalize {}", dest.display()));
+    }
     Ok(())
 }
 
