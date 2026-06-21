@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P2 Capture happy path (2026-06-21)
+- Always-on **capture → OCR → store** pipeline (`02 §5`, `03 §3/§5`): screen capture
+  via Windows.Graphics.Capture with a diff gate that stores only changed frames,
+  text recognition via WinRT `Media.Ocr` on a COM STA worker, JPEG storage, and a
+  row written to `frames` + `ocr_text` — each stored frame enqueueing an
+  `embed_text` job (consumed in P3). Vision is never auto-run (`13.3`).
+- `kernel` orchestrator: the capture loop, a typed event bus (`capture_tick` /
+  `readiness_changed`), a typed-`Settings` loader, and idempotent
+  `start_capture`/`stop_capture`. Capture is **off until you start it**
+  (privacy-first); `privacy.excluded_apps` and `privacy.pause_on_lock` are honored.
+- App: `capture_control` (start/stop) and `get_frame` commands, live `db` +
+  `capture` readiness, and a **minimal live timeline** UI (Start/Stop, readiness
+  strip, a row per captured frame). The full Command-Deck UI lands in P5.
+- Captured frames carry the foreground app/window as `app_hint` / `window_title`.
+- OCR `mean_confidence` is recorded as `-1.0` ("unknown") — WinRT OCR exposes no
+  confidence; no value is fabricated (see `specs/06_PATCH_PLAN.md` #2).
+
 ### Documentation (P0/P1 review pass)
 - Reviewed merged P0 + P1 against the spec — both complete and compliant, no
   correctness bugs (record in `specs/05_BUILD_REVIEW.md` Pass 3). Doc/clarity

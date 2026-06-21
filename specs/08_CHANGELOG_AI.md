@@ -127,3 +127,30 @@
   and pin the half-open `TimeRange` contract before the P5 UI consumes it.
 - **Verification:** see `05` Pass 3 — `fmt`/`clippy -D warnings` clean, `cargo test --workspace`
   unchanged-green (doc/comment-only changes), `ui npm run build`, no ts-rs drift.
+
+## 2026-06-21 — P2 Capture happy path (`p2-capture` branch)
+- **Change:** Implemented the always-on capture pipeline end-to-end (full record in `05` Pass 4):
+  - `capture` — `WgcCapture: CaptureSource` on raw `windows-rs` 0.62 (per-monitor D3D11 + WGC frame
+    pool on a COM(MTA) thread, BGRA→RGBA readback), the diff gate (`32×32` luma mean-abs-diff +
+    `blake3` hash), and the privacy gate (`OpenInputDesktop` lock probe + foreground app/title for
+    `privacy.excluded_apps`, also filling `app_hint`/`window_title`).
+  - `ocr` — `WinRtOcr: OcrProvider` on a dedicated **STA** worker (WinRT `Media.Ocr`),
+    `RecognizeAsync().join()`, `mean_confidence = -1.0` sentinel.
+  - `kernel` — the capture loop (CaptureSource→OcrProvider→JPEG→`insert_frame`/`insert_ocr`→enqueue
+    `embed_text`→emit `capture_tick`), a `broadcast` event bus, a typed-`Settings` loader, and
+    idempotent `start_capture`/`stop_capture`. `vision_tag` is never auto-enqueued (`13.3`).
+  - `src-tauri` — wires store + OCR + capture factory + kernel; `capture_control` + `get_frame`
+    commands; live `get_readiness`; forwards `capture_tick`/`readiness_changed` to the UI.
+  - `ui` — a minimal live timeline (Start/Stop + readiness strip + `capture_tick` rows).
+  - `traits` — added `app_hint`/`window_title` to `CapturedFrame` (internal; no IPC change).
+- **Why:** P2 per `02 §5` / `04 §3` — stand up the cheap, always-on half (capture→OCR→store) and
+  prove the kernel. Heavy work stays deferred to the job queue (P3/P4).
+- **Decisions:** four spec-silent items resolved with the user (`07` #9–#13): capture **off until
+  Start** (privacy-first); **raw `windows-rs`** for WGC; **minimal live timeline**; **populate
+  `app_hint`/`window_title`**. OCR-confidence contradiction → `-1.0` sentinel (`06` #2). Engineering
+  notes (diff metric, day-bucket JPEG path, COM apartments, windows-rs feature gotchas) in `07`.
+- **Verification:** `fmt`/`clippy -D warnings` clean; `cargo test --workspace` **66 passed, 0
+  failed, 3 ignored**; `ui npm run build` + `lint` clean; no ts-rs drift. **Observed running** —
+  the `#[ignore]`d `e2e_capture` test drove the real Kernel (WGC + WinRT OCR + on-disk store) and
+  stored a frame + OCR row + JPEG and enqueued an `embed_text` job (no `vision_tag`), 3.55s; real
+  WGC and WinRT OCR smoke tests also pass locally on Win11 26200.

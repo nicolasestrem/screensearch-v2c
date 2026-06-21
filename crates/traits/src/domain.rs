@@ -26,6 +26,11 @@ pub struct MonitorInfo {
 ///
 /// Internal: holds the full-resolution RGBA pixels behind an [`Arc`] and never
 /// crosses IPC. OCR runs on these pixels **before** any JPEG resize (`03 §8`).
+///
+/// `app_hint` / `window_title` carry the foreground-window context the capture
+/// source already reads for the `privacy.excluded_apps` gate (`03 §8`); the kernel
+/// copies them onto the stored [`NewFrame`] so the timeline has context without a
+/// second OS call. `None` when the foreground window can't be resolved.
 #[derive(Debug, Clone)]
 pub struct CapturedFrame {
     pub monitor_index: u32,
@@ -35,6 +40,10 @@ pub struct CapturedFrame {
     pub captured_at: i64,
     pub pixels: Arc<RgbaImage>,
     pub content_hash: String,
+    /// Foreground app/process name at capture time (privacy gate by-product).
+    pub app_hint: Option<String>,
+    /// Foreground window title at capture time.
+    pub window_title: Option<String>,
 }
 
 /// Result of running OCR over a [`CapturedFrame`].
@@ -87,6 +96,27 @@ pub struct NewFrame {
     pub app_hint: Option<String>,
     pub window_title: Option<String>,
     pub browser_url: Option<String>,
+}
+
+/// Configuration handed to a [`CaptureSource`](crate::CaptureSource) at
+/// construction. The kernel derives it from [`Settings`](crate::Settings) when
+/// capture starts (`03 §8`); it is shared here so the kernel can build it and the
+/// capture impl can consume it without either depending on the other (`03 §2`).
+#[derive(Debug, Clone)]
+pub struct CaptureConfig {
+    /// Delay between capture cycles, ms (`capture.interval_ms`).
+    pub interval_ms: u32,
+    /// Monitor indices to capture; empty = all (`capture.monitors`).
+    pub monitors: Vec<u32>,
+    /// Normalized [0,1] change ratio above which a frame is kept
+    /// (`capture.diff_threshold`).
+    pub diff_threshold: f32,
+    /// Foreground app/process names whose frames are skipped — case-insensitive
+    /// substring match (`privacy.excluded_apps`).
+    pub excluded_apps: Vec<String>,
+    /// Pause capture entirely while the workstation is locked
+    /// (`privacy.pause_on_lock`).
+    pub pause_on_lock: bool,
 }
 
 /// Origin of an embedded text chunk. Serializes to the DB `source` column
