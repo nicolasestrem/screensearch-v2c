@@ -110,3 +110,20 @@
   (`permission_denials_count: 25`, "No buffered inline comments"). The denial retries also
   inflated the runtime. `@claude` in `claude.yml` had the same latent read-only bug.
 - **Verification:** `python -c yaml.safe_load` on all three workflows (OK); re-run on next push.
+
+## 2026-06-21 — P0/P1 review pass (`review/p0-p1` branch)
+- **Change:** Reviewed the merged P0 + P1 against `04`/`03` (full record in `05` Pass 3). Verdict:
+  both **complete & compliant**, no correctness bugs. Applied four **additive** doc/clarity fixes
+  for minor findings — no behavior change:
+  - `concurrent_claims_never_double_claim` (`crates/store/tests/store.rs`): added a comment stating
+    it proves single-shared-connection claim correctness under concurrent async callers, *not*
+    multi-connection WAL contention.
+  - `TimeRange` (`crates/traits/src/ipc.rs`): doc made explicit — half-open `[start, end)` (start
+    inclusive, end exclusive); a matching note at the `hybrid_search` query site (`search.rs`).
+  - `07` known-gaps: added #7 (`03 §13` "< ~200 ms" latency unverified until a realistic-DB fixture
+    in P3) and #8 (vec-arm `time_range` post-filter can under-return on tight windows — tune in P3),
+    promoting `05` Pass 2 "Still risky" prose into the tracked table with an owner.
+- **Why:** review per `04 §3`/`§6`; close the gap between honestly-noted risks and *tracked* ones,
+  and pin the half-open `TimeRange` contract before the P5 UI consumes it.
+- **Verification:** see `05` Pass 3 — `fmt`/`clippy -D warnings` clean, `cargo test --workspace`
+  unchanged-green (doc/comment-only changes), `ui npm run build`, no ts-rs drift.

@@ -15,7 +15,10 @@ use ts_rs::TS;
 use crate::domain::VisionAnalysis;
 use crate::jobs::JobStats;
 
-/// Half-open time window, unix epoch milliseconds.
+/// Half-open `[start, end)` time window (start inclusive, end exclusive), unix
+/// epoch milliseconds. `Store::hybrid_search` filters with `captured_at >= start
+/// AND captured_at < end`, so callers must pass an exclusive upper bound — a frame
+/// captured exactly at `end` is *not* included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct TimeRange {

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation (P0/P1 review pass)
+- Reviewed merged P0 + P1 against the spec — both complete and compliant, no
+  correctness bugs (record in `specs/05_BUILD_REVIEW.md` Pass 3). Doc/clarity
+  touch-ups only: `TimeRange` now states its half-open `[start, end)` semantics
+  explicitly; the concurrent-claim test documents what it actually proves; and the
+  hybrid-search latency (`03 §13`) and vector-arm time-range approximations are now
+  tracked gaps for P3 (`specs/07_KNOWN_GAPS.md` #7/#8). No behavior change.
+
 ### Fixed (post-P1 review, PR #4)
 - `open_state` reports `db = Error` (not `Ready`) if the post-open schema-version
   probe fails — no "ready but unqueryable" store reaches the UI.
