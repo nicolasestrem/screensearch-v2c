@@ -46,8 +46,9 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   commit to `main` without the work being reviewed. New work starts on a new branch.
 - **No schema drift without a migration.** Every schema change is a forward-only migration with a
   `schema_version` bump (`03 §4/§12`).
-- **No Python. No cloud calls.** ML is Rust-only (fastembed) + the local llama.cpp sidecar
-  (`01 §5`). Network = localhost + model downloads only.
+- **No Python in the shipped runtime. No cloud calls.** Runtime ML is Rust-only (fastembed) + the
+  local llama.cpp sidecar (`01 §5`); a Python *ML* sidecar is the V1 approach we don't repeat. Python
+  is allowed for build/dev tooling (e.g. the `hf` CLI). Network = localhost + model downloads only.
 - **No real-time vision.** Vision runs only on-demand/timer/idle (`03 §5`).
 - **Sidecar must never orphan.** Implement the Job-Object lifecycle exactly (`03 §6`); do not ship
   P4 until the no-orphan test passes.

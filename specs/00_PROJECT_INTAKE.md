@@ -56,7 +56,7 @@
 | **Processing model** | **Capture-cheap, enrich-deferred** — durable **SQLite job queue** + worker pools (on-demand / timer / idle) | `✓ decided` |
 | Capture | **Windows.Graphics.Capture (WGC)** behind `CaptureSource` trait | `✓ decided` |
 | OCR | **WinRT `Media.Ocr`** on a COM STA worker, behind `OcrProvider` | `✓ decided` |
-| Embeddings | **fastembed** (ONNX), in-process — **no Python** | `✓ decided` |
+| Embeddings | **fastembed** (ONNX), in-process — **no Python runtime dep** | `✓ decided` |
 | Inference (vision + answer) | **single supervised, model-agnostic llama.cpp sidecar** (Vulkan GPU + CPU fallback), OpenAI-compatible; loads the **selected tier** on demand, swaps between vision/answer models, idle-evicts; **child bound to parent via Windows Job Object (KILL_ON_JOB_CLOSE) → no orphans on crash** | `✓ decided` |
 | Database | **SQLite (WAL) + sqlite-vec (`vec0`, cosine) + FTS5 (porter)** | `✓ decided` |
 | Automation | **None in v1.0** (deferred) | `✓ decided` |
@@ -102,7 +102,7 @@ cutting-edge with caveats. The model-agnostic sidecar loads whichever tier is se
 | Field | Value |
 |---|---|
 | Distribution | **Inno Setup installer (major releases) + portable ZIP.** **Auto-update** is a nice-to-have (later). — `✓ decided` |
-| Build/runtime deps | WebView2 runtime (ships on Win11), Vulkan-capable GPU (optional, CPU fallback), models downloaded on first use. **No Python.** — `✓ decided` |
+| Build/runtime deps | WebView2 runtime (ships on Win11), Vulkan-capable GPU (optional, CPU fallback), models downloaded on first use. **No Python in the end-user runtime** (Python is fine for build/dev tooling). — `✓ decided` |
 | CI/CD | **From scratch** (GitHub Actions, new). — `✓ decided` |
 | Timeline / effort budget | **Open-ended** — no deadline. Phasing optimizes for correctness, not speed. — `✓ decided` |
 

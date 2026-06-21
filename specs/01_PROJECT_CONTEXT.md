@@ -32,7 +32,7 @@ it proved which engines are reliable and which approaches failed (see §5).
 |---|---|
 | OS | Windows 10/11 only (WinRT/WGC/WebView2 APIs). |
 | GPU | Vulkan-capable GPU assumed for ~99% of users; **CPU fallback required**. |
-| Runtime deps | WebView2 runtime (ships with Win11); models downloaded on first use. **No Python runtime.** |
+| Runtime deps | WebView2 runtime (ships with Win11); models downloaded on first use. **No Python in the end-user runtime** (Python is fine for build/dev tooling). |
 | Language/toolchain | Rust 2021 + Cargo; Node/npm for the React UI; Tauri 2 CLI. |
 
 ## 4. Intended stack (decided, not yet implemented)

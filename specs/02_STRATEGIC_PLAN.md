@@ -46,7 +46,7 @@ everything down). **V2c changes the shape, not the engines:**
 | Vision | per-frame, real-time | **Change → on-demand / timed** |
 | Shell/IPC | Axum localhost HTTP + rust-embed | **Change → Tauri 2 typed IPC** |
 | Structure | monolith, ad-hoc channels | **Change → modular kernel + event bus** |
-| ML runtime | flirted with Python sidecar (failed) | **Rust-only, no Python** |
+| ML runtime | flirted with Python ML sidecar (failed) | **Rust-only runtime** (no Python *ML sidecar*; Python OK for tooling) |
 | Models | single defaults | **Change → 3-tier per lane** |
 | Automation | present | **Drop for v1.0** (later) |
 
