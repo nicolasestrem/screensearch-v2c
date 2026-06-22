@@ -531,3 +531,60 @@ InsightsSummary.ts
   capture start (no live `reconfigure()`); the Settings UI (M5) must label each field honestly.
 - The asset-protocol `$APPDATA` scope must resolve to the same dir as `app_data_dir()` (the bundle
   identifier subdir). Expected to match; confirm during the M4 live render.
+
+---
+
+## Pass 9 — 2026-06-22 — P5 (M0) PR #10 review fixes
+
+**Branch:** `feat/p5-backend` (same PR, follow-up commit). Addressed all three actionable review
+comments on PR #10 (two from `gemini-code-assist`, one from `claude[bot]`).
+
+### Fixed
+1. **`timeline_buckets` integer overflow** (gemini, *high*) — `crates/store/src/timeline.rs`.
+   Hostile/malformed timestamps from the frontend could overflow `end - start` (panic in debug,
+   wrap in release) and the `(span + n - 1)` ceil could overflow near `i64::MAX`. Now: `span` via
+   `checked_sub` (unrepresentable → empty window), ceil rewritten as `span / n + (span % n != 0)`
+   (no intermediate overflow), and the bucket end via `checked_add(width).unwrap_or(end).min(end)`.
+2. **`insights_summary` redundant work on invalid range** (gemini, *medium*) —
+   `crates/store/src/insights.rs`. Added an early `end <= start || checked_sub.is_none()` return of
+   the honest-empty summary, skipping four queries + a `timeline_buckets` call that would all
+   return zero/empty anyway.
+3. **`save_settings` non-atomic multi-write** (claude[bot]) — `crates/kernel/src/settings.rs`,
+   `crates/traits/src/contracts.rs`, `crates/store/src/{settings,lib}.rs`. The 20 separate
+   `set_setting` upserts could leave the `settings` table half-updated on a crash or a mid-loop
+   `serde_json` error (silently hidden by `load_settings`' per-key default fallback). Now: a new
+   `Store::set_settings_batch` (defaulted to per-key for non-transactional stores; `SqliteStore`
+   overrides it with a single `unchecked_transaction` + `commit`), and `save_settings` builds every
+   pair — including the fallible JSON encodings — *before* any write, then commits atomically.
+
+### Tests added
+- `set_settings_batch_writes_all_and_overwrites` (store) — batch upserts all keys + overwrites.
+- `timeline_buckets_survives_extreme_ranges` (store) — `i64::MIN..i64::MAX` → empty (no panic);
+  `0..i64::MAX` (which the old ceil would overflow) → one correct bucket.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check          # exit 0
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s   # exit 0, no warnings
+$ cargo test -p store --test store
+test set_settings_batch_writes_all_and_overwrites ... ok
+test insights_summary_aggregates_truthfully ... ok
+test timeline_buckets_are_sparse_and_half_open ... ok
+test timeline_buckets_survives_extreme_ranges ... ok
+test result: ok. 33 passed; 0 failed; 0 ignored
+$ cargo test -p kernel --test settings
+test round_trips_non_default_values ... ok
+test round_trips_defaults ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored
+# full `cargo test --workspace` also green (0 failed across all crates)
+```
+
+### Notes
+- `unchecked_transaction` is sound here: `with_conn` holds the store mutex exclusively for the
+  closure, so no other borrow of the connection exists.
+- A forced-crash/rollback test isn't feasible through the public API (no fault-injection seam, and
+  every settings upsert is a valid `(TEXT, TEXT)` write); the all-or-nothing guarantee is by
+  construction (`?`-return before `commit`). Recorded honestly rather than faked.
+- Other review verdicts were "clean" (SQL correctness, IPC types, CSP/asset scope, CLAUDE.md
+  compliance) — no changes needed there.

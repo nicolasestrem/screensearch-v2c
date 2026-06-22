@@ -160,6 +160,20 @@ pub trait Store: Send + Sync {
     async fn get_setting(&self, key: &str) -> Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> Result<()>;
 
+    /// Atomically upserts many `(key, value)` settings in a single transaction —
+    /// **all land or none do**. Used by `kernel::settings::save_settings` so a crash
+    /// or error mid-save cannot leave the `settings` table in a mixed state (some keys
+    /// new, the rest stale), which `load_settings`' per-key default fallback would
+    /// silently hide. The default applies them one-by-one via [`Self::set_setting`]
+    /// (non-atomic) for stores without transaction support; `SqliteStore` overrides it
+    /// with a real `BEGIN … COMMIT`.
+    async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
+        for (key, value) in kvs {
+            self.set_setting(key, value).await?;
+        }
+        Ok(())
+    }
+
     /// Injects (or replaces) the query-embedding provider that lights up the vector
     /// arm of [`Self::hybrid_search`]. Set once the model has finished loading off
     /// the launch thread (`03 §5`). Default is a no-op for stores that never embed.

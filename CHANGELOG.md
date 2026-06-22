@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New typed IPC: `InsightsSummary` / `AppCount` / `ActivityCount`.
 - Packaging (installer + portable ZIP) is intentionally deferred to a later pass.
 
+### Fixed — P5 (M0) PR #10 review (2026-06-22)
+- **Timeline math is overflow-safe**: extreme or malformed time ranges from the UI can no longer
+  panic the timeline query — an unrepresentable range simply returns no buckets.
+- **Settings save is now atomic**: writing settings commits all keys in a single transaction, so a
+  crash or error part-way through can never leave a half-updated settings store.
+- **Insights skips needless work** on an empty or invalid time range, returning the honest-empty
+  summary immediately.
+
 ### Added — P4 Inference sidecar (2026-06-21)
 - **No-orphan guarantee, proven first** (`02 §2`, `03 §6`, DoD #7): the `llama-server`
   sidecar is bound to a Windows **Job Object** with `KILL_ON_JOB_CLOSE`, and the child

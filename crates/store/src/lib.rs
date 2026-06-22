@@ -274,6 +274,9 @@ impl Store for SqliteStore {
     async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         SqliteStore::set_setting(self, key, value).await
     }
+    async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
+        SqliteStore::set_settings_batch(self, kvs).await
+    }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);
     }

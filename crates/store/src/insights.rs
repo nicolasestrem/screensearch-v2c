@@ -21,6 +21,12 @@ impl SqliteStore {
     /// Aggregates frame activity over the half-open window `[start, end)`. Returns an
     /// empty summary (all zeros / empty lists) when the window holds no frames.
     pub async fn insights_summary(&self, start: i64, end: i64) -> Result<InsightsSummary> {
+        // Invalid or unrepresentable window → honest-empty summary up front, skipping
+        // four queries (and a `timeline_buckets` call) that would all return
+        // zero/empty anyway.
+        if end <= start || end.checked_sub(start).is_none() {
+            return Ok(InsightsSummary::default());
+        }
         let captures = self.timeline_buckets(start, end, INSIGHTS_BUCKETS).await?;
         self.with_conn(move |conn| {
             let total_frames: i64 = conn.query_row(

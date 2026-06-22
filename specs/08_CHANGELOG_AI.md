@@ -311,3 +311,26 @@
   regenerated `export_bindings_insightssummary`; new bindings `InsightsSummary.ts` / `AppCount.ts`
   / `ActivityCount.ts` emitted with `number` (not `bigint`) fields. Live asset-protocol image
   render is deferred to M4 (no UI surface yet) — recorded honestly.
+
+## 2026-06-22 — P5 (M0) PR #10 review fixes (`feat/p5-backend` branch)
+- **Change:** Addressed the three actionable comments on PR #10:
+  - `crates/store/src/timeline.rs` — made `timeline_buckets` overflow-safe: `checked_sub` span,
+    ceil as `span / n + (span % n != 0)`, bucket end via `checked_add(width).unwrap_or(end).min(end)`.
+  - `crates/store/src/insights.rs` — early honest-empty return when `end <= start` or the span is
+    unrepresentable, skipping four queries + a `timeline_buckets` call.
+  - `crates/traits/src/contracts.rs` — new defaulted `Store::set_settings_batch`; `store/src/settings.rs`
+    overrides it with a single `unchecked_transaction` + `commit`; `store/src/lib.rs` forwards it;
+    `crates/kernel/src/settings.rs` — `save_settings` now builds every pair (incl. fallible JSON)
+    up front and commits them atomically via the batch.
+- **Why:** Review hardening. (1) hostile frontend timestamps could overflow the timeline math
+  (panic in debug / wrap in release); (2) redundant DB work on invalid windows; (3) a crash or
+  mid-loop `serde_json` error in the old 20-call `save_settings` could leave a partially-updated
+  `settings` table that `load_settings`' per-key default fallback hides silently.
+- **Tests added:** `set_settings_batch_writes_all_and_overwrites`, `timeline_buckets_survives_extreme_ranges`.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets
+  -- -D warnings` → `Finished … in 1.23s` (no warnings); `cargo test --workspace` all green —
+  `store` now **33 passed**, `kernel` settings **2 passed**, 0 failed across the workspace.
+- **Notes:** `unchecked_transaction` is sound under `with_conn`'s exclusive mutex hold. A
+  forced-rollback test isn't feasible via the public API (no fault seam; every upsert is a valid
+  `(TEXT, TEXT)` write) — the all-or-nothing guarantee is structural (`?` before `commit`).
+  Recorded honestly rather than faked. Other review verdicts were "clean" and needed no change.

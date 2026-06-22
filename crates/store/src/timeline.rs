@@ -26,11 +26,19 @@ impl SqliteStore {
         if end <= start || bucket_count == 0 {
             return Ok(Vec::new());
         }
-        let span = end - start;
+        // Overflow-safe span: hostile/malformed timestamps from the frontend (e.g.
+        // `start = i64::MIN`, `end = i64::MAX`) would overflow `end - start`; treat an
+        // unrepresentable span as an empty window rather than panicking.
+        let span = match end.checked_sub(start) {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
         let n = i64::from(bucket_count);
         // Ceil division so the last bucket reaches `end`; floored at 1 ms so the
-        // bucket width (and the SQL divisor) is always positive.
-        let width = ((span + n - 1) / n).max(1);
+        // bucket width (and the SQL divisor) is always positive. Written as
+        // `span / n + (remainder != 0)` rather than `(span + n - 1) / n` so it stays
+        // overflow-safe even when `span` is near `i64::MAX`.
+        let width = (span / n + i64::from(span % n != 0)).max(1);
         self.with_conn(move |conn| {
             // `?1`/`?2`/`?3` are reused positional params (start/width/end). The
             // integer bucket index `(captured_at - start) / width` groups frames into
@@ -50,10 +58,14 @@ impl SqliteStore {
             let buckets = rows
                 .into_iter()
                 .map(|(b, count)| {
+                    // `b` is bounded by the data (`captured_at < end`), so
+                    // `start + b * width` stays inside `[start, end)`; only the final
+                    // `b_start + width` can exceed `i64::MAX`, so guard it with
+                    // `checked_add` (clamped to `end` regardless).
                     let b_start = start + b * width;
                     TimelineBucket {
                         start: b_start,
-                        end: (b_start + width).min(end),
+                        end: b_start.checked_add(width).unwrap_or(end).min(end),
                         count: u32::try_from(count).unwrap_or(u32::MAX),
                     }
                 })

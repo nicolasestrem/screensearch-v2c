@@ -915,3 +915,60 @@ async fn insights_summary_aggregates_truthfully() {
     assert!(empty.top_apps.is_empty());
     assert!(empty.activity_breakdown.is_empty());
 }
+
+/// `timeline_buckets` must not panic on hostile/extreme timestamps (the values come
+/// straight from the frontend). An unrepresentable span yields an empty result, and
+/// a huge-but-representable span — which the old `(span + n - 1)` ceil would have
+/// overflowed — is handled cleanly.
+#[tokio::test]
+async fn timeline_buckets_survives_extreme_ranges() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    store.insert_frame(frame_at(0)).await.unwrap();
+
+    // `end - start` overflows i64 → empty window, no panic.
+    assert!(store
+        .timeline_buckets(i64::MIN, i64::MAX, 4)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Span is exactly i64::MAX (representable). The previous `(span + n - 1) / n`
+    // ceil would overflow here; the current form does not. The single frame at 0
+    // lands in bucket 0.
+    let buckets = store.timeline_buckets(0, i64::MAX, 4).await.unwrap();
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].start, 0);
+    assert_eq!(buckets[0].count, 1);
+    // A forward bucket: a `checked_add` overflow would wrap the end negative.
+    assert!(buckets[0].end > buckets[0].start);
+}
+
+/// `set_settings_batch` upserts every pair in one transaction: all keys are present
+/// afterward and existing keys are overwritten. (Atomicity-on-failure comes from the
+/// single `BEGIN … COMMIT` — a failed write `?`-returns before `commit`, so nothing
+/// lands; that path is exercised by `save_settings`' build-then-commit ordering.)
+#[tokio::test]
+async fn set_settings_batch_writes_all_and_overwrites() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // Pre-existing value the batch must overwrite.
+    store.set_setting("a", "old").await.unwrap();
+
+    store
+        .set_settings_batch(&[
+            ("a".to_string(), "new".to_string()),
+            ("b".to_string(), "1".to_string()),
+            ("c".to_string(), "2".to_string()),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.get_setting("a").await.unwrap().as_deref(),
+        Some("new")
+    );
+    assert_eq!(store.get_setting("b").await.unwrap().as_deref(), Some("1"));
+    assert_eq!(store.get_setting("c").await.unwrap().as_deref(), Some("2"));
+
+    // An empty batch is a no-op (opens and commits an empty transaction).
+    store.set_settings_batch(&[]).await.unwrap();
+}
