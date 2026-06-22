@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The data-bearing screen bodies (search, the Scanline Timeline, settings, insights) build on this
   foundation in the next milestones.
 
+### Fixed — P5 (M1+M2) PR #11 review (2026-06-22)
+- **Command palette recovers from a no-match search**: after typing a query that matches nothing
+  and pressing the down arrow, the highlight no longer gets stuck — clearing back to a matching
+  query re-highlights a command and Enter runs it again.
+- **Correct keyboard hint**: the palette shortcut now reads **Ctrl+K** (this is a Windows-only app),
+  not the Mac ⌘K.
+- **Clearer error screens**: a route error now shows the actual status/detail of a failed navigation
+  (not just a generic message), and the command-palette input no longer triggers browser
+  autocomplete/spellcheck overlays.
+- **Safer answers (forward-looking)**: starting a new question while one is still streaming is now
+  blocked, so a previous answer's late text can't bleed into the next one.
+
 ### Added — P5 (M0) backend completion (2026-06-22)
 - **Timeline data** (`get_timeline`): frame-density buckets over a time range — the data behind
   the Scanline Timeline. Sparse and half-open, with a presentation-driven bucket count.

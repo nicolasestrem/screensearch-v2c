@@ -656,3 +656,41 @@ $ git diff --exit-code -- ui/src/bindings   # exit 0 — generated bindings unto
   paths — the native WebView2 window can't be screenshotted with the available tools. A full
   populated-with-real-frames visual pass is scheduled with the M3/M4 screens (per the plan DoD).
 - React Router v7 future-flag warning is benign now; opt into `v7_*` flags before any RR7 upgrade.
+
+## Pass 11 — 2026-06-22 — P5 (M1+M2) PR #11 review fixes (`feat/p5-ui-foundation` branch)
+
+Reviews: Claude code-review (after the `ANTHROPIC_API_KEY` secret was restored) + gemini-code-assist.
+Codex was invoked (`@codex review`) but posted no review. One real bug + four hardening items.
+
+### Fixed
+- **Bug — CommandPalette active-index latch** (`CommandPalette.tsx`): the clamp effect now resets to
+  `0` on an empty filtered list (`filtered.length > 0 ? Math.min(Math.max(0,a), len-1) : 0`). The
+  old `Math.min(a, …)` latched `active` at `-1` after ArrowDown over a zero-match query, breaking
+  Enter-to-run once matches returned. **Both** reviewers flagged it.
+- **Ctrl+K label** (`NavRail.tsx`): `⌘K` → `Ctrl+K`. Chose the Windows literal over Gemini's
+  `userAgent` Mac-detection branch — CLAUDE.md forbids cross-platform abstractions on a Windows-only app.
+- **Palette input** (`CommandPalette.tsx`): added `type="text"` + `autoComplete/autoCorrect/
+  autoCapitalize="off"` + `spellCheck={false}`.
+- **RouteError** (`routes/RouteError.tsx`): extract via the official `isRouteErrorResponse` guard
+  (status + statusText/data) before the Error/string/`{message}` fallbacks — a thrown Response/404
+  now shows real detail. (Cleaner than the reviewers' nested-ternary duck-typing.)
+- **useAsk concurrency guard** (`lib/ipc/useAsk.ts`): early-return while `phase === "streaming"`
+  (deps `[state.phase]`) so a second ask can't mix the first's late `answer_delta`s. True
+  concurrent/cancellable ask needs a backend request-id (`07` #28).
+- **queryKeys prefixes** (minor): `timelinePrefix`/`insightsPrefix` used by `useLiveEvents` instead
+  of raw magic arrays.
+
+### Not changed (reviewer "no action needed" / deferred)
+- Full ARIA combobox semantics for the palette → `07` #29 (revisit M3 with the search UX).
+- `frameSrc` module-level cache (correct for a single-process desktop app).
+
+### Verification (verbatim)
+```
+$ npm run build      # ui/
+✓ built in 1.49s     # initial JS ≈ 86 KB gzip (react-vendor 67.90 + query 11.08 + index 7.40)
+$ npm run lint       # ui/  — clean, no errors/warnings (Rules-of-Hooks gate)
+```
+**Observed running** — Playwright vs `npm run dev` reproduced the exact bug path: open palette →
+type no-match `zzzz` → **ArrowDown** (empty list) → replace query with `time` → **Enter** → URL =
+**`/timeline`** (fix recovered `active` to 0; pre-fix it would have stayed `/`). NavRail hint renders
+**"Ctrl+K"**.

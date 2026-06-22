@@ -71,9 +71,12 @@ export function CommandPalette() {
     return () => clearTimeout(t);
   }, [open]);
 
-  // Keep the active index within the (possibly shrunk) filtered list.
+  // Keep the active index within the (possibly shrunk) filtered list. Reset to 0
+  // when the list is empty so a later non-empty list starts highlighted — a bare
+  // `Math.min(a, …)` latches at -1 after an ArrowDown over a zero-match query,
+  // which then makes Enter run `filtered[-1]` (undefined) once matches return.
   useEffect(() => {
-    setActive((a) => Math.min(a, Math.max(0, filtered.length - 1)));
+    setActive((a) => (filtered.length > 0 ? Math.min(Math.max(0, a), filtered.length - 1) : 0));
   }, [filtered.length]);
 
   if (!open) return null;
@@ -114,10 +117,15 @@ export function CommandPalette() {
       >
         <input
           ref={inputRef}
+          type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Jump to… or run a command"
           aria-label="Command palette query"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           className="w-full bg-transparent px-4 py-3 text-body text-ink placeholder:text-ink-faint border-b border-line font-body"
         />
         <ul className="max-h-80 overflow-y-auto py-2">

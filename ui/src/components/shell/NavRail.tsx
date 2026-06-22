@@ -70,7 +70,7 @@ export function NavRail() {
           )}
         >
           <span>Command</span>
-          <kbd className="font-mono text-data text-ink-faint">⌘K</kbd>
+          <kbd className="font-mono text-data text-ink-faint">Ctrl+K</kbd>
         </button>
       </div>
     </nav>

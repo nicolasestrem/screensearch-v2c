@@ -391,3 +391,37 @@
     "Kernel offline" error state the browser correctly shows without a runtime. No panic, no error.
     (The native WebView2 window can't be screenshotted with the available tools; the live StatusRail
     is evidenced by the backend boot log + the rail's verified render paths.)
+
+## 2026-06-22 — P5 (M1+M2) PR #11 review fixes (`feat/p5-ui-foundation` branch)
+- **Change:** Addressed the actionable findings from the PR #11 reviews (Claude code-review +
+  gemini-code-assist; Codex posted no review):
+  - **Bug (CommandPalette active-index latch).** `ui/src/components/shell/CommandPalette.tsx` — the
+    clamp effect now resets to `0` when the filtered list is empty
+    (`filtered.length > 0 ? Math.min(Math.max(0, a), len-1) : 0`). The old `Math.min(a, max(0,…))`
+    latched `active` at `-1` after an ArrowDown over a zero-match query, so Enter then ran
+    `filtered[-1]` (undefined) even once matches returned.
+  - **Ctrl+K label.** `NavRail.tsx` — the shortcut hint reads `Ctrl+K`, not `⌘K`. Chose the literal
+    Windows label over Gemini's `userAgent` platform-detection: CLAUDE.md forbids cross-platform
+    abstractions for a Windows-only app, and a Mac branch is dead code here.
+  - **Palette input hardening.** Added `type="text"` + `autoComplete/autoCorrect/autoCapitalize="off"`
+    + `spellCheck={false}` so OS/browser overlays don't cover the command list.
+  - **RouteError ErrorResponse.** `routes/RouteError.tsx` — extract the message via the official
+    `isRouteErrorResponse` guard (status + statusText/data) before the `Error`/string/`{message}`
+    fallbacks, so a thrown `Response`/404 shows real detail instead of the generic line.
+  - **useAsk concurrency guard.** `lib/ipc/useAsk.ts` — `ask` returns early while
+    `phase === "streaming"` (deps now `[state.phase]`). The `answer_delta` stream has no per-request
+    id, so a second ask mid-stream would fold the first's late deltas into its state. A true
+    concurrent/cancellable ask needs a backend request-id — logged as `07` #28.
+  - **queryKeys prefixes (minor).** Added `timelinePrefix`/`insightsPrefix`; `useLiveEvents` uses
+    them instead of raw `["timeline"]`/`["insights"]` arrays, keeping the invalidation prefix coupled
+    to the key registry.
+- **Why:** review follow-through (`04 §5/§6`). One real correctness bug (the palette latch) + four
+  hardening items before M3 consumes these components.
+- **Not changed (reviewer "no action needed" / deferred):** full ARIA combobox semantics for the
+  palette (`07` #29 — revisit M3); `frameSrc` module-level cache (correct for a single-process app).
+- **Verification:** `npm run build` → `✓ built in 1.49s` (initial JS still ≈ 86 KB gzip); `npm run
+  lint` → clean (Rules-of-Hooks gate). **Observed running** — Playwright vs `npm run dev` reproduced
+  the exact bug path: opened the palette, typed a no-match query `zzzz`, pressed **ArrowDown** over
+  the empty list, replaced the query with `time` (→ "Go to Timeline"), pressed **Enter** → URL
+  navigated to **`/timeline`** (the fix recovered `active` to 0; pre-fix it would have stayed `/`).
+  The NavRail hint renders **"Ctrl+K"**.

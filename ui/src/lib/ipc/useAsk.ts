@@ -89,15 +89,25 @@ export function useAsk(): UseAsk {
     };
   }, []);
 
-  const ask = useCallback(async (request: AskRequest) => {
-    dispatch({ type: "start" });
-    try {
-      await cmd.ask(request);
-    } catch (e) {
-      // The command itself failed (e.g. sidecar not ready) before any delta.
-      dispatch({ type: "delta", delta: { type: "error", message: String(e) } });
-    }
-  }, []);
+  const ask = useCallback(
+    async (request: AskRequest) => {
+      // One ask at a time. The backend streams `answer_delta` on a single global
+      // channel with no per-request id, so a second ask started mid-stream would
+      // fold the first ask's late-arriving deltas into its state. Block until the
+      // current stream settles (the recall UI also gates its trigger on
+      // `phase === "streaming"`). A truly concurrent/cancellable ask needs a
+      // backend request-id on the event — logged as 07 #28.
+      if (state.phase === "streaming") return;
+      dispatch({ type: "start" });
+      try {
+        await cmd.ask(request);
+      } catch (e) {
+        // The command itself failed (e.g. sidecar not ready) before any delta.
+        dispatch({ type: "delta", delta: { type: "error", message: String(e) } });
+      }
+    },
+    [state.phase],
+  );
 
   const reset = useCallback(() => dispatch({ type: "reset" }), []);
 

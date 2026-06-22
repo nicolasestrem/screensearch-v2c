@@ -10,7 +10,11 @@ export const queryKeys = {
   sidecarStatus: ["sidecarStatus"] as const,
   settings: ["settings"] as const,
   search: (query: SearchQuery) => ["search", query] as const,
+  // `*Prefix` keys match every variant of a family for bulk invalidation (e.g.
+  // a `capture_tick` invalidates all timeline ranges/bucket-counts at once).
+  timelinePrefix: ["timeline"] as const,
   timeline: (range: TimeRange, bucketCount: number) => ["timeline", range, bucketCount] as const,
   frame: (frameId: number) => ["frame", frameId] as const,
+  insightsPrefix: ["insights"] as const,
   insights: (range: TimeRange) => ["insights", range] as const,
 };

@@ -57,8 +57,8 @@ export function useLiveEvents() {
       listenTo("capture_tick", () => {
         if (tickTimer) clearTimeout(tickTimer);
         tickTimer = setTimeout(() => {
-          qc.invalidateQueries({ queryKey: ["timeline"] });
-          qc.invalidateQueries({ queryKey: ["insights"] });
+          qc.invalidateQueries({ queryKey: queryKeys.timelinePrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.jobStats });
         }, TICK_DEBOUNCE_MS);
       }),
