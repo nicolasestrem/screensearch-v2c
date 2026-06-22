@@ -42,3 +42,6 @@ desktop.ini
 .vscode/*
 !.vscode/extensions.json
 docs/TESTING.md
+docs/TESTING.md
+*.png
+docs/TESTING.md
