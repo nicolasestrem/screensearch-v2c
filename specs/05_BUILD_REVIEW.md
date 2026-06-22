@@ -886,3 +886,33 @@ honest apply labels), Settings loading skeleton, Settings load-error+retry; Insi
 partial labelling), Insights empty, Insights partial (18% tagged), Insights compute-error+retry,
 Insights loading skeleton. (Native-window screenshots remain impossible — Playwright can't attach to
 the Tauri WebView; the IPC mock is the dev-mode substitute the plan calls for.)
+
+### Review response — PR #13 (2026-06-22)
+Automated review (gemini-code-assist ×6, chatgpt-codex ×1, claude ×2) raised nine points; all
+addressed (CI itself was green: build & test windows, CodeQL, claude-review).
+- **[bug] Numeric handler sent floats to integer Rust fields** (claude) — `valueAsNumber` (e.g.
+  `500.5`) passed `Number.isFinite` and would be rejected by serde for a Rust integer on save. Split
+  the generic handler into `intHandler` (`Math.round`) for the six integer fields and `numHandler`
+  (raw) for the one float (`capture_diff_threshold`).
+- **[ux] Clearing a numeric input snapped back** (gemini ×3 — Settings, RetentionControl,
+  ScheduleControl) — an empty field is `NaN`, which the guard ignored, so the controlled input
+  reverted to its old value. All numeric handlers now fall back to `0` on empty (a transient value to
+  type over). `ScheduleControl`'s minute display no longer floors at 1, so a cleared field shows `0`.
+- **[correctness] Out-of-range values could be persisted** (codex, P2) — input `min`/`max` are
+  advisory (typing/pasting bypasses them) and an out-of-range `capture_diff_threshold` (>1) would
+  wedge the capture diff-gate. Added `sanitizeSettings()` — rounds every integer field and clamps all
+  numerics to valid ranges — applied on **save**, with the clamped values reflected back into the form
+  and a toast when anything was adjusted.
+- **[robustness] `modelsLoading` partial state** (claude + gemini) — only checked `"initializing"`,
+  missing `"unknown"` (pre-init) and the in-flight `readiness.isLoading` case (so the populated form
+  showed no partial indicator during the readiness probe). Now also covers both, with optional
+  chaining guarding a partially-populated payload.
+- **[correctness] `baseline` could drift from the backend** (gemini) — the seed effect only set
+  `baseline` once, so the `dirty` diff could go stale after a refetch. Now `baseline` re-syncs on
+  every `settings.data` change; the editable `draft` is still seeded only once (no clobbering edits).
+
+Verification (verbatim): `npm --prefix ui run lint` exit 0 · `npm --prefix ui run build` exit 0
+(`tsc --noEmit` + vite, ✓ 2.20s; Settings chunk 3.86 KB gz, Insights 1.99 KB gz, initial JS unchanged
+≈ 87.7 KB gz). **Observed running** (Playwright vs Vite dev, typed IPC mock): the clear-to-`0` fix
+confirmed by interaction — `Capture interval (ms)` `"3000"` → clear → `"0"` (no snapback) → type →
+`"4500"`; Settings form renders with 0 app-code console errors (only a favicon 404).

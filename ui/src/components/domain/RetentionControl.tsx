@@ -19,6 +19,8 @@ export function RetentionControl({ days, onChange }: RetentionControlProps) {
       onChange={(e) => {
         const d = e.currentTarget.valueAsNumber;
         if (Number.isFinite(d) && d >= 0) onChange(Math.round(d));
+        // A cleared field is NaN — fall back to 0 so the input doesn't snap back.
+        else if (e.currentTarget.value === "") onChange(0);
       }}
       hint="0 keeps captures forever. Recorded but not yet enforced — no automatic deletion runs today (a purge job is a planned follow-up)."
     />

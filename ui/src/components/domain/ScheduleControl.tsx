@@ -28,8 +28,10 @@ export function ScheduleControl({
   idleSecs,
   onChange,
 }: ScheduleControlProps) {
-  const timerMinutes = Math.max(1, Math.round(timerIntervalMs / 60_000));
-  const idleMinutes = Math.max(1, Math.round(idleSecs / 60));
+  // Shown in minutes; a cleared field shows 0 (a transient value to type over) rather
+  // than snapping back — the Settings save clamps both thresholds to their valid range.
+  const timerMinutes = Math.round(timerIntervalMs / 60_000);
+  const idleMinutes = Math.round(idleSecs / 60);
 
   return (
     <div className="flex flex-col gap-4">
@@ -54,6 +56,8 @@ export function ScheduleControl({
             const m = e.currentTarget.valueAsNumber;
             if (Number.isFinite(m) && m >= 1) {
               onChange({ enrich_vision_timer_interval_ms: Math.round(m) * 60_000 });
+            } else if (e.currentTarget.value === "") {
+              onChange({ enrich_vision_timer_interval_ms: 0 });
             }
           }}
           hint="Applies on restart."
@@ -76,6 +80,8 @@ export function ScheduleControl({
             const m = e.currentTarget.valueAsNumber;
             if (Number.isFinite(m) && m >= 1) {
               onChange({ enrich_vision_idle_secs: Math.round(m) * 60 });
+            } else if (e.currentTarget.value === "") {
+              onChange({ enrich_vision_idle_secs: 0 });
             }
           }}
           hint="Applies on restart."

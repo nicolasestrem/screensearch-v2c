@@ -52,6 +52,34 @@ function parseStrList(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+/**
+ * Clamp/round the numeric settings into valid ranges before they're persisted. Field
+ * `min`/`max` are advisory — a user can type or paste out of range — and the integer
+ * Rust fields reject a JSON float, so the form sanitises on save: every integer field
+ * is rounded and clamped, and `capture_diff_threshold` (the only float) is clamped to
+ * [0, 1] (a normalised frame-difference can never exceed 1, so a larger value would
+ * wedge the capture diff-gate). Returns a new object; never mutates the input.
+ */
+function sanitizeSettings(s: Settings): Settings {
+  const clampInt = (v: number, lo: number, hi: number) =>
+    Math.min(hi, Math.max(lo, Math.round(Number.isFinite(v) ? v : lo)));
+  const clampNum = (v: number, lo: number, hi: number) =>
+    Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
+  return {
+    ...s,
+    capture_interval_ms: clampInt(s.capture_interval_ms, 250, 3_600_000),
+    capture_diff_threshold: clampNum(s.capture_diff_threshold, 0, 1),
+    storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
+    storage_max_width: clampInt(s.storage_max_width, 320, 7680),
+    storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
+    enrich_worker_concurrency: clampInt(s.enrich_worker_concurrency, 1, 16),
+    enrich_vision_timer_interval_ms: clampInt(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000),
+    enrich_vision_idle_secs: clampInt(s.enrich_vision_idle_secs, 60, 86_400),
+    sidecar_idle_ttl_secs: clampInt(s.sidecar_idle_ttl_secs, 0, 86_400),
+    sidecar_ngl: clampInt(s.sidecar_ngl, 0, 999),
+  };
+}
+
 function SettingsSkeleton() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
@@ -77,12 +105,15 @@ export function Component() {
   const [monitorsText, setMonitorsText] = useState("");
   const [appsText, setAppsText] = useState("");
 
-  // Seed the draft once, the first time settings load (later refetches — e.g. from a
-  // tier hot-apply invalidation — must not clobber in-progress edits).
+  // Keep the saved-snapshot in sync with the backend on every refetch so the `dirty`
+  // diff stays accurate (e.g. after a tier hot-apply invalidation, or an optimistic
+  // save settling). The editable draft is seeded only once — a later refetch must not
+  // clobber in-progress edits.
   useEffect(() => {
-    if (settings.data && draft === null) {
+    if (!settings.data) return;
+    setBaseline(settings.data);
+    if (draft === null) {
       setDraft(settings.data);
-      setBaseline(settings.data);
       setMonitorsText(settings.data.capture_monitors.join(", "));
       setAppsText(settings.data.privacy_excluded_apps.join(", "));
     }
@@ -107,11 +138,25 @@ export function Component() {
 
   const patch = (p: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...p } : d));
 
+  // Numeric inputs: a cleared field yields NaN — fall back to 0 (a transient value the
+  // user types over; out-of-range values are clamped on save) rather than ignoring the
+  // change, which would snap the controlled input back to its old value. `intHandler`
+  // rounds for the integer-typed Rust fields (a stray float is rejected by serde);
+  // `numHandler` keeps the raw value for the one float field (capture_diff_threshold).
+  const intHandler =
+    <K extends keyof Settings>(key: K) =>
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.currentTarget.valueAsNumber;
+      if (Number.isFinite(v)) set(key, Math.round(v) as Settings[K]);
+      else if (e.currentTarget.value === "") set(key, 0 as Settings[K]);
+    };
+
   const numHandler =
     <K extends keyof Settings>(key: K) =>
     (e: ChangeEvent<HTMLInputElement>) => {
       const v = e.currentTarget.valueAsNumber;
       if (Number.isFinite(v)) set(key, v as Settings[K]);
+      else if (e.currentTarget.value === "") set(key, 0 as Settings[K]);
     };
 
   // Tier changes hot-apply immediately (persisted + applied to the live provider via
@@ -135,14 +180,20 @@ export function Component() {
     );
   };
 
-  const save = () =>
-    setSettings.mutate(draft, {
+  const save = () => {
+    const clean = sanitizeSettings(draft);
+    const clamped = JSON.stringify(clean) !== JSON.stringify(draft);
+    setDraft(clean); // reflect any clamped/rounded values back into the form
+    setSettings.mutate(clean, {
       onSuccess: () => {
-        setBaseline(draft);
-        toast.success("Settings saved");
+        setBaseline(clean);
+        toast.success(
+          clamped ? "Settings saved (some values clamped to valid ranges)" : "Settings saved",
+        );
       },
       onError: (e) => toast.error(String(e)),
     });
+  };
 
   const reset = () => {
     setDraft(baseline);
@@ -153,9 +204,15 @@ export function Component() {
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const saving = setSettings.isPending;
 
+  // Partial state — surface that models may still be starting: while the readiness
+  // probe is in flight, or either lane is still "unknown" (pre-init) / "initializing".
+  // Optional chaining guards a partially-populated readiness payload.
   const modelsLoading =
-    readiness.data?.embed_model.status === "initializing" ||
-    readiness.data?.sidecar.status === "initializing";
+    readiness.isLoading ||
+    readiness.data?.embed_model?.status === "initializing" ||
+    readiness.data?.embed_model?.status === "unknown" ||
+    readiness.data?.sidecar?.status === "initializing" ||
+    readiness.data?.sidecar?.status === "unknown";
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
@@ -184,7 +241,7 @@ export function Component() {
             type="number"
             min={250}
             value={draft.capture_interval_ms}
-            onChange={numHandler("capture_interval_ms")}
+            onChange={intHandler("capture_interval_ms")}
             hint={`How often the screen is sampled. ${APPLY_CAPTURE}`}
           />
           <Field
@@ -217,7 +274,7 @@ export function Component() {
             min={1}
             max={100}
             value={draft.storage_jpeg_quality}
-            onChange={numHandler("storage_jpeg_quality")}
+            onChange={intHandler("storage_jpeg_quality")}
             hint={`Higher = sharper frames, larger database. ${APPLY_CAPTURE}`}
           />
           <Field
@@ -225,7 +282,7 @@ export function Component() {
             type="number"
             min={320}
             value={draft.storage_max_width}
-            onChange={numHandler("storage_max_width")}
+            onChange={intHandler("storage_max_width")}
             hint={`Captured frames are downscaled to this width. ${APPLY_CAPTURE}`}
           />
           <RetentionControl
@@ -283,7 +340,7 @@ export function Component() {
             min={1}
             max={16}
             value={draft.enrich_worker_concurrency}
-            onChange={numHandler("enrich_worker_concurrency")}
+            onChange={intHandler("enrich_worker_concurrency")}
             hint={`How many enrichment jobs run at once. ${APPLY_RESTART}`}
           />
           <ScheduleControl
@@ -323,7 +380,7 @@ export function Component() {
             type="number"
             min={0}
             value={draft.sidecar_idle_ttl_secs}
-            onChange={numHandler("sidecar_idle_ttl_secs")}
+            onChange={intHandler("sidecar_idle_ttl_secs")}
             hint={`Unload the model after this many idle seconds (0 keeps it loaded). ${APPLY_RESTART}`}
           />
           <Field
@@ -331,7 +388,7 @@ export function Component() {
             type="number"
             min={0}
             value={draft.sidecar_ngl}
-            onChange={numHandler("sidecar_ngl")}
+            onChange={intHandler("sidecar_ngl")}
             hint={`How many model layers to offload to the GPU. ${APPLY_RESTART}`}
           />
         </div>
