@@ -694,3 +694,13 @@ $ npm run lint       # ui/  — clean, no errors/warnings (Rules-of-Hooks gate)
 type no-match `zzzz` → **ArrowDown** (empty list) → replace query with `time` → **Enter** → URL =
 **`/timeline`** (fix recovered `active` to 0; pre-fix it would have stayed `/`). NavRail hint renders
 **"Ctrl+K"**.
+
+### Follow-up — Codex review of `f03fa58` (synchronous ask guard)
+Codex flagged (P2) that the `useAsk` guard reads React state, which lags within an event tick: two
+`ask()` calls in the same synchronous tick both observe the pre-`start` `phase` and both reach
+`cmd.ask`, interleaving two streams on the id-less `answer_delta` channel. **Fixed** — `useAsk` now
+guards on a synchronous `useRef` in-flight flag (set before dispatch, released when `phase` hits
+`done`/`error`, and on `reset`); `ask` deps drop to `[]`. The backend per-request-id for true
+concurrency/cancellation stays open as `07` #28. Also tidied the stale `⌘K` comment in `NavRail.tsx`.
+Verify: `npm run build` `✓ built in 1.09s`, `npm run lint` clean. No UI consumer until M3, so this is
+pre-emptive hardening (build/lint + reasoning). Claude's `f03fa58` re-review: "No issues … PR is clean".

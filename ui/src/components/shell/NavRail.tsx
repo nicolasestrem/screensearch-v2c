@@ -1,6 +1,6 @@
 // NavRail (left) — the five primary destinations (UI_REFERENCE §3). Active route
-// gets the accent (text + wash + a left scan-bar); the ⌘K hint opens the command
-// palette. Each link is a NavLink so the browser/router own focus + history.
+// gets the accent (text + wash + a left scan-bar); the Ctrl+K hint opens the
+// command palette. Each link is a NavLink so the browser/router own focus + history.
 import { NavLink } from "react-router-dom";
 import type { ComponentType } from "react";
 import { cn } from "../../lib/cn";

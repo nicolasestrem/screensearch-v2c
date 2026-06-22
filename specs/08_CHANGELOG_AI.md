@@ -425,3 +425,19 @@
   the empty list, replaced the query with `time` (→ "Go to Timeline"), pressed **Enter** → URL
   navigated to **`/timeline`** (the fix recovered `active` to 0; pre-fix it would have stayed `/`).
   The NavRail hint renders **"Ctrl+K"**.
+
+## 2026-06-22 — P5 (M1+M2) PR #11 Codex follow-up (`feat/p5-ui-foundation` branch)
+- **Change:** `ui/src/lib/ipc/useAsk.ts` — replaced the React-state concurrency guard with a
+  synchronous **`useRef` in-flight flag** (set before `dispatch`/`cmd.ask`, released by an effect
+  when `phase` reaches `done`/`error`, and on `reset`). Tidied the now-stale `⌘K` comment in
+  `NavRail.tsx` → `Ctrl+K`.
+- **Why:** Codex review of `f03fa58` (P2): the prior `if (state.phase === "streaming") return` guard
+  reads React state, which lags within an event tick — two `ask()` calls in the *same* synchronous
+  tick both observe the pre-`start` `phase` and both reach `cmd.ask`, so the single global
+  `answer_delta` channel (no request id) could interleave two streams. A ref reflects the in-flight
+  state immediately, blocking the second call synchronously. `ask` deps drop to `[]` (stable
+  identity). The backend per-request-id needed for *true* concurrency/cancellation remains `07` #28.
+- **Verification:** `npm run build` → `✓ built in 1.09s` (initial JS unchanged ≈ 86 KB gzip);
+  `npm run lint` → clean (Rules-of-Hooks gate; ref/dispatch are stable so `[]` deps are exhaustive).
+  No UI consumer yet (Recall is M3), so this is pre-emptive hardening verified by build/lint +
+  reasoning, not a behavioral repro. Claude's re-review of `f03fa58` found "No issues … PR is clean".
