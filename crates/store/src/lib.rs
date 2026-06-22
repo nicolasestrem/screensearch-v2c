@@ -29,6 +29,7 @@ use traits::{
 };
 
 mod embeddings;
+mod frames;
 mod insights;
 mod jobs;
 mod records;

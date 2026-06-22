@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
     AnswerDelta, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
-    ComponentReadiness, ComponentStatus, FrameDetail, InsightsSummary, JobStats, ModelLane,
-    OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit, SearchQuery, SetModelTier,
-    Settings, Store, TimeRange, TimelineBucket, VisionTarget,
+    ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary, JobStats,
+    ModelLane, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit, SearchQuery,
+    SetModelTier, Settings, Store, TimeRange, TimelineBucket, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -266,6 +266,41 @@ async fn get_timeline(
         .map_err(|e| e.to_string())
 }
 
+/// Lightweight frame list over `[start, end)` for browsing (`get_frames`, P5): the
+/// Timeline's hover thumbnails, the Deck's "jump back in" recents, and a Moment's
+/// neighbour context. Most-recent-first, capped at `limit`. Each row is a
+/// [`FrameMeta`]; open one with `get_frame` for the full detail.
+#[tauri::command]
+async fn get_frames(
+    range: TimeRange,
+    limit: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<FrameMeta>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .frames_in_range(range.start, range.end, limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The frame whose capture time is nearest `at` (unix ms), or `null` if the DB has
+/// no frames (`get_nearest_frame`, P5). Resolves the Timeline scan-head position to a
+/// concrete frame id so "Enter opens the moment under the head" lands on a real frame.
+#[tauri::command]
+async fn get_nearest_frame(
+    at: i64,
+    state: State<'_, AppState>,
+) -> Result<Option<FrameMeta>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store.nearest_frame(at).await.map_err(|e| e.to_string())
+}
+
 /// Truthful activity aggregates over `[start, end)` for the Insights screen
 /// (`get_insights`, P5). Real DB counts only — honest-empty when the window is bare.
 #[tauri::command]
@@ -412,6 +447,8 @@ pub fn run() {
             ask,
             set_model_tier,
             get_timeline,
+            get_frames,
+            get_nearest_frame,
             get_insights,
             get_settings,
             set_settings

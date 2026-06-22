@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
-    ChunkSource, Embedding, EmbeddingProvider, JobKind, JobState, NewFrame, NewJob, OcrResult,
-    SearchQuery, TimeRange, TimelineBucket, VisionAnalysis,
+    ChunkSource, Embedding, EmbeddingProvider, FrameMeta, JobKind, JobState, NewFrame, NewJob,
+    OcrResult, SearchQuery, TimeRange, TimelineBucket, VisionAnalysis,
 };
 
 /// A job of the given kind with sensible defaults (immediately runnable).
@@ -941,6 +941,76 @@ async fn timeline_buckets_survives_extreme_ranges() {
     assert_eq!(buckets[0].count, 1);
     // A forward bucket: a `checked_add` overflow would wrap the end negative.
     assert!(buckets[0].end > buckets[0].start);
+}
+
+/// `frames_in_range` lists frames in the half-open window, most-recent-first, capped
+/// at `limit` — the Timeline thumbnails / Deck recents source. Backs `get_frames`.
+#[tokio::test]
+async fn frames_in_range_lists_window_recent_first() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let f1 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f2 = store.insert_frame(frame_at(200)).await.unwrap();
+    let f3 = store.insert_frame(frame_at(300)).await.unwrap();
+    // Out of [150, 350): one before `start`, one exactly at the exclusive `end`.
+    store.insert_frame(frame_at(100)).await.unwrap(); // same ts as f1, still < start
+    store.insert_frame(frame_at(350)).await.unwrap();
+
+    // Window [150, 350): f2 and f3 only, newest first.
+    let metas = store.frames_in_range(150, 350, 10).await.unwrap();
+    let ids: Vec<i64> = metas.iter().map(|m| m.frame_id).collect();
+    assert_eq!(ids, vec![f3, f2]);
+    // FrameMeta carries the lightweight browsing fields.
+    assert_eq!(metas[0].captured_at, 300);
+    assert_eq!(metas[0].image_path, "frames/300.jpg");
+    assert_eq!(metas[0].app_hint.as_deref(), Some("Firefox"));
+
+    // `limit` caps the result; newest-first means the most recent (@350) is kept.
+    let capped = store.frames_in_range(0, 1_000, 1).await.unwrap();
+    assert_eq!(capped.len(), 1);
+    assert_eq!(capped[0].captured_at, 350);
+
+    // Degenerate windows / zero limit yield nothing — never the whole table.
+    assert!(store
+        .frames_in_range(350, 150, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(store.frames_in_range(0, 1_000, 0).await.unwrap().is_empty());
+    // f1 is reachable in a window that includes it.
+    assert!(store
+        .frames_in_range(0, 150, 10)
+        .await
+        .unwrap()
+        .iter()
+        .any(|m| m.frame_id == f1));
+}
+
+/// `nearest_frame` resolves a timestamp to the closest frame on either side, with
+/// the at-or-after frame winning an exact tie. Backs `get_nearest_frame` (the
+/// Timeline scan-head → concrete frame id). `None` only when the DB is empty.
+#[tokio::test]
+async fn nearest_frame_picks_closest_with_after_winning_ties() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // Empty DB → no nearest frame.
+    assert!(store.nearest_frame(1_000).await.unwrap().is_none());
+
+    let f100 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f200 = store.insert_frame(frame_at(200)).await.unwrap();
+    let f400 = store.insert_frame(frame_at(400)).await.unwrap();
+
+    let id_at = |m: Option<FrameMeta>| m.expect("a frame").frame_id;
+    // Before the first frame → the first frame.
+    assert_eq!(id_at(store.nearest_frame(0).await.unwrap()), f100);
+    // After the last frame → the last frame.
+    assert_eq!(id_at(store.nearest_frame(10_000).await.unwrap()), f400);
+    // Closer to f200 than f100.
+    assert_eq!(id_at(store.nearest_frame(170).await.unwrap()), f200);
+    // Closer to f200 than f400.
+    assert_eq!(id_at(store.nearest_frame(260).await.unwrap()), f200);
+    // Exact midpoint between f200 and f400 (300) → the later frame wins the tie.
+    assert_eq!(id_at(store.nearest_frame(300).await.unwrap()), f400);
+    // Exactly on a frame → that frame.
+    assert_eq!(id_at(store.nearest_frame(200).await.unwrap()), f200);
 }
 
 /// `set_settings_batch` upserts every pair in one transaction: all keys are present
