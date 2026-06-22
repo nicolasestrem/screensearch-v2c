@@ -65,6 +65,16 @@ export const getFrames = (range: TimeRange, limit: number): Promise<FrameMeta[]>
 export const getNearestFrame = (at: number): Promise<FrameMeta | null> =>
   invoke<FrameMeta | null>("get_nearest_frame", { at });
 
+/** The captures bracketing `at` (unix ms): up to `limitEach` closest frames on each
+ *  side within `±halfWindowMs`, ascending by time, excluding the anchor. Backs a
+ *  Moment's prev/next + context strip (the adjacent frames, not the window's newest). */
+export const getFrameContext = (
+  at: number,
+  halfWindowMs: number,
+  limitEach: number,
+): Promise<FrameMeta[]> =>
+  invoke<FrameMeta[]>("get_frame_context", { at, halfWindowMs, limitEach });
+
 /** Truthful activity aggregates over `[start, end)` for the Insights screen. */
 export const getInsights = (range: TimeRange): Promise<InsightsSummary> =>
   invoke<InsightsSummary>("get_insights", { range });

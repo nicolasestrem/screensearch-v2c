@@ -11,6 +11,29 @@
 
 ---
 
+## 2026-06-22 — P5 (M3+M4) PR #12 review fixes (`feat/p5-screens`)
+- **Change:** Addressed the `claude-review` findings on PR #12. (1) Fixed a high-priority Moment bug:
+  prev/next + the context strip were sourced from `get_frames([at−30m, at+30m), 24)`, but
+  `frames_in_range` is newest-first capped, so a dense window returned only far-edge frames and
+  dropped the anchor (`findIndex` = −1 → dead navigation). Added `SqliteStore::neighbour_frames(at,
+  half_window_ms, limit_each)` (closest-before DESC + closest-after ASC, merged ascending, anchor
+  excluded) exposed as `get_frame_context`; new `useFrameContext` hook + `frameContext` query keys
+  (invalidated on `capture_tick`); Moment derives prev/next by capture-time. (2) `AnswerStream`
+  markdown links now render `target="_blank" rel="noopener noreferrer"` so model output can't hijack
+  the WebView. (3) `AnswerStream` "Thinking" trace is now a controlled `<details>` (auto-opens on a
+  new stream, never auto-collapses), hooks hoisted above early returns.
+- **Why:** Hard rule "prioritize accuracy over task completion" + CLAUDE.md "review and test
+  thoroughly." The Moment bug breaks a headline feature in any real (non-trivial) session; the link
+  and thinking-panel issues are correctness/UX regressions in the streamed-answer path. No new IPC
+  type (reuses `FrameMeta`), so bindings are unchanged. Two findings acknowledged but deferred as
+  minor (`07` #34 live-search invalidation; the cosmetic timeline clamp).
+- **Verification:** `cargo fmt --all -- --check` exit 0 · `cargo clippy --workspace --all-targets --
+  -D warnings` exit 0 · `cargo test -p store` 36 passed (incl. `neighbour_frames_brackets_anchor_
+  with_closest_each_side`) · `cargo test -p traits` 32 passed · `git diff --stat -- ui/src/bindings`
+  empty · `npm run typecheck`/`lint`/`build` all exit 0 (build ✓ in 1.85s, initial JS ≈ 87.5 KB gz).
+
+---
+
 ## 2026-06-21 — P0 Scaffold (`p0-scaffold` branch)
 - **Change:** Stood up the full workspace scaffold — Cargo workspace; `traits` crate with the six
   `03 §3` contracts + domain/jobs/IPC types; honestly-empty skeleton crates `kernel`, `store`,

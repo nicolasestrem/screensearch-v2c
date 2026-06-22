@@ -22,6 +22,12 @@ export const queryKeys = {
   // A new capture (`capture_tick`) invalidates every range/limit variant at once.
   framesPrefix: ["frames"] as const,
   frames: (range: TimeRange, limit: number) => ["frames", range, limit] as const,
+  // A frame's neighbour context (closest captures on each side). A new capture
+  // (`capture_tick`) can add a neighbour, so this family is invalidated alongside
+  // the frame lists above.
+  frameContextPrefix: ["frameContext"] as const,
+  frameContext: (at: number, halfWindowMs: number, limitEach: number) =>
+    ["frameContext", at, halfWindowMs, limitEach] as const,
   insightsPrefix: ["insights"] as const,
   insights: (range: TimeRange) => ["insights", range] as const,
 };

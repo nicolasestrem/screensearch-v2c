@@ -9,12 +9,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button, ErrorState, Panel, Skeleton } from "../components/primitives";
 import { FrameTile, MomentDetail } from "../components/domain";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "../components/icons";
-import { useFrame, useFrames } from "../lib/ipc/queries";
+import { useFrame, useFrameContext } from "../lib/ipc/queries";
 import { useEnqueueVision } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
 
 const NEIGHBOUR_HALF_MS = 30 * 60 * 1000; // ±30 min context window
-const NEIGHBOUR_LIMIT = 24;
+const NEIGHBOUR_EACH = 12; // closest captures to load on each side of the anchor
 
 export function Component() {
   const { id } = useParams();
@@ -24,13 +24,12 @@ export function Component() {
   const detail = useFrame(frameId);
   const enqueue = useEnqueueVision();
 
-  // Context window around this frame (enabled once we know its capture time).
+  // Captures bracketing this frame (enabled once we know its capture time). Anchored
+  // to `at` — the closest on each side — so prev/next reach the true neighbours even
+  // in a busy session (a plain newest-first window would only return the latest
+  // frames and drop the anchor, breaking navigation).
   const at = detail.data?.captured_at ?? 0;
-  const neighbours = useFrames(
-    { start: at - NEIGHBOUR_HALF_MS, end: at + NEIGHBOUR_HALF_MS },
-    NEIGHBOUR_LIMIT,
-    detail.data != null,
-  );
+  const neighbours = useFrameContext(at, NEIGHBOUR_HALF_MS, NEIGHBOUR_EACH, detail.data != null);
 
   const queueVision = () => {
     if (frameId == null) return;
@@ -101,11 +100,14 @@ export function Component() {
     );
   }
 
-  // Prev / next within the loaded context window (ascending by capture time).
+  // Prev / next within the loaded context window (ascending by capture time, anchor
+  // excluded). `at` is this frame's capture time, so prev = the closest capture before
+  // it and next = the closest after — derived by time, not by locating the anchor in
+  // the list (it isn't there).
   const sorted = [...(neighbours.data ?? [])].sort((a, b) => a.captured_at - b.captured_at);
-  const idx = sorted.findIndex((f) => f.frame_id === frameId);
-  const prev = idx > 0 ? sorted[idx - 1] : null;
-  const next = idx >= 0 && idx < sorted.length - 1 ? sorted[idx + 1] : null;
+  const before = sorted.filter((f) => f.captured_at < at);
+  const prev = before.length > 0 ? before[before.length - 1] : null;
+  const next = sorted.find((f) => f.captured_at > at) ?? null;
   const context = sorted.filter((f) => f.frame_id !== frameId);
 
   return (

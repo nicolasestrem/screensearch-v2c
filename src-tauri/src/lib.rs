@@ -301,6 +301,28 @@ async fn get_nearest_frame(
     store.nearest_frame(at).await.map_err(|e| e.to_string())
 }
 
+/// The captures bracketing `at` (unix ms) for a Moment's prev/next + context strip
+/// (`get_frame_context`, P5): the `limit_each` closest frames on each side within
+/// `±half_window_ms`, ascending by capture time, excluding the anchor. Unlike
+/// `get_frames` (newest-first, capped), this guarantees the *adjacent* captures, so
+/// prev/next always point at the true neighbours even in a busy session.
+#[tauri::command]
+async fn get_frame_context(
+    at: i64,
+    half_window_ms: i64,
+    limit_each: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<FrameMeta>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .neighbour_frames(at, half_window_ms, limit_each)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Truthful activity aggregates over `[start, end)` for the Insights screen
 /// (`get_insights`, P5). Real DB counts only — honest-empty when the window is bare.
 #[tauri::command]
@@ -449,6 +471,7 @@ pub fn run() {
             get_timeline,
             get_frames,
             get_nearest_frame,
+            get_frame_context,
             get_insights,
             get_settings,
             set_settings

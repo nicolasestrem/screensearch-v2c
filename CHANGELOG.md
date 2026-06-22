@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every screen renders all of loading / empty / error / partial / populated — no mock data, no dead
   ends. Initial JS stays ~87 KB gzipped (the markdown renderer ships only with Recall).
 
+### Fixed — P5 (M3+M4) review follow-ups (2026-06-22)
+- **Moment Prev/Next & "around this moment" now work in real sessions.** They were sourced from a
+  newest-first window that, in a busy capture session, returned only frames from the far edge of the
+  window — so the buttons silently went dead and the strip showed unrelated frames. The backend now
+  serves the captures immediately *bracketing* a moment (`get_frame_context`), so navigation always
+  lands on the true neighbours.
+- **Answer links open safely.** Links inside a streamed answer now open in your browser instead of
+  navigating away inside the app window.
+- **The answer's "Thinking" trace no longer snaps shut** the instant the answer finishes — it stays
+  as you left it so you can read it.
+
 ### Added — P5 (M1+M2) UI foundation, shell & primitives (2026-06-22)
 - **The "Command Deck" shell**: the app now opens to a real frame — a top StatusRail (live
   capture / data store / enrichment queue / inference status), a left NavRail (Deck · Recall ·

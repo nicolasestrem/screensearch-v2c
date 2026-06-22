@@ -1013,6 +1013,50 @@ async fn nearest_frame_picks_closest_with_after_winning_ties() {
     assert_eq!(id_at(store.nearest_frame(200).await.unwrap()), f200);
 }
 
+/// `neighbour_frames` brackets the anchor with the *closest* captures on each side —
+/// not the window edges — so a Moment's prev/next + context strip always point at the
+/// adjacent frames. Backs `get_frame_context`. Regression: `frames_in_range`'s
+/// newest-first cap would return only the latest frames in a wide forward window and
+/// silently drop the anchor's true neighbours (and the anchor itself).
+#[tokio::test]
+async fn neighbour_frames_brackets_anchor_with_closest_each_side() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    for t in [100, 200, 300, 400, 500, 600, 700] {
+        store.insert_frame(frame_at(t)).await.unwrap();
+    }
+
+    // Anchor @400, ±1000 covers every frame, two per side. Closest two before (@300,
+    // @200) + closest two after (@500, @600), ascending; anchor (@400) excluded and the
+    // far edges (@100/@700) dropped by the 2-each cap — NOT the window's newest frames.
+    let metas = store.neighbour_frames(400, 1_000, 2).await.unwrap();
+    let times: Vec<i64> = metas.iter().map(|m| m.captured_at).collect();
+    assert_eq!(times, vec![200, 300, 500, 600]);
+
+    // prev/next as the Moment screen derives them: closest below / closest above.
+    let prev = metas.iter().rfind(|m| m.captured_at < 400).unwrap();
+    let next = metas.iter().find(|m| m.captured_at > 400).unwrap();
+    assert_eq!(prev.captured_at, 300);
+    assert_eq!(next.captured_at, 500);
+
+    // Anchor at the earliest frame → only the after-side; no before frames, no panic.
+    let only_after = store.neighbour_frames(100, 1_000, 3).await.unwrap();
+    assert!(only_after.iter().all(|m| m.captured_at > 100));
+    assert_eq!(only_after.first().map(|m| m.captured_at), Some(200));
+
+    // The half-window clips reach: ±100 keeps only the immediately adjacent @300/@500.
+    let near = store.neighbour_frames(400, 100, 5).await.unwrap();
+    let near_times: Vec<i64> = near.iter().map(|m| m.captured_at).collect();
+    assert_eq!(near_times, vec![300, 500]);
+
+    // Degenerate window / zero limit → empty (never the whole table).
+    assert!(store.neighbour_frames(400, 0, 5).await.unwrap().is_empty());
+    assert!(store
+        .neighbour_frames(400, 1_000, 0)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 /// `set_settings_batch` upserts every pair in one transaction: all keys are present
 /// afterward and existing keys are overwritten. (Atomicity-on-failure comes from the
 /// single `BEGIN … COMMIT` — a failed write `?`-returns before `commit`, so nothing

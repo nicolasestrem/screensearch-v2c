@@ -68,6 +68,25 @@ export function useFrames(range: TimeRange, limit: number, enabled = true) {
   });
 }
 
+/**
+ * The captures bracketing a frame (closest on each side), for a Moment's prev/next
+ * + context strip. Unlike `useFrames`, the result is anchored to `at` rather than the
+ * window's newest frames, so the immediate neighbours are always present. Idle until
+ * the anchor time is known (the owning `useFrame` has resolved).
+ */
+export function useFrameContext(
+  at: number,
+  halfWindowMs: number,
+  limitEach: number,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.frameContext(at, halfWindowMs, limitEach),
+    queryFn: () => cmd.getFrameContext(at, halfWindowMs, limitEach),
+    enabled: enabled && halfWindowMs > 0 && limitEach > 0,
+  });
+}
+
 /** One frame's full detail; idle until a frame id is selected. */
 export function useFrame(frameId: number | null) {
   return useQuery({

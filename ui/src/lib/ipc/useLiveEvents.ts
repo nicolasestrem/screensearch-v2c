@@ -77,8 +77,10 @@ export function useLiveEvents() {
           qc.invalidateQueries({ queryKey: queryKeys.timelinePrefix });
           qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
           // New frames change the newest-first lists (timeline thumbnails, deck
-          // recents); refresh them alongside the density ribbon.
+          // recents) and a viewed moment's neighbour context; refresh them alongside
+          // the density ribbon.
           qc.invalidateQueries({ queryKey: queryKeys.framesPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.frameContextPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.jobStats });
         }, TICK_DEBOUNCE_MS);
       }),

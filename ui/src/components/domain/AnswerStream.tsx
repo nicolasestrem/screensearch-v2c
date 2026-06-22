@@ -5,6 +5,7 @@
 // grounding citations as clickable tiles that open each source moment. react-markdown
 // is imported only here, so it ships in the /recall route chunk (§8). The idle phase
 // renders nothing — the Recall screen owns the empty "ask a question" invitation.
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -48,6 +49,20 @@ function CitationTile({ frameId }: { frameId: number }) {
 }
 
 export function AnswerStream({ phase, thinking, answer, citations, error, onRetry }: AnswerStreamProps) {
+  const streaming = phase === "streaming";
+
+  // The thinking trace is a *controlled* <details>: expanded while a new answer
+  // streams in, then left as the user last set it. Tying `open` straight to
+  // `streaming` would yank the panel shut the instant streaming finished — exactly
+  // when the user may want to read it. Hooks run unconditionally, before any early
+  // return (Rules-of-Hooks gate).
+  const [thinkingOpen, setThinkingOpen] = useState(true);
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (streaming && !wasStreaming.current) setThinkingOpen(true);
+    wasStreaming.current = streaming;
+  }, [streaming]);
+
   if (phase === "idle") return null;
 
   if (phase === "error") {
@@ -60,12 +75,14 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
     );
   }
 
-  const streaming = phase === "streaming";
-
   return (
     <div className="flex flex-col gap-4">
       {thinking && (
-        <details open={streaming} className="rounded-panel border border-line bg-base">
+        <details
+          open={thinkingOpen}
+          onToggle={(e) => setThinkingOpen((e.currentTarget as HTMLDetailsElement).open)}
+          className="rounded-panel border border-line bg-base"
+        >
           <summary className="cursor-pointer select-none px-3 py-2 text-caption text-ink-muted font-body">
             Thinking
           </summary>
@@ -76,7 +93,20 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
       )}
 
       <div className="prose prose-deck max-w-none">
-        <Markdown remarkPlugins={[remarkGfm]}>{answer}</Markdown>
+        <Markdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // Answer text is model output: open any link in the OS browser, never
+            // navigate the app's own WebView (which would unmount the whole UI).
+            a: ({ href, children }) => (
+              <a href={href} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            ),
+          }}
+        >
+          {answer}
+        </Markdown>
         {streaming && (
           <span
             className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-accent align-text-bottom"
