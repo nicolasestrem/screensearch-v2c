@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P5 (M1+M2) UI foundation, shell & primitives (2026-06-22)
+- **The "Command Deck" shell**: the app now opens to a real frame — a top StatusRail (live
+  capture / data store / enrichment queue / inference status), a left NavRail (Deck · Recall ·
+  Timeline · Insights · Settings), a ⌘K command palette (jump-to + start/stop capture), and a
+  readiness banner that appears only while something is starting or needs attention.
+- **Design system**: warm-graphite dark theme with a single signal-orange accent and Windows-native
+  fonts, defined once as design tokens — every color, font, radius, and spacing in the UI references
+  a token (no hardcoded styling). Ambient motion (the scanline texture) honors "reduce motion".
+- **Typed data layer end-to-end**: every screen reads the backend through generated types only —
+  typed command wrappers, a live-event subscription that keeps the status readouts fresh, and a
+  streaming reducer for grounded answers. No hand-written API types.
+- **Reusable building blocks**: Panel, Button, IconButton, Field, Select, Toggle, Chip, Toast,
+  EmptyState, ErrorState, Skeleton, and Tooltip — accessible (visible focus, ≥32px hit targets,
+  AA contrast) and built once for the screens that follow.
+- **Routing & resilience**: real, deep-linkable routes for every screen (including a per-frame
+  `/timeline/:id` and a friendly not-found), each wrapped in its own error boundary so a broken
+  view never blanks the whole app. Routes are code-split to keep startup small (~86 KB gzipped).
+- The data-bearing screen bodies (search, the Scanline Timeline, settings, insights) build on this
+  foundation in the next milestones.
+
 ### Added — P5 (M0) backend completion (2026-06-22)
 - **Timeline data** (`get_timeline`): frame-density buckets over a time range — the data behind
   the Scanline Timeline. Sparse and half-open, with a presentation-driven bucket count.

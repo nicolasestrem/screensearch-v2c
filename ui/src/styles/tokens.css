@@ -1,0 +1,77 @@
+/* Design tokens — the single source of styling truth (UI_REFERENCE §1–2).
+ *
+ * Every color, font, spacing, radius, z-layer, and motion duration the UI uses
+ * lives here as a CSS custom property. The Tailwind theme (tailwind.config.js)
+ * maps utility classes onto these variables, so components reference *tokens*,
+ * never raw hex / px / magic numbers ("tokens only", CLAUDE.md + UI_REFERENCE §2).
+ *
+ * Identity: warm-graphite "Command Deck", dark-only, one signal-orange accent,
+ * Windows-native fonts. Do not add a fourth hue (UI_REFERENCE §1).
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── Palette: warm graphite + one bold accent ───────────────────────────── */
+  --bg-base: #15120d; /* app background (warm near-black, not pure black) */
+  --bg-surface: #1e1a13; /* panels, cards */
+  --bg-overlay: #262017; /* popovers, command palette, modals */
+  --line: #332b20; /* hairline dividers, borders */
+  --ink: #ece4d5; /* primary text (warm off-white) */
+  --ink-muted: #9a8f7a; /* secondary text, labels */
+  --ink-faint: #6b6253; /* tertiary, disabled */
+  --accent: #ff6a1a; /* the only bold color — scan-head, active, primary action */
+  --accent-wash: rgba(255, 106, 26, 0.14); /* scanline glow, selection, active row */
+  --scrim: rgba(8, 6, 3, 0.72); /* modal/overlay backdrop dimming the app behind */
+
+  /* Functional-only (status contexts; never brand decoration; desaturated). */
+  --danger: #c5524b;
+  --warn: #d9912f;
+  --ok: #7fa88b;
+
+  /* ── Typography (Windows-native stack — a constraint and the personality) ── */
+  --font-display: "Bahnschrift", "Segoe UI", system-ui, sans-serif; /* labels, eyebrows, heads */
+  --font-body: "Segoe UI", system-ui, sans-serif; /* prose, answers */
+  --font-mono: "Consolas", "Cascadia Mono", ui-monospace, monospace; /* all data */
+
+  /* Type scale (px / weight) — UI_REFERENCE §1. */
+  --text-display: 28px;
+  --text-title: 20px;
+  --text-subtitle: 16px;
+  --text-body: 14px;
+  --text-caption: 12px;
+  --text-data: 13px; /* mono */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --tracking-eyebrow: 0.08em; /* uppercase instrument-readout tracking */
+
+  /* ── Form ───────────────────────────────────────────────────────────────── */
+  --radius-panel: 4px;
+  --radius-chip: 2px;
+  --radius-ribbon: 0; /* the timeline is an instrument, not a card */
+
+  /* ── Spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48 (UI_REFERENCE §2) ─────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* ── Z-layers: base / rail / overlay / toast ────────────────────────────── */
+  --z-base: 0;
+  --z-rail: 10;
+  --z-overlay: 100;
+  --z-toast: 1000;
+
+  /* ── Motion: 120–200ms ease for UI; scan-head linear; ambient very slow ─── */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-ui: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* Minimum interactive hit target (UI_REFERENCE §7: ≥ 32px). */
+  --hit-min: 32px;
+}

@@ -15,5 +15,17 @@ export default defineConfig({
   },
   build: {
     target: "chrome110",
+    rollupOptions: {
+      output: {
+        // Split heavy, rarely-changing vendor code into its own chunks so the
+        // app shell stays small and cacheable (UI_REFERENCE §8). react-markdown
+        // is only imported by /recall, so route-splitting already keeps it out
+        // of the initial chunk; this just isolates the big shared libs.
+        manualChunks: {
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          query: ["@tanstack/react-query"],
+        },
+      },
+    },
   },
 });

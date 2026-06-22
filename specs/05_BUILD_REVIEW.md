@@ -588,3 +588,71 @@ test result: ok. 2 passed; 0 failed; 0 ignored
   construction (`?`-return before `commit`). Recorded honestly rather than faked.
 - Other review verdicts were "clean" (SQL correctness, IPC types, CSP/asset scope, CLAUDE.md
   compliance) — no changes needed there.
+
+## Pass 10 — 2026-06-22 — P5 (M1+M2) UI foundation, shell & primitives (`feat/p5-ui-foundation` branch)
+
+### Implemented (with verbatim verification)
+Replaced the P2 live-timeline `App.tsx` with the "Command Deck" foundation (UI_REFERENCE §1–9),
+frontend-only — **no Rust/bindings change** (`git diff --exit-code -- ui/src/bindings` → exit 0):
+- **Design tokens** (`ui/src/styles/tokens.css`) + Tailwind theme mapped to them
+  (`tailwind.config.js`, `postcss.config.js`, `globals.css`); colors/radius/fonts are token-only,
+  default spacing kept (rem steps already equal the 4·8·12·16·24·32·48 scale).
+- **Typed IPC plane** (`ui/src/lib/ipc/`): `commands.ts`, `events.ts`, `queryKeys.ts`, `queries.ts`,
+  `mutations.ts`, `useAsk.ts`, `useLiveEvents.ts`, `frameSrc.ts` — bindings-only types (§6).
+- **State** (`ui/src/state/`): `uiStore`, `toastStore`.
+- **Shell** (`ui/src/components/shell/`): `AppShell`, `StatusRail`, `NavRail`, `CommandPalette`,
+  `ReadinessBanner`.
+- **Primitives** (`ui/src/components/primitives/`): the twelve §5 primitives + inline-SVG icons.
+- **App wiring** (`ui/src/app/`): `providers.tsx`, `router.tsx` (lazy routes + per-route
+  `errorElement`), route scaffolds, vendor `manualChunks`; removed `ui/src/styles.css`.
+
+```
+$ npm run build      # ui/  (tsc --noEmit && vite build)
+✓ 125 modules transformed.
+dist/assets/index-*.css            25.60 kB │ gzip:  5.40 kB
+dist/assets/index-*.js             20.02 kB │ gzip:  7.24 kB
+dist/assets/query-*.js             36.71 kB │ gzip: 11.08 kB
+dist/assets/react-vendor-*.js     207.71 kB │ gzip: 67.89 kB
+# + per-route lazy chunks (Deck/Recall/Timeline/Moment/Insights/Settings/NotFound ≤ 0.83 kB each)
+✓ built in 1.27s
+# initial JS ≈ 86 KB gzip ≪ 250 KB budget (UI_REFERENCE §8)
+
+$ npm run lint       # ui/  (eslint .)
+# clean — no errors, no warnings (Rules-of-Hooks error gate passes)
+
+$ git diff --exit-code -- ui/src/bindings   # exit 0 — generated bindings untouched
+```
+
+**Observed running (not just compiled):**
+- *Degraded — Playwright-MCP vs `npm run dev` (localhost:5173):* shell renders; no-Tauri runtime →
+  readiness query errors → StatusRail shows the honest **"Kernel offline"** chip; routes
+  `/ · /recall · /timeline · /timeline/42 · /insights · /settings` + bogus path → **NotFound**;
+  global **Ctrl+K** opens the palette (auto-focus), **↓ + Enter** runs "Go to Recall" (navigates +
+  closes). Console: only a favicon 404 + the router v7 future-flag note.
+- *Authoritative — `tauri dev`:* compiled (`Finished … in 16.15s`) and booted — `store opened …
+  schema_version=1`, `WinRT OCR ready`, `inference attached; sidecar ready (lazy spawn)`,
+  `embedding model loaded; attaching to kernel`. Every subsystem comes up Ready (the live data the
+  StatusRail consumes). No panic/error.
+
+### Skipped / deferred (intentional, by milestone)
+- **Screen bodies** (search list, AnswerStream, Scanline Timeline, Moment detail, Settings controls,
+  Insights charts) → M3–M5. Routes are scaffolds stating each screen's purpose (IA per §3), not
+  "Coming Soon".
+- `frameSrc.ts` exists and is correct but isn't rendered yet (no `FrameImage`/`FrameTile` until M4).
+- `@tanstack/react-virtual`, `react-markdown`, `remark-gfm` installed now but first consumed in M3/M4.
+
+### Decisions / corrections (logged)
+- **StatusRail "DB size"** → shows the **DB readiness/status** chip instead; no size field exists in
+  the IPC contract and fabricating one is disallowed (new `07` gap #27).
+- **`job_progress` payload is `JobStats`**, not the `JobProgress` wrapper binding — the kernel emits
+  the inner value (`src-tauri` `forward_events`); `events.ts` types `job_progress` as `JobStats`.
+- **Tailwind spacing** kept at default rather than replaced, so width/height/inset/max-* utilities
+  survive while color/radius/font scales stay token-locked.
+- **Sidecar live status** is an event-sourced Query cache entry (no fetch command) — `useSidecarStatus`'s
+  queryFn preserves the last `sidecar_status`-written value so a refetch can't clobber it.
+
+### Still risky / to watch
+- Live StatusRail visuals are evidenced by the `tauri dev` boot log + the rail's verified render
+  paths — the native WebView2 window can't be screenshotted with the available tools. A full
+  populated-with-real-frames visual pass is scheduled with the M3/M4 screens (per the plan DoD).
+- React Router v7 future-flag warning is benign now; opt into `v7_*` flags before any RR7 upgrade.

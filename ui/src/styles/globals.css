@@ -1,0 +1,114 @@
+/* Global stylesheet: tokens → Tailwind layers → base element styling and the
+ * ambient scanline keyframes (gated behind prefers-reduced-motion, UI_REFERENCE
+ * §1/§7). Imported once from main.tsx; replaces the P2 styles.css. */
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg-base);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: var(--text-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Tabular, monospaced data everywhere it appears (timestamps, counts). */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Visible keyboard focus on every interactive element (UI_REFERENCE §7).
+     Mouse clicks don't show it (:focus-visible), keyboard does. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-chip);
+  }
+
+  ::selection {
+    background: var(--accent-wash);
+  }
+
+  /* Warm, narrow scrollbars consistent with the dark console surfaces. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: var(--radius-chip);
+  }
+}
+
+@layer components {
+  /* Eyebrow / instrument-readout label: condensed, uppercase, tracked. */
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: var(--text-caption);
+    font-weight: var(--weight-semibold);
+    letter-spacing: var(--tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+}
+
+@layer utilities {
+  /* Faint scanline texture — the subject's native material (screen capture /
+     CRT). Applied to instrument surfaces (the timeline ribbon). Decorative
+     drift is disabled under reduced-motion below. */
+  .scanlines {
+    background-image: repeating-linear-gradient(
+      0deg,
+      var(--accent-wash) 0px,
+      var(--accent-wash) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    background-size: 100% 3px;
+  }
+
+  .scanlines-drift {
+    animation: scanline-drift 8s linear infinite;
+  }
+}
+
+/* The ambient scanline drifts *very* slowly; the scan-head moves linearly.
+   Defined once; only attached via .scanlines-drift, which reduced-motion kills. */
+@keyframes scanline-drift {
+  from {
+    background-position-y: 0;
+  }
+  to {
+    background-position-y: 3px;
+  }
+}
+
+/* All ambient motion off under prefers-reduced-motion (UI_REFERENCE §1/§7). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .scanlines-drift {
+    animation: none !important;
+  }
+}

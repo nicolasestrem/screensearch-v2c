@@ -334,3 +334,60 @@
   forced-rollback test isn't feasible via the public API (no fault seam; every upsert is a valid
   `(TEXT, TEXT)` write) — the all-or-nothing guarantee is structural (`?` before `commit`).
   Recorded honestly rather than faked. Other review verdicts were "clean" and needed no change.
+
+## 2026-06-22 — P5 (M1+M2) UI foundation, shell & primitives (`feat/p5-ui-foundation` branch)
+- **Change:** Replaced the minimal P2 `App.tsx` with the full "Command Deck" frontend foundation
+  (UI_REFERENCE §1–9), consuming the M0 backend through the generated bindings only:
+  - **Deps** (`ui/package.json`): `react-router-dom@6`, `@tanstack/react-query@5`, `zustand@5`,
+    `@tanstack/react-virtual@3`, `react-markdown@9`, `remark-gfm@4`; dev `tailwindcss@3` +
+    `@tailwindcss/typography`, `postcss`, `autoprefixer`.
+  - **Tokens & Tailwind** (`ui/src/styles/{tokens.css,globals.css}`, `tailwind.config.js`,
+    `postcss.config.js`): the palette/type/spacing/radius/z/motion of UI_REFERENCE §1–2 as CSS
+    custom properties; Tailwind *replaces* color/radius/font scales with token refs (no off-palette
+    hue or off-scale type reachable) but keeps the default `spacing` scale (its rem steps already
+    equal 4·8·12·16·24·32·48 px and back the width/height/inset utilities); reduced-motion gates the
+    scanline drift.
+  - **Typed IPC layer** (`ui/src/lib/ipc/`): `commands.ts` (one wrapper per `03 §7` command, camel→
+    snake args), `events.ts` (typed `listen` map), `queryKeys.ts`, `queries.ts`, `mutations.ts`
+    (optimistic `useSetSettings`), `useAsk.ts` (a reducer folding `answer_delta` → phase/thinking/
+    answer/citations), `useLiveEvents.ts` (one subscription manager: `readiness_changed`/
+    `job_progress`/`sidecar_status` patch the Query cache, `capture_tick` debounce-invalidates
+    timeline/insights), `frameSrc.ts` (memoized `appDataDir` + `convertFileSrc`, throws-safe in dev).
+  - **State** (`ui/src/state/`): `uiStore` (palette/range/focused frame) and `toastStore`
+    (client-side toast queue + a `toast.*` facade for mutation callbacks).
+  - **Shell** (`ui/src/components/shell/`): `AppShell` (mounts `useLiveEvents` + the global ⌘K
+    listener once), `StatusRail`, `NavRail`, `CommandPalette` (filter + ↑/↓/Enter/Esc), `ReadinessBanner`.
+  - **Primitives** (`ui/src/components/primitives/`): the twelve §5 primitives + an inline-SVG icon
+    set (no web fonts), all tokens-only with visible focus and ≥32px targets.
+  - **App wiring** (`ui/src/app/`): `providers.tsx` (QueryClient) + `router.tsx` (`createBrowserRouter`,
+    lazy routes, per-route `errorElement`); route scaffolds for all screens (data bodies land M3–M5);
+    `vite.config.ts` vendor `manualChunks`. Removed the superseded `ui/src/styles.css`.
+- **Why:** P5 M1+M2 per the approved plan and UI_REFERENCE — establish the shell, typed data plane,
+  design tokens, routing/error boundaries, and primitives the data screens build on. No backend or
+  bindings changed (`git diff --exit-code -- ui/src/bindings` → exit 0).
+- **Decisions (logged):** (a) StatusRail shows the **DB readiness/status** chip, not a "DB size"
+  number — no size field exists in the IPC contract, so showing a size would be fabricated (07 #27).
+  (b) The `job_progress` event payload is a bare `JobStats` (the kernel emits the inner value), not
+  the `JobProgress` wrapper binding — `events.ts` types it accordingly. (c) React Router's
+  v7-future-flag console warning is informational and left as-is. (d) Route scaffolds state each
+  screen's purpose (IA per §3) — not "Coming Soon"; the screen bodies are scheduled M3–M5.
+- **Verification:**
+  - `npm run build` (tsc --noEmit && vite build) → `✓ built in 1.27s`; initial JS gzipped ≈ 86 KB
+    (`react-vendor` 67.89 + `query` 11.08 + `index` 7.24) + CSS 5.40 KB — well under the 250 KB
+    budget (UI_REFERENCE §8); each route emitted as its own lazy chunk.
+  - `npm run lint` (eslint .) → clean, **no errors/warnings** (Rules-of-Hooks error gate passes).
+  - **Degraded (Playwright-MCP vs `npm run dev`, localhost:5173):** the shell renders (StatusRail +
+    NavRail + content); with no Tauri runtime the readiness query errors and the rail shows the
+    honest **"Kernel offline"** chip (the error state); routing works for `/`, `/recall`, `/timeline`,
+    `/timeline/42` (Moment), `/insights`, `/settings`, and a bogus path → the **NotFound** invitation;
+    global **Ctrl+K** opens the palette (input auto-focused), **↓ + Enter** selects "Go to Recall"
+    and navigates + closes; console clean apart from a favicon 404 and the router future-flag note.
+    Screenshots: `m1m2-shell-deck.png`, `m1m2-timeline-active.png`, `m1m2-command-palette.png`
+    (gitignored verification artifacts).
+  - **Authoritative (`npm run dev` = `tauri dev`):** the integrated app compiled (`Finished … in
+    16.15s`) and booted — `store opened … schema_version=1`, `WinRT OCR ready`, `inference attached;
+    sidecar ready (lazy spawn)`, `embedding model loaded; attaching to kernel`. So under the Tauri
+    shell every subsystem comes up Ready (the live data the StatusRail consumes), vs. the
+    "Kernel offline" error state the browser correctly shows without a runtime. No panic, no error.
+    (The native WebView2 window can't be screenshotted with the available tools; the live StatusRail
+    is evidenced by the backend boot log + the rail's verified render paths.)
