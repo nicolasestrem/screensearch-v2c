@@ -36,4 +36,29 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// Atomically upserts many settings in **one transaction** — either every pair
+    /// lands or none do. This is what makes `save_settings` crash-safe: a failure
+    /// (or a kill) part-way through rolls back, so `load_settings` never sees a mix of
+    /// new and stale keys. `unchecked_transaction` is sound here because `with_conn`
+    /// holds the store mutex exclusively for the duration of the closure — no other
+    /// borrow of the connection can exist.
+    pub async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
+        let kvs = kvs.to_vec();
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )?;
+                for (key, value) in &kvs {
+                    stmt.execute(params![key, value])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
 }

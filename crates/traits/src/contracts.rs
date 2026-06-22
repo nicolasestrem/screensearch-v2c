@@ -14,7 +14,7 @@ use crate::domain::{
     AnswerOpts, CapturedFrame, ChunkSource, Embedding, FrameEnrichmentInput, NewFrame, OcrResult,
     RetrievedChunk, VisionAnalysis,
 };
-use crate::ipc::{AnswerDelta, SearchHit, SearchQuery};
+use crate::ipc::{AnswerDelta, InsightsSummary, SearchHit, SearchQuery, TimelineBucket};
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::{MonitorInfo, Result};
 
@@ -124,6 +124,25 @@ pub trait Store: Send + Sync {
         Ok(std::collections::HashMap::new())
     }
 
+    /// Frame-count density buckets across the half-open window `[start, end)`, split
+    /// into at most `bucket_count` fixed-width buckets and returned **sparse** (only
+    /// occupied buckets, ascending). Backs the `get_timeline` command (`03 §7`).
+    /// Default returns empty for stores without a timeline.
+    async fn timeline_buckets(
+        &self,
+        _start: i64,
+        _end: i64,
+        _bucket_count: u32,
+    ) -> Result<Vec<TimelineBucket>> {
+        Ok(Vec::new())
+    }
+
+    /// Truthful activity aggregates over `[start, end)` for the Insights screen
+    /// (`get_insights`, P5). Default returns the honest-empty summary.
+    async fn insights_summary(&self, _start: i64, _end: i64) -> Result<InsightsSummary> {
+        Ok(InsightsSummary::default())
+    }
+
     // job queue (see `03 §5`)
     async fn enqueue_job(&self, job: NewJob) -> Result<i64>;
     async fn claim_jobs(&self, kinds: &[JobKind], limit: u32, now: i64) -> Result<Vec<Job>>;
@@ -140,6 +159,20 @@ pub trait Store: Send + Sync {
     // settings
     async fn get_setting(&self, key: &str) -> Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> Result<()>;
+
+    /// Atomically upserts many `(key, value)` settings in a single transaction —
+    /// **all land or none do**. Used by `kernel::settings::save_settings` so a crash
+    /// or error mid-save cannot leave the `settings` table in a mixed state (some keys
+    /// new, the rest stale), which `load_settings`' per-key default fallback would
+    /// silently hide. The default applies them one-by-one via [`Self::set_setting`]
+    /// (non-atomic) for stores without transaction support; `SqliteStore` overrides it
+    /// with a real `BEGIN … COMMIT`.
+    async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
+        for (key, value) in kvs {
+            self.set_setting(key, value).await?;
+        }
+        Ok(())
+    }
 
     /// Injects (or replaces) the query-embedding provider that lights up the vector
     /// arm of [`Self::hybrid_search`]. Set once the model has finished loading off

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
     ChunkSource, Embedding, EmbeddingProvider, JobKind, JobState, NewFrame, NewJob, OcrResult,
-    SearchQuery, TimeRange, VisionAnalysis,
+    SearchQuery, TimeRange, TimelineBucket, VisionAnalysis,
 };
 
 /// A job of the given kind with sensible defaults (immediately runnable).
@@ -822,4 +822,153 @@ async fn ocr_texts_bulk_fetches_nonempty_only() {
 
     // Empty input is a no-op (no query).
     assert!(store.ocr_texts(&[]).await.unwrap().is_empty());
+}
+
+/// `timeline_buckets` groups frames into fixed-width, half-open buckets and returns
+/// only the **occupied** ones (sparse), ascending by time. Backs `get_timeline`.
+#[tokio::test]
+async fn timeline_buckets_are_sparse_and_half_open() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // bucket width = ceil(200 / 4) = 50 → [0,50) [50,100) [100,150) [150,200).
+    for ts in [10, 20, 120] {
+        store.insert_frame(frame_at(ts)).await.unwrap();
+    }
+    // Out of range: a frame before `start` and one exactly at the exclusive `end`
+    // are both excluded.
+    store.insert_frame(frame_at(-5)).await.unwrap();
+    store.insert_frame(frame_at(200)).await.unwrap();
+
+    let buckets = store.timeline_buckets(0, 200, 4).await.unwrap();
+    assert_eq!(
+        buckets,
+        vec![
+            TimelineBucket {
+                start: 0,
+                end: 50,
+                count: 2
+            },
+            TimelineBucket {
+                start: 100,
+                end: 150,
+                count: 1
+            },
+        ],
+    );
+
+    // Invalid / degenerate ranges yield nothing.
+    assert!(store.timeline_buckets(200, 0, 4).await.unwrap().is_empty());
+    assert!(store.timeline_buckets(0, 200, 0).await.unwrap().is_empty());
+}
+
+/// `insights_summary` returns real aggregates over the half-open window: total and
+/// vision-tagged counts, the top foreground apps, and the activity-type breakdown.
+#[tokio::test]
+async fn insights_summary_aggregates_truthfully() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let firefox = |ts: i64| {
+        let mut f = frame_at(ts);
+        f.app_hint = Some("Firefox".to_string());
+        f
+    };
+    // 3 Firefox, 1 Code, 1 with no app hint — all inside [0, 1000).
+    let f1 = store.insert_frame(firefox(100)).await.unwrap();
+    store.insert_frame(firefox(200)).await.unwrap();
+    store.insert_frame(firefox(300)).await.unwrap();
+    let mut code = frame_at(400);
+    code.app_hint = Some("Code".to_string());
+    let f_code = store.insert_frame(code).await.unwrap();
+    let mut anon = frame_at(500);
+    anon.app_hint = None;
+    store.insert_frame(anon).await.unwrap();
+
+    // Tag two frames with vision activity types (writes frames.activity_type).
+    let vision = |activity: &str| VisionAnalysis {
+        description: "desc".to_string(),
+        activity_type: Some(activity.to_string()),
+        app_hint: None,
+        confidence: 0.9,
+        model: "test".to_string(),
+    };
+    store.insert_vision(f1, vision("browsing")).await.unwrap();
+    store.insert_vision(f_code, vision("coding")).await.unwrap();
+
+    let s = store.insights_summary(0, 1000).await.unwrap();
+    assert_eq!(s.total_frames, 5);
+    assert_eq!(s.tagged_frames, 2);
+    // Most-captured app is Firefox (3), ordered by count desc.
+    let top = s.top_apps.first().expect("a top app");
+    assert_eq!(top.app.as_deref(), Some("Firefox"));
+    assert_eq!(top.count, 3);
+    // Both tagged activities appear, each once.
+    let activities: Vec<(Option<String>, u32)> = s
+        .activity_breakdown
+        .iter()
+        .map(|a| (a.activity.clone(), a.count))
+        .collect();
+    assert!(activities.contains(&(Some("browsing".to_string()), 1)));
+    assert!(activities.contains(&(Some("coding".to_string()), 1)));
+    assert!(!s.captures.is_empty(), "capture density buckets present");
+
+    // A window with no frames → honest-empty summary, never fabricated.
+    let empty = store.insights_summary(10_000, 20_000).await.unwrap();
+    assert_eq!(empty.total_frames, 0);
+    assert!(empty.top_apps.is_empty());
+    assert!(empty.activity_breakdown.is_empty());
+}
+
+/// `timeline_buckets` must not panic on hostile/extreme timestamps (the values come
+/// straight from the frontend). An unrepresentable span yields an empty result, and
+/// a huge-but-representable span — which the old `(span + n - 1)` ceil would have
+/// overflowed — is handled cleanly.
+#[tokio::test]
+async fn timeline_buckets_survives_extreme_ranges() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    store.insert_frame(frame_at(0)).await.unwrap();
+
+    // `end - start` overflows i64 → empty window, no panic.
+    assert!(store
+        .timeline_buckets(i64::MIN, i64::MAX, 4)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Span is exactly i64::MAX (representable). The previous `(span + n - 1) / n`
+    // ceil would overflow here; the current form does not. The single frame at 0
+    // lands in bucket 0.
+    let buckets = store.timeline_buckets(0, i64::MAX, 4).await.unwrap();
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].start, 0);
+    assert_eq!(buckets[0].count, 1);
+    // A forward bucket: a `checked_add` overflow would wrap the end negative.
+    assert!(buckets[0].end > buckets[0].start);
+}
+
+/// `set_settings_batch` upserts every pair in one transaction: all keys are present
+/// afterward and existing keys are overwritten. (Atomicity-on-failure comes from the
+/// single `BEGIN … COMMIT` — a failed write `?`-returns before `commit`, so nothing
+/// lands; that path is exercised by `save_settings`' build-then-commit ordering.)
+#[tokio::test]
+async fn set_settings_batch_writes_all_and_overwrites() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // Pre-existing value the batch must overwrite.
+    store.set_setting("a", "old").await.unwrap();
+
+    store
+        .set_settings_batch(&[
+            ("a".to_string(), "new".to_string()),
+            ("b".to_string(), "1".to_string()),
+            ("c".to_string(), "2".to_string()),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store.get_setting("a").await.unwrap().as_deref(),
+        Some("new")
+    );
+    assert_eq!(store.get_setting("b").await.unwrap().as_deref(), Some("1"));
+    assert_eq!(store.get_setting("c").await.unwrap().as_deref(), Some("2"));
+
+    // An empty batch is a no-op (opens and commits an empty transaction).
+    store.set_settings_batch(&[]).await.unwrap();
 }

@@ -281,3 +281,56 @@
   `test result: ok. 2 passed; 0 failed` in 15.77 s, with `real_answer_streams_tokens` returning
   `ANSWER: The deploy finished at 14:32. CITATIONS: [42]` and `real_vision_tags_an_image`
   describing the test image. DoD #5 (real sidecar) demonstrated.
+
+## 2026-06-22 — P5 (M0) Backend completion (`feat/p5-backend` branch)
+- **Change:** Implemented the three `03 §7` commands the Command-Deck UI requires that P4 left out,
+  plus the queries behind them and frame-image serving:
+  - `crates/store/src/timeline.rs` — `timeline_buckets(start, end, bucket_count)`: sparse,
+    integer-index, half-open `[start, end)` frame-density buckets (backs `get_timeline`).
+  - `crates/store/src/insights.rs` — `insights_summary(start, end)`: total/tagged counts, capture
+    density, top apps, activity breakdown (backs `get_insights`, the Insights screen).
+  - `crates/traits/src/ipc.rs` — new `InsightsSummary` / `AppCount` / `ActivityCount` ts-rs types;
+    `contracts.rs` — defaulted `timeline_buckets` / `insights_summary` on `Store`; `store/src/lib.rs`
+    forwards both.
+  - `crates/kernel/src/settings.rs` — `save_settings`, the exact inverse of `load_settings`.
+  - `src-tauri/src/lib.rs` — `get_timeline` / `get_insights` / `get_settings` / `set_settings`
+    commands (registered); `set_settings` hot-applies model tiers to the live providers.
+  - `src-tauri/tauri.conf.json` + `Cargo.toml` — enabled the asset protocol (`protocol-asset`
+    feature, scope `$APPDATA/frames/**`) and a tight CSP (was `null`).
+- **Why:** P5 (`02 §5`, `UI_REFERENCE`) — the UI consumes typed IPC only, so the timeline,
+  settings, and insights screens cannot exist until these commands do; frame images need a way to
+  reach the WebView (asset protocol). CSP hardening closes the `07` P0-dev gap. Packaging (DoD
+  §13.9) is deferred to a follow-up per the user's decision.
+- **Decisions (spec-silent, logged in `07` #21–#25):** asset protocol for frame images;
+  `get_timeline` takes a presentation-driven `bucket_count`; `toast` event stays client-side;
+  `storage.retention_days` persisted-not-enforced; `InsightsSummary` is a new contract shape.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets
+  -- -D warnings` → `Finished … in 7.40s` (no warnings); `cargo test --workspace` → all green incl.
+  the 4 new tests (`round_trips_defaults`, `round_trips_non_default_values`,
+  `timeline_buckets_are_sparse_and_half_open`, `insights_summary_aggregates_truthfully`) and the
+  regenerated `export_bindings_insightssummary`; new bindings `InsightsSummary.ts` / `AppCount.ts`
+  / `ActivityCount.ts` emitted with `number` (not `bigint`) fields. Live asset-protocol image
+  render is deferred to M4 (no UI surface yet) — recorded honestly.
+
+## 2026-06-22 — P5 (M0) PR #10 review fixes (`feat/p5-backend` branch)
+- **Change:** Addressed the three actionable comments on PR #10:
+  - `crates/store/src/timeline.rs` — made `timeline_buckets` overflow-safe: `checked_sub` span,
+    ceil as `span / n + (span % n != 0)`, bucket end via `checked_add(width).unwrap_or(end).min(end)`.
+  - `crates/store/src/insights.rs` — early honest-empty return when `end <= start` or the span is
+    unrepresentable, skipping four queries + a `timeline_buckets` call.
+  - `crates/traits/src/contracts.rs` — new defaulted `Store::set_settings_batch`; `store/src/settings.rs`
+    overrides it with a single `unchecked_transaction` + `commit`; `store/src/lib.rs` forwards it;
+    `crates/kernel/src/settings.rs` — `save_settings` now builds every pair (incl. fallible JSON)
+    up front and commits them atomically via the batch.
+- **Why:** Review hardening. (1) hostile frontend timestamps could overflow the timeline math
+  (panic in debug / wrap in release); (2) redundant DB work on invalid windows; (3) a crash or
+  mid-loop `serde_json` error in the old 20-call `save_settings` could leave a partially-updated
+  `settings` table that `load_settings`' per-key default fallback hides silently.
+- **Tests added:** `set_settings_batch_writes_all_and_overwrites`, `timeline_buckets_survives_extreme_ranges`.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets
+  -- -D warnings` → `Finished … in 1.23s` (no warnings); `cargo test --workspace` all green —
+  `store` now **33 passed**, `kernel` settings **2 passed**, 0 failed across the workspace.
+- **Notes:** `unchecked_transaction` is sound under `with_conn`'s exclusive mutex hold. A
+  forced-rollback test isn't feasible via the public API (no fault seam; every upsert is a valid
+  `(TEXT, TEXT)` write) — the all-or-nothing guarantee is structural (`?` before `commit`).
+  Recorded honestly rather than faked. Other review verdicts were "clean" and needed no change.

@@ -23,16 +23,19 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use traits::{
-    ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, Job, JobKind, JobStats,
-    NewFrame, NewJob, OcrResult, Result, SearchHit, SearchQuery, VisionAnalysis,
+    ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, InsightsSummary, Job, JobKind,
+    JobStats, NewFrame, NewJob, OcrResult, Result, SearchHit, SearchQuery, TimelineBucket,
+    VisionAnalysis,
 };
 
 mod embeddings;
+mod insights;
 mod jobs;
 mod records;
 mod schema;
 mod search;
 mod settings;
+mod timeline;
 
 pub use schema::{EMBEDDING_DIM, LATEST_SCHEMA_VERSION};
 /// Re-export of the contract this crate implements (`03 §3`).
@@ -227,6 +230,17 @@ impl Store for SqliteStore {
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
         SqliteStore::hybrid_search(self, q).await
     }
+    async fn timeline_buckets(
+        &self,
+        start: i64,
+        end: i64,
+        bucket_count: u32,
+    ) -> Result<Vec<TimelineBucket>> {
+        SqliteStore::timeline_buckets(self, start, end, bucket_count).await
+    }
+    async fn insights_summary(&self, start: i64, end: i64) -> Result<InsightsSummary> {
+        SqliteStore::insights_summary(self, start, end).await
+    }
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>> {
         SqliteStore::frame_enrichment_input(self, frame_id).await
     }
@@ -259,6 +273,9 @@ impl Store for SqliteStore {
     }
     async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         SqliteStore::set_setting(self, key, value).await
+    }
+    async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
+        SqliteStore::set_settings_batch(self, kvs).await
     }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);

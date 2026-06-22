@@ -8,7 +8,7 @@
 
 use serde::de::DeserializeOwned;
 use std::str::FromStr;
-use traits::{CaptureConfig, Settings, Store};
+use traits::{CaptureConfig, Result, Settings, Store};
 
 /// Reads every `03 §8` setting, falling back to [`Settings::default`] per key.
 pub async fn load_settings(store: &dyn Store) -> Settings {
@@ -63,6 +63,108 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
+    }
+}
+
+/// Persists every `03 §8` setting back to the key/value `settings` table — the
+/// exact inverse of [`load_settings`], using the **same key strings** so a saved
+/// value round-trips. Numbers are written via `to_string`, bools as `"true"`/
+/// `"false"`, and composite values (`capture.monitors`, `privacy.excluded_apps`,
+/// model tiers) as JSON (matching how `set_model_tier` already writes a tier).
+///
+/// Every pair (including the fallible JSON encodings) is built **before** any write,
+/// then committed in one transaction via [`Store::set_settings_batch`]. This is
+/// all-or-nothing: a serialization error short-circuits with zero writes, and a
+/// crash mid-commit rolls back — so [`load_settings`] never observes a mix of new
+/// and stale keys (its per-key default fallback would hide such a split silently).
+///
+/// Backs the `set_settings` command (`03 §7`): the values are durable immediately;
+/// which subsystems re-read them live vs on restart is documented in the Settings
+/// UI (model tiers hot-apply; capture/storage/privacy on next capture start; the
+/// rest on app restart).
+pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
+    let kvs: Vec<(String, String)> = vec![
+        (
+            "capture.interval_ms".into(),
+            s.capture_interval_ms.to_string(),
+        ),
+        (
+            "capture.monitors".into(),
+            serde_json::to_string(&s.capture_monitors)?,
+        ),
+        (
+            "capture.diff_threshold".into(),
+            s.capture_diff_threshold.to_string(),
+        ),
+        (
+            "storage.jpeg_quality".into(),
+            s.storage_jpeg_quality.to_string(),
+        ),
+        ("storage.max_width".into(), s.storage_max_width.to_string()),
+        (
+            "storage.retention_days".into(),
+            s.storage_retention_days.to_string(),
+        ),
+        (
+            "enrich.embed_text".into(),
+            bool_str(s.enrich_embed_text).into(),
+        ),
+        (
+            "enrich.image_embeddings".into(),
+            bool_str(s.enrich_image_embeddings).into(),
+        ),
+        (
+            "enrich.vision_timer_enabled".into(),
+            bool_str(s.enrich_vision_timer_enabled).into(),
+        ),
+        (
+            "enrich.vision_timer_interval_ms".into(),
+            s.enrich_vision_timer_interval_ms.to_string(),
+        ),
+        (
+            "enrich.vision_idle_enabled".into(),
+            bool_str(s.enrich_vision_idle_enabled).into(),
+        ),
+        (
+            "enrich.vision_idle_secs".into(),
+            s.enrich_vision_idle_secs.to_string(),
+        ),
+        (
+            "enrich.worker_concurrency".into(),
+            s.enrich_worker_concurrency.to_string(),
+        ),
+        (
+            "models.vision_tier".into(),
+            serde_json::to_string(&s.models_vision_tier)?,
+        ),
+        (
+            "models.answer_tier".into(),
+            serde_json::to_string(&s.models_answer_tier)?,
+        ),
+        ("answer.thinking".into(), bool_str(s.answer_thinking).into()),
+        (
+            "sidecar.idle_ttl_secs".into(),
+            s.sidecar_idle_ttl_secs.to_string(),
+        ),
+        ("sidecar.ngl".into(), s.sidecar_ngl.to_string()),
+        (
+            "privacy.excluded_apps".into(),
+            serde_json::to_string(&s.privacy_excluded_apps)?,
+        ),
+        (
+            "privacy.pause_on_lock".into(),
+            bool_str(s.privacy_pause_on_lock).into(),
+        ),
+    ];
+    store.set_settings_batch(&kvs).await
+}
+
+/// The canonical string form for a persisted bool (parsed back by [`boolean`]).
+fn bool_str(b: bool) -> &'static str {
+    if b {
+        "true"
+    } else {
+        "false"
     }
 }
 

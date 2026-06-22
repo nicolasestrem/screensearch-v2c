@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
     AnswerDelta, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
-    ComponentReadiness, ComponentStatus, FrameDetail, JobStats, ModelLane, OcrProvider, OcrResult,
-    Readiness, RetrievedChunk, SearchHit, SearchQuery, SetModelTier, Store, VisionTarget,
+    ComponentReadiness, ComponentStatus, FrameDetail, InsightsSummary, JobStats, ModelLane,
+    OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit, SearchQuery, SetModelTier,
+    Settings, Store, TimeRange, TimelineBucket, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -246,6 +247,79 @@ async fn set_model_tier(request: SetModelTier, state: State<'_, AppState>) -> Re
     Ok(())
 }
 
+/// Frame-count density buckets over `[start, end)` for the Scanline Timeline
+/// (`get_timeline`, `03 §7`). `bucket_count` is presentation-driven (the UI passes a
+/// count derived from the ribbon width); the store returns sparse, occupied buckets.
+#[tauri::command]
+async fn get_timeline(
+    range: TimeRange,
+    bucket_count: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<TimelineBucket>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .timeline_buckets(range.start, range.end, bucket_count.max(1))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Truthful activity aggregates over `[start, end)` for the Insights screen
+/// (`get_insights`, P5). Real DB counts only — honest-empty when the window is bare.
+#[tauri::command]
+async fn get_insights(
+    range: TimeRange,
+    state: State<'_, AppState>,
+) -> Result<InsightsSummary, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .insights_summary(range.start, range.end)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read the persisted user settings (`get_settings`, `03 §7/§8`). Missing keys fall
+/// back to defaults (a fresh DB returns [`Settings::default`]).
+#[tauri::command]
+async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    Ok(kernel::settings::load_settings(store.as_ref()).await)
+}
+
+/// Persist user settings (`set_settings`, `03 §7/§8`). All keys are written durably.
+/// Model tiers **hot-apply** to the live providers here (same path as
+/// `set_model_tier`); `answer.thinking` is read per-`ask`; capture/storage/privacy
+/// take effect on the next capture start and the rest on app restart (the Settings
+/// UI labels each accordingly — no fictional live reconfiguration).
+#[tauri::command]
+async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    kernel::settings::save_settings(store.as_ref(), &settings)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Hot-apply the lane tiers to the live providers (the sidecar switches GGUF on
+    // the lane's next request, `03 §6`); everything else is persisted only.
+    if let Some(v) = state.vision.lock().expect("vision slot").clone() {
+        v.set_tier(settings.models_vision_tier);
+    }
+    if let Some(a) = state.answer.lock().expect("answer slot").clone() {
+        a.set_tier(settings.models_answer_tier);
+    }
+    Ok(())
+}
+
 /// Application entry point (called from `main.rs`).
 pub fn run() {
     tauri::Builder::default()
@@ -336,7 +410,11 @@ pub fn run() {
             capture_control,
             enqueue_vision,
             ask,
-            set_model_tier
+            set_model_tier,
+            get_timeline,
+            get_insights,
+            get_settings,
+            set_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
