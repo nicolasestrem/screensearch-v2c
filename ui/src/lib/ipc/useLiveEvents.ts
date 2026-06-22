@@ -14,6 +14,8 @@ import { queryKeys } from "./queryKeys";
 
 /** Debounce window for coalescing capture_tick bursts into one invalidation. */
 const TICK_DEBOUNCE_MS = 800;
+/** Debounce window for coalescing job_progress bursts (e.g. an enrichment backlog drain). */
+const ENRICH_DEBOUNCE_MS = 1000;
 
 export function useLiveEvents() {
   const qc = useQueryClient();
@@ -37,9 +39,24 @@ export function useLiveEvents() {
       }),
     );
 
+    // job_progress fires on every job state change. Update the live queue counter
+    // immediately, then debounce-invalidate the data a *completed* job changed:
+    // vision_tag → frame detail + insights (tags / activity); embed_* → search
+    // (the vector arm). The event carries only counts (no kind / frame id), so the
+    // families are invalidated broadly — invalidateQueries refetches only the
+    // *observed* queries and marks the rest stale, so an idle backlog drain stays
+    // cheap. A surgical per-frame refresh would need a richer completion event
+    // (07 #30). Timeline is intentionally excluded (capture density, not enrichment).
+    let enrichTimer: ReturnType<typeof setTimeout> | undefined;
     track(
       listenTo("job_progress", (stats) => {
         qc.setQueryData(queryKeys.jobStats, stats);
+        if (enrichTimer) clearTimeout(enrichTimer);
+        enrichTimer = setTimeout(() => {
+          qc.invalidateQueries({ queryKey: queryKeys.framePrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
+        }, ENRICH_DEBOUNCE_MS);
       }),
     );
 
@@ -67,6 +84,7 @@ export function useLiveEvents() {
     return () => {
       active = false;
       if (tickTimer) clearTimeout(tickTimer);
+      if (enrichTimer) clearTimeout(enrichTimer);
       unlisteners.forEach((u) => u());
     };
   }, [qc]);

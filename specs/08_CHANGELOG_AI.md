@@ -441,3 +441,22 @@
   `npm run lint` → clean (Rules-of-Hooks gate; ref/dispatch are stable so `[]` deps are exhaustive).
   No UI consumer yet (Recall is M3), so this is pre-emptive hardening verified by build/lint +
   reasoning, not a behavioral repro. Claude's re-review of `f03fa58` found "No issues … PR is clean".
+
+## 2026-06-22 — P5 (M1+M2) PR #11 Codex follow-up #2 (`feat/p5-ui-foundation` branch)
+- **Change:** `ui/src/lib/ipc/useLiveEvents.ts` — the `job_progress` handler now debounce-invalidates
+  the data families a completed job changes (`framePrefix` / `searchPrefix` / `insightsPrefix`,
+  `ENRICH_DEBOUNCE_MS = 1000`) in addition to the immediate `jobStats` counter update.
+  `ui/src/lib/ipc/queryKeys.ts` — added `searchPrefix` / `framePrefix` (alongside the existing
+  `timelinePrefix` / `insightsPrefix`).
+- **Why:** Codex review of `db61a5f` (P2): a completed `vision_tag`/`embed_*` job's only UI signal
+  is `job_progress` (counts only — no kind/frame id). With `refetchOnWindowFocus` off and no polling,
+  an already-cached Moment (`get_frame`), Recall (`search`), or Insights query would never refetch,
+  so new vision tags / indexed embeddings stayed invisible until a manual reload. Debounced family
+  invalidation fixes it client-side; `invalidateQueries` refetches only *observed* queries and marks
+  the rest stale, so an idle enrichment backlog drain stays cheap. Timeline is excluded (capture
+  density, unaffected by enrichment — `capture_tick` already covers new frames). The surgical fix
+  (a richer `job_completed { kind, frame_id }` event) is a backend change — logged as `07` #30.
+- **Verification:** `npm run build` → `✓ built in 1.08s` (initial JS unchanged ≈ 86 KB gzip);
+  `npm run lint` → clean. No UI consumer of these queries until M3/M4 (the screens are scaffolds), so
+  this is foundation-plumbing hardening verified by build/lint + reasoning; the behavioral proof
+  (Moment refetches after a vision tag) lands with the screens.

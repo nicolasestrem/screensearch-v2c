@@ -704,3 +704,14 @@ guards on a synchronous `useRef` in-flight flag (set before dispatch, released w
 concurrency/cancellation stays open as `07` #28. Also tidied the stale `⌘K` comment in `NavRail.tsx`.
 Verify: `npm run build` `✓ built in 1.09s`, `npm run lint` clean. No UI consumer until M3, so this is
 pre-emptive hardening (build/lint + reasoning). Claude's `f03fa58` re-review: "No issues … PR is clean".
+
+### Follow-up — Codex review of `db61a5f` (enrichment-completion refresh)
+Codex flagged (P2) that a completed `vision_tag`/`embed_*` job only signals `job_progress` (counts
+only), so with focus-refetch off + no polling, a cached Moment/Recall/Insights query would never
+refresh — new tags/embeddings invisible until reload. **Fixed** — `useLiveEvents` debounce-invalidates
+`frame`/`search`/`insights` families on `job_progress` (`ENRICH_DEBOUNCE_MS = 1000`) on top of the
+immediate `jobStats` update; `invalidateQueries` refetches only observed queries (others go stale), so
+a backlog drain stays cheap. Timeline excluded (capture density). Added `searchPrefix`/`framePrefix`
+to `queryKeys`. The surgical fix (a richer `job_completed { kind, frame_id }` event) needs a backend
+change — `07` #30. Verify: `npm run build` `✓ built in 1.08s`, `npm run lint` clean. Behavioral proof
+(Moment refetches after a vision tag) lands with the M3/M4 screens that consume these queries.
