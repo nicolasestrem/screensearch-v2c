@@ -334,3 +334,129 @@
   forced-rollback test isn't feasible via the public API (no fault seam; every upsert is a valid
   `(TEXT, TEXT)` write) — the all-or-nothing guarantee is structural (`?` before `commit`).
   Recorded honestly rather than faked. Other review verdicts were "clean" and needed no change.
+
+## 2026-06-22 — P5 (M1+M2) UI foundation, shell & primitives (`feat/p5-ui-foundation` branch)
+- **Change:** Replaced the minimal P2 `App.tsx` with the full "Command Deck" frontend foundation
+  (UI_REFERENCE §1–9), consuming the M0 backend through the generated bindings only:
+  - **Deps** (`ui/package.json`): `react-router-dom@6`, `@tanstack/react-query@5`, `zustand@5`,
+    `@tanstack/react-virtual@3`, `react-markdown@9`, `remark-gfm@4`; dev `tailwindcss@3` +
+    `@tailwindcss/typography`, `postcss`, `autoprefixer`.
+  - **Tokens & Tailwind** (`ui/src/styles/{tokens.css,globals.css}`, `tailwind.config.js`,
+    `postcss.config.js`): the palette/type/spacing/radius/z/motion of UI_REFERENCE §1–2 as CSS
+    custom properties; Tailwind *replaces* color/radius/font scales with token refs (no off-palette
+    hue or off-scale type reachable) but keeps the default `spacing` scale (its rem steps already
+    equal 4·8·12·16·24·32·48 px and back the width/height/inset utilities); reduced-motion gates the
+    scanline drift.
+  - **Typed IPC layer** (`ui/src/lib/ipc/`): `commands.ts` (one wrapper per `03 §7` command, camel→
+    snake args), `events.ts` (typed `listen` map), `queryKeys.ts`, `queries.ts`, `mutations.ts`
+    (optimistic `useSetSettings`), `useAsk.ts` (a reducer folding `answer_delta` → phase/thinking/
+    answer/citations), `useLiveEvents.ts` (one subscription manager: `readiness_changed`/
+    `job_progress`/`sidecar_status` patch the Query cache, `capture_tick` debounce-invalidates
+    timeline/insights), `frameSrc.ts` (memoized `appDataDir` + `convertFileSrc`, throws-safe in dev).
+  - **State** (`ui/src/state/`): `uiStore` (palette/range/focused frame) and `toastStore`
+    (client-side toast queue + a `toast.*` facade for mutation callbacks).
+  - **Shell** (`ui/src/components/shell/`): `AppShell` (mounts `useLiveEvents` + the global ⌘K
+    listener once), `StatusRail`, `NavRail`, `CommandPalette` (filter + ↑/↓/Enter/Esc), `ReadinessBanner`.
+  - **Primitives** (`ui/src/components/primitives/`): the twelve §5 primitives + an inline-SVG icon
+    set (no web fonts), all tokens-only with visible focus and ≥32px targets.
+  - **App wiring** (`ui/src/app/`): `providers.tsx` (QueryClient) + `router.tsx` (`createBrowserRouter`,
+    lazy routes, per-route `errorElement`); route scaffolds for all screens (data bodies land M3–M5);
+    `vite.config.ts` vendor `manualChunks`. Removed the superseded `ui/src/styles.css`.
+- **Why:** P5 M1+M2 per the approved plan and UI_REFERENCE — establish the shell, typed data plane,
+  design tokens, routing/error boundaries, and primitives the data screens build on. No backend or
+  bindings changed (`git diff --exit-code -- ui/src/bindings` → exit 0).
+- **Decisions (logged):** (a) StatusRail shows the **DB readiness/status** chip, not a "DB size"
+  number — no size field exists in the IPC contract, so showing a size would be fabricated (07 #27).
+  (b) The `job_progress` event payload is a bare `JobStats` (the kernel emits the inner value), not
+  the `JobProgress` wrapper binding — `events.ts` types it accordingly. (c) React Router's
+  v7-future-flag console warning is informational and left as-is. (d) Route scaffolds state each
+  screen's purpose (IA per §3) — not "Coming Soon"; the screen bodies are scheduled M3–M5.
+- **Verification:**
+  - `npm run build` (tsc --noEmit && vite build) → `✓ built in 1.27s`; initial JS gzipped ≈ 86 KB
+    (`react-vendor` 67.89 + `query` 11.08 + `index` 7.24) + CSS 5.40 KB — well under the 250 KB
+    budget (UI_REFERENCE §8); each route emitted as its own lazy chunk.
+  - `npm run lint` (eslint .) → clean, **no errors/warnings** (Rules-of-Hooks error gate passes).
+  - **Degraded (Playwright-MCP vs `npm run dev`, localhost:5173):** the shell renders (StatusRail +
+    NavRail + content); with no Tauri runtime the readiness query errors and the rail shows the
+    honest **"Kernel offline"** chip (the error state); routing works for `/`, `/recall`, `/timeline`,
+    `/timeline/42` (Moment), `/insights`, `/settings`, and a bogus path → the **NotFound** invitation;
+    global **Ctrl+K** opens the palette (input auto-focused), **↓ + Enter** selects "Go to Recall"
+    and navigates + closes; console clean apart from a favicon 404 and the router future-flag note.
+    Screenshots: `m1m2-shell-deck.png`, `m1m2-timeline-active.png`, `m1m2-command-palette.png`
+    (gitignored verification artifacts).
+  - **Authoritative (`npm run dev` = `tauri dev`):** the integrated app compiled (`Finished … in
+    16.15s`) and booted — `store opened … schema_version=1`, `WinRT OCR ready`, `inference attached;
+    sidecar ready (lazy spawn)`, `embedding model loaded; attaching to kernel`. So under the Tauri
+    shell every subsystem comes up Ready (the live data the StatusRail consumes), vs. the
+    "Kernel offline" error state the browser correctly shows without a runtime. No panic, no error.
+    (The native WebView2 window can't be screenshotted with the available tools; the live StatusRail
+    is evidenced by the backend boot log + the rail's verified render paths.)
+
+## 2026-06-22 — P5 (M1+M2) PR #11 review fixes (`feat/p5-ui-foundation` branch)
+- **Change:** Addressed the actionable findings from the PR #11 reviews (Claude code-review +
+  gemini-code-assist; Codex posted no review):
+  - **Bug (CommandPalette active-index latch).** `ui/src/components/shell/CommandPalette.tsx` — the
+    clamp effect now resets to `0` when the filtered list is empty
+    (`filtered.length > 0 ? Math.min(Math.max(0, a), len-1) : 0`). The old `Math.min(a, max(0,…))`
+    latched `active` at `-1` after an ArrowDown over a zero-match query, so Enter then ran
+    `filtered[-1]` (undefined) even once matches returned.
+  - **Ctrl+K label.** `NavRail.tsx` — the shortcut hint reads `Ctrl+K`, not `⌘K`. Chose the literal
+    Windows label over Gemini's `userAgent` platform-detection: CLAUDE.md forbids cross-platform
+    abstractions for a Windows-only app, and a Mac branch is dead code here.
+  - **Palette input hardening.** Added `type="text"` + `autoComplete/autoCorrect/autoCapitalize="off"`
+    + `spellCheck={false}` so OS/browser overlays don't cover the command list.
+  - **RouteError ErrorResponse.** `routes/RouteError.tsx` — extract the message via the official
+    `isRouteErrorResponse` guard (status + statusText/data) before the `Error`/string/`{message}`
+    fallbacks, so a thrown `Response`/404 shows real detail instead of the generic line.
+  - **useAsk concurrency guard.** `lib/ipc/useAsk.ts` — `ask` returns early while
+    `phase === "streaming"` (deps now `[state.phase]`). The `answer_delta` stream has no per-request
+    id, so a second ask mid-stream would fold the first's late deltas into its state. A true
+    concurrent/cancellable ask needs a backend request-id — logged as `07` #28.
+  - **queryKeys prefixes (minor).** Added `timelinePrefix`/`insightsPrefix`; `useLiveEvents` uses
+    them instead of raw `["timeline"]`/`["insights"]` arrays, keeping the invalidation prefix coupled
+    to the key registry.
+- **Why:** review follow-through (`04 §5/§6`). One real correctness bug (the palette latch) + four
+  hardening items before M3 consumes these components.
+- **Not changed (reviewer "no action needed" / deferred):** full ARIA combobox semantics for the
+  palette (`07` #29 — revisit M3); `frameSrc` module-level cache (correct for a single-process app).
+- **Verification:** `npm run build` → `✓ built in 1.49s` (initial JS still ≈ 86 KB gzip); `npm run
+  lint` → clean (Rules-of-Hooks gate). **Observed running** — Playwright vs `npm run dev` reproduced
+  the exact bug path: opened the palette, typed a no-match query `zzzz`, pressed **ArrowDown** over
+  the empty list, replaced the query with `time` (→ "Go to Timeline"), pressed **Enter** → URL
+  navigated to **`/timeline`** (the fix recovered `active` to 0; pre-fix it would have stayed `/`).
+  The NavRail hint renders **"Ctrl+K"**.
+
+## 2026-06-22 — P5 (M1+M2) PR #11 Codex follow-up (`feat/p5-ui-foundation` branch)
+- **Change:** `ui/src/lib/ipc/useAsk.ts` — replaced the React-state concurrency guard with a
+  synchronous **`useRef` in-flight flag** (set before `dispatch`/`cmd.ask`, released by an effect
+  when `phase` reaches `done`/`error`, and on `reset`). Tidied the now-stale `⌘K` comment in
+  `NavRail.tsx` → `Ctrl+K`.
+- **Why:** Codex review of `f03fa58` (P2): the prior `if (state.phase === "streaming") return` guard
+  reads React state, which lags within an event tick — two `ask()` calls in the *same* synchronous
+  tick both observe the pre-`start` `phase` and both reach `cmd.ask`, so the single global
+  `answer_delta` channel (no request id) could interleave two streams. A ref reflects the in-flight
+  state immediately, blocking the second call synchronously. `ask` deps drop to `[]` (stable
+  identity). The backend per-request-id needed for *true* concurrency/cancellation remains `07` #28.
+- **Verification:** `npm run build` → `✓ built in 1.09s` (initial JS unchanged ≈ 86 KB gzip);
+  `npm run lint` → clean (Rules-of-Hooks gate; ref/dispatch are stable so `[]` deps are exhaustive).
+  No UI consumer yet (Recall is M3), so this is pre-emptive hardening verified by build/lint +
+  reasoning, not a behavioral repro. Claude's re-review of `f03fa58` found "No issues … PR is clean".
+
+## 2026-06-22 — P5 (M1+M2) PR #11 Codex follow-up #2 (`feat/p5-ui-foundation` branch)
+- **Change:** `ui/src/lib/ipc/useLiveEvents.ts` — the `job_progress` handler now debounce-invalidates
+  the data families a completed job changes (`framePrefix` / `searchPrefix` / `insightsPrefix`,
+  `ENRICH_DEBOUNCE_MS = 1000`) in addition to the immediate `jobStats` counter update.
+  `ui/src/lib/ipc/queryKeys.ts` — added `searchPrefix` / `framePrefix` (alongside the existing
+  `timelinePrefix` / `insightsPrefix`).
+- **Why:** Codex review of `db61a5f` (P2): a completed `vision_tag`/`embed_*` job's only UI signal
+  is `job_progress` (counts only — no kind/frame id). With `refetchOnWindowFocus` off and no polling,
+  an already-cached Moment (`get_frame`), Recall (`search`), or Insights query would never refetch,
+  so new vision tags / indexed embeddings stayed invisible until a manual reload. Debounced family
+  invalidation fixes it client-side; `invalidateQueries` refetches only *observed* queries and marks
+  the rest stale, so an idle enrichment backlog drain stays cheap. Timeline is excluded (capture
+  density, unaffected by enrichment — `capture_tick` already covers new frames). The surgical fix
+  (a richer `job_completed { kind, frame_id }` event) is a backend change — logged as `07` #30.
+- **Verification:** `npm run build` → `✓ built in 1.08s` (initial JS unchanged ≈ 86 KB gzip);
+  `npm run lint` → clean. No UI consumer of these queries until M3/M4 (the screens are scaffolds), so
+  this is foundation-plumbing hardening verified by build/lint + reasoning; the behavioral proof
+  (Moment refetches after a vision tag) lands with the screens.

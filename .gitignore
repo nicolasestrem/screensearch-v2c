@@ -30,6 +30,10 @@ captures/
 .env
 .env.*
 
+# Verification artifacts (Playwright-MCP snapshots / screenshots — not source)
+.playwright-mcp/
+m1m2-*.png
+
 # OS / editor
 Thumbs.db
 desktop.ini
@@ -37,3 +41,4 @@ desktop.ini
 .idea/
 .vscode/*
 !.vscode/extensions.json
+docs/TESTING.md
