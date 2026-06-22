@@ -90,6 +90,12 @@ struct ChatRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Optional OpenAI-style structured-output constraint. `llama-server` converts a
+    /// `json_schema` here into a sampling grammar, so the vision lane can force a
+    /// well-shaped object (enum `activity_type`, numeric `confidence`) rather than
+    /// trusting the prompt alone (`07` #20). Omitted from the body when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -147,13 +153,21 @@ impl SidecarClient {
     }
 
     /// Non-streaming chat completion; returns the assistant message text. Used by the
-    /// vision lane (one image → one description).
-    pub async fn complete(&self, messages: Vec<ChatMessage>, max_tokens: u32) -> Result<String> {
+    /// vision lane (one image → one description). `response_format`, when set, constrains
+    /// the reply to a structured shape (the vision lane passes a JSON schema so the model
+    /// must emit a well-formed object — `07` #20); pass `None` for an unconstrained reply.
+    pub async fn complete(
+        &self,
+        messages: Vec<ChatMessage>,
+        max_tokens: u32,
+        response_format: Option<serde_json::Value>,
+    ) -> Result<String> {
         let req = ChatRequest {
             messages,
             max_tokens,
             stream: false,
             temperature: Some(0.2),
+            response_format,
         };
         let url = format!("{}/v1/chat/completions", self.base);
         let resp = self
@@ -188,6 +202,7 @@ impl SidecarClient {
             max_tokens,
             stream: true,
             temperature: Some(0.6),
+            response_format: None,
         };
         let url = format!("{}/v1/chat/completions", self.base);
         let resp = self
@@ -254,5 +269,40 @@ impl SidecarClient {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(response_format: Option<serde_json::Value>) -> ChatRequest {
+        ChatRequest {
+            messages: vec![ChatMessage::text("user", "hi")],
+            max_tokens: 16,
+            stream: false,
+            temperature: Some(0.2),
+            response_format,
+        }
+    }
+
+    #[test]
+    fn response_format_is_omitted_from_body_when_none() {
+        let json = serde_json::to_string(&req(None)).unwrap();
+        assert!(
+            !json.contains("response_format"),
+            "an unconstrained request must not carry a response_format key: {json}"
+        );
+    }
+
+    #[test]
+    fn response_format_is_serialized_when_set() {
+        let json = serde_json::to_string(&req(Some(serde_json::json!({ "type": "json_object" }))))
+            .unwrap();
+        assert!(json.contains("\"response_format\""), "missing key: {json}");
+        assert!(
+            json.contains("json_object"),
+            "schema not serialized: {json}"
+        );
     }
 }

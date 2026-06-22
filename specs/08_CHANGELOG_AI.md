@@ -553,3 +553,75 @@
   pickers/thinking toggle/schedule control, loading skeleton, load-error+retry; Insights populated
   incl. the density chart + ranked bars, empty, partial, compute-error+retry, loading skeleton).
   Native-window screenshots remain impossible (Playwright can't attach to the Tauri WebView).
+
+## 2026-06-22 — Vision-tagging quality fix (`feat/p5-m5-insights-settings-vision`, off `main` @ 39d5da8)
+- **Context:** P5-M5 (Settings + Insights) was already merged (#13); the genuinely-remaining work was
+  the vision-output honesty gap logged in `07` #19/#20. The gated GPU smoke had recorded a fabricated
+  `confidence: 0.0` (echoed from a `"confidence": 0.0` placeholder in the prompt) and a free-form
+  `activity_type` — both violate CLAUDE.md's never-fabricate-a-value rule.
+- **Change — `crates/inference` only (no `traits`/schema/IPC change → ts-rs bindings unchanged):**
+  - `client.rs`: `ChatRequest` gains an optional `response_format: Option<serde_json::Value>`
+    (`skip_serializing_if`), threaded through `complete(messages, max_tokens, response_format)`; the
+    streaming `answer` path passes `None`. Two unit tests assert the field serializes when set and is
+    omitted when `None`.
+  - `vision.rs`: `VISION_PROMPT` no longer shows a numeric `confidence` (the field is described, not
+    demonstrated) and states the `activity_type` enum. The vision call now passes an OpenAI
+    `response_format` JSON-schema (`vision_response_format()` — enum `activity_type`, numeric
+    `confidence`) which `llama-server` enforces as a sampling grammar. `parse_vision` normalises
+    defensively regardless of model compliance: `normalize_confidence` trusts only finite `(0.0, 1.0]`
+    (else `CONFIDENCE_UNKNOWN = -1.0` — mirrors OCR), `normalize_activity` maps to the closed
+    `ACTIVITY_TYPES` set (case/space-insensitive) or `None` (incl. the model's own "unknown"). Six new
+    unit tests cover zero/missing/out-of-range confidence and off-enum/normalised activity.
+  - `tests/smoke.rs`: the gated `real_vision_tags_an_image` now asserts confidence is `-1.0` or a real
+    `(0.0, 1.0]` (never `0.0`) and `activity_type` is `None` or in the allowed set.
+- **Why this approach:** the response-format grammar makes the model emit a well-shaped object, but
+  the defensive parse is the guarantee — even a model that ignores the schema can't slip a free-form
+  label or a fabricated `0.0` past `parse_vision`. No domain type changed, so no schema migration and
+  no binding drift.
+- **Verification (verbatim):** `cargo fmt --all -- --check` exit 0 · `cargo clippy --workspace
+  --all-targets -- -D warnings` exit 0 · `cargo test --workspace` exit 0 (inference lib **33** incl.
+  the 8 new tests; store 36; traits 32; all crates green) · `git diff --exit-code -- ui/src/bindings`
+  exit 0 (no drift) · `npm --prefix ui run typecheck` exit 0 · `npm --prefix ui run lint` exit 0 ·
+  `npm --prefix ui run build` ✓ (Insights/Settings chunks build; initial JS ≈ 87 KB gz).
+  **Observed running:** the **real-GPU** gated smoke
+  `cargo test -p inference --test smoke real_vision_tags_an_image -- --ignored --nocapture` **passed**
+  on the RTX 5060 Ti (cached Qwen3-VL-4B-Instruct Q4_K_M + mmproj): `VISION: A split-screen view …
+  | activity=Some("browsing") | conf=0.95` — a real enum activity and a genuine confidence, replacing
+  the old `unknown`/`0.0`. `npm run tauri dev` booted the full app (store v1, WinRT OCR ready, vision
+  scheduler started, inference attached/lazy, fastembed loaded, embedding workers started) with no
+  panic; clean shutdown left **no orphaned `llama-server.exe`**.
+- **Docs:** `07` #19/#20 marked resolved; `README.md` phase table refreshed (P0–P5 complete, packaging
+  the only open DoD item) and its run command corrected to `npm run tauri dev` (the Tauri CLI ships as
+  the npm dev-dependency here; `cargo tauri` needs a separate `cargo install tauri-cli`); `CHANGELOG.md`
+  updated.
+
+## 2026-06-22 — PR #14 review follow-up (`feat/p5-m5-insights-settings-vision`)
+- **Context:** automated reviewers on PR #14 raised three correct points against the vision fix above
+  (one from gemini-code-assist, two P2s from chatgpt-codex). All three addressed.
+- **(1) Forced activity label on low-signal frames (codex P2 — the consequential one).** The grammar
+  made `activity_type` a *required* enum of the eight labels, so the model could never decline and the
+  off-enum→`None` safeguard in `parse_vision` was effectively dead code (the grammar forbade off-enum
+  values). A blank desktop / lock screen / synthetic frame was therefore tagged with an arbitrary
+  label and mirrored into `frames.activity_type`, skewing Insights. **Fix:** `vision_response_format()`
+  now makes `activity_type` nullable (`"type":["string","null"]`, `null` appended to the `enum`) and
+  drops it from `required`; `VISION_PROMPT` instructs the model to answer `null` when nothing clearly
+  fits. **Not cosmetic** — the gated smoke proves it: the synthetic two-tone frame that the *forced*
+  schema confidently mislabelled `browsing` @ `0.95` (see the run recorded above) now correctly returns
+  `activity=None | conf=-1` — the model declines. New unit tests `explicit_null_activity_type_becomes_none`
+  and `response_format_allows_null_activity_and_drops_it_from_required`.
+- **(2) `app_hint` "null" filter was case-sensitive (gemini).** `s != "null"` let `"Null"`/`"NULL"`
+  through as a literal app name. **Fix:** extracted `normalize_app_hint`, which trims and compares with
+  `eq_ignore_ascii_case("null")`, returning the trimmed value. New tests
+  `null_app_hint_string_is_dropped_case_insensitively` (covers `null`/`NULL`/`Null`/`  null  `) and
+  `app_hint_is_trimmed_and_kept_when_real`.
+- **(3) `-1.0` sentinel rendered as `-100%` (codex P2).** `MomentDetail.tsx` computed
+  `Math.round(vision.confidence * 100)%` unconditionally, so the new "unknown" sentinel showed users
+  `-100%`. **Fix:** the Vision panel now shows a neutral `n/a` chip when `confidence < 0` and the accent
+  percentage only for a real score. UI-only; `VisionAnalysis` unchanged, so no binding drift.
+- **Verification (verbatim):** `cargo fmt --all -- --check` exit 0 · `cargo clippy -p inference
+  --all-targets -- -D warnings` exit 0 · `cargo test -p inference --lib` → **36 passed; 0 failed**
+  (was 33; +3 net new) · `git diff --exit-code -- ui/src/bindings` exit 0 (no drift) ·
+  `npm run typecheck` exit 0 · `npm run lint` exit 0 · `npm run build` ✓. **Observed running:** the
+  real-GPU gated smoke `real_vision_tags_an_image` **passed** on the RTX 5060 Ti — `VISION: The screen
+  is divided into two vertical sections … | activity=None | conf=-1` (honest decline on the low-signal
+  synthetic frame; the test asserts confidence ∈ {-1.0} ∪ (0,1] and activity ∈ {none} ∪ the set).

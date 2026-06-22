@@ -51,7 +51,10 @@ async fn vision_completion_returns_message_content() {
 
     let client = SidecarClient::new(server.uri());
     let msg = ChatMessage::image("Describe this screenshot.", "data:image/jpeg;base64,AAAA");
-    let out = client.complete(vec![msg], 256).await.expect("completion");
+    let out = client
+        .complete(vec![msg], 256, None)
+        .await
+        .expect("completion");
     assert_eq!(out, "a VS Code editor with Rust code");
 }
 

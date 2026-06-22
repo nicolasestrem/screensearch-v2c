@@ -142,5 +142,24 @@ async fn real_vision_tags_an_image() {
         "must produce a description"
     );
 
+    // Honest output (`07` #20): confidence is either the unknown sentinel (-1.0) or a
+    // real score in (0.0, 1.0] — never a fabricated 0.0 echoed from the prompt.
+    let conf = analysis.confidence;
+    assert!(
+        conf == -1.0 || (conf > 0.0 && conf <= 1.0),
+        "confidence must be the unknown sentinel or a real (0,1] score, got {conf}"
+    );
+    // activity_type is either absent or one of the closed label set we asked for — no
+    // free-form / "unknown" labels are stored.
+    const ALLOWED: &[&str] = &[
+        "coding", "browsing", "email", "reading", "chat", "terminal", "design", "video",
+    ];
+    if let Some(a) = analysis.activity_type.as_deref() {
+        assert!(
+            ALLOWED.contains(&a),
+            "activity_type {a:?} is off the allowed set"
+        );
+    }
+
     supervisor.shutdown().await;
 }

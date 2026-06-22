@@ -916,3 +916,63 @@ Verification (verbatim): `npm --prefix ui run lint` exit 0 · `npm --prefix ui r
 ≈ 87.7 KB gz). **Observed running** (Playwright vs Vite dev, typed IPC mock): the clear-to-`0` fix
 confirmed by interaction — `Capture interval (ms)` `"3000"` → clear → `"0"` (no snapback) → type →
 `"4500"`; Settings form renders with 0 app-code console errors (only a favicon 404).
+
+## Pass — Vision-tagging quality fix (2026-06-22, `feat/p5-m5-insights-settings-vision` off `main` @ 39d5da8)
+
+**Scope.** With P5-M5 (Settings + Insights) already merged on `main` (#13), the remaining work was the
+vision-output honesty gap (`07` #19/#20): the prompt pinned a literal `"confidence": 0.0` the model
+echoed, and `activity_type` was free-form. Fix is confined to `crates/inference` — no `traits`/schema/
+IPC change, so no migration and no ts-rs binding drift.
+
+**Done.**
+- `client.rs`: optional `response_format` on `ChatRequest`, threaded through `complete(...)`; streaming
+  path unchanged (`None`). +2 unit tests (serialized-when-set / omitted-when-none).
+- `vision.rs`: prompt no longer demonstrates a `confidence` value; vision call sends an OpenAI
+  `response_format` JSON-schema (enum `activity_type`, numeric `confidence`) → `llama-server` grammar;
+  `parse_vision` hardened with `normalize_confidence` (trust only finite `(0,1]`, else `-1.0`) and
+  `normalize_activity` (closed `ACTIVITY_TYPES` set or `None`). +6 unit tests.
+- `tests/smoke.rs`: gated smoke asserts confidence ≠ fabricated `0.0` and activity ∈ allowed∪{none}.
+
+**Verification (verbatim).**
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `cargo test --workspace` → exit 0 (inference lib **33** incl. 8 new; store 36; traits 32; 0 failed)
+- `git diff --exit-code -- ui/src/bindings` → exit 0 (no drift)
+- `npm --prefix ui run typecheck` → exit 0 · `lint` → exit 0 · `build` → exit 0
+- **Real-GPU smoke** `cargo test -p inference --test smoke real_vision_tags_an_image -- --ignored
+  --nocapture` (RTX 5060 Ti, cached Qwen3-VL-4B Q4_K_M+mmproj) → **1 passed in 11.52s**:
+  `VISION: A split-screen view … | activity=Some("browsing") | conf=0.95` (was `unknown`/`0.0`).
+- **Observed running:** `npm run tauri dev` booted all subsystems Ready (store v1, WinRT OCR, vision
+  scheduler, inference attached/lazy, fastembed, embedding workers) with no panic; shutdown left no
+  orphaned `llama-server.exe`.
+
+**Note (QA finding).** The session's initial git snapshot was stale (`2ecf038`); `main` was already at
+`39d5da8` with M5 merged, so Insights/Settings needed no rebuild — confirmed by reading the files +
+the full UI build. `cargo tauri dev` is **not** runnable here (no `cargo-tauri`); the repo's Tauri CLI
+is the npm dev-dependency, so `npm run tauri dev` is the working launch path (README corrected).
+
+## Pass — PR #14 review follow-up (vision honesty hardening)
+
+Addressed three correct automated-review findings on PR #14 (gemini-code-assist + two chatgpt-codex P2s).
+
+### Changed
+- `crates/inference/src/vision.rs` — `activity_type` made **nullable & optional** in
+  `vision_response_format()` (the forced enum had made off-enum→`None` dead code and pushed arbitrary
+  labels into Insights for low-signal frames); `VISION_PROMPT` now says answer `null` when unsure;
+  `app_hint` filtering extracted to `normalize_app_hint` (trim + `eq_ignore_ascii_case("null")`, was a
+  case-sensitive `!= "null"`). +3 net unit tests.
+- `ui/src/components/domain/MomentDetail.tsx` — Vision panel shows a neutral **`n/a`** chip when
+  `confidence < 0` (the `-1.0` unknown sentinel) instead of rendering it as `-100%`. UI-only; no
+  binding drift.
+
+### Verification (verbatim)
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy -p inference --all-targets -- -D warnings` → exit 0
+- `cargo test -p inference --lib` → **36 passed; 0 failed** (was 33)
+- `git diff --exit-code -- ui/src/bindings` → exit 0 (no drift; `VisionAnalysis` unchanged)
+- `npm run typecheck` → exit 0 · `npm run lint` → exit 0 · `npm run build` → ✓
+- **Real-GPU smoke** `real_vision_tags_an_image` (RTX 5060 Ti) → **1 passed in 9.88s**:
+  `VISION: The screen is divided into two vertical sections … | activity=None | conf=-1`. The synthetic
+  two-tone frame — a genuinely low-signal image — now returns **no activity / unknown confidence** (an
+  honest decline), where the *forced-enum* schema had it confidently report `browsing` @ `0.95`. This
+  is the review's point demonstrated, not just patched.
