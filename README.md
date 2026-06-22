@@ -4,11 +4,13 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status: active build.** The always-on capture pipeline and deferred enrichment are
-> implemented and tested; **hybrid search works end-to-end**. Phases **P0–P3 are complete**;
-> the inference sidecar (P4) and the full UI + packaging (P5) are next. The design lives in
-> [`specs/`](./specs); the as-built architecture is in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
-> A standalone, clean-slate project (not linked to, and importing no data from, any prior version).
+> **Status: feature-complete, pre-packaging.** Capture → OCR → deferred enrichment → **hybrid
+> search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the
+> full **Command-Deck UI** (Deck, Recall, Timeline, Moment, Insights, Settings) are implemented and
+> tested. Phases **P0–P5 are complete**; only **packaging** (installer + portable ZIP, code signing —
+> DoD §13.9) remains. The design lives in [`specs/`](./specs); the as-built architecture is in
+> [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project (not linked to,
+> and importing no data from, any prior version).
 
 ## Build progress
 
@@ -18,15 +20,18 @@ on-device, no cloud.
 | **P1** | Data spine — SQLite (WAL) + FTS5 + sqlite-vec, forward-only migrations, durable job queue, hybrid search | ✅ Complete |
 | **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, minimal live timeline | ✅ Complete |
 | **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
-| **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ⏳ Next |
-| **P5** | Command-Deck UI, settings, installer + portable ZIP, code signing | ⏳ Planned |
+| **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
+| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | ✅ Complete |
+| **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
 
 ### Working today
 Start capture → each changed frame is OCR'd, stored, and JPEG-archived → an `embed_text` job is
 enqueued → a background worker pool embeds it with **fastembed** (EmbeddingGemma-300M, 768-dim) →
 **hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with Reciprocal Rank Fusion) returns
-the right frames in **~33 ms p95 on a 10 000-frame database**. Vision tagging and grounded answers
-arrive with the P4 sidecar.
+the right frames in **~33 ms p95 on a 10 000-frame database**. **Vision tagging** (on-demand / timer /
+idle — structured output with an honest confidence, never a fabricated score) and **grounded,
+streaming answers** with citations run on the local **llama.cpp sidecar**; the full Command-Deck UI
+surfaces all of it.
 
 ## What it does (v1.0 target)
 
@@ -34,11 +39,11 @@ arrive with the P4 sidecar.
   written straight to a local SQLite store. *(P2 — done)*
 - **Deferred, user-controlled enrichment** — embeddings run as durable jobs in a SQLite-backed
   queue, drained by a background worker pool; vision tagging is **on-demand / timed / idle** only.
-  *(embeddings P3 — done; vision P4)*
+  *(embeddings P3 — done; vision P4 — done)*
 - **Hybrid search** — FTS5 keyword + vector (sqlite-vec) semantic, fused with Reciprocal Rank
   Fusion. *(P3 — done)*
 - **Grounded, reasoning answers** — RAG over your screen history via a local llama.cpp model with
-  a *thinking* mode. *(P4)*
+  a *thinking* mode. *(P4 — done)*
 
 ## Architecture (summary)
 
@@ -82,10 +87,10 @@ crates/
   capture/         CaptureSource (WGC) + diff/privacy gates
   ocr/             OcrProvider (WinRT Media.Ocr, STA worker)
   embeddings/      EmbeddingProvider (fastembed, in-process ONNX)
-  inference/       VisionProvider + AnswerProvider + supervisor (P4 — scaffold)
+  inference/       VisionProvider + AnswerProvider + llama.cpp supervisor (Job-Object lifecycle)
   doctor/          WebView2 / Vulkan / llama-server environment smoke-check
 src-tauri/         Tauri 2 shell + composition root + command handlers + main()
-ui/                React 18 + TS + Vite ("Command Deck"; minimal in P2/P3, full in P5)
+ui/                React 18 + TS + Vite — the full "Command Deck" (6 screens, typed IPC)
 specs/             spec-engineering pipeline (00 intake → 04 build prompt → 05–08 build/review)
                    + UI_REFERENCE.md   (frontend identity, tokens, screens, state matrix)
                    + MODEL_REGISTRY.md (exact HF repos / quants / mmproj per model tier)
@@ -107,8 +112,9 @@ cargo test --workspace            # GPU/WinRT/model/perf tests are #[ignore]d
 # UI
 cd ui; npm ci; npm run build
 
-# Run the app (debug)
-cargo tauri dev
+# Run the app (debug) — the Tauri CLI ships as the npm dev-dependency `@tauri-apps/cli`,
+# so launch via the root npm script (use `cargo tauri dev` only if you `cargo install tauri-cli`).
+npm run tauri dev
 ```
 
 Model-backed and hardware tests are gated behind `#[ignore]` (they download models or need a real
@@ -118,6 +124,7 @@ display/GPU). Run them locally:
 cargo test -p embeddings -- --ignored                       # loads the real EmbeddingGemma model
 cargo test -p store --test perf -- --ignored --nocapture    # hybrid-search latency on 10k frames
 cargo test -p ocr -- --ignored                              # WinRT OCR smoke (needs a language pack)
+cargo test -p inference --test smoke -- --ignored --nocapture  # real llama-server: vision tag + grounded ask (GPU)
 ```
 
 ## Environment check

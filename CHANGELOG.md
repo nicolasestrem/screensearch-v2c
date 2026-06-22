@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Vision-tagging quality (2026-06-22)
+- **Vision tags no longer record a fabricated confidence.** The vision prompt previously showed a
+  literal `"confidence": 0.0`, which the model echoed — so every tag was stored with a `0.0`
+  certainty that *looked* real. The prompt now describes the confidence field instead of demonstrating
+  a value, and parsing treats `0.0` (and any out-of-range value) as the same `-1.0` "unknown" sentinel
+  the OCR path uses — we never invent a score.
+- **`activity_type` is now a closed set, not free-form.** Vision tagging is constrained with a
+  `response_format` JSON schema (the sidecar turns it into a sampling grammar), and any label outside
+  the known set — coding, browsing, email, reading, chat, terminal, design, video — including the
+  model's own "unknown", is dropped to none rather than stored. Keeps the Insights activity breakdown
+  meaningful. Verified end-to-end on a real GPU: a screenshot now tags as `browsing` with confidence
+  `0.95` (was `unknown` / `0.0`). Resolves `07_KNOWN_GAPS.md` #19/#20.
+
 ### Added — P5 (M5) Settings & Insights (2026-06-22)
 - **Settings**: a single editable form over every persisted setting — capture (interval, change
   threshold, monitors), storage (JPEG quality, max width) and retention, model tiers, the answer

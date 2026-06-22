@@ -916,3 +916,37 @@ Verification (verbatim): `npm --prefix ui run lint` exit 0 · `npm --prefix ui r
 ≈ 87.7 KB gz). **Observed running** (Playwright vs Vite dev, typed IPC mock): the clear-to-`0` fix
 confirmed by interaction — `Capture interval (ms)` `"3000"` → clear → `"0"` (no snapback) → type →
 `"4500"`; Settings form renders with 0 app-code console errors (only a favicon 404).
+
+## Pass — Vision-tagging quality fix (2026-06-22, `feat/p5-m5-insights-settings-vision` off `main` @ 39d5da8)
+
+**Scope.** With P5-M5 (Settings + Insights) already merged on `main` (#13), the remaining work was the
+vision-output honesty gap (`07` #19/#20): the prompt pinned a literal `"confidence": 0.0` the model
+echoed, and `activity_type` was free-form. Fix is confined to `crates/inference` — no `traits`/schema/
+IPC change, so no migration and no ts-rs binding drift.
+
+**Done.**
+- `client.rs`: optional `response_format` on `ChatRequest`, threaded through `complete(...)`; streaming
+  path unchanged (`None`). +2 unit tests (serialized-when-set / omitted-when-none).
+- `vision.rs`: prompt no longer demonstrates a `confidence` value; vision call sends an OpenAI
+  `response_format` JSON-schema (enum `activity_type`, numeric `confidence`) → `llama-server` grammar;
+  `parse_vision` hardened with `normalize_confidence` (trust only finite `(0,1]`, else `-1.0`) and
+  `normalize_activity` (closed `ACTIVITY_TYPES` set or `None`). +6 unit tests.
+- `tests/smoke.rs`: gated smoke asserts confidence ≠ fabricated `0.0` and activity ∈ allowed∪{none}.
+
+**Verification (verbatim).**
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `cargo test --workspace` → exit 0 (inference lib **33** incl. 8 new; store 36; traits 32; 0 failed)
+- `git diff --exit-code -- ui/src/bindings` → exit 0 (no drift)
+- `npm --prefix ui run typecheck` → exit 0 · `lint` → exit 0 · `build` → exit 0
+- **Real-GPU smoke** `cargo test -p inference --test smoke real_vision_tags_an_image -- --ignored
+  --nocapture` (RTX 5060 Ti, cached Qwen3-VL-4B Q4_K_M+mmproj) → **1 passed in 11.52s**:
+  `VISION: A split-screen view … | activity=Some("browsing") | conf=0.95` (was `unknown`/`0.0`).
+- **Observed running:** `npm run tauri dev` booted all subsystems Ready (store v1, WinRT OCR, vision
+  scheduler, inference attached/lazy, fastembed, embedding workers) with no panic; shutdown left no
+  orphaned `llama-server.exe`.
+
+**Note (QA finding).** The session's initial git snapshot was stale (`2ecf038`); `main` was already at
+`39d5da8` with M5 merged, so Insights/Settings needed no rebuild — confirmed by reading the files +
+the full UI build. `cargo tauri dev` is **not** runnable here (no `cargo-tauri`); the repo's Tauri CLI
+is the npm dev-dependency, so `npm run tauri dev` is the working launch path (README corrected).
