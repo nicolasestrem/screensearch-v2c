@@ -14,7 +14,7 @@ use crate::domain::{
     AnswerOpts, CapturedFrame, ChunkSource, Embedding, FrameEnrichmentInput, NewFrame, OcrResult,
     RetrievedChunk, VisionAnalysis,
 };
-use crate::ipc::{AnswerDelta, SearchHit, SearchQuery};
+use crate::ipc::{AnswerDelta, InsightsSummary, SearchHit, SearchQuery, TimelineBucket};
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::{MonitorInfo, Result};
 
@@ -122,6 +122,25 @@ pub trait Store: Send + Sync {
         _frame_ids: &[i64],
     ) -> Result<std::collections::HashMap<i64, String>> {
         Ok(std::collections::HashMap::new())
+    }
+
+    /// Frame-count density buckets across the half-open window `[start, end)`, split
+    /// into at most `bucket_count` fixed-width buckets and returned **sparse** (only
+    /// occupied buckets, ascending). Backs the `get_timeline` command (`03 §7`).
+    /// Default returns empty for stores without a timeline.
+    async fn timeline_buckets(
+        &self,
+        _start: i64,
+        _end: i64,
+        _bucket_count: u32,
+    ) -> Result<Vec<TimelineBucket>> {
+        Ok(Vec::new())
+    }
+
+    /// Truthful activity aggregates over `[start, end)` for the Insights screen
+    /// (`get_insights`, P5). Default returns the honest-empty summary.
+    async fn insights_summary(&self, _start: i64, _end: i64) -> Result<InsightsSummary> {
+        Ok(InsightsSummary::default())
     }
 
     // job queue (see `03 §5`)

@@ -454,3 +454,80 @@ changes — P4 added no new IPC types). The no-orphan gate
 - Sidecar readiness is set `Ready` after the binary resolves even though the model downloads lazily
   on first request; a model-missing failure surfaces as a `Crashed`/`Error` status + an answer
   `Error` delta rather than up-front.
+
+---
+
+## Pass 8 — 2026-06-22 — P5 (M0) Backend completion
+
+**Branch:** `feat/p5-backend`. First milestone of P5: the three spec-`§7` commands the Command-Deck
+UI needs but P4 never implemented, the queries behind them, the Insights aggregate, frame-image
+serving, and CSP hardening. No UI work yet (the P2 `App.tsx` is untouched; the full UI lands in
+M1–M5).
+
+### Implemented (with verbatim verification)
+- **`timeline_buckets(start, end, bucket_count)`** (`crates/store/src/timeline.rs`) — integer-index
+  bucketing (`(captured_at - start) / width`, `GROUP BY`), **sparse** (occupied buckets only),
+  half-open `[start, end)`, ceil-width so the last bucket reaches `end`. Backs `get_timeline`.
+- **`insights_summary(start, end)`** (`crates/store/src/insights.rs`) — real aggregates: total +
+  vision-tagged counts, capture density (reuses `timeline_buckets`), top apps (`GROUP BY app_hint`),
+  activity breakdown (`GROUP BY activity_type`). Honest-empty when the window is bare. Backs
+  `get_insights`.
+- **New IPC types** (`crates/traits/src/ipc.rs`): `InsightsSummary` (+`Default`), `AppCount`,
+  `ActivityCount` — ts-rs-exported (`ui/src/bindings/{InsightsSummary,AppCount,ActivityCount}.ts`),
+  64-bit fields guarded as `number` (added `InsightsSummary` to `no_bigint_in_ipc_types`).
+- **`Store` trait** gained defaulted `timeline_buckets` / `insights_summary`; `SqliteStore`
+  forwards both.
+- **`kernel::settings::save_settings`** — exact inverse of `load_settings` (same key strings;
+  numbers→`to_string`, bools→`"true"/"false"`, JSON for composites). Round-trip tested.
+- **Commands** (`src-tauri/src/lib.rs`): `get_timeline`, `get_insights`, `get_settings`,
+  `set_settings` (persists all; hot-applies model tiers to the live providers like
+  `set_model_tier`) — registered in `generate_handler!`.
+- **Frame-image serving + CSP** (`tauri.conf.json` + `src-tauri/Cargo.toml`): enabled the Tauri
+  **asset protocol** (`protocol-asset` feature + `assetProtocol.scope = ["$APPDATA/frames/**"]`)
+  and replaced `csp: null` with a tight policy (`img-src 'self' asset: http://asset.localhost
+  data:`, …). Closes the `07` CSP gap.
+
+Verbatim verification (run 2026-06-22):
+```
+$ cargo fmt --all -- --check
+=== fmt check clean ===                                  # exit 0
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.40s   # exit 0, no warnings
+$ cargo test --workspace
+     Running tests\settings.rs (kernel)
+test round_trips_defaults ... ok
+test round_trips_non_default_values ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored
+     Running tests\store.rs (store)
+test insights_summary_aggregates_truthfully ... ok
+test timeline_buckets_are_sparse_and_half_open ... ok
+test result: ok. 31 passed; 0 failed; 0 ignored
+     Running unittests src\lib.rs (traits)
+test ipc::export_bindings_insightssummary ... ok
+test result: ok. 31 passed; 0 failed; 0 ignored
+# all other crates green; 0 failed across the workspace
+$ ls ui/src/bindings | grep -iE 'Insight|AppCount|ActivityCount'
+ActivityCount.ts
+AppCount.ts
+InsightsSummary.ts
+```
+
+### Skipped / deferred
+- **Live frame-serving screenshot** (asset protocol rendering a real JPEG in the WebView) — there
+  is no UI surface to show a frame yet (still the P2 timeline). The asset protocol is configured
+  and compiles; the visual proof happens in M4 (Moment screen) under `cargo tauri dev`. Recorded
+  honestly rather than claimed.
+- **Packaging** (installer/ZIP, DoD §13.9) — deferred to a follow-up pass per the user's call;
+  stays open in `07`.
+
+### Decisions (spec-silent — logged in `07`)
+- Frame images via the **asset protocol** (not a custom scheme or base64). `get_timeline` gains a
+  `bucket_count` arg beyond the literal §7 signature. The `toast` event is **not** emitted by the
+  backend (toasts are client-side). `storage.retention_days` is persisted but **not enforced** (no
+  purge job). `InsightsSummary` is a **new** IPC contract (spec defines none).
+
+### Still risky / notes
+- `set_settings` persists everything but most subsystems re-read config only on restart / next
+  capture start (no live `reconfigure()`); the Settings UI (M5) must label each field honestly.
+- The asset-protocol `$APPDATA` scope must resolve to the same dir as `app_data_dir()` (the bundle
+  identifier subdir). Expected to match; confirm during the M4 live render.

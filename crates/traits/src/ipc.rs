@@ -71,6 +71,47 @@ pub struct TimelineBucket {
     pub count: u32,
 }
 
+/// Aggregate activity summary over a time window (`get_insights` output).
+///
+/// The spec defines no Insights contract (silent gap, logged in `07`). This is the
+/// chosen shape: real DB aggregates only — totals, capture density over time
+/// (reusing [`TimelineBucket`]), the top foreground apps, and the vision
+/// activity-type breakdown. [`Default`] is the honest-empty summary.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct InsightsSummary {
+    /// Frames captured in the window.
+    #[ts(type = "number")]
+    pub total_frames: i64,
+    /// Frames in the window that carry a vision `activity_type`.
+    #[ts(type = "number")]
+    pub tagged_frames: i64,
+    /// Capture density across the window (sparse, ascending by time).
+    pub captures: Vec<TimelineBucket>,
+    /// Most-captured foreground apps, descending by frame count.
+    pub top_apps: Vec<AppCount>,
+    /// Vision activity-type breakdown, descending by frame count.
+    pub activity_breakdown: Vec<ActivityCount>,
+}
+
+/// One row of the [`InsightsSummary`] top-apps breakdown. `app` is `None` for
+/// frames with no resolved foreground app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct AppCount {
+    pub app: Option<String>,
+    pub count: u32,
+}
+
+/// One row of the [`InsightsSummary`] activity-type breakdown. `activity` is the
+/// vision-assigned label (only tagged frames are counted).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ActivityCount {
+    pub activity: Option<String>,
+    pub count: u32,
+}
+
 /// Full detail for a single frame (`get_frame` output).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
@@ -376,6 +417,7 @@ mod ts_number_guard {
             ("TimeRange", TimeRange::inline()),
             ("SearchHit", SearchHit::inline()),
             ("TimelineBucket", TimelineBucket::inline()),
+            ("InsightsSummary", InsightsSummary::inline()),
             ("FrameDetail", FrameDetail::inline()),
             ("VisionTarget", VisionTarget::inline()),
             ("CaptureTick", CaptureTick::inline()),
