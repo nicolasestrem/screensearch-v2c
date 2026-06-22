@@ -831,3 +831,58 @@ $ npm run build       # ui/  — ✓ built in 1.85s; initial JS ≈ 87.5 KB gzip
                       #   (react-vendor 68.14 + query 11.08 + index 8.31); Recall chunk 58.01 gz
                       #   (react-markdown isolated); Moment 1.85 gz
 ```
+
+## P5 — M5: Settings & Insights (feat/p5-settings-insights, 2026-06-22)
+
+### Implemented
+- **Settings route** (`ui/src/routes/Settings.tsx`) — a single editable draft of the typed `Settings`
+  binding over six panels (Capture · Storage · Models · Enrichment · Privacy · Sidecar-advanced). Save
+  is optimistic + reconcile (`useSetSettings`); **Reset** reverts to the last-saved snapshot; a dirty
+  chip + disabled Save/Reset gate the action bar. Model tiers **hot-apply immediately** on pick
+  (`useSetModelTier` — persists + switches the live provider) with optimistic draft update and revert
+  on error. Each field carries an honest apply-point label (now / next question / next capture start /
+  restart). All hooks (incl. the two free-text list buffers) are declared **before** the loading/error
+  early returns — Rules-of-Hooks gate stays green. States: loading skeleton · load-error+retry ·
+  populated · partial ("models loading…" chip driven by readiness). No empty state (matrix: "—").
+- **Insights route** (`ui/src/routes/Insights.tsx`) — real `get_insights` aggregates with Today/7/30
+  range presets. States: loading skeleton · compute-error+retry · empty ("Not enough history yet" +
+  Go-to-Deck) · partial (tagged < total → "tagged only" badge + "based on N tagged frames" note) ·
+  populated (stat chips + captures-over-time + top-apps + activity breakdown).
+- **Domain controls** — `ModelTierPicker` (segmented Default/Quality/Beta per lane), `ScheduleControl`
+  (on-demand note + timer/idle opt-ins with minute-thresholds), `RetentionControl` (honest
+  not-enforced label), and the lightweight inline charts `CapturesTrend` (time-positioned density
+  bars, no chart lib) + `InsightsBars` (ranked horizontal bars). Exported from `domain/index.ts`.
+
+### Engineering defaults (spec-silent — logged in `07` #35/#36/#37)
+- **Apply-timing** mirrors the backend's honest policy (tiers live, thinking per-ask, capture/storage/
+  privacy on next capture, enrich/sidecar on restart); persisted always. No live `reconfigure()`.
+- **`capture_monitors`** edited as a comma-separated 0-based index list (empty = all) — no
+  monitor-enumeration command exists, so no fabricated monitor names.
+- **List fields** (`capture_monitors`, `privacy_excluded_apps`) keep a raw-text buffer so typing
+  (trailing commas etc.) isn't fought by re-serialising the parsed array back into the input; the
+  parsed array still drives dirty-detection and the save payload.
+- **Insights `captures`** rendered by true time-offset (not by bucket index), so the chart is
+  decoupled from the backend's fixed 48-bucket grain.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check                              # fmt exit: 0
+$ cargo clippy --workspace --all-targets -- -D warnings   # Finished `dev` … 5.82s; clippy exit: 0
+$ cargo test --workspace                                  # test exit: 0  (M5 changed 0 Rust files —
+                                                          #   suite identical to merged main 2ecf038)
+$ git diff --stat -- ui/src/bindings                      # empty — no IPC type added, no drift
+$ npm --prefix ui run lint                                # exit 0 (Rules-of-Hooks gate)
+$ npm --prefix ui run build  # tsc --noEmit + vite build  — ✓ built in 1.63s
+   Settings  10.46 kB │ gzip 3.56 kB   (own lazy chunk)
+   Insights   5.16 kB │ gzip 1.99 kB   (own lazy chunk)
+   initial JS ≈ 87.7 KB gzip (react-vendor 68.14 + query 11.08 + index 8.47); Recall 58.02 gz isolated
+```
+**Observed running:** Playwright vs the Vite dev server with `window.__TAURI_INTERNALS__` mocked to the
+exact `Settings`/`InsightsSummary`/`Readiness`/`JobStats` binding shapes (the browser has no Tauri
+bridge). Captured all five states for **both** screens with **0 console errors**: Settings populated
+(form + the two `ModelTierPicker`s + thinking toggle + `ScheduleControl` with the timer field revealed,
+honest apply labels), Settings loading skeleton, Settings load-error+retry; Insights populated
+(`CapturesTrend` orange density chart + ranked `InsightsBars` for apps & activities + "tagged only"
+partial labelling), Insights empty, Insights partial (18% tagged), Insights compute-error+retry,
+Insights loading skeleton. (Native-window screenshots remain impossible — Playwright can't attach to
+the Tauri WebView; the IPC mock is the dev-mode substitute the plan calls for.)
