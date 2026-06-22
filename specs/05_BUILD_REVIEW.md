@@ -439,8 +439,11 @@ changes — P4 added no new IPC types). The no-orphan gate
 - Real vision-tag + streamed-answer on the GPU → the `#[ignore]` smoke (`tests/smoke.rs`); run
   manually with `--ignored`. The lifecycle, HTTP client (mock), and provider logic are proven
   deterministically without it.
-- `llama.cpp` release-asset name can drift; resolution is pinned to "latest" + a unit-tested
-  `*-win-vulkan-x64.zip` selector, overridable via `SSV2C_LLAMA_RELEASE_URL`.
+- `llama.cpp` release-asset name can drift; resolution scans the recent-releases list and
+  takes the newest release that carries a unit-tested `*-win-vulkan-x64.zip` asset (not the
+  single `/releases/latest`, which can be an incomplete CI publish), overridable via
+  `SSV2C_LLAMA_RELEASE_URL`. Fixed 2026-06-22 after a live `latest` (`b9753`) shipped no
+  Vulkan zip and broke sidecar start.
 
 **Still risky / notes:**
 - No pending-job dedup for the timer/idle vision producers — a frame enqueued-but-not-yet-processed

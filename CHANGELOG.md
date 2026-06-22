@@ -37,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`cargo test -p inference --test smoke -- --ignored`); the always-green suite proves
   the lifecycle, the HTTP client (against a mock), and the providers deterministically.
 
+### Fixed — P4 sidecar binary resolution (2026-06-22)
+- **Resilient llama.cpp release selection** — `ensure_binary` previously read GitHub's
+  single `/releases/latest`, which fails with `no win-vulkan-x64 asset in the latest
+  llama.cpp release` whenever that release ships an **incomplete asset set** (llama.cpp's
+  CI occasionally publishes a build with only a partial set of platform zips — observed:
+  `b9753` had 1 asset, no Vulkan zip). Resolution now scans the recent-releases list and
+  takes the newest release that actually carries the `*-win-vulkan-x64.zip` asset. Pure
+  selector `pick_vulkan_from_releases` is unit-tested (incomplete-newest-then-complete,
+  newest-wins, none-found). Vulkan stays the shipped lane — it is vendor-neutral and runs
+  on Blackwell GPUs (RTX 50-series) where the prebuilt `cuda-12.4` asset would not.
+
 ### Fixed — P3 review (PR #7, 2026-06-21)
 - **Stale-job recovery** never misses a job now: the startup sweep requeues every
   `running` job unconditionally, and `claim` + the periodic sweep share one DB clock

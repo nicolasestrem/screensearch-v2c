@@ -19,8 +19,12 @@ use serde::Deserialize;
 
 use crate::models::{self, ModelLane, ModelTier};
 
-/// GitHub "latest release" endpoint for the upstream llama.cpp project.
-const GITHUB_LATEST: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+/// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
+/// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
+/// publishes a release with an incomplete asset set (no `win-vulkan-x64` zip), and a
+/// single-`latest` lookup would then fail outright instead of using the prior build.
+const GITHUB_RELEASES: &str =
+    "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10";
 /// GitHub requires a User-Agent on API requests.
 const USER_AGENT: &str = "screensearch-v2c";
 
@@ -40,6 +44,19 @@ pub fn pick_vulkan_asset(names: &[String]) -> Option<usize> {
     names.iter().position(|n| {
         let n = n.to_ascii_lowercase();
         n.ends_with(".zip") && n.contains("win") && n.contains("vulkan") && n.contains("x64")
+    })
+}
+
+/// From a newest-first list of releases, returns the `(download_url, asset_name)` of the
+/// Windows x64 Vulkan zip in the most recent release that actually carries one. Some
+/// llama.cpp releases ship an incomplete asset set, so the newest release is not always
+/// usable — we take the newest that is. Returns `None` if no recent release has the asset.
+fn pick_vulkan_from_releases(releases: &[GithubRelease]) -> Option<(String, String)> {
+    releases.iter().find_map(|r| {
+        let names: Vec<String> = r.assets.iter().map(|a| a.name.clone()).collect();
+        let idx = pick_vulkan_asset(&names)?;
+        let asset = &r.assets[idx];
+        Some((asset.browser_download_url.clone(), asset.name.clone()))
     })
 }
 
@@ -171,19 +188,16 @@ async fn resolve_binary_url() -> Result<(String, String)> {
     }
     let client = reqwest::Client::new();
     let resp = client
-        .get(GITHUB_LATEST)
+        .get(GITHUB_RELEASES)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()
         .await
-        .context("query llama.cpp latest release")?
+        .context("query llama.cpp releases")?
         .error_for_status()
         .context("llama.cpp release query returned an error status")?;
-    let release: GithubRelease = resp.json().await.context("decode release json")?;
-    let names: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
-    let idx = pick_vulkan_asset(&names)
-        .context("no win-vulkan-x64 asset in the latest llama.cpp release")?;
-    let asset = &release.assets[idx];
-    Ok((asset.browser_download_url.clone(), asset.name.clone()))
+    let releases: Vec<GithubRelease> = resp.json().await.context("decode releases json")?;
+    pick_vulkan_from_releases(&releases)
+        .context("no win-vulkan-x64 asset in any recent llama.cpp release")
 }
 
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
@@ -261,6 +275,60 @@ mod tests {
     fn no_vulkan_asset_returns_none() {
         let names = vec!["llama-b6500-bin-win-cpu-x64.zip".to_string()];
         assert!(pick_vulkan_asset(&names).is_none());
+    }
+
+    fn asset(name: &str, url: &str) -> GithubAsset {
+        GithubAsset {
+            name: name.to_string(),
+            browser_download_url: url.to_string(),
+        }
+    }
+
+    #[test]
+    fn skips_release_with_incomplete_assets() {
+        // Mirrors observed llama.cpp behaviour: a freshly-published "latest" release
+        // (e.g. b9753) can carry an incomplete asset set with no win-vulkan-x64 zip,
+        // while the previous release (b9752) is complete. We must fall back to it.
+        let releases = vec![
+            GithubRelease {
+                assets: vec![asset("llama-b9753-xcframework.zip", "https://x/9753-xcf")],
+            },
+            GithubRelease {
+                assets: vec![
+                    asset("llama-b9752-bin-win-cpu-x64.zip", "https://x/9752-cpu"),
+                    asset(
+                        "llama-b9752-bin-win-vulkan-x64.zip",
+                        "https://x/9752-vulkan",
+                    ),
+                ],
+            },
+        ];
+        let (url, name) =
+            pick_vulkan_from_releases(&releases).expect("vulkan from recent releases");
+        assert_eq!(name, "llama-b9752-bin-win-vulkan-x64.zip");
+        assert_eq!(url, "https://x/9752-vulkan");
+    }
+
+    #[test]
+    fn prefers_the_newest_release_that_has_vulkan() {
+        let releases = vec![
+            GithubRelease {
+                assets: vec![asset("llama-b2-bin-win-vulkan-x64.zip", "https://x/b2")],
+            },
+            GithubRelease {
+                assets: vec![asset("llama-b1-bin-win-vulkan-x64.zip", "https://x/b1")],
+            },
+        ];
+        let (url, _name) = pick_vulkan_from_releases(&releases).expect("newest vulkan");
+        assert_eq!(url, "https://x/b2");
+    }
+
+    #[test]
+    fn no_vulkan_in_any_release_returns_none() {
+        let releases = vec![GithubRelease {
+            assets: vec![asset("llama-b1-bin-win-cpu-x64.zip", "https://x/cpu")],
+        }];
+        assert!(pick_vulkan_from_releases(&releases).is_none());
     }
 
     #[test]

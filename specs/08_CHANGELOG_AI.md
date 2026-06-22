@@ -252,3 +252,32 @@
   `killing_parent_terminates_job_bound_child` passes — DoD #7 demonstrated. Real vision-tag +
   streamed-answer on the RTX 5060 Ti remain the gated manual smoke (`cargo test -p inference --test
   smoke -- --ignored`).
+
+## 2026-06-22 — P4 fix: sidecar binary resolution survives incomplete llama.cpp releases
+- **Change:** `inference::download::resolve_binary_url` no longer reads GitHub's single
+  `/releases/latest`. It now fetches the recent-releases list (`/releases?per_page=10`) and a new
+  pure helper `pick_vulkan_from_releases` walks them newest→oldest, returning the
+  `(download_url, name)` of the first release that actually carries a `*-win-vulkan-x64.zip` asset
+  (the existing `pick_vulkan_asset` selector, reused). Error message on total miss is now "no
+  win-vulkan-x64 asset in **any recent** llama.cpp release".
+- **Why:** Sidecar start failed with `llama-server unavailable: no win-vulkan-x64 asset in the
+  latest llama.cpp release`. Root cause (confirmed against the live GitHub API): llama.cpp's CI
+  sometimes publishes a release with an **incomplete asset set** — `b9753` carried a single asset
+  and **no** Windows Vulkan zip — and `/releases/latest` resolving to such a build broke startup
+  outright. A network/rate-limit failure surfaces a *different* message, so the symptom uniquely
+  implicated the selector running against a real-but-incomplete release. Scanning recent releases
+  uses the newest *usable* build instead of failing. Vulkan stays the lane (vendor-neutral; runs on
+  the user's Blackwell RTX 5060 Ti, where the prebuilt `cuda-12.4` asset would not). `SSV2C_LLAMA_RELEASE_URL`
+  remains the override escape hatch.
+- **Verification:** TDD — added `skips_release_with_incomplete_assets`, `prefers_the_newest_release_that_has_vulkan`,
+  `no_vulkan_in_any_release_returns_none` (red first: `cannot find function pick_vulkan_from_releases`,
+  exit 101). After implementing: `cargo test -p inference --lib download` → **8 passed, 0 failed**;
+  `cargo test -p inference` full → all green (unit 8+others, no-orphan 1, reap 2, client 4, smoke 2
+  ignored); `cargo fmt --all -- --check` (exit 0); `cargo clippy -p inference -- -D warnings`
+  (clean). Live resolution against the current API selects `b9754` (newest complete) over the
+  intervening incomplete `b9753`. **Real GPU end-to-end now confirmed** on an RTX 5060 Ti: the
+  new resolver downloaded the Vulkan binary, `llama-server` launched, and the gated smoke passed —
+  `cargo test -p inference --test smoke -- --ignored --nocapture --test-threads=1` →
+  `test result: ok. 2 passed; 0 failed` in 15.77 s, with `real_answer_streams_tokens` returning
+  `ANSWER: The deploy finished at 14:32. CITATIONS: [42]` and `real_vision_tags_an_image`
+  describing the test image. DoD #5 (real sidecar) demonstrated.

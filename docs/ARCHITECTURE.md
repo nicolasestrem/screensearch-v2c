@@ -235,9 +235,12 @@ so the idle-evictor can't pull a model out from under it. Lifecycle:
 Vision and answer each offer **Default / Quality / Beta** (`MODEL_REGISTRY`). Nothing is bundled —
 everything downloads on first use, Rust-only (no Python in the runtime):
 
-- **Binary** — `ensure_binary` fetches the latest prebuilt llama.cpp **Vulkan** Windows release zip
+- **Binary** — `ensure_binary` fetches a prebuilt llama.cpp **Vulkan** Windows release zip
   from GitHub into `<app-data>/sidecar/llama` (asset selected by a unit-tested
-  `*-win-vulkan-x64.zip` matcher; overridable via `SSV2C_LLAMA_RELEASE_URL`).
+  `*-win-vulkan-x64.zip` matcher; overridable via `SSV2C_LLAMA_RELEASE_URL`). It scans the
+  recent-releases list rather than `/releases/latest` and takes the **newest release that
+  actually carries** the Vulkan asset — llama.cpp's CI sometimes publishes a release with an
+  incomplete asset set, which a single-`latest` lookup would fail on outright.
 - **Models** — `ensure_model` lists the tier's HuggingFace repo via `hf-hub`, picks the `Q4_K_M`
   weights (+ the **same-repo** `mmproj` for vision — a mismatched projector crashes the server), and
   copies them into `<app-data>/models/<lane>/<tier>`. Idempotent (skips files already present).
