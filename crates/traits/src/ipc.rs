@@ -51,6 +51,23 @@ pub struct SearchHit {
     pub app_hint: Option<String>,
 }
 
+/// A lightweight frame reference for browsing — the `get_frames` and
+/// `get_nearest_frame` outputs (P5). Carries only what a tile/thumbnail needs
+/// (frame id, capture time, the stored JPEG's relative path, and the foreground
+/// app hint), without the OCR text / vision / tags that [`FrameDetail`] hydrates.
+/// Drives the Timeline hover thumbnails, the Deck "jump back in" recents, and a
+/// Moment's neighbour context; open one with `get_frame(frame_id)` for full detail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct FrameMeta {
+    #[ts(type = "number")]
+    pub frame_id: i64,
+    #[ts(type = "number")]
+    pub captured_at: i64,
+    pub image_path: String,
+    pub app_hint: Option<String>,
+}
+
 /// Input to the `ask` command. The answer streams back via `answer_delta` events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
@@ -416,6 +433,7 @@ mod ts_number_guard {
         let decls = [
             ("TimeRange", TimeRange::inline()),
             ("SearchHit", SearchHit::inline()),
+            ("FrameMeta", FrameMeta::inline()),
             ("TimelineBucket", TimelineBucket::inline()),
             ("InsightsSummary", InsightsSummary::inline()),
             ("FrameDetail", FrameDetail::inline()),

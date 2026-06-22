@@ -33,6 +33,7 @@ captures/
 # Verification artifacts (Playwright-MCP snapshots / screenshots — not source)
 .playwright-mcp/
 m1m2-*.png
+m3m4-*.png
 
 # OS / editor
 Thumbs.db

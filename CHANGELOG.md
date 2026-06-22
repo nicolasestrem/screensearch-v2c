@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P5 (M3+M4) Recall, Deck, Timeline & Moment (2026-06-22)
+- **Deck (home)**: capture status with one-click start/stop, today's activity (capture count,
+  density minimap, top apps), the enrichment-queue meter, and a "jump back in" grid of your most
+  recent captures. Onboards from empty ("start capture"), and flags when captures are recorded but
+  not yet enriched.
+- **Recall (search + ask)**: hybrid search over your screen text/meaning, shown as a virtualized
+  result list that links straight to the frame; and a grounded **Ask** that streams an answer with a
+  collapsible "thinking" trace and clickable citation thumbnails to the source moments. Tells you
+  honestly when it's "searching text only" (embeddings still indexing) or the answer model isn't
+  loaded — never a dead end.
+- **Timeline (the Scanline)**: the signature instrument — a canvas density ribbon over a chosen
+  window (Today / 7 days / 30 days) with a sweeping signal-orange scan-head, hover thumbnails, and a
+  faint scanline texture. Fully keyboard-operable (arrows scrub, Shift for big steps, Home/End jump,
+  Enter opens the moment under the head); the open lands on the real nearest frame. Ambient motion
+  honors "reduce motion".
+- **Moment (one frame)**: the capture image, its recognized text, the vision description/tags and
+  context, prev/next and a strip of nearby frames, plus an on-demand **"Tag with vision"** action
+  when a frame hasn't been analyzed yet. Deep-linkable and resilient to a missing/deleted frame.
+- **Frame browsing data** (`get_frames`, `get_nearest_frame`): the backend can now list frames in a
+  window (newest-first) and resolve a point in time to the nearest captured frame — what the Timeline
+  thumbnails, the Deck recents, and "Enter opens the moment" need. New typed `FrameMeta`.
+- Every screen renders all of loading / empty / error / partial / populated — no mock data, no dead
+  ends. Initial JS stays ~87 KB gzipped (the markdown renderer ships only with Recall).
+
+### Fixed — P5 (M3+M4) review follow-ups (2026-06-22)
+- **Moment Prev/Next & "around this moment" now work in real sessions.** They were sourced from a
+  newest-first window that, in a busy capture session, returned only frames from the far edge of the
+  window — so the buttons silently went dead and the strip showed unrelated frames. The backend now
+  serves the captures immediately *bracketing* a moment (`get_frame_context`), so navigation always
+  lands on the true neighbours.
+- **Answer links open safely.** Links inside a streamed answer now open in your browser instead of
+  navigating away inside the app window.
+- **The answer's "Thinking" trace no longer snaps shut** the instant the answer finishes — it stays
+  as you left it so you can read it.
+
 ### Added — P5 (M1+M2) UI foundation, shell & primitives (2026-06-22)
 - **The "Command Deck" shell**: the app now opens to a real frame — a top StatusRail (live
   capture / data store / enrichment queue / inference status), a left NavRail (Deck · Recall ·

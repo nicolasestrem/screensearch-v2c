@@ -81,6 +81,45 @@ export const IconChevronRight = (p: IconProps) => (
   </Svg>
 );
 
+/** Chevron left — previous / back-by-one. */
+export const IconChevronLeft = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15 6l-6 6 6 6" />
+  </Svg>
+);
+
+/** Arrow left — "back" navigation. */
+export const IconArrowLeft = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M19 12H5M11 6l-6 6 6 6" />
+  </Svg>
+);
+
+/** Image — a frame thumbnail placeholder (no resolvable source). */
+export const IconImage = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="1.5" />
+    <circle cx="8.5" cy="9.5" r="1.5" />
+    <path d="M5 19l5-5 3 3 3-4 3 4" />
+  </Svg>
+);
+
+/** Sparkle — the grounded "Ask" action (RAG answer). */
+export const IconSparkle = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3l1.8 4.9L18.9 9l-5.1 1.1L12 15l-1.8-4.9L5.1 9l5.1-1.1z" />
+    <path d="M18 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+  </Svg>
+);
+
+/** Tag — a vision/label chip marker. */
+export const IconTag = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9z" />
+    <circle cx="7.5" cy="7.5" r="1.3" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
 /** Capture — a record dot. */
 export const IconCapture = (p: IconProps) => (
   <Svg {...p}>

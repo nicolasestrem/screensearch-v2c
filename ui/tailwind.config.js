@@ -81,6 +81,10 @@ export default {
         base: "var(--motion-base)",
         slow: "var(--motion-slow)",
       },
+      boxShadow: {
+        // The signature scan-head's halo (the one place we spend glow).
+        scan: "var(--glow-scan)",
+      },
       borderColor: {
         DEFAULT: "var(--line)",
       },

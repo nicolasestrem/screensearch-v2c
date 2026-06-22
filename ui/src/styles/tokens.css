@@ -23,6 +23,7 @@
   --accent: #ff6a1a; /* the only bold color — scan-head, active, primary action */
   --accent-wash: rgba(255, 106, 26, 0.14); /* scanline glow, selection, active row */
   --scrim: rgba(8, 6, 3, 0.72); /* modal/overlay backdrop dimming the app behind */
+  --glow-scan: 0 0 8px rgba(255, 106, 26, 0.6); /* the signature scan-head's halo */
 
   /* Functional-only (status contexts; never brand decoration; desaturated). */
   --danger: #c5524b;

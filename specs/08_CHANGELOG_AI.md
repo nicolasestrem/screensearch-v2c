@@ -11,6 +11,29 @@
 
 ---
 
+## 2026-06-22 — P5 (M3+M4) PR #12 review fixes (`feat/p5-screens`)
+- **Change:** Addressed the `claude-review` findings on PR #12. (1) Fixed a high-priority Moment bug:
+  prev/next + the context strip were sourced from `get_frames([at−30m, at+30m), 24)`, but
+  `frames_in_range` is newest-first capped, so a dense window returned only far-edge frames and
+  dropped the anchor (`findIndex` = −1 → dead navigation). Added `SqliteStore::neighbour_frames(at,
+  half_window_ms, limit_each)` (closest-before DESC + closest-after ASC, merged ascending, anchor
+  excluded) exposed as `get_frame_context`; new `useFrameContext` hook + `frameContext` query keys
+  (invalidated on `capture_tick`); Moment derives prev/next by capture-time. (2) `AnswerStream`
+  markdown links now render `target="_blank" rel="noopener noreferrer"` so model output can't hijack
+  the WebView. (3) `AnswerStream` "Thinking" trace is now a controlled `<details>` (auto-opens on a
+  new stream, never auto-collapses), hooks hoisted above early returns.
+- **Why:** Hard rule "prioritize accuracy over task completion" + CLAUDE.md "review and test
+  thoroughly." The Moment bug breaks a headline feature in any real (non-trivial) session; the link
+  and thinking-panel issues are correctness/UX regressions in the streamed-answer path. No new IPC
+  type (reuses `FrameMeta`), so bindings are unchanged. Two findings acknowledged but deferred as
+  minor (`07` #34 live-search invalidation; the cosmetic timeline clamp).
+- **Verification:** `cargo fmt --all -- --check` exit 0 · `cargo clippy --workspace --all-targets --
+  -D warnings` exit 0 · `cargo test -p store` 36 passed (incl. `neighbour_frames_brackets_anchor_
+  with_closest_each_side`) · `cargo test -p traits` 32 passed · `git diff --stat -- ui/src/bindings`
+  empty · `npm run typecheck`/`lint`/`build` all exit 0 (build ✓ in 1.85s, initial JS ≈ 87.5 KB gz).
+
+---
+
 ## 2026-06-21 — P0 Scaffold (`p0-scaffold` branch)
 - **Change:** Stood up the full workspace scaffold — Cargo workspace; `traits` crate with the six
   `03 §3` contracts + domain/jobs/IPC types; honestly-empty skeleton crates `kernel`, `store`,
@@ -460,3 +483,38 @@
   `npm run lint` → clean. No UI consumer of these queries until M3/M4 (the screens are scaffolds), so
   this is foundation-plumbing hardening verified by build/lint + reasoning; the behavioral proof
   (Moment refetches after a vision tag) lands with the screens.
+
+## 2026-06-22 — P5 (M3+M4) Recall · Deck · Timeline · Moment (`feat/p5-screens` branch, PR #12)
+- **Change — backend slice (precursor commit):** new `crates/store/src/frames.rs` with inherent
+  `SqliteStore::frames_in_range(start,end,limit) -> Vec<FrameMeta>` (newest-first over `[start,end)`)
+  and `nearest_frame(at) -> Option<FrameMeta>` (closest frame either side of `at`, at-or-after wins an
+  exact tie; `i128` distance avoids overflow). New ts-rs `FrameMeta { frame_id, captured_at,
+  image_path, app_hint }` (`crates/traits/src/ipc.rs`, added to the `no_bigint_in_ipc_types` guard).
+  Commands `get_frames` / `get_nearest_frame` (`src-tauri/src/lib.rs`, registered). Two `:memory:`
+  tests in `crates/store/tests/store.rs`.
+- **Change — frontend:** typed wrappers `getFrames`/`getNearestFrame`; `useFrames` query + `frames`
+  key family (distinct from singular `frame`); `useLiveEvents` `capture_tick` also invalidates the
+  frames list. New `lib/time.ts` (human-relative + absolute timestamps) and `lib/timeRanges.ts`
+  (day-snapped windows). New `components/domain/`: `FrameImage`, `FrameTile`, `SearchResult`,
+  `AnswerStream`, `JobQueueMeter`, `ScanlineTimeline` (+ shared `timelineDraw.ts`), `TimelineMinimap`,
+  `MomentDetail`. Replaced the Deck/Recall/Timeline/Moment route scaffolds with full implementations,
+  each covering loading/empty/error/partial/populated. New token `--glow-scan` + Tailwind
+  `shadow-scan` (scan-head halo). New icons (image, chevron-left, arrow-left, sparkle, tag).
+- **Why:** M3+M4 of the P5 plan — the "Command Deck" data screens. The frame-browsing slice was
+  required because the merged M0 backend exposed only density buckets, which can't drive the Timeline
+  hover thumbnails / Enter-opens-a-Moment / Deck recents; the user approved adding it (`07` #31).
+  Enter resolves to a concrete frame via `get_nearest_frame` (exact, server-side), not a sampled
+  thumbnail. Search results are virtualized (`@tanstack/react-virtual`, `UI_REFERENCE §8`); the Ask
+  answer streams via the `useAsk` reducer with collapsible thinking + citation tiles; the
+  ScanlineTimeline is a real `role="slider"` (keyboard scrub + pointer drag), reduced-motion-gated.
+- **Verification:** `cargo fmt --check` clean · `cargo build --workspace` 22.05s · `cargo test
+  --workspace` all pass (store **35**, incl. 2 new frames tests) · `cargo clippy --workspace
+  --all-targets -- -D warnings` clean · bindings regenerate clean (only the new `FrameMeta.ts`) ·
+  `npm run typecheck` clean · `npm run lint` clean (Rules-of-Hooks gate) · `npm run build` ✓ 2.02s,
+  **initial JS ≈ 87 KB gzip** (react-markdown isolated in the lazy Recall chunk). **Observed
+  running:** `tauri dev` booted all subsystems Ready (no panic); live WebView captures showed the
+  **populated** Deck (real frame thumbnails via the asset protocol, today minimap, top-apps, queue
+  meter, live-updating across captures) and Timeline (real density ribbon + scan-head). Degraded
+  states (Playwright vs the Vite dev server, no Tauri runtime) showed Deck error/retry, Recall search
+  + ask invites, Timeline error + presets, and the ⌘K palette. (Native-window populated screenshots
+  are a manual aid — Playwright can't attach to the Tauri WebView.)
