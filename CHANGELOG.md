@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P5 (M5) Settings & Insights (2026-06-22)
+- **Settings**: a single editable form over every persisted setting — capture (interval, change
+  threshold, monitors), storage (JPEG quality, max width) and retention, model tiers, the answer
+  "thinking" toggle, enrichment (text/image embeddings, worker concurrency) and the deferred-vision
+  schedule, privacy (excluded apps, pause-on-lock), and advanced sidecar knobs. Saves are optimistic
+  and reconcile against the backend; model tiers additionally **hot-apply the instant you pick them**
+  (the running provider switches without waiting for Save). Every field states *when* it takes effect
+  — tiers now, the thinking flag on your next question, capture/storage/privacy on the next capture
+  start, enrichment/sidecar on restart — and retention is labelled honestly as recorded-but-not-yet-
+  enforced. A failed save keeps your edits and explains.
+- **Insights**: truthful activity analytics computed entirely from your own history — total and
+  vision-tagged capture counts, a captures-over-time density chart, your top foreground apps, and the
+  vision activity-type breakdown. No fabricated numbers: when there's nothing yet it says "not enough
+  history yet", and while vision tagging is still catching up the activity breakdown is labelled
+  "tagged only" with the count it's based on. Lightweight inline charts (no chart library) keep the
+  bundle small — Settings and Insights are each their own lazily-loaded route chunk.
+- New reusable controls: `ModelTierPicker`, `ScheduleControl`, `RetentionControl`, and the Insights
+  `CapturesTrend` / `InsightsBars` charts.
+
 ### Added — P5 (M3+M4) Recall, Deck, Timeline & Moment (2026-06-22)
 - **Deck (home)**: capture status with one-click start/stop, today's activity (capture count,
   density minimap, top apps), the enrichment-queue meter, and a "jump back in" grid of your most

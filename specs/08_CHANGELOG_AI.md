@@ -518,3 +518,38 @@
   states (Playwright vs the Vite dev server, no Tauri runtime) showed Deck error/retry, Recall search
   + ask invites, Timeline error + presets, and the ⌘K palette. (Native-window populated screenshots
   are a manual aid — Playwright can't attach to the Tauri WebView.)
+
+## 2026-06-22 — P5 (M5): Settings & Insights (`feat/p5-settings-insights`, off `main` @ 2ecf038)
+- **Change — frontend only (0 Rust files touched, no IPC type added → bindings unchanged):**
+  Replaced the `Settings` and `Insights` route scaffolds with full implementations. New domain
+  controls in `ui/src/components/domain/` (exported from `index.ts`): `ModelTierPicker` (segmented
+  Default/Quality/Beta per lane), `ScheduleControl` (deferred-vision timer/idle opt-ins, minute
+  thresholds, on-demand explainer), `RetentionControl` (honest not-enforced label), and the inline
+  charts `CapturesTrend` (time-positioned density bars) + `InsightsBars` (ranked horizontal bars) —
+  no chart library, to protect the bundle. Reused the M0 commands/queries/mutations as-is
+  (`get_settings`/`set_settings`/`set_model_tier`/`get_insights`, `useSettings`/`useInsights`,
+  `useSetSettings`/`useSetModelTier`).
+- **Settings** edits one draft of the typed `Settings` binding across six panels; Save is optimistic
+  + reconcile, Reset reverts to the saved snapshot, a dirty chip gates the actions. Tiers hot-apply
+  the instant they're picked (set_model_tier → live provider) with optimistic revert on error; every
+  field is labelled with *when* it applies. The two list fields (`capture_monitors`,
+  `privacy_excluded_apps`) use a raw-text buffer (parsed array drives dirty/save) so typing isn't
+  fought. All hooks precede the loading/error early returns.
+- **Insights** renders only real `get_insights` aggregates with Today/7/30 presets: total + tagged
+  counts, captures-over-time, top apps, activity breakdown — honest-empty ("not enough history yet")
+  and partial-labelled ("tagged only" + the count the breakdown is based on) when tagging is behind.
+- **Why:** final milestone of the P5 plan (`02 §5`), completing the Command Deck. Settings/Insights
+  ship as their own lazily-loaded route chunks. Spec-silent decisions logged in `07` #35 (apply-
+  timing mirrors the backend's honest policy — no live `reconfigure()`), #36 (no monitor-enumeration
+  command → comma-separated index field), #37 (Insights' fixed 48-bucket grain, rendered by true
+  time-offset so the chart isn't coupled to it).
+- **Verification:** `cargo fmt --all -- --check` exit 0 · `cargo clippy --workspace --all-targets --
+  -D warnings` exit 0 · `cargo test --workspace` exit 0 (no Rust changed — suite identical to merged
+  `main` 2ecf038) · `git diff --stat -- ui/src/bindings` empty · `npm --prefix ui run lint` exit 0
+  (Rules-of-Hooks gate) · `npm --prefix ui run build` ✓ 1.63s (`tsc --noEmit` + vite), Settings 3.56
+  gz / Insights 1.99 gz own lazy chunks, initial JS ≈ 87.7 KB gzip. **Observed running:** Playwright
+  vs the Vite dev server with `window.__TAURI_INTERNALS__` mocked to the exact binding shapes; all
+  five states captured for both screens with 0 console errors (Settings populated incl. the tier
+  pickers/thinking toggle/schedule control, loading skeleton, load-error+retry; Insights populated
+  incl. the density chart + ranked bars, empty, partial, compute-error+retry, loading skeleton).
+  Native-window screenshots remain impossible (Playwright can't attach to the Tauri WebView).
