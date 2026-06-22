@@ -594,3 +594,34 @@
   the only open DoD item) and its run command corrected to `npm run tauri dev` (the Tauri CLI ships as
   the npm dev-dependency here; `cargo tauri` needs a separate `cargo install tauri-cli`); `CHANGELOG.md`
   updated.
+
+## 2026-06-22 — PR #14 review follow-up (`feat/p5-m5-insights-settings-vision`)
+- **Context:** automated reviewers on PR #14 raised three correct points against the vision fix above
+  (one from gemini-code-assist, two P2s from chatgpt-codex). All three addressed.
+- **(1) Forced activity label on low-signal frames (codex P2 — the consequential one).** The grammar
+  made `activity_type` a *required* enum of the eight labels, so the model could never decline and the
+  off-enum→`None` safeguard in `parse_vision` was effectively dead code (the grammar forbade off-enum
+  values). A blank desktop / lock screen / synthetic frame was therefore tagged with an arbitrary
+  label and mirrored into `frames.activity_type`, skewing Insights. **Fix:** `vision_response_format()`
+  now makes `activity_type` nullable (`"type":["string","null"]`, `null` appended to the `enum`) and
+  drops it from `required`; `VISION_PROMPT` instructs the model to answer `null` when nothing clearly
+  fits. **Not cosmetic** — the gated smoke proves it: the synthetic two-tone frame that the *forced*
+  schema confidently mislabelled `browsing` @ `0.95` (see the run recorded above) now correctly returns
+  `activity=None | conf=-1` — the model declines. New unit tests `explicit_null_activity_type_becomes_none`
+  and `response_format_allows_null_activity_and_drops_it_from_required`.
+- **(2) `app_hint` "null" filter was case-sensitive (gemini).** `s != "null"` let `"Null"`/`"NULL"`
+  through as a literal app name. **Fix:** extracted `normalize_app_hint`, which trims and compares with
+  `eq_ignore_ascii_case("null")`, returning the trimmed value. New tests
+  `null_app_hint_string_is_dropped_case_insensitively` (covers `null`/`NULL`/`Null`/`  null  `) and
+  `app_hint_is_trimmed_and_kept_when_real`.
+- **(3) `-1.0` sentinel rendered as `-100%` (codex P2).** `MomentDetail.tsx` computed
+  `Math.round(vision.confidence * 100)%` unconditionally, so the new "unknown" sentinel showed users
+  `-100%`. **Fix:** the Vision panel now shows a neutral `n/a` chip when `confidence < 0` and the accent
+  percentage only for a real score. UI-only; `VisionAnalysis` unchanged, so no binding drift.
+- **Verification (verbatim):** `cargo fmt --all -- --check` exit 0 · `cargo clippy -p inference
+  --all-targets -- -D warnings` exit 0 · `cargo test -p inference --lib` → **36 passed; 0 failed**
+  (was 33; +3 net new) · `git diff --exit-code -- ui/src/bindings` exit 0 (no drift) ·
+  `npm run typecheck` exit 0 · `npm run lint` exit 0 · `npm run build` ✓. **Observed running:** the
+  real-GPU gated smoke `real_vision_tags_an_image` **passed** on the RTX 5060 Ti — `VISION: The screen
+  is divided into two vertical sections … | activity=None | conf=-1` (honest decline on the low-signal
+  synthetic frame; the test asserts confidence ∈ {-1.0} ∪ (0,1] and activity ∈ {none} ∪ the set).

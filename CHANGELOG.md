@@ -19,8 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `response_format` JSON schema (the sidecar turns it into a sampling grammar), and any label outside
   the known set — coding, browsing, email, reading, chat, terminal, design, video — including the
   model's own "unknown", is dropped to none rather than stored. Keeps the Insights activity breakdown
-  meaningful. Verified end-to-end on a real GPU: a screenshot now tags as `browsing` with confidence
-  `0.95` (was `unknown` / `0.0`). Resolves `07_KNOWN_GAPS.md` #19/#20.
+  meaningful. Resolves `07_KNOWN_GAPS.md` #19/#20.
+- **Low-signal frames stay untagged instead of being mislabelled (PR #14 review).** The activity
+  grammar now also permits `null`, and the field is no longer required — a blank desktop, a lock
+  screen, or the synthetic two-tone smoke image no longer forces the model to pick one of the eight
+  labels just to satisfy the schema (which had been skewing the Insights breakdown). The prompt tells
+  the model to answer `null` rather than guess. Verified on a real GPU: the gated smoke's two-tone
+  test frame now comes back `activity=none, confidence=unknown` — the model honestly declines —
+  whereas the forced-enum schema had it confidently (and wrongly) report `browsing` at `0.95`.
+- **`app_hint` "null" is dropped case-insensitively (PR #14 review).** A model that emits the text
+  `"null"`/`"NULL"`/`"Null"` (instead of a JSON null) no longer leaks it as an application name; the
+  surviving hint is also trimmed.
+- **Unknown confidence renders as `n/a`, not `-100%` (PR #14 review).** The Moment detail view now
+  shows a neutral `n/a` chip when the stored confidence is the `-1.0` sentinel, instead of multiplying
+  it into a misleading `-100%`.
 
 ### Added — P5 (M5) Settings & Insights (2026-06-22)
 - **Settings**: a single editable form over every persisted setting — capture (interval, change

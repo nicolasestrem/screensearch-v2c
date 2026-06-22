@@ -44,16 +44,28 @@ const JPEG_QUALITY: u8 = 80;
 const VISION_PROMPT: &str = "You are analyzing a single screenshot of a user's screen. \
 Reply with ONLY a compact JSON object and nothing else, with exactly these fields: \
 \"description\": one or two sentences describing what is on screen; \
-\"activity_type\": one of coding, browsing, email, reading, chat, terminal, design, video; \
+\"activity_type\": one of coding, browsing, email, reading, chat, terminal, design, video, \
+or null if none of those clearly fits (do not guess); \
 \"app_hint\": the application name if identifiable, otherwise null; \
 \"confidence\": a number between 0.0 and 1.0 giving your certainty in this analysis, \
 judged from how clearly the screenshot supports it.";
 
 /// The OpenAI-style `response_format` handed to `llama-server` for vision tagging. The
-/// server turns the JSON schema into a sampling grammar, so the model must emit an
-/// object with an enum `activity_type` and a numeric `confidence` (`07` #20). This
-/// guarantees shape, not meaning — `parse_vision` still validates the values.
+/// server turns the JSON schema into a sampling grammar, so the model must emit an object
+/// whose `activity_type` is one of [`ACTIVITY_TYPES`] *or* `null`, with a numeric
+/// `confidence` (`07` #20). This guarantees shape, not meaning — `parse_vision` still
+/// validates the values.
+///
+/// `activity_type` is nullable and **not** required: a low-signal frame (a blank desktop,
+/// a lock screen, a synthetic test image) has no identifiable activity, and forcing the
+/// grammar to pick one of the eight labels would mirror an arbitrary tag into the Insights
+/// breakdown. Allowing `null` lets the model decline, and `normalize_activity` keeps `None`.
 fn vision_response_format() -> serde_json::Value {
+    let mut activity_enum: Vec<serde_json::Value> = ACTIVITY_TYPES
+        .iter()
+        .map(|&a| serde_json::Value::from(a))
+        .collect();
+    activity_enum.push(serde_json::Value::Null);
     serde_json::json!({
         "type": "json_schema",
         "json_schema": {
@@ -62,11 +74,11 @@ fn vision_response_format() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "description": { "type": "string" },
-                    "activity_type": { "type": "string", "enum": ACTIVITY_TYPES },
+                    "activity_type": { "type": ["string", "null"], "enum": activity_enum },
                     "app_hint": { "type": ["string", "null"] },
                     "confidence": { "type": "number" }
                 },
-                "required": ["description", "activity_type", "confidence"]
+                "required": ["description", "confidence"]
             }
         }
     })
@@ -162,7 +174,7 @@ fn parse_vision(content: &str, model: &str) -> VisionAnalysis {
                 return VisionAnalysis {
                     description: desc,
                     activity_type: normalize_activity(v.activity_type),
-                    app_hint: v.app_hint.filter(|s| !s.trim().is_empty() && s != "null"),
+                    app_hint: normalize_app_hint(v.app_hint),
                     confidence: normalize_confidence(v.confidence),
                     model: model.to_string(),
                 };
@@ -188,6 +200,15 @@ fn normalize_activity(raw: Option<String>) -> Option<String> {
         .copied()
         .find(|&a| a == label.as_str())
         .map(str::to_string)
+}
+
+/// Keeps a real application name, dropping empties and the literal string `"null"` — the
+/// model sometimes emits `null`/`NULL`/`Null` as *text* instead of a JSON null, so the
+/// match is case-insensitive (`07` #20). The surviving value is trimmed.
+fn normalize_app_hint(raw: Option<String>) -> Option<String> {
+    let hint = raw?;
+    let trimmed = hint.trim();
+    (!trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("null")).then(|| trimmed.to_string())
 }
 
 /// Coerces a model-supplied confidence into a real score or the unknown sentinel. Only a
@@ -263,10 +284,57 @@ mod tests {
     }
 
     #[test]
-    fn null_app_hint_string_becomes_none() {
-        let reply = r#"{"description":"x","app_hint":"null","confidence":0.1}"#;
+    fn null_app_hint_string_is_dropped_case_insensitively() {
+        // The model sometimes emits the *text* "null" instead of a JSON null, in any case
+        // and with stray whitespace — none of these should be stored as an app name.
+        for raw in ["null", "NULL", "Null", "  null  "] {
+            let reply = format!(r#"{{"description":"x","app_hint":"{raw}","confidence":0.1}}"#);
+            let v = parse_vision(&reply, "m");
+            assert!(v.app_hint.is_none(), "app_hint {raw:?} must be None");
+        }
+    }
+
+    #[test]
+    fn app_hint_is_trimmed_and_kept_when_real() {
+        let reply = r#"{"description":"x","app_hint":"  VS Code  ","confidence":0.1}"#;
         let v = parse_vision(reply, "m");
-        assert!(v.app_hint.is_none());
+        assert_eq!(v.app_hint.as_deref(), Some("VS Code"));
+    }
+
+    #[test]
+    fn explicit_null_activity_type_becomes_none() {
+        // The schema permits `null` for an unidentifiable activity; it must not be coerced
+        // into a label.
+        let reply = r#"{"description":"A blank desktop","activity_type":null,"confidence":0.4}"#;
+        let v = parse_vision(reply, "m");
+        assert!(v.activity_type.is_none());
+        assert!((v.confidence - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn response_format_allows_null_activity_and_drops_it_from_required() {
+        let fmt = vision_response_format();
+        let schema = &fmt["json_schema"]["schema"];
+        let activity = &schema["properties"]["activity_type"];
+        // Nullable type and a `null` member in the enum, so the grammar can decline.
+        assert!(activity["type"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t == "null"));
+        assert!(activity["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.is_null()));
+        // Only description + confidence are forced; activity_type is optional.
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(required, ["description", "confidence"]);
     }
 
     #[test]

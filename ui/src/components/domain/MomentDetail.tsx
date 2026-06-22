@@ -31,6 +31,15 @@ function Meta({ label, value }: { label: string; value: string | null | undefine
 
 export function MomentDetail({ detail, onQueueVision, queueing }: MomentDetailProps) {
   const { vision } = detail;
+  // A negative confidence is the "unknown" sentinel (the model gave no usable score);
+  // surface it as n/a rather than a misleading -100%.
+  const confidenceChip = vision ? (
+    vision.confidence >= 0 ? (
+      <Chip tone="accent">{Math.round(vision.confidence * 100)}%</Chip>
+    ) : (
+      <Chip tone="neutral">n/a</Chip>
+    )
+  ) : undefined;
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
@@ -66,14 +75,7 @@ export function MomentDetail({ detail, onQueueVision, queueing }: MomentDetailPr
           </div>
         </Panel>
 
-        <Panel
-          title="Vision"
-          action={
-            vision ? (
-              <Chip tone="accent">{Math.round(vision.confidence * 100)}%</Chip>
-            ) : undefined
-          }
-        >
+        <Panel title="Vision" action={confidenceChip}>
           {vision ? (
             <div className="flex flex-col gap-3">
               <p className="text-body text-ink font-body">{vision.description}</p>
