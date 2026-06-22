@@ -18,7 +18,7 @@ use kernel::{process_job, CaptureFactory, Kernel};
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
     CaptureConfig, CaptureSource, Embedding, EmbeddingProvider, JobKind, NewFrame, NewJob,
-    OcrProvider, OcrResult, Readiness, Result, SearchQuery, Store,
+    OcrProvider, OcrResult, Readiness, Result, SearchQuery, Store, VisionAnalysis, VisionProvider,
 };
 
 /// A deterministic embedder: maps each text to a pre-registered vector (so the
@@ -153,7 +153,7 @@ async fn process_job_embeds_text_and_completes() {
         .unwrap()
         .pop()
         .expect("a job to claim");
-    process_job(&store, &embedder, &data_dir, job)
+    process_job(&store, &embedder, None, &data_dir, job)
         .await
         .unwrap();
 
@@ -181,7 +181,7 @@ async fn process_job_completes_on_empty_ocr_without_embedding() {
         .unwrap()
         .pop()
         .unwrap();
-    process_job(&store, &embedder, &PathBuf::from("."), job)
+    process_job(&store, &embedder, None, &PathBuf::from("."), job)
         .await
         .unwrap();
 
@@ -210,7 +210,7 @@ async fn process_job_dead_letters_missing_frame_id() {
         .unwrap()
         .pop()
         .unwrap();
-    process_job(&store, &embedder, &PathBuf::from("."), job)
+    process_job(&store, &embedder, None, &PathBuf::from("."), job)
         .await
         .unwrap();
 
@@ -239,7 +239,7 @@ async fn process_job_retries_then_dead_letters_on_persistent_embed_failure() {
         .unwrap()
         .pop()
         .unwrap();
-    process_job(&store, &embedder, &data_dir, job)
+    process_job(&store, &embedder, None, &data_dir, job)
         .await
         .unwrap();
     assert_eq!(store.job_stats().await.unwrap().pending, 1);
@@ -252,7 +252,7 @@ async fn process_job_retries_then_dead_letters_on_persistent_embed_failure() {
         .unwrap()
         .pop()
         .expect("the retried job is reclaimable past its backoff");
-    process_job(&store, &embedder, &data_dir, job)
+    process_job(&store, &embedder, None, &data_dir, job)
         .await
         .unwrap();
 
@@ -293,7 +293,7 @@ async fn process_job_embeds_image_from_disk() {
         .unwrap()
         .pop()
         .unwrap();
-    process_job(&store, &embedder, &data_dir, job)
+    process_job(&store, &embedder, None, &data_dir, job)
         .await
         .unwrap();
 
@@ -321,7 +321,7 @@ async fn process_job_dead_letters_embed_image_when_file_missing() {
         .unwrap()
         .pop()
         .unwrap();
-    process_job(&store, &embedder, &data_dir, job)
+    process_job(&store, &embedder, None, &data_dir, job)
         .await
         .unwrap();
 
@@ -412,4 +412,105 @@ async fn attach_embedder_drains_backlog_and_vector_arm_finds_frame() {
     assert_eq!(hits[0].frame_id, fid);
 
     kernel.stop_workers().await;
+}
+
+// --- vision_tag routing (P4): process_job drives the fake vision provider ----------
+
+/// A vision provider that returns a fixed analysis (no sidecar) so the worker's
+/// `vision_tag` path is exercised on any platform.
+struct FakeVision {
+    description: String,
+}
+
+#[async_trait]
+impl VisionProvider for FakeVision {
+    async fn analyze(&self, _image: &RgbaImage) -> Result<VisionAnalysis> {
+        Ok(VisionAnalysis {
+            description: self.description.clone(),
+            activity_type: Some("coding".to_string()),
+            app_hint: Some("VS Code".to_string()),
+            confidence: 0.9,
+            model: "fake-vision".to_string(),
+        })
+    }
+}
+
+fn vision_tag_job(frame_id: Option<i64>) -> NewJob {
+    NewJob {
+        kind: JobKind::VisionTag,
+        frame_id,
+        priority: 10,
+        max_attempts: 3,
+        not_before: 0,
+    }
+}
+
+/// A claimed `vision_tag` job runs the provider and writes the analysis to the store.
+#[tokio::test]
+async fn process_job_vision_tag_writes_analysis() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+
+    let concrete = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = concrete.clone();
+    let fid = store.insert_frame(new_frame(8_000)).await.unwrap(); // image_path = frames/8000.jpg
+    store.enqueue_job(vision_tag_job(Some(fid))).await.unwrap();
+
+    // Write a real JPEG where the worker resolves it.
+    let abs = data_dir.join("frames").join("8000.jpg");
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255])))
+        .to_rgb8()
+        .save(&abs)
+        .unwrap();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MapEmbedder::new());
+    let vision: Arc<dyn VisionProvider> = Arc::new(FakeVision {
+        description: "a Rust editor with tests".to_string(),
+    });
+
+    let job = store
+        .claim_jobs(&[JobKind::VisionTag], 1, 1)
+        .await
+        .unwrap()
+        .pop()
+        .expect("a vision_tag job to claim");
+    process_job(&store, &embedder, Some(&vision), &data_dir, job)
+        .await
+        .unwrap();
+
+    assert_eq!(store.job_stats().await.unwrap().done, 1);
+    let frame = concrete
+        .get_frame(fid)
+        .await
+        .unwrap()
+        .expect("frame exists");
+    let analysis = frame.vision.expect("vision analysis was written");
+    assert_eq!(analysis.description, "a Rust editor with tests");
+    assert_eq!(frame.activity_type.as_deref(), Some("coding")); // mirrored onto the frame
+}
+
+/// With no vision provider attached, a `vision_tag` job retries (stays pending) rather
+/// than failing — the backlog drains once the sidecar comes up (`03 §6`).
+#[tokio::test]
+async fn process_job_vision_tag_retries_without_provider() {
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let fid = store.insert_frame(new_frame(9_000)).await.unwrap();
+    store.enqueue_job(vision_tag_job(Some(fid))).await.unwrap();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MapEmbedder::new());
+    let job = store
+        .claim_jobs(&[JobKind::VisionTag], 1, 1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    process_job(&store, &embedder, None, &PathBuf::from("."), job)
+        .await
+        .unwrap();
+
+    let stats = store.job_stats().await.unwrap();
+    assert_eq!(stats.pending, 1, "no provider → retry, not fail");
+    assert_eq!(stats.dead, 0);
+    assert_eq!(stats.done, 0);
 }

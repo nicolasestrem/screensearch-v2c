@@ -2,6 +2,8 @@
 //! plus the assembled per-frame read used by the `get_frame` IPC command
 //! (`03 §3/§4/§7`).
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension};
 use traits::{FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, VisionAnalysis};
 
@@ -111,6 +113,67 @@ impl SqliteStore {
                 )
                 .optional()?;
             Ok(row)
+        })
+        .await
+    }
+
+    /// Frame ids with no `vision_analysis` row yet, oldest first, capped at `limit`,
+    /// optionally within `[start, end)` capture time. Feeds the timer/idle vision
+    /// batch and the `enqueue_vision` range target (`03 §5`).
+    pub async fn untagged_frame_ids(
+        &self,
+        limit: u32,
+        range: Option<(i64, i64)>,
+    ) -> Result<Vec<i64>> {
+        self.with_conn(move |conn| {
+            // Build the query once, appending the optional time-window predicate and
+            // binding every value as an anonymous positional `?` (in push order).
+            let mut sql = String::from(
+                "SELECT f.id FROM frames f
+                 LEFT JOIN vision_analysis v ON v.frame_id = f.id
+                 WHERE v.frame_id IS NULL",
+            );
+            let mut args: Vec<i64> = Vec::new();
+            if let Some((start, end)) = range {
+                sql.push_str(" AND f.captured_at >= ? AND f.captured_at < ?");
+                args.push(start);
+                args.push(end);
+            }
+            sql.push_str(" ORDER BY f.captured_at ASC LIMIT ?");
+            args.push(i64::from(limit));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let ids = stmt
+                .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
+        .await
+    }
+
+    /// Bulk-fetches OCR text for many frames in one `IN (…)` query (the `ask`
+    /// grounding hydrate, `03 §7/§13.5`). Only frames with non-empty text are returned.
+    pub async fn ocr_texts(&self, frame_ids: &[i64]) -> Result<HashMap<i64, String>> {
+        if frame_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = frame_ids.to_vec();
+        self.with_conn(move |conn| {
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "SELECT frame_id, text FROM ocr_text
+                 WHERE frame_id IN ({placeholders}) AND text <> ''"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?;
+            let mut map = HashMap::new();
+            for row in rows {
+                let (id, text) = row?;
+                map.insert(id, text);
+            }
+            Ok(map)
         })
         .await
     }

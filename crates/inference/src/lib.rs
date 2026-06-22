@@ -6,10 +6,35 @@
 //! (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) so it can never orphan after a crash —
 //! a hard requirement; P4 does not ship until the no-orphan test passes (`03 §6`).
 //!
-//! **Status:** P0 scaffold — no implementation yet. The Job-Object lifecycle lands
-//! first in **P4**, before any real inference wiring (`02 §5`, `04 §3`).
+//! **Status (P4):** the Job-Object lifecycle lands first (`02 §5`, `04 §3`). The
+//! [`job_object`] + [`process`] modules implement the no-orphan binding (assign a
+//! suspended child to a `KILL_ON_JOB_CLOSE` job, then resume); real inference wiring
+//! (supervisor, HTTP client, providers) builds on top of it.
 //!
-//! (No `forbid(unsafe_code)` here: the P4 Job-Object path uses `unsafe` Win32 FFI.)
+//! (No `forbid(unsafe_code)` here: the Job-Object path uses `unsafe` Win32 FFI.)
 
-/// The contracts this crate implements (impls arrive in P4).
+/// The contracts this crate implements.
 pub use traits::{AnswerProvider, VisionProvider};
+
+pub mod client;
+pub mod download;
+pub mod models;
+
+#[cfg(windows)]
+pub mod answer;
+#[cfg(windows)]
+pub mod job_object;
+#[cfg(windows)]
+pub mod process;
+#[cfg(windows)]
+pub mod supervisor;
+#[cfg(windows)]
+pub mod vision;
+
+// The composition root (`src-tauri`) wires these concrete impls (`03 §2`).
+#[cfg(windows)]
+pub use answer::AnswerSidecar;
+#[cfg(windows)]
+pub use supervisor::{ModelSupervisor, SupervisorConfig};
+#[cfg(windows)]
+pub use vision::VisionSidecar;

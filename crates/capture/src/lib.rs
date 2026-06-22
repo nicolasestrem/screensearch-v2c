@@ -21,10 +21,12 @@ use tokio::sync::oneshot;
 use traits::{CaptureConfig, CaptureSource, CapturedFrame, MonitorInfo, Result};
 
 mod diff;
+mod idle;
 mod monitors;
 mod privacy;
 mod wgc;
 
+pub use idle::user_idle_ms;
 use wgc::CaptureRequest;
 
 /// WGC-backed capture source. Owns the channel to the capture worker thread, the

@@ -230,6 +230,12 @@ impl Store for SqliteStore {
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>> {
         SqliteStore::frame_enrichment_input(self, frame_id).await
     }
+    async fn untagged_frame_ids(&self, limit: u32, range: Option<(i64, i64)>) -> Result<Vec<i64>> {
+        SqliteStore::untagged_frame_ids(self, limit, range).await
+    }
+    async fn ocr_texts(&self, frame_ids: &[i64]) -> Result<std::collections::HashMap<i64, String>> {
+        SqliteStore::ocr_texts(self, frame_ids).await
+    }
     async fn enqueue_job(&self, job: NewJob) -> Result<i64> {
         SqliteStore::enqueue_job(self, job).await
     }

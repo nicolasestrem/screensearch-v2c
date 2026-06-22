@@ -9,18 +9,31 @@
 //! The inference sidecar lands in P4.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
-    CaptureControl, CaptureSource, CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail,
-    JobStats, OcrProvider, OcrResult, Readiness, SearchHit, SearchQuery, Store,
+    AnswerDelta, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
+    ComponentReadiness, ComponentStatus, FrameDetail, JobStats, ModelLane, OcrProvider, OcrResult,
+    Readiness, RetrievedChunk, SearchHit, SearchQuery, SetModelTier, Store, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
-use kernel::{CaptureFactory, Kernel, KernelEvent};
+use inference::{AnswerSidecar, ModelSupervisor, SupervisorConfig, VisionSidecar};
+use kernel::{CaptureFactory, IdleSource, Kernel, KernelEvent};
 use store::SqliteStore;
+
+/// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
+/// on first run / large quants).
+const SIDECAR_HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
+/// Top-K retrieved chunks used as grounding context for an `ask` (`07` decision).
+const ASK_TOP_K: u32 = 8;
+
+/// A slot the composition root fills off the launch thread, shared with command
+/// handlers (the sidecar supervisor + the concrete tiered providers).
+type SharedSlot<T> = Arc<StdMutex<Option<T>>>;
 
 /// App-wide state owned by the composition root and shared with command handlers.
 struct AppState {
@@ -32,6 +45,13 @@ struct AppState {
     /// Readiness used only when there is no kernel (DB-open failure); otherwise the
     /// live snapshot comes from the kernel.
     fallback_readiness: Readiness,
+    /// The sidecar supervisor, filled once the binary resolves off-thread (P4). Held
+    /// here so app exit can shut the sidecar down cleanly.
+    supervisor: SharedSlot<Arc<ModelSupervisor>>,
+    /// The concrete tiered providers, for `set_model_tier` (the kernel only holds them
+    /// as `dyn` traits, which can't switch tier).
+    vision: SharedSlot<Arc<VisionSidecar>>,
+    answer: SharedSlot<Arc<AnswerSidecar>>,
 }
 
 /// Liveness probe for the typed IPC bridge (P0 smoke test, retained).
@@ -107,6 +127,125 @@ async fn capture_control(
     }
 }
 
+/// Enqueue deferred vision tagging for a frame or a time range (`enqueue_vision`,
+/// `03 §7`). Returns the number of `vision_tag` jobs enqueued. This is the on-demand
+/// trigger; results land asynchronously and surface via `job_progress` + `get_frame`.
+#[tauri::command]
+async fn enqueue_vision(target: VisionTarget, state: State<'_, AppState>) -> Result<u64, String> {
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable (database not open)".to_string())?;
+    kernel
+        .enqueue_vision(target)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Ask a grounded question about the screen history (`ask`, `03 §7/§13.5`). Returns
+/// immediately; the answer streams back as `answer_delta` events. Retrieves the top-K
+/// chunks via hybrid search, grounds the answer in their full OCR text, and runs the
+/// answer provider on a background task that forwards each delta to the UI.
+#[tauri::command]
+async fn ask(
+    request: AskRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable".to_string())?;
+    let answer = kernel
+        .answer_provider()
+        .await
+        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+
+    // Retrieve grounding context: top-K hybrid hits, each with its full OCR text
+    // (falling back to the search snippet if the text isn't available).
+    let hits = store
+        .hybrid_search(&SearchQuery {
+            text: request.query.clone(),
+            limit: ASK_TOP_K,
+            time_range: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    // Hydrate grounding text in a single bulk query (avoid an N+1 over the hits),
+    // falling back to each hit's snippet when a frame has no OCR text.
+    let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    let ocr = store.ocr_texts(&frame_ids).await.unwrap_or_default();
+    let context: Vec<RetrievedChunk> = hits
+        .into_iter()
+        .map(|hit| {
+            let text = ocr.get(&hit.frame_id).cloned().unwrap_or(hit.snippet);
+            RetrievedChunk {
+                frame_id: hit.frame_id,
+                text,
+                score: hit.score,
+                captured_at: hit.captured_at,
+            }
+        })
+        .collect();
+
+    // Stream: the provider sends typed deltas on `tx`; a forwarder emits each as an
+    // `answer_delta` event. Both end when the provider finishes (tx drops → rx closes).
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<AnswerDelta>(64);
+    let emitter = app.clone();
+    tokio::spawn(async move {
+        while let Some(delta) = rx.recv().await {
+            let _ = emitter.emit("answer_delta", delta);
+        }
+    });
+    let opts = AnswerOpts {
+        thinking: request.thinking,
+        max_tokens: request.max_tokens,
+    };
+    let query = request.query;
+    tokio::spawn(async move {
+        let _ = answer.answer(&query, &context, opts, tx).await;
+    });
+    Ok(())
+}
+
+/// Change the active model tier for a lane (`set_model_tier`, `03 §7`). Persists the
+/// choice to settings and applies it to the live provider; the sidecar switches to the
+/// new GGUF on the lane's next request (`03 §6`).
+#[tauri::command]
+async fn set_model_tier(request: SetModelTier, state: State<'_, AppState>) -> Result<(), String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    let value = serde_json::to_string(&request.tier).map_err(|e| e.to_string())?;
+    let key = match request.lane {
+        ModelLane::Vision => "models.vision_tier",
+        ModelLane::Answer => "models.answer_tier",
+    };
+    store
+        .set_setting(key, &value)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match request.lane {
+        ModelLane::Vision => {
+            if let Some(v) = state.vision.lock().expect("vision slot").clone() {
+                v.set_tier(request.tier);
+            }
+        }
+        ModelLane::Answer => {
+            if let Some(a) = state.answer.lock().expect("answer slot").clone() {
+                a.set_tier(request.tier);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Application entry point (called from `main.rs`).
 pub fn run() {
     tauri::Builder::default()
@@ -141,8 +280,15 @@ pub fn run() {
                 ))
             });
 
-            // Forward kernel events to the UI, and kick off the off-thread embedding
-            // model load (P3) — app launch is never blocked on the first-run download.
+            // Slots filled off the launch thread (P4 inference), shared with command
+            // handlers and the exit path.
+            let supervisor_slot: SharedSlot<Arc<ModelSupervisor>> = Arc::new(StdMutex::new(None));
+            let vision_slot: SharedSlot<Arc<VisionSidecar>> = Arc::new(StdMutex::new(None));
+            let answer_slot: SharedSlot<Arc<AnswerSidecar>> = Arc::new(StdMutex::new(None));
+
+            // Forward kernel events to the UI, and kick off the off-thread model loads
+            // (P3 embeddings + P4 inference) — app launch is never blocked on the
+            // first-run downloads.
             if let (Some(kernel), Some(store)) = (&kernel, &store) {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(forward_events(kernel.clone(), handle));
@@ -154,12 +300,30 @@ pub fn run() {
                 let models_dir = data_dir.join("models").join("fastembed");
                 let dyn_store: Arc<dyn Store> = store.clone();
                 tauri::async_runtime::spawn(init_embeddings(kernel.clone(), dyn_store, models_dir));
+
+                // Resolve the sidecar binary + wire the inference providers off-thread.
+                kernel.set_sidecar_readiness(
+                    ComponentStatus::Initializing,
+                    Some("resolving llama-server".to_string()),
+                );
+                let dyn_store: Arc<dyn Store> = store.clone();
+                tauri::async_runtime::spawn(init_inference(
+                    kernel.clone(),
+                    dyn_store,
+                    data_dir.clone(),
+                    supervisor_slot.clone(),
+                    vision_slot.clone(),
+                    answer_slot.clone(),
+                ));
             }
 
             app.manage(AppState {
                 store,
                 kernel,
                 fallback_readiness: readiness,
+                supervisor: supervisor_slot,
+                vision: vision_slot,
+                answer: answer_slot,
             });
             Ok(())
         })
@@ -169,18 +333,29 @@ pub fn run() {
             get_job_stats,
             get_frame,
             search,
-            capture_control
+            capture_control,
+            enqueue_vision,
+            ask,
+            set_model_tier
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // On exit, stop the worker pool so an in-flight embed finishes cleanly.
-            // Best-effort only: a job left `running` is requeued by the startup
-            // stale-job sweep on the next launch (`03 §6`).
+            // On exit, stop the vision scheduler + worker pool so in-flight work
+            // finishes cleanly, then shut the sidecar down. Best-effort: a job left
+            // `running` is requeued by the startup stale-job sweep, and the Job Object
+            // would terminate the sidecar anyway (`03 §6`).
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
                 if let Some(kernel) = state.kernel.clone() {
-                    tauri::async_runtime::block_on(kernel.stop_workers());
+                    tauri::async_runtime::block_on(async {
+                        kernel.stop_vision_scheduler().await;
+                        kernel.stop_workers().await;
+                    });
+                }
+                let supervisor = state.supervisor.lock().expect("supervisor slot").clone();
+                if let Some(supervisor) = supervisor {
+                    tauri::async_runtime::block_on(supervisor.shutdown());
                 }
             }
         });
@@ -222,6 +397,100 @@ async fn init_embeddings(kernel: Arc<Kernel>, store: Arc<dyn Store>, models_dir:
     }
 }
 
+/// Resolves the `llama-server` binary off the launch thread, builds the
+/// [`ModelSupervisor`] + the tiered vision/answer providers, and attaches them to the
+/// kernel (P4, `03 §6`). Lazy by design: the sidecar binary is fetched now, but models
+/// download — and the process spawns — only on the first real request. `sidecar`
+/// readiness reflects progress (Initializing → Ready / Unavailable), and the
+/// supervisor's lifecycle transitions are bridged into the kernel's event bus.
+async fn init_inference(
+    kernel: Arc<Kernel>,
+    store: Arc<dyn Store>,
+    data_dir: PathBuf,
+    supervisor_slot: SharedSlot<Arc<ModelSupervisor>>,
+    vision_slot: SharedSlot<Arc<VisionSidecar>>,
+    answer_slot: SharedSlot<Arc<AnswerSidecar>>,
+) {
+    let sidecar_dir = data_dir.join("sidecar");
+    let models_root = data_dir.join("models");
+    if let Err(e) = std::fs::create_dir_all(&sidecar_dir) {
+        kernel.set_sidecar_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
+        return;
+    }
+
+    // Fetch the prebuilt Vulkan llama-server (idempotent; skipped if already present).
+    let binary = match inference::download::ensure_binary(&sidecar_dir).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "llama-server unavailable");
+            kernel.set_sidecar_readiness(
+                ComponentStatus::Unavailable,
+                Some(format!("llama-server unavailable: {e}")),
+            );
+            return;
+        }
+    };
+
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    let config = SupervisorConfig {
+        binary,
+        pidfile: sidecar_dir.join("llama-server.pid"),
+        idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
+        health_timeout: SIDECAR_HEALTH_TIMEOUT,
+    };
+    let supervisor = match ModelSupervisor::new(config) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "model supervisor init failed");
+            kernel.set_sidecar_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
+            return;
+        }
+    };
+
+    let vision = Arc::new(VisionSidecar::new(
+        supervisor.clone(),
+        models_root.clone(),
+        settings.models_vision_tier,
+        settings.sidecar_ngl,
+    ));
+    let answer = Arc::new(AnswerSidecar::new(
+        supervisor.clone(),
+        models_root,
+        settings.models_answer_tier,
+        settings.sidecar_ngl,
+    ));
+    *vision_slot.lock().expect("vision slot") = Some(vision.clone());
+    *answer_slot.lock().expect("answer slot") = Some(answer.clone());
+    *supervisor_slot.lock().expect("supervisor slot") = Some(supervisor.clone());
+
+    // Bridge the supervisor's lifecycle transitions into the kernel (updates `sidecar`
+    // readiness + re-broadcasts as `sidecar_status`).
+    {
+        let kernel = kernel.clone();
+        let mut rx = supervisor.subscribe();
+        tauri::async_runtime::spawn(async move {
+            while let Ok(status) = rx.recv().await {
+                kernel.emit_sidecar_status(status);
+            }
+        });
+    }
+
+    // Idle source for idle-triggered tagging (the kernel forbids `unsafe`).
+    let idle: IdleSource = Arc::new(capture::user_idle_ms);
+    kernel
+        .attach_inference(
+            vision as Arc<dyn traits::VisionProvider>,
+            answer as Arc<dyn traits::AnswerProvider>,
+            Some(idle),
+        )
+        .await;
+    kernel.set_sidecar_readiness(
+        ComponentStatus::Ready,
+        Some("ready (model downloads + spawns on first use)".to_string()),
+    );
+    tracing::info!("inference attached; sidecar ready (lazy spawn)");
+}
+
 /// Forwards [`KernelEvent`]s onto the Tauri event bus for the WebView2 UI (`03 §7`).
 async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
     use tokio::sync::broadcast::error::RecvError;
@@ -236,6 +505,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             }
             Ok(KernelEvent::JobProgress(stats)) => {
                 let _ = app.emit("job_progress", stats);
+            }
+            Ok(KernelEvent::SidecarStatus(status)) => {
+                let _ = app.emit("sidecar_status", status);
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")

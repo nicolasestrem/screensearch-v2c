@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — P4 Inference sidecar (2026-06-21)
+- **No-orphan guarantee, proven first** (`02 §2`, `03 §6`, DoD #7): the `llama-server`
+  sidecar is bound to a Windows **Job Object** with `KILL_ON_JOB_CLOSE`, and the child
+  is assigned to it **before** its main thread resumes — so if the app dies for any
+  reason, the OS takes the sidecar down with it. A cross-process test (kill the parent,
+  assert the child dies) is the gate; it passes.
+- **Model supervisor** (`03 §6`): lazy spawn on first use, `/health`-gated startup,
+  idle eviction after `sidecar.idle_ttl_secs`, crash restart, a startup **reap** of a
+  stray sidecar from a prior run (pidfile + image-path sentinel — never an unrelated
+  process), and model switching (stop + restart with a new GGUF; vision adds `--mmproj`).
+- **Vision tagging** (`03 §3/§5`): on-demand (the `enqueue_vision` command), plus
+  opt-in **timer** and **idle** producers (`GetLastInputInfo`) that batch still-untagged
+  frames — never real-time. The worker runs the frame's JPEG through the sidecar and
+  stores the analysis.
+- **Grounded, streaming answers** (`03 §13.5`): the `ask` command retrieves top-K
+  hybrid hits, grounds the answer in their OCR text, and streams typed `answer_delta`
+  events — `thinking` trace, answer tokens, and one citation per source frame. Reasoning
+  is handled both as a `reasoning_content` field and as inline `<think>` tags.
+- **Tiered models, runtime-downloaded, Rust-only** (`MODEL_REGISTRY`, `01 §5`): vision +
+  answer each offer Default/Quality/Beta via `set_model_tier`. The `llama-server` binary
+  (prebuilt Vulkan release) and the GGUF weights (+ same-repo mmproj) download on first
+  use — the binary from GitHub, the models via `hf-hub` (no Python in the runtime).
+- New IPC: `ask`, `enqueue_vision`, `set_model_tier` commands; `answer_delta` +
+  `sidecar_status` events; `sidecar` readiness now tracks the supervisor's lifecycle.
+- Real end-to-end inference (download + GPU) is covered by `#[ignore]`d smoke tests
+  (`cargo test -p inference --test smoke -- --ignored`); the always-green suite proves
+  the lifecycle, the HTTP client (against a mock), and the providers deterministically.
+
+### Fixed — P4 sidecar binary resolution (2026-06-22)
+- **Resilient llama.cpp release selection** — `ensure_binary` previously read GitHub's
+  single `/releases/latest`, which fails with `no win-vulkan-x64 asset in the latest
+  llama.cpp release` whenever that release ships an **incomplete asset set** (llama.cpp's
+  CI occasionally publishes a build with only a partial set of platform zips — observed:
+  `b9753` had 1 asset, no Vulkan zip). Resolution now scans the recent-releases list and
+  takes the newest release that actually carries the `*-win-vulkan-x64.zip` asset. Pure
+  selector `pick_vulkan_from_releases` is unit-tested (incomplete-newest-then-complete,
+  newest-wins, none-found). Vulkan stays the shipped lane — it is vendor-neutral and runs
+  on Blackwell GPUs (RTX 50-series) where the prebuilt `cuda-12.4` asset would not.
+
 ### Fixed — P3 review (PR #7, 2026-06-21)
 - **Stale-job recovery** never misses a job now: the startup sweep requeues every
   `running` job unconditionally, and `claim` + the periodic sweep share one DB clock

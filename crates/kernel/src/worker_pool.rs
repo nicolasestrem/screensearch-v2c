@@ -10,15 +10,20 @@
 //! the minimal recovery.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
-use traits::{ChunkSource, EmbeddingProvider, Job, JobKind, Store};
+use traits::{ChunkSource, EmbeddingProvider, Job, JobKind, Store, VisionProvider};
 
 use crate::events::KernelEvent;
+
+/// Shared, runtime-settable vision provider slot (`None` until the inference sidecar
+/// is attached). Behind an `Arc<RwLock>` so the kernel can attach the provider after
+/// the pool is already running without restarting it (`03 §6`).
+pub(crate) type VisionSlot = Arc<RwLock<Option<Arc<dyn VisionProvider>>>>;
 
 /// Idle poll floor — how long a worker waits after an empty claim before retrying.
 const IDLE_MIN: Duration = Duration::from_millis(250);
@@ -64,6 +69,10 @@ enum Outcome {
 pub(crate) struct Shared {
     pub store: Arc<dyn Store>,
     pub embedder: Arc<dyn EmbeddingProvider>,
+    /// The vision provider, attached after the sidecar comes up (`None` until then).
+    /// `vision_tag` jobs only exist once a producer (command/timer/idle) enqueues them,
+    /// which only happens after the provider is attached, so a `None` here is defensive.
+    pub vision: VisionSlot,
     /// App-data root; `frames.image_path` is stored relative to it (`frames/…`).
     pub data_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
@@ -133,8 +142,17 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         };
         match claimed {
             Some(job) => {
-                if let Err(e) =
-                    process_job(&shared.store, &shared.embedder, &shared.data_dir, job).await
+                // Snapshot the vision provider out of the shared slot before the await
+                // (the std RwLock guard must not cross it).
+                let vision = shared.vision.read().expect("vision slot lock").clone();
+                if let Err(e) = process_job(
+                    &shared.store,
+                    &shared.embedder,
+                    vision.as_ref(),
+                    &shared.data_dir,
+                    job,
+                )
+                .await
                 {
                     tracing::warn!(error = %e, "worker: finalizing job failed");
                 }
@@ -182,14 +200,14 @@ async fn emit_progress(shared: &Shared) {
 pub async fn process_job(
     store: &Arc<dyn Store>,
     embedder: &Arc<dyn EmbeddingProvider>,
+    vision: Option<&Arc<dyn VisionProvider>>,
     data_dir: &Path,
     job: Job,
 ) -> Result<()> {
     let outcome = match job.kind {
         JobKind::EmbedText => embed_text_outcome(store, embedder, job.frame_id).await,
         JobKind::EmbedImage => embed_image_outcome(store, embedder, data_dir, job.frame_id).await,
-        // vision_tag is never claimed by P3 workers; defensive only.
-        JobKind::VisionTag => Outcome::DeadLetter("vision_tag is not handled until P4".to_string()),
+        JobKind::VisionTag => vision_tag_outcome(store, vision, data_dir, job.frame_id).await,
     };
     match outcome {
         Outcome::Complete => store.complete_job(job.id).await,
@@ -290,6 +308,50 @@ async fn embed_image_outcome(
     {
         Ok(()) => Outcome::Complete,
         Err(e) => Outcome::Retry(format!("upsert image embedding: {e}")),
+    }
+}
+
+/// Run deferred vision tagging on a frame's stored JPEG via the sidecar provider
+/// (`03 §5`). Image-load handling mirrors [`embed_image_outcome`]: a transient IO
+/// error retries, a genuinely missing file is dead-lettered. A purged frame is a
+/// no-op success. A sidecar/analyze error is retryable (the sidecar may be restarting).
+async fn vision_tag_outcome(
+    store: &Arc<dyn Store>,
+    vision: Option<&Arc<dyn VisionProvider>>,
+    data_dir: &Path,
+    frame_id: Option<i64>,
+) -> Outcome {
+    let Some(frame_id) = frame_id else {
+        return Outcome::DeadLetter("vision_tag job has no frame_id".to_string());
+    };
+    let Some(vision) = vision else {
+        // A vision_tag job exists but no provider is attached yet — retry; the
+        // backlog drains once the sidecar comes up (`03 §6`).
+        return Outcome::Retry("vision provider not attached".to_string());
+    };
+    let input = match store.get_enrichment_input(frame_id).await {
+        Ok(Some(i)) => i,
+        Ok(None) => return Outcome::Complete, // frame purged between enqueue and run
+        Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
+    };
+    let abs = data_dir.join(&input.image_path);
+    let image = match load_rgba(abs.clone()).await {
+        Ok(img) => img,
+        Err(e) => {
+            return if abs.exists() {
+                Outcome::Retry(format!("load image {}: {e}", abs.display()))
+            } else {
+                Outcome::DeadLetter(format!("image missing {}: {e}", abs.display()))
+            };
+        }
+    };
+    let analysis = match vision.analyze(&image).await {
+        Ok(a) => a,
+        Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e}")),
+    };
+    match store.insert_vision(frame_id, analysis).await {
+        Ok(()) => Outcome::Complete,
+        Err(e) => Outcome::Retry(format!("insert vision {frame_id}: {e}")),
     }
 }
 
