@@ -715,3 +715,74 @@ a backlog drain stays cheap. Timeline excluded (capture density). Added `searchP
 to `queryKeys`. The surgical fix (a richer `job_completed { kind, frame_id }` event) needs a backend
 change — `07` #30. Verify: `npm run build` `✓ built in 1.08s`, `npm run lint` clean. Behavioral proof
 (Moment refetches after a vision tag) lands with the M3/M4 screens that consume these queries.
+
+## P5 (M3+M4) — Recall, Deck, Timeline, Moment (`feat/p5-screens`, PR #12)
+
+The data-bearing screen bodies on top of the M1+M2 foundation. One pivotal fork was surfaced to the
+user before building (not guessed): the Timeline contract (hover thumbnails, Enter-opens-a-Moment)
+and the Deck (jump-back-in) need to map a time/recency onto real frames, but the merged M0 backend
+exposed only density buckets. The user approved adding a thin frame-browsing backend slice (`07`
+#31) — so this PR opens with a backend precursor commit, then the screens.
+
+### Implemented
+- **Backend slice** (`crates/store/src/frames.rs`, inherent `SqliteStore` methods — mirrors
+  `get_frame`, no `Store`-trait change): `frames_in_range(start,end,limit)` (newest-first, half-open)
+  and `nearest_frame(at)` (closest on either side, at-or-after wins ties; `i128` distance so hostile
+  timestamps can't overflow). Commands `get_frames` / `get_nearest_frame`; new ts-rs `FrameMeta`
+  (added to the `no_bigint_in_ipc_types` guard). Two `:memory:` integration tests.
+- **Frontend IPC** — `getFrames`/`getNearestFrame` wrappers, `useFrames` query, `frames` key family
+  (distinct from the singular `frame` detail); `capture_tick` now also invalidates the frames list.
+  Helpers `lib/time.ts` (relative + absolute, 24-h clock) and `lib/timeRanges.ts` (day-snapped,
+  key-stable windows).
+- **Domain components** (`components/domain/`): `FrameImage` (lazy, async-decoded, intrinsic w/h →
+  no CLS, dev-safe placeholder), `FrameTile`, `SearchResult` (FTS `[match]` highlighting),
+  `AnswerStream` (react-markdown + GFM `prose-deck`, collapsible `<details>` thinking, citation
+  tiles), `JobQueueMeter`, `ScanlineTimeline` (canvas density ribbon via a shared `drawDensityRibbon`,
+  devicePixelRatio-crisp, token colors read from computed style, DOM scan-head + glow + scanline
+  texture, `role="slider"` with valuemin/max/now/text, pointer + keyboard scrub), `TimelineMinimap`
+  (thin reuse of the same draw fn), `MomentDetail`.
+- **Screens, all five states each** (`routes/`): Deck (capture hero + today aggregates + minimap +
+  recents + queue meter; onboarding empty, enrichment-pending partial), Recall (mode-toggled
+  virtualized search via `@tanstack/react-virtual` + streamed Ask, degraded-mode banners), Timeline
+  (ScanlineTimeline + range presets + `?t=` deep link; Enter → `get_nearest_frame` → `/timeline/:id`),
+  Moment (`MomentDetail` + prev/next + neighbour strip + on-demand "Tag with vision").
+- **Token addition:** `--glow-scan` + Tailwind `shadow-scan` — the one place glow is spent (the
+  scan-head halo), kept token-driven (no hardcoded shadow in components).
+
+### Skipped / deferred
+- Width-derived timeline `bucket_count` — fixed 240 is ample (`07` #32).
+- A richer `job_completed { kind, frame_id }` event for surgical invalidation — still `07` #30.
+- Insights + Settings screens are M5 (still `ScreenScaffold` placeholders, untouched here).
+
+### Still risky / watch
+- **Concurrent ask** unchanged — `useAsk`'s single-flight guard holds; true concurrency needs the
+  backend request-id (`07` #28).
+- **Hover-thumbnail bias** — preview thumbnails come from the newest-first window sample, so a very
+  dense window biases the *preview* toward recent frames; the *open* is always exact via
+  `get_nearest_frame` (`07` #31).
+- **Native-window screenshots are not automatable** — Playwright drives the Vite browser (no Tauri
+  IPC → degraded states only). Populated states were captured from the live WebView via `PrintWindow`
+  for this pass; that is a manual verification aid, not a CI artifact.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check                 # clean
+$ cargo build --workspace                    # Finished `dev` in 22.05s
+$ cargo test --workspace                     # all pass; store: 35 passed (incl. 2 new frames tests)
+$ cargo clippy --workspace --all-targets -- -D warnings   # Finished, no warnings
+$ git status --porcelain ui/src/bindings/    # ?? ui/src/bindings/FrameMeta.ts (only the new file)
+$ npm run typecheck   # ui/  — clean
+$ npm run lint        # ui/  — clean (Rules-of-Hooks gate)
+$ npm run build       # ui/  — ✓ built in 2.02s; initial JS ≈ 87 KB gzip
+                      #   (react-vendor 68.14 + query 11.08 + index 8.24); react-markdown isolated
+                      #   in the lazy Recall chunk (57.89 gz); route chunks 2–3 KB gz each
+```
+**Observed running** — `npm run dev` (root = `tauri dev`) booted the integrated app: store opened
+(schema v1), WinRT OCR ready, vision scheduler started, inference attached (lazy sidecar), fastembed
+loaded, embedding workers started — no panic; the new commands compiled into the registered handler.
+Live WebView captures confirmed the **populated** path: the Deck rendered real frame thumbnails
+(images served via the asset protocol), the today minimap, top-apps aggregates, and the queue meter,
+live-updating across captures (71→82 frames, done 76→87 — proving the `capture_tick`/`job_progress`
+cache invalidation refreshes in real time); the Timeline rendered the real density ribbon + scan-head.
+Degraded states (Playwright vs `npm run dev` localhost:5173, no Tauri runtime): Deck error/retry,
+Recall search + ask invites with the mode toggle, Timeline error + range presets, the ⌘K palette.

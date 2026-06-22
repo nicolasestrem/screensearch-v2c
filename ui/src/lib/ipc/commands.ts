@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Readiness } from "../../bindings/Readiness";
 import type { JobStats } from "../../bindings/JobStats";
 import type { FrameDetail } from "../../bindings/FrameDetail";
+import type { FrameMeta } from "../../bindings/FrameMeta";
 import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { SearchHit } from "../../bindings/SearchHit";
 import type { CaptureControl } from "../../bindings/CaptureControl";
@@ -53,6 +54,16 @@ export const setModelTier = (request: SetModelTier): Promise<void> =>
 /** Frame-count density buckets over `[start, end)` for the Scanline Timeline. */
 export const getTimeline = (range: TimeRange, bucketCount: number): Promise<TimelineBucket[]> =>
   invoke<TimelineBucket[]>("get_timeline", { range, bucketCount });
+
+/** Lightweight frame list over `[start, end)`, newest-first, capped at `limit`
+ *  (timeline thumbnails, deck recents, moment neighbours). */
+export const getFrames = (range: TimeRange, limit: number): Promise<FrameMeta[]> =>
+  invoke<FrameMeta[]>("get_frames", { range, limit });
+
+/** The frame whose capture time is nearest `at` (unix ms), or `null` if the DB has
+ *  no frames — resolves a timeline scan-head position to a concrete frame. */
+export const getNearestFrame = (at: number): Promise<FrameMeta | null> =>
+  invoke<FrameMeta | null>("get_nearest_frame", { at });
 
 /** Truthful activity aggregates over `[start, end)` for the Insights screen. */
 export const getInsights = (range: TimeRange): Promise<InsightsSummary> =>

@@ -18,6 +18,10 @@ export const queryKeys = {
   timeline: (range: TimeRange, bucketCount: number) => ["timeline", range, bucketCount] as const,
   framePrefix: ["frame"] as const,
   frame: (frameId: number) => ["frame", frameId] as const,
+  // Frame *lists* (FrameMeta) — distinct from the singular `frame` detail above.
+  // A new capture (`capture_tick`) invalidates every range/limit variant at once.
+  framesPrefix: ["frames"] as const,
+  frames: (range: TimeRange, limit: number) => ["frames", range, limit] as const,
   insightsPrefix: ["insights"] as const,
   insights: (range: TimeRange) => ["insights", range] as const,
 };

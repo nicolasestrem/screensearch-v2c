@@ -55,6 +55,19 @@ export function useTimeline(range: TimeRange, bucketCount: number, enabled = tru
   });
 }
 
+/**
+ * Lightweight frame list over a window, newest-first (timeline thumbnails, deck
+ * recents). Invalidated (debounced) by `capture_tick` as new frames land. Idle for
+ * an empty/invalid window so we never ask for the whole table.
+ */
+export function useFrames(range: TimeRange, limit: number, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.frames(range, limit),
+    queryFn: () => cmd.getFrames(range, limit),
+    enabled: enabled && limit > 0 && range.end > range.start,
+  });
+}
+
 /** One frame's full detail; idle until a frame id is selected. */
 export function useFrame(frameId: number | null) {
   return useQuery({
