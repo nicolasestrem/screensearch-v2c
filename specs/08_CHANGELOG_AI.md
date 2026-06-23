@@ -11,6 +11,24 @@
 
 ---
 
+## 2026-06-23 — Refresh root `CLAUDE.md` (`docs/refresh-claude-md`)
+- **Change:** Docs-only refresh of the root `CLAUDE.md`. (1) Rewrote the "current state" line —
+  was "specification complete, no application code yet; build starts at P0", now "P0–P5 complete
+  and merged to `main`, in post-merge hardening". (2) Replaced the non-working app command
+  `cargo tauri dev`/`cargo tauri build` with `npm run tauri dev`/`npm run build`. (3) Rewrote the
+  Build/verify section to match `.github/workflows/ci.yml`: UI-before-cargo order, `npm run lint`
+  gate, `clippy --all-targets`, `build/test --workspace`, the `git diff --exit-code -- ui/src/
+  bindings` guard, Rust 1.82 / Node 22. (4) Added a "Where the code lives" 9-crate + `ui/` map.
+- **Why:** The headline and app command were ~1 month stale and actively misleading (an agent
+  could try to scaffold from scratch or run a command that fails — `cargo-tauri` is not installed).
+  Brings the operating manual back in line with the code, CI, and `package.json` without weakening
+  the "specs are the source of truth" stance. No code, schema, or behavior change.
+- **Verification:** Cross-checked every command against `.github/workflows/ci.yml`, root
+  `package.json`, and `Cargo.toml`; re-read `CLAUDE.md` — no remaining reference to "no application
+  code yet", "build starts at P0", or `cargo tauri dev`.
+
+---
+
 ## 2026-06-22 — P5 (M3+M4) PR #12 review fixes (`feat/p5-screens`)
 - **Change:** Addressed the `claude-review` findings on PR #12. (1) Fixed a high-priority Moment bug:
   prev/next + the context strip were sourced from `get_frames([at−30m, at+30m), 24)`, but

@@ -7,7 +7,9 @@ A standalone, **Windows-only**, local-first desktop app (Rust + Tauri 2) that ca
 makes it searchable by text and meaning, and answers questions about it — fully on-device. This is
 a **clean-slate** project; it shares no code or data with any prior version.
 
-**Current state: specification complete, no application code yet.** The build starts at P0.
+**Current state: P0–P5 complete and merged to `main` (2026-06-21 → 06-23); now in post-merge
+hardening / review passes.** The full app exists — a 9-crate Rust workspace + a React/TS UI. The
+specs remain the contract; the build-loop docs (`05`/`06`/`07`/`08`) are the live status of record.
 
 ## ⛔ Read the spec before doing anything (mandatory order)
 1. `specs/01_PROJECT_CONTEXT.md` — what is true today (env, constraints, non-goals)
@@ -23,6 +25,17 @@ Re-read each session — the files are the source of truth, not your memory.
 - *Why / scope / phases* → `02` · *Constraints / non-goals* → `01` · *How (schema, traits, job
   queue, sidecar, settings, DoD)* → `03` · *UI* → `UI_REFERENCE.md` · *Exact model repos/quants*
   → `MODEL_REGISTRY.md` · *How to operate* → `04`.
+
+## Where the code lives
+- `src-tauri/` — Tauri 2 shell + composition root (wires all impls; commands/IPC).
+- `crates/traits` — module contracts + shared types · `crates/kernel` — orchestrator (event bus,
+  worker pool, model supervisor, vision scheduler) · `crates/store` — SQLite + sqlite-vec + FTS5
+  store & job queue · `crates/capture` — WGC capture + diff gate + privacy · `crates/ocr` — WinRT
+  Media.Ocr · `crates/embeddings` — fastembed (in-process ONNX) · `crates/inference` — llama.cpp
+  sidecar client + Job-Object supervisor · `crates/doctor` — env smoke-check.
+- `ui/` — React + TS + Vite; typed IPC bindings are generated into `ui/src/bindings/` — never
+  hand-edit them.
+- Module crates depend on `traits` only, never on each other's impls (`Cargo.toml`, spec `03 §2`).
 
 ## Hard rules (non-negotiable)
 - **Stop at ambiguity.** Spec explicit → implement exactly. Spec silent → STOP, ask, append to
@@ -47,12 +60,17 @@ Re-read each session — the files are the source of truth, not your memory.
 - **UI:** typed IPC via `ts-rs` only; every view defines all states (loading/empty/error/partial/
   populated); Rules-of-Hooks is an error-level gate; tokens only (no hardcoded hex/font/spacing).
 
-## Build/verify (once P0 has scaffolded the workspace)
-- Rust: `cargo fmt --all -- --check` · `cargo clippy --workspace -- -D warnings` ·
-  `cargo build` · `cargo test`
-- UI: `cd ui && npm ci && npm run build`
-- App: `cargo tauri dev` / `cargo tauri build`
-Paste the verbatim output when reporting status.
+## Build/verify (matches CI — `.github/workflows/ci.yml`)
+Order matters: build the UI first — `src-tauri`'s `generate_context!` embeds `ui/dist` (git-ignored),
+so cargo fails if the UI hasn't been built.
+1. UI: `cd ui && npm ci && npm run lint && npm run build`  (lint = Rules-of-Hooks error gate)
+2. Rust: `cargo fmt --all -- --check` · `cargo clippy --workspace --all-targets -- -D warnings` ·
+   `cargo build --workspace` · `cargo test --workspace`
+3. Binding guard: `cargo test` regenerates the ts-rs bindings —
+   `git diff --exit-code -- ui/src/bindings` must be clean (commit regenerated bindings, or CI fails).
+- Run the app: `npm run tauri dev` (NOT `cargo tauri dev` — `cargo-tauri` is not installed).
+  Package: `npm run build`.
+- Toolchain: Rust 1.82, Node 22. Paste verbatim output when reporting status.
 
 ## Build-loop notes (keep current)
 Append your work record to `specs/05_BUILD_REVIEW.md`, `06_PATCH_PLAN.md`, `07_KNOWN_GAPS.md`,

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — Refreshed root `CLAUDE.md` to current state (2026-06-23)
+- **Corrected the stale "current state" headline.** It claimed *"specification complete, no
+  application code yet — the build starts at P0"*; it now reflects reality: **P0–P5 complete and
+  merged to `main`, in post-merge hardening**, with a 9-crate Rust workspace + React/TS UI.
+- **Fixed the app run/build command.** Replaced `cargo tauri dev` / `cargo tauri build` (no
+  `cargo-tauri` installed) with `npm run tauri dev` / `npm run build`.
+- **Made Build/verify match CI.** Documented the UI-before-cargo order (`generate_context!` embeds
+  the git-ignored `ui/dist`), the `npm run lint` gate, `--all-targets` on clippy, `--workspace` on
+  build/test, the `git diff --exit-code -- ui/src/bindings` binding guard, and the Rust 1.82 / Node
+  22 toolchain.
+- **Added a compact "Where the code lives" crate map** so an agent can orient without reading the
+  full spec. No code or behavior changes.
+
 ### Fixed — P4 sidecar hardening (2026-06-23)
 - **Model switches no longer cut off active sidecar requests.** `ModelSupervisor` now serializes
   sidecar leases, so a lane/tier switch waits for the current answer stream or vision tag request to
