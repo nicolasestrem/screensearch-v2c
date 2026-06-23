@@ -4,8 +4,8 @@
 // Model tiers additionally hot-apply the moment they change (useSetModelTier), so the
 // running providers switch without waiting for Save. Every field labels *when* it
 // takes effect — tiers now, the answer thinking flag on the next question, capture/
-// storage/privacy on the next capture start, enrichment/sidecar on restart — matching
-// the backend's honest apply policy (no fictional live reconfiguration, `03 §8`).
+// storage/privacy on the next capture start, workers after save, and sidecar launch
+// options on the next sidecar launch.
 //
 // States (§4): loading → skeleton; error → load failed + retry; partial → models
 // still downloading (noted in the Models panel); populated → the form. Settings has
@@ -97,7 +97,8 @@ export function Component() {
   const settings = useSettings();
   const readiness = useReadiness();
   const monitors = useMonitors();
-  const sidecarDevices = useSidecarDevices();
+  const sidecarReady = readiness.data?.sidecar.status === "ready";
+  const sidecarDevices = useSidecarDevices(sidecarReady);
   const setSettings = useSetSettings();
   const setTier = useSetModelTier();
 
@@ -208,12 +209,22 @@ export function Component() {
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const saving = setSettings.isPending;
   const toggleMonitor = (index: number) => {
-    const next = draft.capture_monitors.includes(index)
-      ? draft.capture_monitors.filter((m) => m !== index)
-      : [...draft.capture_monitors, index].sort((a, b) => a - b);
+    let next: number[];
+    if (draft.capture_monitors.length === 0 && monitors.data?.length) {
+      next = monitors.data.map((m) => m.index).filter((i) => i !== index);
+    } else {
+      next = draft.capture_monitors.includes(index)
+        ? draft.capture_monitors.filter((m) => m !== index)
+        : [...draft.capture_monitors, index].sort((a, b) => a - b);
+    }
+    if (monitors.data?.length && next.length === monitors.data.length) {
+      next = [];
+    }
     set("capture_monitors", next);
     setMonitorsText(next.join(", "));
   };
+  const detectedSidecarDevices = sidecarDevices.data ?? [];
+  const hasDetectedSidecarDevices = detectedSidecarDevices.length > 0;
 
   // Partial state — surface that models may still be starting: while the readiness
   // probe is in flight, or either lane is still "unknown" (pre-init) / "initializing".
@@ -361,13 +372,13 @@ export function Component() {
             label="Embed OCR text"
             checked={draft.enrich_embed_text}
             onChange={(v) => set("enrich_embed_text", v)}
-            hint={`Index recognised text as vectors for semantic search. ${APPLY_NOW}`}
+            hint={`Index recognised text as vectors for semantic search. Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
           />
           <Toggle
             label="Embed images"
             checked={draft.enrich_image_embeddings}
             onChange={(v) => set("enrich_image_embeddings", v)}
-            hint={`Also embed frame images (more compute). ${APPLY_NOW}`}
+            hint={`Also embed frame images (more compute). Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
           />
           <Field
             label="Worker concurrency"
@@ -426,29 +437,32 @@ export function Component() {
             onChange={intHandler("sidecar_ngl")}
             hint={`How many model layers to offload to the GPU. ${APPLY_SIDECAR}`}
           />
-          <Select
-            label="Device"
-            value={draft.sidecar_device ?? ""}
-            onChange={(e) => set("sidecar_device", e.currentTarget.value || null)}
-            options={[
-              { value: "", label: "Automatic" },
-              ...(sidecarDevices.data ?? []).map((d) => ({ value: d, label: d })),
-              ...(draft.sidecar_device && !(sidecarDevices.data ?? []).includes(draft.sidecar_device)
-                ? [{ value: draft.sidecar_device, label: draft.sidecar_device }]
-                : []),
-            ]}
-            hint={
-              sidecarDevices.isError
-                ? `Device list unavailable; manual value below is still saved. ${APPLY_SIDECAR}`
-                : APPLY_SIDECAR
-            }
-          />
-          <Field
-            label="Manual device"
-            value={draft.sidecar_device ?? ""}
-            onChange={(e) => set("sidecar_device", e.currentTarget.value.trim() || null)}
-            hint="Example: Vulkan0. Leave empty for automatic."
-          />
+          {hasDetectedSidecarDevices ? (
+            <Select
+              label="Device"
+              value={draft.sidecar_device ?? ""}
+              onChange={(e) => set("sidecar_device", e.currentTarget.value || null)}
+              options={[
+                { value: "", label: "Automatic" },
+                ...detectedSidecarDevices.map((d) => ({ value: d, label: d })),
+                ...(draft.sidecar_device && !detectedSidecarDevices.includes(draft.sidecar_device)
+                  ? [{ value: draft.sidecar_device, label: draft.sidecar_device }]
+                  : []),
+              ]}
+              hint={APPLY_SIDECAR}
+            />
+          ) : (
+            <Field
+              label="Device"
+              value={draft.sidecar_device ?? ""}
+              onChange={(e) => set("sidecar_device", e.currentTarget.value.trim() || null)}
+              hint={
+                sidecarDevices.isError
+                  ? `Device list unavailable; enter a llama.cpp device id such as Vulkan0. ${APPLY_SIDECAR}`
+                  : `Device list appears after sidecar initialization; enter a manual id such as Vulkan0 if needed. ${APPLY_SIDECAR}`
+              }
+            />
+          )}
         </div>
       </Panel>
     </div>

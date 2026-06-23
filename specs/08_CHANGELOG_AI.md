@@ -11,6 +11,20 @@
 
 ---
 
+## 2026-06-23 — PR #19 review follow-up (`codex/p5-comprehensive-review-fixes`)
+- **Change:** Addressed all actionable PR #19 comments. Fixed the ask-task insertion/removal race by
+  locking the active-task map before spawning the provider task; made retention log and continue when
+  a single DB delete fails; fixed monitor toggling from the empty/all-monitors state; gated/refreshed
+  sidecar device listing on sidecar readiness; removed the simultaneous Select + manual sidecar
+  device controls; updated stale toast comments; renamed `uuid_like_id` to `next_ask_id`; documented
+  the sidecar-device parser heuristic; and clarified embed-toggle apply timing in Settings/docs.
+- **Why:** Reviewers found a real task-map leak race, a retention "poison pill" failure mode, and
+  confusing Settings UX/labels. The `enrichTimer` cleanup comment was verified as already fixed in
+  `HEAD` and required no code change.
+- **Verification:** Final command output is recorded in the task response after rerunning the gates.
+
+---
+
 ## 2026-06-23 — P5 comprehensive review hardening (`codex/p5-comprehensive-review-fixes`)
 - **Change:** Implemented the approved P5 comprehensive review fix plan. Backend changes include
   range-aware `get_nearest_frame(at, range?)`, IPC clamping for frame/timeline/insights reads,

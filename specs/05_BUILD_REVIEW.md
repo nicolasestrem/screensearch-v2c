@@ -1096,6 +1096,35 @@ retention, and sidecar-device gaps without changing the packaging decision.
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `npm --prefix ui run build`
 
+## Pass — 2026-06-23 — PR #19 review follow-up (`codex/p5-comprehensive-review-fixes` branch)
+
+**Scope.** Addressed every actionable PR #19 comment from Gemini, Claude, and Codex on the P5
+comprehensive review hardening PR.
+
+**Changes.**
+- Fixed the active ask-task race by locking the task map before spawning the provider task, so an
+  immediately-completing task cannot miss its cleanup insertion/removal ordering.
+- Made retention robust to a single frame delete failure: the sweeper logs the failed DB delete and
+  continues with later candidates instead of letting one frame block all pruning.
+- Fixed monitor toggling from the default empty/all-monitors state by expanding to all-but-clicked,
+  and normalizing an explicit all-selected list back to empty.
+- Refetched sidecar devices when readiness becomes ready and only runs the device query once the
+  sidecar binary is resolved. Settings now shows either a device Select or a manual Field, not both.
+- Clarified embed-toggle apply timing: worker claiming updates after save, while capture enqueueing
+  changes on the next capture start. Updated docs/spec tracking accordingly.
+- Cleaned smaller comments: stale toast-store transport comment, `uuid_like_id` → `next_ask_id`, and
+  an explanatory comment for the llama.cpp device-id parser threshold.
+- Verified the Claude `enrichTimer` cleanup comment was already addressed in `HEAD`; no extra code
+  change was needed there.
+
+**Verification.** Rerun after this follow-up before pushing:
+- `cargo fmt --all -- --check`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run typecheck`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `npm --prefix ui run build`
+
 ---
 
 ## Pass — 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening` branch)

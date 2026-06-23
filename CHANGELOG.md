@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change, monitor selection uses real `get_monitors` data with a manual fallback, Timeline/Insights
   bucket counts adapt to chart width, and advanced llama.cpp device selection uses
   `--list-devices` / `--device` through the optional `sidecar.device` setting.
+- **PR #19 review follow-up:** fixed ask-task cleanup race, made retention continue past a
+  per-frame DB delete failure, corrected monitor toggling from the default "all monitors" state,
+  refreshed sidecar devices when readiness becomes ready, removed redundant device controls, and
+  clarified that capture enqueue settings apply on the next capture start while worker claiming
+  updates after save.
 - Packaging remains deferred as the separate DoD §13.9 follow-up.
 
 ### Docs — Refreshed root `CLAUDE.md` to current state (2026-06-23)

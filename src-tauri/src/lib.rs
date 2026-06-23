@@ -46,7 +46,7 @@ const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const DAY_MS: i64 = 86_400_000;
 static NEXT_ASK_ID: AtomicU64 = AtomicU64::new(1);
 
-fn uuid_like_id() -> u64 {
+fn next_ask_id() -> u64 {
     NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -224,7 +224,7 @@ async fn ask(
         .request_id
         .clone()
         .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| format!("legacy-{}", uuid_like_id()));
+        .unwrap_or_else(|| format!("legacy-{}", next_ask_id()));
     let store = state
         .store
         .clone()
@@ -287,13 +287,13 @@ async fn ask(
         max_tokens: request.max_tokens,
     };
     let query = request.query;
-    let tasks = state.ask_tasks.clone();
+    let mut tasks = state.ask_tasks.lock().await;
+    let tasks_clone = state.ask_tasks.clone();
     let task_request_id = request_id.clone();
     let handle = tokio::spawn(async move {
         let _ = answer.answer(&query, &context, opts, tx).await;
-        tasks.lock().await.remove(&task_request_id);
+        tasks_clone.lock().await.remove(&task_request_id);
     });
-    let mut tasks = state.ask_tasks.lock().await;
     if let Some(old) = tasks.insert(request_id, handle) {
         old.abort();
     }
@@ -901,6 +901,8 @@ fn parse_sidecar_device_ids(output: &str) -> Vec<String> {
             .next()
             .unwrap_or_default()
             .trim();
+        // llama.cpp device ids are at least four characters (`CUDA0`,
+        // `Vulkan0`, `Metal`, etc.); shorter tokens are usually log noise.
         if token.len() >= 4
             && token.chars().any(|c| c.is_ascii_digit())
             && token
@@ -943,10 +945,10 @@ async fn run_retention_once(
     let mut purged = 0_u64;
     for frame in candidates {
         let image_path = safe_frame_path(data_dir, &frame.image_path);
-        store
-            .delete_frame(frame.frame_id)
-            .await
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = store.delete_frame(frame.frame_id).await {
+            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not delete frame from database");
+            continue;
+        }
         if let Some(path) = image_path {
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {

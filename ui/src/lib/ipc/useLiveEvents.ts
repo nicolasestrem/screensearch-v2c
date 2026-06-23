@@ -39,6 +39,9 @@ export function useLiveEvents() {
     track(
       listenTo("readiness_changed", (readiness) => {
         qc.setQueryData(queryKeys.readiness, readiness);
+        if (readiness.sidecar.status === "ready") {
+          qc.invalidateQueries({ queryKey: queryKeys.sidecarDevices });
+        }
       }),
     );
 
