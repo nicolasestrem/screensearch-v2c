@@ -6,11 +6,13 @@
 //!
 //! Shutdown mirrors the capture loop: one `watch` channel stops every worker after
 //! its in-flight job. A periodic sweep requeues jobs a dead worker left `running`
-//! (`03 §6`, `07` gap #6) — there is no per-job lease, so a visibility timeout is
-//! the minimal recovery.
+//! (`03 §6`, `07` gap #6). There is no durable per-job lease, so the sweep avoids
+//! requeueing while this process still has live in-flight jobs; startup recovery
+//! still requeues any `running` jobs before workers are spawned.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -73,6 +75,11 @@ pub(crate) struct Shared {
     /// `vision_tag` jobs only exist once a producer (command/timer/idle) enqueues them,
     /// which only happens after the provider is attached, so a `None` here is defensive.
     pub vision: VisionSlot,
+    /// Job ids currently being processed by this worker pool. The periodic sweep
+    /// uses this as a process-local guard so long-running provider calls can still
+    /// record their final retry/dead-letter outcome instead of being requeued out
+    /// from under themselves.
+    pub active_jobs: Arc<Mutex<HashSet<i64>>>,
     /// App-data root; `frames.image_path` is stored relative to it (`frames/…`).
     pub data_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
@@ -125,6 +132,37 @@ impl Drop for WorkerPool {
     }
 }
 
+struct ActiveJobGuard {
+    active_jobs: Arc<Mutex<HashSet<i64>>>,
+    id: i64,
+}
+
+impl ActiveJobGuard {
+    fn new(active_jobs: Arc<Mutex<HashSet<i64>>>, id: i64) -> Self {
+        active_jobs
+            .lock()
+            .expect("active job set lock poisoned")
+            .insert(id);
+        Self { active_jobs, id }
+    }
+}
+
+impl Drop for ActiveJobGuard {
+    fn drop(&mut self) {
+        self.active_jobs
+            .lock()
+            .expect("active job set lock poisoned")
+            .remove(&self.id);
+    }
+}
+
+fn active_job_count(active_jobs: &Mutex<HashSet<i64>>) -> usize {
+    active_jobs
+        .lock()
+        .expect("active job set lock poisoned")
+        .len()
+}
+
 /// One worker: claim a job, process it, emit progress; back off when the queue is
 /// empty; stop promptly when signalled.
 async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
@@ -142,6 +180,7 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         };
         match claimed {
             Some(job) => {
+                let _active = ActiveJobGuard::new(shared.active_jobs.clone(), job.id);
                 // Snapshot the vision provider out of the shared slot before the await
                 // (the std RwLock guard must not cross it).
                 let vision = shared.vision.read().expect("vision slot lock").clone();
@@ -178,6 +217,11 @@ async fn sweep_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
             biased;
             _ = stop.changed() => break,
             _ = tokio::time::sleep(SWEEP_INTERVAL) => {
+                let active = active_job_count(&shared.active_jobs);
+                if active > 0 {
+                    tracing::debug!(active, "sweep: skipped while worker jobs are active");
+                    continue;
+                }
                 match shared.store.reset_stale_running_jobs(VISIBILITY_TIMEOUT_MS).await {
                     Ok(n) if n > 0 => tracing::warn!(requeued = n, "sweep: requeued stale running jobs"),
                     Ok(_) => {}
@@ -362,4 +406,22 @@ async fn load_rgba(path: PathBuf) -> Result<image::RgbaImage> {
     })
     .await
     .map_err(|e| anyhow!("image decode task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_job_guard_tracks_in_flight_job_until_drop() {
+        let active_jobs = Arc::new(Mutex::new(HashSet::new()));
+        assert_eq!(active_job_count(&active_jobs), 0);
+
+        {
+            let _guard = ActiveJobGuard::new(active_jobs.clone(), 42);
+            assert_eq!(active_job_count(&active_jobs), 1);
+        }
+
+        assert_eq!(active_job_count(&active_jobs), 0);
+    }
 }

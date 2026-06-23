@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -244,6 +245,7 @@ impl Kernel {
             store: self.store.clone(),
             embedder,
             vision: self.vision.clone(),
+            active_jobs: Arc::new(std::sync::Mutex::new(HashSet::new())),
             data_dir,
             events: self.events.clone(),
             kinds,

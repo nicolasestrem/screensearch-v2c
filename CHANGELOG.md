@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P0/P1 store hardening (2026-06-23)
+- **Job finalization now requires a claimed running job.** `complete_job` and `fail_job` no longer
+  rewrite pending, done, or dead jobs by id alone. This protects the durable queue state machine from
+  stale-worker finalization after a retry, dead-letter, or stale-running recovery.
+- **Older builds reject newer database schemas.** Opening a SQLite store with a `schema_version`
+  greater than the compiled migration set now fails clearly instead of reporting the DB as ready.
+- **PR #15 review follow-up:** the future-schema guard now derives the supported version from the
+  compiled `MIGRATIONS` set and debug-asserts that `LATEST_SCHEMA_VERSION` stays in sync. The
+  future-schema regression test now uses `tempfile::tempdir`, with `tempfile` centralized in workspace
+  dependency versions for Rust tests.
+- **PR #15 Codex review follow-up:** the periodic enrichment stale-job sweep now skips while the
+  current worker pool has in-flight jobs. A long but live provider call stays `running`, so its later
+  retry/dead-letter failure is accounted by `fail_job` instead of being requeued out from under the
+  worker. Startup recovery still requeues leftover `running` jobs before workers start.
+- Added regression tests for pending/done/dead job finalization and future-schema rejection. No IPC,
+  `ts-rs`, schema, or trait signatures changed.
+
 ### Fixed — Vision-tagging quality (2026-06-22)
 - **Vision tags no longer record a fabricated confidence.** The vision prompt previously showed a
   literal `"confidence": 0.0`, which the model echoed — so every tag was stored with a `0.0`

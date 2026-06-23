@@ -50,6 +50,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 # dev-only: a localhost mock of the sidecar's OpenAI HTTP API for client tests.
 wiremock = "0.6"
+tempfile = "3"
 
 # Runtime model + binary downloads (Rust-only, no Python — 01 §5, MODEL_REGISTRY §4).
 # hf-hub pulls GGUF/mmproj from HuggingFace; zip unpacks the prebuilt llama.cpp Vulkan

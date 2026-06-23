@@ -87,6 +87,32 @@ async fn open_in_memory_migrates_to_latest_schema_version() {
     );
 }
 
+#[test]
+fn open_path_rejects_future_schema_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("screensearch.db");
+
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE schema_version (version INTEGER NOT NULL);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?1)",
+            [store::LATEST_SCHEMA_VERSION + 1],
+        )
+        .unwrap();
+    }
+
+    let err = match SqliteStore::open_path(&db) {
+        Ok(_) => panic!("future schema opened successfully"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("newer schema_version"),
+        "future schema should be rejected, got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn settings_round_trip_and_overwrite() {
     let store = SqliteStore::open_in_memory().unwrap();
@@ -526,6 +552,35 @@ async fn complete_job_moves_to_done() {
 }
 
 #[tokio::test]
+async fn complete_job_requires_running_state() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store
+        .enqueue_job(job(JobKind::EmbedText, 0, 3, 0))
+        .await
+        .unwrap();
+
+    let pending_err = store.complete_job(id).await.unwrap_err().to_string();
+    assert!(
+        pending_err.contains("not running"),
+        "pending job completion should be rejected, got {pending_err:?}"
+    );
+    assert_eq!(store.job_stats().await.unwrap().pending, 1);
+
+    store
+        .claim_jobs(&[JobKind::EmbedText], 10, 100)
+        .await
+        .unwrap();
+    store.complete_job(id).await.unwrap();
+    assert_eq!(store.job_stats().await.unwrap().done, 1);
+
+    let done_err = store.complete_job(id).await.unwrap_err().to_string();
+    assert!(
+        done_err.contains("not running"),
+        "completed job should not be completed again, got {done_err:?}"
+    );
+}
+
+#[tokio::test]
 async fn fail_retries_with_backoff_then_dead_letters_at_max_attempts() {
     let store = SqliteStore::open_in_memory().unwrap();
     let id = store
@@ -581,6 +636,62 @@ async fn fail_without_retry_at_dead_letters_immediately() {
     // retry_at = None → terminal even though attempts remain
     store.fail_job(id, "fatal", None).await.unwrap();
     assert_eq!(store.job_stats().await.unwrap().dead, 1);
+}
+
+#[tokio::test]
+async fn fail_job_requires_running_state() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store
+        .enqueue_job(job(JobKind::EmbedText, 0, 2, 0))
+        .await
+        .unwrap();
+
+    let pending_err = store
+        .fail_job(id, "not claimed", Some(500))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        pending_err.contains("not running"),
+        "pending job failure should be rejected, got {pending_err:?}"
+    );
+    let stats = store.job_stats().await.unwrap();
+    assert_eq!(stats.pending, 1);
+    assert_eq!(stats.dead, 0);
+
+    store
+        .claim_jobs(&[JobKind::EmbedText], 10, 100)
+        .await
+        .unwrap();
+    store.fail_job(id, "retryable", Some(500)).await.unwrap();
+    assert_eq!(store.job_stats().await.unwrap().pending, 1);
+
+    let retry_pending_err = store
+        .fail_job(id, "still not claimed", Some(700))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        retry_pending_err.contains("not running"),
+        "retry-pending job failure should be rejected, got {retry_pending_err:?}"
+    );
+
+    store
+        .claim_jobs(&[JobKind::EmbedText], 10, 500)
+        .await
+        .unwrap();
+    store.fail_job(id, "fatal", None).await.unwrap();
+    assert_eq!(store.job_stats().await.unwrap().dead, 1);
+
+    let dead_err = store
+        .fail_job(id, "already dead", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        dead_err.contains("not running"),
+        "dead job failure should be rejected, got {dead_err:?}"
+    );
 }
 
 #[tokio::test]

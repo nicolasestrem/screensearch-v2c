@@ -625,3 +625,66 @@
   real-GPU gated smoke `real_vision_tags_an_image` **passed** on the RTX 5060 Ti — `VISION: The screen
   is divided into two vertical sections … | activity=None | conf=-1` (honest decline on the low-signal
   synthetic frame; the test asserts confidence ∈ {-1.0} ∪ (0,1] and activity ∈ {none} ∪ the set).
+
+## 2026-06-23 — P0/P1 review findings fix (`codex/fix-p0-p1-review-findings`)
+- **Context:** a scrupulous review of Phase 0/Phase 1 found two P1 data-spine hardening issues: job
+  finalization was keyed by id only (so pending/done/dead jobs could be rewritten), and a DB with a
+  future `schema_version` opened as if it were compatible.
+- **Change:** `complete_job` and `fail_job` now finalize only `state='running'` rows and return
+  `"missing or not running"` errors otherwise. `bootstrap_and_migrate` now rejects
+  `schema_version > LATEST_SCHEMA_VERSION` before applying migrations. Added regression tests:
+  `complete_job_requires_running_state`, `fail_job_requires_running_state`, and
+  `open_path_rejects_future_schema_version`.
+- **Why:** this preserves the `03 §5` queue state machine (`claim_jobs` → run → finalize) and the
+  `03 §12` forward-only migration guarantee. No IPC, `ts-rs`, schema, or trait interface changed.
+- **Verification (verbatim):**
+  `cargo test -p store --test store complete_job_requires_running_state -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo test -p store --test store fail_job_requires_running_state -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo test -p store --test store open_path_rejects_future_schema_version -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo fmt --all -- --check` exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0;
+  `cargo test --workspace` exit 0 (store integration tests now **39 passed**; traits **32 passed**);
+  `npm --prefix ui run build` exit 0 (`✓ built in 2.21s`);
+  `npm --prefix ui run lint` exit 0;
+  `git diff --exit-code -- ui/src/bindings` exit 0.
+
+## 2026-06-23 — PR #15 review follow-up (`codex/fix-p0-p1-review-findings`)
+- **Context:** PR #15 received two unresolved Gemini review threads after the initial P0/P1 hardening
+  commit. Both were actionable and compatible with the existing store design.
+- **(1) Schema-version guard source of truth.** `bootstrap_and_migrate` now derives `max_version` from
+  the maximum version in `schema::MIGRATIONS` and rejects `schema_version > max_version`. A
+  `debug_assert_eq!` catches any drift between `LATEST_SCHEMA_VERSION` and the compiled migrations in
+  development/test builds, while the public constant stays available for readiness/status and tests.
+- **(2) Temp DB cleanup in regression test.** `open_path_rejects_future_schema_version` now uses
+  `tempfile::tempdir()` instead of manually composing and removing a directory under the OS temp path.
+  `tempfile` is now a workspace dependency for Rust tests, and the existing kernel dev-dependency was
+  switched to the centralized version to avoid drift.
+- **Why:** this tightens the future-schema rejection around the migration set the binary actually
+  contains and makes the test robust to panics without changing IPC, `ts-rs`, schema SQL, or trait
+  interfaces.
+
+## 2026-06-23 — PR #15 Codex review follow-up (`codex/fix-p0-p1-review-findings`)
+- **Context:** a new Codex review thread on `crates/store/src/jobs.rs` pointed out a production
+  interaction between the stricter `fail_job(... state='running')` guard and the kernel's periodic
+  stale-running sweep: a long but live provider call could be requeued to `pending` after the
+  visibility timeout, then fail later and lose retry/dead-letter accounting because it no longer owned
+  a `running` row.
+- **Change:** `kernel::worker_pool` now tracks this process's active job ids in a small
+  `Arc<Mutex<HashSet<i64>>>`. Each worker holds an RAII guard while `process_job` awaits provider work;
+  the periodic sweep checks that set and skips requeueing while any current-pool job is in flight.
+  Startup recovery still calls `reset_stale_running_jobs(0)` before workers are spawned, so prior-run
+  leftovers are still recovered.
+- **Why not loosen `fail_job`:** the store has no durable claim token. Allowing `fail_job` to mutate a
+  `pending` row after stale requeue would reintroduce stale-worker finalization by id alone, and an old
+  worker could also race with a newly claimed `running` row. The kernel-local guard preserves failure
+  accounting for live long calls without changing IPC, `ts-rs`, schema SQL, or trait interfaces.
+- **Verification (verbatim):** `cargo test -p kernel active_job_guard_tracks_in_flight_job_until_drop`
+  → `test worker_pool::tests::active_job_guard_tracks_in_flight_job_until_drop ... ok`;
+  `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` exit 0;
+  `cargo test --workspace` exit 0 (new kernel unit test, kernel enrichment **9 passed**, store
+  integration **39 passed**, traits binding tests **32 passed**); `npm --prefix ui run build` exit 0
+  (`✓ built in 1.48s`); `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings`
+  exit 0.
