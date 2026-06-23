@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::domain::VisionAnalysis;
-use crate::jobs::JobStats;
+use crate::jobs::{JobKind, JobStats};
 
 /// Half-open `[start, end)` time window (start inclusive, end exclusive), unix
 /// epoch milliseconds. `Store::hybrid_search` filters with `captured_at >= start
@@ -68,13 +68,22 @@ pub struct FrameMeta {
     pub app_hint: Option<String>,
 }
 
-/// Input to the `ask` command. The answer streams back via `answer_delta` events.
+/// Input to the `ask` command. The answer streams back via request-scoped `answer_delta` events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct AskRequest {
+    pub request_id: Option<String>,
     pub query: String,
     pub thinking: bool,
     pub max_tokens: u32,
+}
+
+/// Request-scoped streamed answer event (`answer_delta` payload).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct AnswerEvent {
+    pub request_id: String,
+    pub delta: AnswerDelta,
 }
 
 /// One bucket of the timeline histogram (`get_timeline` output).
@@ -109,6 +118,18 @@ pub struct InsightsSummary {
     pub top_apps: Vec<AppCount>,
     /// Vision activity-type breakdown, descending by frame count.
     pub activity_breakdown: Vec<ActivityCount>,
+}
+
+/// Storage footprint shown in the StatusRail.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct StorageStats {
+    #[ts(type = "number")]
+    pub db_bytes: u64,
+    #[ts(type = "number")]
+    pub frame_bytes: u64,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
 }
 
 /// One row of the [`InsightsSummary`] top-apps breakdown. `app` is `None` for
@@ -210,6 +231,9 @@ pub enum CaptureControl {
 /// (UI-triggered) is always available; **timed** and **idle** enrichment are each
 /// independent opt-in toggles, off by default, with a user-set threshold. (This
 /// replaces `03 §8`'s single `enrich.vision_mode` enum — see specs/06_PATCH_PLAN.)
+///
+/// `sidecar_device` is the optional llama.cpp `--device` selector (for example,
+/// `Vulkan0`); `None` lets llama.cpp choose its default device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct Settings {
@@ -235,6 +259,7 @@ pub struct Settings {
     pub answer_thinking: bool,
     pub sidecar_idle_ttl_secs: u32,
     pub sidecar_ngl: u32,
+    pub sidecar_device: Option<String>,
     pub privacy_excluded_apps: Vec<String>,
     pub privacy_pause_on_lock: bool,
 }
@@ -263,6 +288,7 @@ impl Default for Settings {
             answer_thinking: true,
             sidecar_idle_ttl_secs: 180,
             sidecar_ngl: 99,
+            sidecar_device: None,
             privacy_excluded_apps: vec![
                 "1Password".to_string(),
                 "KeePass".to_string(),
@@ -379,6 +405,19 @@ pub struct JobProgress {
     pub stats: JobStats,
 }
 
+/// Data-changing enrichment job completion (`job_completed` event). Carries enough
+/// identity for the UI to refresh frame/search/insights data surgically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct JobCompleted {
+    #[ts(type = "number")]
+    pub job_id: i64,
+    pub kind: JobKind,
+    #[ts(type = "number")]
+    pub frame_id: i64,
+    pub stats: JobStats,
+}
+
 /// Lifecycle state of the inference sidecar (`03 §6`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -436,10 +475,13 @@ mod ts_number_guard {
             ("FrameMeta", FrameMeta::inline()),
             ("TimelineBucket", TimelineBucket::inline()),
             ("InsightsSummary", InsightsSummary::inline()),
+            ("StorageStats", StorageStats::inline()),
             ("FrameDetail", FrameDetail::inline()),
             ("VisionTarget", VisionTarget::inline()),
             ("CaptureTick", CaptureTick::inline()),
+            ("AnswerEvent", AnswerEvent::inline()),
             ("AnswerDelta", AnswerDelta::inline()),
+            ("JobCompleted", JobCompleted::inline()),
             ("JobStats", JobStats::inline()),
         ];
         for (name, decl) in decls {

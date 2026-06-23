@@ -1,6 +1,4 @@
-// Client-side toast queue. Toasts are driven by command success/failure in the UI
-// (the backend never emits a `toast` event — plan decision); the ts-rs `Toast`
-// type is kept for forward-compat but not used as a transport here.
+// Toast queue for UI actions and backend `toast` events forwarded by useLiveEvents.
 import { create } from "zustand";
 import type { ToastLevel } from "../bindings/ToastLevel";
 

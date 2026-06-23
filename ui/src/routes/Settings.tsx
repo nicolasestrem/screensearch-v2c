@@ -4,17 +4,17 @@
 // Model tiers additionally hot-apply the moment they change (useSetModelTier), so the
 // running providers switch without waiting for Save. Every field labels *when* it
 // takes effect — tiers now, the answer thinking flag on the next question, capture/
-// storage/privacy on the next capture start, enrichment/sidecar on restart — matching
-// the backend's honest apply policy (no fictional live reconfiguration, `03 §8`).
+// storage/privacy on the next capture start, workers after save, and sidecar launch
+// options on the next sidecar launch.
 //
 // States (§4): loading → skeleton; error → load failed + retry; partial → models
 // still downloading (noted in the Models panel); populated → the form. Settings has
 // no empty state. A failed Save keeps the form and explains via a toast.
 import { useEffect, useState, type ChangeEvent } from "react";
 
-import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState } from "../components/primitives";
+import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState, Select } from "../components/primitives";
 import { ModelTierPicker, RetentionControl, ScheduleControl } from "../components/domain";
-import { useReadiness, useSettings } from "../lib/ipc/queries";
+import { useMonitors, useReadiness, useSettings, useSidecarDevices } from "../lib/ipc/queries";
 import { useSetModelTier, useSetSettings } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
 import type { Settings } from "../bindings/Settings";
@@ -32,6 +32,7 @@ const APPLY_NOW = "Applies now.";
 const APPLY_ASK = "Applies to your next question.";
 const APPLY_CAPTURE = "Applies on the next capture start.";
 const APPLY_RESTART = "Applies on restart.";
+const APPLY_SIDECAR = "Applies to the next sidecar launch.";
 
 /** Parse a comma-separated list of non-negative monitor indices; empty → []. */
 function parseIntList(raw: string): number[] {
@@ -77,6 +78,7 @@ function sanitizeSettings(s: Settings): Settings {
     enrich_vision_idle_secs: clampInt(s.enrich_vision_idle_secs, 60, 86_400),
     sidecar_idle_ttl_secs: clampInt(s.sidecar_idle_ttl_secs, 0, 86_400),
     sidecar_ngl: clampInt(s.sidecar_ngl, 0, 999),
+    sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
   };
 }
 
@@ -94,6 +96,9 @@ function SettingsSkeleton() {
 export function Component() {
   const settings = useSettings();
   const readiness = useReadiness();
+  const monitors = useMonitors();
+  const sidecarReady = readiness.data?.sidecar.status === "ready";
+  const sidecarDevices = useSidecarDevices(sidecarReady);
   const setSettings = useSetSettings();
   const setTier = useSetModelTier();
 
@@ -203,6 +208,23 @@ export function Component() {
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const saving = setSettings.isPending;
+  const toggleMonitor = (index: number) => {
+    let next: number[];
+    if (draft.capture_monitors.length === 0 && monitors.data?.length) {
+      next = monitors.data.map((m) => m.index).filter((i) => i !== index);
+    } else {
+      next = draft.capture_monitors.includes(index)
+        ? draft.capture_monitors.filter((m) => m !== index)
+        : [...draft.capture_monitors, index].sort((a, b) => a - b);
+    }
+    if (monitors.data?.length && next.length === monitors.data.length) {
+      next = [];
+    }
+    set("capture_monitors", next);
+    setMonitorsText(next.join(", "));
+  };
+  const detectedSidecarDevices = sidecarDevices.data ?? [];
+  const hasDetectedSidecarDevices = detectedSidecarDevices.length > 0;
 
   // Partial state — surface that models may still be starting: while the readiness
   // probe is in flight, or either lane is still "unknown" (pre-init) / "initializing".
@@ -263,6 +285,30 @@ export function Component() {
             }}
             hint={`Comma-separated monitor indices (0-based). Empty = all monitors. ${APPLY_CAPTURE}`}
           />
+          {monitors.data && monitors.data.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {monitors.data.map((m) => {
+                const selected =
+                  draft.capture_monitors.length === 0 || draft.capture_monitors.includes(m.index);
+                return (
+                  <button
+                    key={m.index}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggleMonitor(m.index)}
+                    className={`rounded-chip border px-3 min-h-hit-min text-caption font-display uppercase tracking-eyebrow ${
+                      selected
+                        ? "border-accent text-accent bg-accent-wash"
+                        : "border-line text-ink-muted hover:text-ink"
+                    }`}
+                  >
+                    {m.name || `Monitor ${m.index}`} · {m.width}×{m.height}
+                    {m.is_primary ? " · primary" : ""}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </Panel>
 
@@ -326,13 +372,13 @@ export function Component() {
             label="Embed OCR text"
             checked={draft.enrich_embed_text}
             onChange={(v) => set("enrich_embed_text", v)}
-            hint={`Index recognised text as vectors for semantic search. ${APPLY_RESTART}`}
+            hint={`Index recognised text as vectors for semantic search. Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
           />
           <Toggle
             label="Embed images"
             checked={draft.enrich_image_embeddings}
             onChange={(v) => set("enrich_image_embeddings", v)}
-            hint={`Also embed frame images (more compute). ${APPLY_RESTART}`}
+            hint={`Also embed frame images (more compute). Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
           />
           <Field
             label="Worker concurrency"
@@ -341,7 +387,7 @@ export function Component() {
             max={16}
             value={draft.enrich_worker_concurrency}
             onChange={intHandler("enrich_worker_concurrency")}
-            hint={`How many enrichment jobs run at once. ${APPLY_RESTART}`}
+            hint={`How many enrichment jobs run at once. ${APPLY_NOW}`}
           />
           <ScheduleControl
             timerEnabled={draft.enrich_vision_timer_enabled}
@@ -389,8 +435,34 @@ export function Component() {
             min={0}
             value={draft.sidecar_ngl}
             onChange={intHandler("sidecar_ngl")}
-            hint={`How many model layers to offload to the GPU. ${APPLY_RESTART}`}
+            hint={`How many model layers to offload to the GPU. ${APPLY_SIDECAR}`}
           />
+          {hasDetectedSidecarDevices ? (
+            <Select
+              label="Device"
+              value={draft.sidecar_device ?? ""}
+              onChange={(e) => set("sidecar_device", e.currentTarget.value || null)}
+              options={[
+                { value: "", label: "Automatic" },
+                ...detectedSidecarDevices.map((d) => ({ value: d, label: d })),
+                ...(draft.sidecar_device && !detectedSidecarDevices.includes(draft.sidecar_device)
+                  ? [{ value: draft.sidecar_device, label: draft.sidecar_device }]
+                  : []),
+              ]}
+              hint={APPLY_SIDECAR}
+            />
+          ) : (
+            <Field
+              label="Device"
+              value={draft.sidecar_device ?? ""}
+              onChange={(e) => set("sidecar_device", e.currentTarget.value.trim() || null)}
+              hint={
+                sidecarDevices.isError
+                  ? `Device list unavailable; enter a llama.cpp device id such as Vulkan0. ${APPLY_SIDECAR}`
+                  : `Device list appears after sidecar initialization; enter a manual id such as Vulkan0 if needed. ${APPLY_SIDECAR}`
+              }
+            />
+          )}
         </div>
       </Panel>
     </div>

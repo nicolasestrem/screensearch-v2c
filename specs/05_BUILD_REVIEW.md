@@ -1055,6 +1055,80 @@ $ npm --prefix ui run lint
 $ git diff --exit-code -- ui/src/bindings
 ```
 
+## Pass — 2026-06-23 — P5 comprehensive review hardening (`codex/p5-comprehensive-review-fixes` branch)
+
+**Scope.** Implemented the approved post-P5 review plan while keeping packaging deferred (`07` #26).
+This pass closes P5-adjacent correctness, boundedness, accessibility, live-refresh, telemetry,
+retention, and sidecar-device gaps without changing the packaging decision.
+
+**Backend / contract changes.**
+- Added range-aware nearest-frame lookup (`get_nearest_frame(at, range?)`) and store coverage so
+  Timeline opens cannot escape the selected window.
+- Clamped direct IPC sizes for frame lists, frame context, Timeline buckets, and Insights buckets.
+- Added storage stats (`get_storage_stats`), monitor enumeration (`get_monitors`), sidecar device
+  enumeration (`list_sidecar_devices` via `llama-server --list-devices`), optional
+  `sidecar.device`, request-scoped `AnswerEvent`, and `cancel_ask`.
+- Added `KernelEvent::Toast` and richer successful data-changing `JobCompleted` events; the UI uses
+  these for operational notices and surgical query invalidation.
+- Enforced `storage.retention_days` at startup and hourly in 1000-row batches, deleting DB rows and
+  only containment-checked relative frame files under `<app-data>/frames`.
+- Reconfigured enrichment workers live after settings changes and when an embedder attaches, so
+  embedding lanes can be re-enabled without restarting the app.
+
+**UI changes.**
+- Reworked local-day helpers to use calendar midnights (`Date(year, month, day + n)`) instead of
+  fixed 24-hour offsets.
+- Added Deck panel-level error/retry states for readiness, insights, frames, timeline, and job
+  stats; completed Command Palette ARIA combobox/listbox semantics.
+- Removed hardcoded Timeline drawing colors in favor of CSS token values.
+- Added StatusRail storage telemetry, monitor picker + manual fallback, sidecar device picker +
+  manual fallback, request-id ask cancellation/stale-delta filtering, embeddings-disabled
+  live-search invalidation, and adaptive Timeline/Insights bucket counts from measured chart width.
+
+**Docs / tracking.** Updated `CHANGELOG.md`, `README.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md`,
+`specs/07_KNOWN_GAPS.md`, and `specs/08_CHANGELOG_AI.md`; `07` #26 remains open for packaging.
+
+**Verification.** Final gates all exited 0 after the last code change:
+- `cargo fmt --all -- --check`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run typecheck`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `npm --prefix ui run build`
+
+## Pass — 2026-06-23 — PR #19 review follow-up (`codex/p5-comprehensive-review-fixes` branch)
+
+**Scope.** Addressed every actionable PR #19 comment from Gemini, Claude, and Codex on the P5
+comprehensive review hardening PR.
+
+**Changes.**
+- Fixed the active ask-task race by locking the task map before spawning the provider task, so an
+  immediately-completing task cannot miss its cleanup insertion/removal ordering.
+- Made retention robust to a single frame delete failure: the sweeper logs the failed DB delete and
+  continues with later candidates instead of letting one frame block all pruning.
+- Fixed monitor toggling from the default empty/all-monitors state by expanding to all-but-clicked,
+  and normalizing an explicit all-selected list back to empty.
+- Refetched sidecar devices when readiness becomes ready and only runs the device query once the
+  sidecar binary is resolved. Settings now shows either a device Select or a manual Field, not both.
+- Clarified embed-toggle apply timing: worker claiming updates after save, while capture enqueueing
+  changes on the next capture start. Updated docs/spec tracking accordingly.
+- Cleaned smaller comments: stale toast-store transport comment, `uuid_like_id` → `next_ask_id`, and
+  an explanatory comment for the llama.cpp device-id parser threshold.
+- Verified the Claude `enrichTimer` cleanup comment was already addressed in `HEAD`; no extra code
+  change was needed there.
+- **Second Codex pass:** tracked whether the attached FastEmbed provider has the optional image lane
+  and reloads it when `enrich_image_embeddings` is enabled after a text-only startup. Retention now
+  removes each frame file before deleting its DB row, so a transient file-lock failure keeps the row
+  available for retry instead of orphaning the JPEG.
+
+**Verification.** Rerun after this follow-up before pushing:
+- `cargo fmt --all -- --check`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run typecheck`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `npm --prefix ui run build`
+
 ---
 
 ## Pass — 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening` branch)

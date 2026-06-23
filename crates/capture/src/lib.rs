@@ -29,6 +29,12 @@ mod wgc;
 pub use idle::user_idle_ms;
 use wgc::CaptureRequest;
 
+/// Enumerates connected monitors as user-facing metadata. The raw `HMONITOR`s stay
+/// inside the capture crate; Settings only needs the stable index/name/size fields.
+pub fn enumerate_monitors() -> Vec<MonitorInfo> {
+    monitors::enumerate().into_iter().map(|m| m.info).collect()
+}
+
 /// WGC-backed capture source. Owns the channel to the capture worker thread, the
 /// monitor list, and a small queue of changed frames produced by the last cycle.
 pub struct WgcCapture {

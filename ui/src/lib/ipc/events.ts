@@ -7,16 +7,20 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { CaptureTick } from "../../bindings/CaptureTick";
 import type { Readiness } from "../../bindings/Readiness";
 import type { JobStats } from "../../bindings/JobStats";
+import type { JobCompleted } from "../../bindings/JobCompleted";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
-import type { AnswerDelta } from "../../bindings/AnswerDelta";
+import type { AnswerEvent } from "../../bindings/AnswerEvent";
+import type { Toast } from "../../bindings/Toast";
 
 /** Map of backend event name → payload type. */
 export interface AppEvents {
   capture_tick: CaptureTick;
   readiness_changed: Readiness;
   job_progress: JobStats;
+  job_completed: JobCompleted;
   sidecar_status: SidecarStatus;
-  answer_delta: AnswerDelta;
+  answer_delta: AnswerEvent;
+  toast: Toast;
 }
 
 /**

@@ -18,6 +18,26 @@ export function useJobStats() {
   return useQuery({ queryKey: queryKeys.jobStats, queryFn: cmd.getJobStats });
 }
 
+/** Storage footprint; refreshed by capture/retention events. */
+export function useStorageStats() {
+  return useQuery({ queryKey: queryKeys.storageStats, queryFn: cmd.getStorageStats });
+}
+
+/** Connected monitors for Settings. */
+export function useMonitors() {
+  return useQuery({ queryKey: queryKeys.monitors, queryFn: cmd.getMonitors });
+}
+
+/** llama.cpp device ids for advanced sidecar selection. */
+export function useSidecarDevices(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.sidecarDevices,
+    queryFn: cmd.listSidecarDevices,
+    enabled,
+    retry: 0,
+  });
+}
+
 /**
  * Latest sidecar lifecycle status. There is no fetch command for this — it is an
  * event-sourced cache entry populated by `sidecar_status` (the queryFn just
@@ -97,10 +117,10 @@ export function useFrame(frameId: number | null) {
 }
 
 /** Activity aggregates for the Insights screen. */
-export function useInsights(range: TimeRange, enabled = true) {
+export function useInsights(range: TimeRange, bucketCount: number, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.insights(range),
-    queryFn: () => cmd.getInsights(range),
-    enabled: enabled && range.end > range.start,
+    queryKey: queryKeys.insights(range, bucketCount),
+    queryFn: () => cmd.getInsights(range, bucketCount),
+    enabled: enabled && bucketCount > 0 && range.end > range.start,
   });
 }

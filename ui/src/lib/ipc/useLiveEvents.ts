@@ -2,6 +2,7 @@
 // server-state caches fresh from the backend event stream (UI_REFERENCE §6):
 //   • readiness_changed → patch the readiness cache directly (no refetch)
 //   • job_progress      → patch the jobStats cache directly
+//   • job_completed     → surgical frame/search/insights invalidation
 //   • sidecar_status    → patch the sidecarStatus cache + refresh readiness
 //   • capture_tick      → high-frequency; debounce-invalidate timeline + insights
 // `answer_delta` is intentionally NOT handled here — useAsk owns it.
@@ -11,6 +12,8 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { listenTo } from "./events";
 import { queryKeys } from "./queryKeys";
+import { toast as toastStore } from "../../state/toastStore";
+import type { Readiness } from "../../bindings/Readiness";
 
 /** Debounce window for coalescing capture_tick bursts into one invalidation. */
 const TICK_DEBOUNCE_MS = 800;
@@ -36,28 +39,32 @@ export function useLiveEvents() {
     track(
       listenTo("readiness_changed", (readiness) => {
         qc.setQueryData(queryKeys.readiness, readiness);
+        if (readiness.sidecar.status === "ready") {
+          qc.invalidateQueries({ queryKey: queryKeys.sidecarDevices });
+        }
       }),
     );
 
-    // job_progress is a worker progress snapshot emitted after each job attempt
-    // completes. Update the live queue counter immediately, then
-    // debounce-invalidate the data a completed attempt may have changed:
-    // vision_tag → frame detail + insights (tags / activity); embed_* → search
-    // (the vector arm). The event carries only counts (no kind / frame id), so the
-    // families are invalidated broadly — invalidateQueries refetches only the
-    // *observed* queries and marks the rest stale, so an idle backlog drain stays
-    // cheap. A surgical per-frame refresh would need a richer completion event
-    // (07 #30). Timeline is intentionally excluded (capture density, not enrichment).
-    let enrichTimer: ReturnType<typeof setTimeout> | undefined;
     track(
       listenTo("job_progress", (stats) => {
         qc.setQueryData(queryKeys.jobStats, stats);
-        if (enrichTimer) clearTimeout(enrichTimer);
-        enrichTimer = setTimeout(() => {
-          qc.invalidateQueries({ queryKey: queryKeys.framePrefix });
+      }),
+    );
+
+    let enrichTimer: ReturnType<typeof setTimeout> | undefined;
+    track(
+      listenTo("job_completed", (completed) => {
+        qc.setQueryData(queryKeys.jobStats, completed.stats);
+        qc.invalidateQueries({ queryKey: queryKeys.frame(completed.frame_id) });
+        if (completed.kind === "embed_text" || completed.kind === "embed_image") {
           qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
-          qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
-        }, ENRICH_DEBOUNCE_MS);
+        }
+        if (completed.kind === "vision_tag") {
+          if (enrichTimer) clearTimeout(enrichTimer);
+          enrichTimer = setTimeout(() => {
+            qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
+          }, ENRICH_DEBOUNCE_MS);
+        }
       }),
     );
 
@@ -67,6 +74,7 @@ export function useLiveEvents() {
         // The kernel also re-emits readiness on a sidecar transition, but nudge a
         // refetch so the StatusRail stays truthful even if that event is missed.
         qc.invalidateQueries({ queryKey: queryKeys.readiness });
+        qc.invalidateQueries({ queryKey: queryKeys.sidecarDevices });
       }),
     );
 
@@ -83,7 +91,24 @@ export function useLiveEvents() {
           qc.invalidateQueries({ queryKey: queryKeys.framesPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.frameContextPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.jobStats });
+          qc.invalidateQueries({ queryKey: queryKeys.storageStats });
+          const readiness = qc.getQueryData<Readiness>(queryKeys.readiness);
+          if (readiness?.embed_model.status !== "ready") {
+            qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
+          }
         }, TICK_DEBOUNCE_MS);
+      }),
+    );
+
+    track(
+      listenTo("toast", (t) => {
+        toastStore[t.level](t.message);
+        if (t.message.toLowerCase().includes("retention")) {
+          qc.invalidateQueries({ queryKey: queryKeys.storageStats });
+          qc.invalidateQueries({ queryKey: queryKeys.framesPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.timelinePrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
+        }
       }),
     );
 

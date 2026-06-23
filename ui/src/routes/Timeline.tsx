@@ -17,8 +17,9 @@ import { toast } from "../state/toastStore";
 import { absoluteDate, absoluteTime } from "../lib/time";
 import { lastDaysRange } from "../lib/timeRanges";
 import { cn } from "../lib/cn";
+import { useAdaptiveBucketCount } from "../lib/useAdaptiveBucketCount";
 
-const BUCKETS = 240; // presentation-driven density resolution
+const DEFAULT_BUCKETS = 240;
 const THUMB_LIMIT = 300; // hover-preview frames sampled across the window
 const PRESETS = [
   { label: "Today", days: 1 },
@@ -43,7 +44,8 @@ export function Component() {
     return Number.isFinite(t) && t > 0 ? t : range.end - 1;
   });
 
-  const timeline = useTimeline(range, BUCKETS);
+  const [timelineMeasureRef, bucketCount] = useAdaptiveBucketCount(DEFAULT_BUCKETS, 120, 2000, 4);
+  const timeline = useTimeline(range, bucketCount);
   const thumbs = useFrames(range, THUMB_LIMIT);
 
   // Keep the head inside the window when the range changes.
@@ -60,7 +62,7 @@ export function Component() {
 
   const openAt = async (pos: number) => {
     try {
-      const frame = await cmd.getNearestFrame(Math.round(pos));
+      const frame = await cmd.getNearestFrame(Math.round(pos), range);
       if (frame) navigate(`/timeline/${frame.frame_id}`);
       else toast.info("No capture near that time");
     } catch (e) {
@@ -103,48 +105,48 @@ export function Component() {
         {rangeControl}
       </div>
 
-      <Panel
-        title="Scanline"
-        flush
-        action={
-          hasData ? <Chip tone="accent">{absoluteTime(position)}</Chip> : undefined
-        }
-      >
-        {timeline.isLoading ? (
-          <Skeleton className="h-24 w-full rounded-none" />
-        ) : timeline.isError ? (
-          <ErrorState
-            title="Couldn't load the timeline"
-            message={String(timeline.error)}
-            onRetry={() => timeline.refetch()}
-          />
-        ) : !hasData ? (
-          <EmptyState
-            title="No captures in this range"
-            description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
-            action={
-              <Button variant="secondary" onClick={() => navigate("/")}>
-                Back to Deck
-              </Button>
-            }
-          />
-        ) : (
-          <div className="flex flex-col gap-2">
-            <ScanlineTimeline
-              buckets={buckets}
-              range={range}
-              position={position}
-              onScrub={setPosition}
-              onOpen={openAt}
-              thumbnails={thumbs.data ?? []}
+      <div ref={timelineMeasureRef}>
+        <Panel
+          title="Scanline"
+          flush
+          action={hasData ? <Chip tone="accent">{absoluteTime(position)}</Chip> : undefined}
+        >
+          {timeline.isLoading ? (
+            <Skeleton className="h-24 w-full rounded-none" />
+          ) : timeline.isError ? (
+            <ErrorState
+              title="Couldn't load the timeline"
+              message={String(timeline.error)}
+              onRetry={() => timeline.refetch()}
             />
-            <p className="px-1 text-caption text-ink-faint font-body">
-              Drag or use ← → to scrub (Shift for bigger steps, Home/End to jump). Enter opens the moment.
-              {thumbs.isLoading ? " · Loading thumbnails…" : ""}
-            </p>
-          </div>
-        )}
-      </Panel>
+          ) : !hasData ? (
+            <EmptyState
+              title="No captures in this range"
+              description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
+              action={
+                <Button variant="secondary" onClick={() => navigate("/")}>
+                  Back to Deck
+                </Button>
+              }
+            />
+          ) : (
+            <div className="flex flex-col gap-2">
+              <ScanlineTimeline
+                buckets={buckets}
+                range={range}
+                position={position}
+                onScrub={setPosition}
+                onOpen={openAt}
+                thumbnails={thumbs.data ?? []}
+              />
+              <p className="px-1 text-caption text-ink-faint font-body">
+                Drag or use ← → to scrub (Shift for bigger steps, Home/End to jump). Enter opens the moment.
+                {thumbs.isLoading ? " · Loading thumbnails…" : ""}
+              </p>
+            </div>
+          )}
+        </Panel>
+      </div>
     </div>
   );
 }

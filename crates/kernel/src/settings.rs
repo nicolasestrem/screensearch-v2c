@@ -60,6 +60,7 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         answer_thinking: boolean(store, "answer.thinking", d.answer_thinking).await,
         sidecar_idle_ttl_secs: num(store, "sidecar.idle_ttl_secs", d.sidecar_idle_ttl_secs).await,
         sidecar_ngl: num(store, "sidecar.ngl", d.sidecar_ngl).await,
+        sidecar_device: json(store, "sidecar.device", d.sidecar_device).await,
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
@@ -149,6 +150,10 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         ),
         ("sidecar.ngl".into(), s.sidecar_ngl.to_string()),
         (
+            "sidecar.device".into(),
+            serde_json::to_string(&s.sidecar_device)?,
+        ),
+        (
             "privacy.excluded_apps".into(),
             serde_json::to_string(&s.privacy_excluded_apps)?,
         ),
@@ -175,6 +180,9 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.enrich_vision_idle_secs = clamp_u32(s.enrich_vision_idle_secs, 60, 86_400);
     s.sidecar_idle_ttl_secs = clamp_u32(s.sidecar_idle_ttl_secs, 0, 86_400);
     s.sidecar_ngl = clamp_u32(s.sidecar_ngl, 0, 999);
+    s.sidecar_device = s
+        .sidecar_device
+        .and_then(|d| (!d.trim().is_empty()).then(|| d.trim().to_string()));
     s
 }
 

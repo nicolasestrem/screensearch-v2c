@@ -7,8 +7,10 @@ on-device, no cloud.
 > **Status: feature-complete, pre-packaging.** Capture → OCR → deferred enrichment → **hybrid
 > search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the
 > full **Command-Deck UI** (Deck, Recall, Timeline, Moment, Insights, Settings) are implemented and
-> tested. Phases **P0–P5 are complete**; only **packaging** (installer + portable ZIP, code signing —
-> DoD §13.9) remains. The design lives in [`specs/`](./specs); the as-built architecture is in
+> tested, including the P5 review hardening for bounded IPC, request-scoped ask streams, storage
+> telemetry, retention enforcement, monitor/device selection, adaptive charts, and live enrichment
+> reconfiguration. Phases **P0–P5 are complete**; only **packaging** (installer + portable ZIP, code
+> signing — DoD §13.9) remains. The design lives in [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project (not linked to,
 > and importing no data from, any prior version).
 
@@ -31,7 +33,8 @@ enqueued → a background worker pool embeds it with **fastembed** (EmbeddingGem
 the right frames in **~33 ms p95 on a 10 000-frame database**. **Vision tagging** (on-demand / timer /
 idle — structured output with an honest confidence, never a fabricated score) and **grounded,
 streaming answers** with citations run on the local **llama.cpp sidecar**; the full Command-Deck UI
-surfaces all of it.
+surfaces all of it. Retention purges run at startup and hourly when enabled, and the StatusRail shows
+real DB/frame storage usage.
 
 ## What it does (v1.0 target)
 
@@ -56,7 +59,8 @@ surfaces all of it.
 - **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text, optional
   nomic-embed-vision-v1.5 image. **No Python in the runtime.**
 - **Inference (P4):** a single supervised, model-agnostic **llama.cpp sidecar** (Vulkan GPU + CPU
-  fallback), **bound to the app via a Windows Job Object** so it can never orphan after a crash.
+  fallback), **bound to the app via a Windows Job Object** so it can never orphan after a crash;
+  advanced users can list/select llama.cpp devices when the default Vulkan device is wrong.
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the as-built design and data flow.
 

@@ -7,6 +7,9 @@ import type { TimeRange } from "../../bindings/TimeRange";
 export const queryKeys = {
   readiness: ["readiness"] as const,
   jobStats: ["jobStats"] as const,
+  storageStats: ["storageStats"] as const,
+  monitors: ["monitors"] as const,
+  sidecarDevices: ["sidecarDevices"] as const,
   sidecarStatus: ["sidecarStatus"] as const,
   settings: ["settings"] as const,
   // `*Prefix` keys match every variant of a family for bulk invalidation (e.g.
@@ -29,5 +32,5 @@ export const queryKeys = {
   frameContext: (at: number, halfWindowMs: number, limitEach: number) =>
     ["frameContext", at, halfWindowMs, limitEach] as const,
   insightsPrefix: ["insights"] as const,
-  insights: (range: TimeRange) => ["insights", range] as const,
+  insights: (range: TimeRange, bucketCount: number) => ["insights", range, bucketCount] as const,
 };

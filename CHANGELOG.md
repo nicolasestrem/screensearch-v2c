@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P5 comprehensive review hardening (2026-06-23)
+- **Date ranges now use local calendar midnights.** Deck, Timeline, Insights, and Recall no longer
+  derive "today" / trailing windows from fixed 24-hour offsets, avoiding DST drift.
+- **Navigation and IPC are bounded.** Timeline nearest-frame opens are constrained to the selected
+  range, while frame-list, frame-context, Timeline, and Insights command sizes are clamped for direct
+  IPC callers.
+- **Operational state is explicit.** Deck panels now show retryable error states, the Command
+  Palette exposes combobox/listbox ARIA semantics, Timeline canvas colors come from CSS tokens, and
+  backend `toast` / richer `job_completed` events drive more precise UI refreshes.
+- **Storage and retention are real.** `storage.retention_days` is enforced at startup and hourly in
+  safe bounded batches, and StatusRail displays DB, frame, and total storage size via
+  `get_storage_stats`.
+- **Streaming answers are request-scoped and cancellable.** `answer_delta` carries a request id,
+  superseded asks are cancelled, and stale deltas are ignored by the UI.
+- **Settings are more live and discoverable.** Embedding workers reconfigure when enrichment lanes
+  change, monitor selection uses real `get_monitors` data with a manual fallback, Timeline/Insights
+  bucket counts adapt to chart width, and advanced llama.cpp device selection uses
+  `--list-devices` / `--device` through the optional `sidecar.device` setting.
+- **PR #19 review follow-up:** fixed ask-task cleanup race, made retention continue past a
+  per-frame DB delete failure, corrected monitor toggling from the default "all monitors" state,
+  refreshed sidecar devices when readiness becomes ready, removed redundant device controls, and
+  clarified that capture enqueue settings apply on the next capture start while worker claiming
+  updates after save.
+- **PR #19 Codex follow-up:** enabling image embeddings after startup now reloads the FastEmbed
+  provider with the image lane instead of letting `embed_image` jobs fail until restart, and
+  retention removes frame files before DB rows so transient Windows file locks do not create
+  permanent orphan JPEGs.
+- Packaging remains deferred as the separate DoD §13.9 follow-up.
+
 ### Docs — Refreshed root `CLAUDE.md` to current state (2026-06-23)
 - **Corrected the stale "current state" headline.** It claimed *"specification complete, no
   application code yet — the build starts at P0"*; it now reflects reality: **P0–P5 complete and

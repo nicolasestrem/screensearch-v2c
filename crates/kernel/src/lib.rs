@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 use traits::{
     AnswerProvider, CaptureConfig, CaptureSource, ComponentReadiness, ComponentStatus,
     EmbeddingProvider, JobKind, NewJob, OcrProvider, Readiness, SidecarState, SidecarStatus, Store,
-    VisionProvider, VisionTarget,
+    Toast, ToastLevel, VisionProvider, VisionTarget,
 };
 
 mod capture_loop;
@@ -232,6 +232,10 @@ impl Kernel {
                         ComponentStatus::Error,
                         Some("capture source shut down unexpectedly".to_string()),
                     );
+                    let _ = events.send(KernelEvent::Toast(Toast {
+                        level: ToastLevel::Error,
+                        message: "Capture source shut down unexpectedly".to_string(),
+                    }));
                 }
             }
         });
@@ -273,7 +277,7 @@ impl Kernel {
         self.store.set_embedder(embedder.clone());
         *self.embedder.write().expect("embedder slot lock") = Some(embedder);
         self.set_embed_readiness(ComponentStatus::Ready, None);
-        self.start_workers().await;
+        self.reconfigure_enrichment().await;
     }
 
     /// Starts the bounded enrichment worker pool (idempotent — a no-op if already
@@ -327,6 +331,13 @@ impl Kernel {
             pool.shutdown().await;
             tracing::info!("enrichment workers stopped");
         }
+    }
+
+    /// Re-reads enrichment settings and restarts the worker pool so lane toggles and
+    /// concurrency changes take effect without an app restart.
+    pub async fn reconfigure_enrichment(&self) {
+        self.stop_workers().await;
+        self.start_workers().await;
     }
 
     /// Sets the `embed_model` readiness and broadcasts the change (`03 §7`).
@@ -398,6 +409,7 @@ impl Kernel {
     /// `03 §6/§7`). The composition root bridges the supervisor's status channel here.
     pub fn emit_sidecar_status(&self, status: SidecarStatus) {
         let (component, detail) = sidecar_component(&status);
+        let state = status.state;
         let snapshot = {
             let mut r = self.readiness.write().expect("readiness lock poisoned");
             r.sidecar = ComponentReadiness {
@@ -408,6 +420,20 @@ impl Kernel {
         };
         let _ = self.events.send(KernelEvent::ReadinessChanged(snapshot));
         let _ = self.events.send(KernelEvent::SidecarStatus(status));
+        if state == SidecarState::Crashed {
+            self.emit_toast(
+                ToastLevel::Error,
+                "Inference sidecar crashed; the next request will try to restart it",
+            );
+        }
+    }
+
+    /// Emits a transient user-facing notification through the shell event bridge.
+    pub fn emit_toast(&self, level: ToastLevel, message: impl Into<String>) {
+        let _ = self.events.send(KernelEvent::Toast(Toast {
+            level,
+            message: message.into(),
+        }));
     }
 
     /// Sets the `sidecar` readiness directly and broadcasts the change. Used by the

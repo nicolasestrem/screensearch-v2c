@@ -60,7 +60,13 @@ async fn real_answer_streams_tokens() {
         .expect("ensure answer model");
 
     let supervisor = supervisor_for(binary, &sidecar_dir);
-    let answer = AnswerSidecar::new(supervisor.clone(), models_root, ModelTier::Default, 99);
+    let answer = AnswerSidecar::new(
+        supervisor.clone(),
+        models_root,
+        ModelTier::Default,
+        99,
+        None,
+    );
 
     let context = vec![RetrievedChunk {
         frame_id: 42,
@@ -123,7 +129,13 @@ async fn real_vision_tags_an_image() {
         .expect("ensure vision model");
 
     let supervisor = supervisor_for(binary, &sidecar_dir);
-    let vision = VisionSidecar::new(supervisor.clone(), models_root, ModelTier::Default, 99);
+    let vision = VisionSidecar::new(
+        supervisor.clone(),
+        models_root,
+        ModelTier::Default,
+        99,
+        None,
+    );
 
     // A simple two-tone image — enough for the model to produce a description.
     let image = image::RgbaImage::from_fn(320, 160, |x, _| {

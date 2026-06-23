@@ -1020,7 +1020,7 @@ async fn insights_summary_aggregates_truthfully() {
     store.insert_vision(f1, vision("browsing")).await.unwrap();
     store.insert_vision(f_code, vision("coding")).await.unwrap();
 
-    let s = store.insights_summary(0, 1000).await.unwrap();
+    let s = store.insights_summary(0, 1000, 48).await.unwrap();
     assert_eq!(s.total_frames, 5);
     assert_eq!(s.tagged_frames, 2);
     // Most-captured app is Firefox (3), ordered by count desc.
@@ -1038,7 +1038,7 @@ async fn insights_summary_aggregates_truthfully() {
     assert!(!s.captures.is_empty(), "capture density buckets present");
 
     // A window with no frames → honest-empty summary, never fabricated.
-    let empty = store.insights_summary(10_000, 20_000).await.unwrap();
+    let empty = store.insights_summary(10_000, 20_000, 48).await.unwrap();
     assert_eq!(empty.total_frames, 0);
     assert!(empty.top_apps.is_empty());
     assert!(empty.activity_breakdown.is_empty());
@@ -1141,6 +1141,44 @@ async fn nearest_frame_picks_closest_with_after_winning_ties() {
     assert_eq!(id_at(store.nearest_frame(200).await.unwrap()), f200);
 }
 
+/// Range-scoped nearest-frame lookup must never return a frame outside the visible
+/// Timeline window. Regression: the P5 command looked across the whole DB, so opening
+/// a sparse Today/7d/30d window could jump to a capture outside the selected range.
+#[tokio::test]
+async fn nearest_frame_in_range_ignores_frames_outside_window() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let outside_before = store.insert_frame(frame_at(100)).await.unwrap();
+    let inside = store.insert_frame(frame_at(500)).await.unwrap();
+    let outside_after = store.insert_frame(frame_at(900)).await.unwrap();
+
+    let nearest = store
+        .nearest_frame_in_range(150, 400, 800)
+        .await
+        .unwrap()
+        .expect("frame inside range");
+    assert_eq!(nearest.frame_id, inside);
+
+    let nearest_after = store
+        .nearest_frame_in_range(850, 400, 800)
+        .await
+        .unwrap()
+        .expect("frame inside range");
+    assert_eq!(nearest_after.frame_id, inside);
+
+    assert!(store
+        .nearest_frame_in_range(150, 200, 400)
+        .await
+        .unwrap()
+        .is_none());
+
+    let global = store.nearest_frame(150).await.unwrap().unwrap();
+    assert_eq!(
+        global.frame_id, outside_before,
+        "global nearest remains available for non-windowed callers"
+    );
+    assert_ne!(global.frame_id, outside_after);
+}
+
 /// `neighbour_frames` brackets the anchor with the *closest* captures on each side —
 /// not the window edges — so a Moment's prev/next + context strip always point at the
 /// adjacent frames. Backs `get_frame_context`. Regression: `frames_in_range`'s
@@ -1213,4 +1251,55 @@ async fn set_settings_batch_writes_all_and_overwrites() {
 
     // An empty batch is a no-op (opens and commits an empty transaction).
     store.set_settings_batch(&[]).await.unwrap();
+}
+
+/// Retention needs a bounded list of purge candidates before deleting files. It
+/// should return only frames older than the cutoff, oldest first, capped at `limit`.
+#[tokio::test]
+async fn frames_older_than_lists_bounded_retention_candidates() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let f100 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f200 = store.insert_frame(frame_at(200)).await.unwrap();
+    store.insert_frame(frame_at(300)).await.unwrap();
+
+    let candidates = store.frames_older_than(250, 1).await.unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].frame_id, f100);
+    assert_eq!(candidates[0].image_path, "frames/100.jpg");
+
+    let candidates = store.frames_older_than(250, 10).await.unwrap();
+    let ids: Vec<i64> = candidates.iter().map(|m| m.frame_id).collect();
+    assert_eq!(ids, vec![f100, f200]);
+
+    assert!(store.frames_older_than(250, 0).await.unwrap().is_empty());
+}
+
+/// Insights bucket density is presentation-driven just like Timeline density; callers
+/// can request a coarser/finer chart without a fixed 48-bucket backend ceiling.
+#[tokio::test]
+async fn insights_summary_uses_requested_bucket_count() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    for ts in [10, 60, 120, 180] {
+        store.insert_frame(frame_at(ts)).await.unwrap();
+    }
+
+    let two = store.insights_summary(0, 200, 2).await.unwrap();
+    assert_eq!(
+        two.captures,
+        vec![
+            TimelineBucket {
+                start: 0,
+                end: 100,
+                count: 2
+            },
+            TimelineBucket {
+                start: 100,
+                end: 200,
+                count: 2
+            },
+        ]
+    );
+
+    let four = store.insights_summary(0, 200, 4).await.unwrap();
+    assert_eq!(four.captures.len(), 4);
 }

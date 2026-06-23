@@ -83,6 +83,66 @@ impl SqliteStore {
         .await
     }
 
+    /// The single frame whose `captured_at` is closest to `at`, constrained to the
+    /// half-open window `[start, end)`. Returns `None` when the visible window has no
+    /// frames, even if the database has captures outside it.
+    pub async fn nearest_frame_in_range(
+        &self,
+        at: i64,
+        start: i64,
+        end: i64,
+    ) -> Result<Option<FrameMeta>> {
+        if end <= start {
+            return Ok(None);
+        }
+        self.with_conn(move |conn| {
+            let after = conn
+                .query_row(
+                    "SELECT id, captured_at, image_path, app_hint
+                     FROM frames
+                     WHERE captured_at >= ?1 AND captured_at >= ?2 AND captured_at < ?3
+                     ORDER BY captured_at ASC LIMIT 1",
+                    params![at, start, end],
+                    row_to_meta,
+                )
+                .optional()?;
+            let before = conn
+                .query_row(
+                    "SELECT id, captured_at, image_path, app_hint
+                     FROM frames
+                     WHERE captured_at < ?1 AND captured_at >= ?2 AND captured_at < ?3
+                     ORDER BY captured_at DESC LIMIT 1",
+                    params![at, start, end],
+                    row_to_meta,
+                )
+                .optional()?;
+            Ok(nearer(at, before, after))
+        })
+        .await
+    }
+
+    /// Bounded retention candidates: frames older than `cutoff`, oldest first. The
+    /// caller deletes the returned rows and their JPEG files in small batches.
+    pub async fn frames_older_than(&self, cutoff: i64, limit: u32) -> Result<Vec<FrameMeta>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, captured_at, image_path, app_hint
+                 FROM frames
+                 WHERE captured_at < ?1
+                 ORDER BY captured_at ASC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![cutoff, i64::from(limit)], row_to_meta)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
     /// The captures immediately **bracketing** `at` (unix ms): up to `limit_each`
     /// frames just *before* it and up to `limit_each` just *after* it, within
     /// `±half_window_ms`, returned ascending by `captured_at`. The anchor's own row

@@ -5,7 +5,7 @@
 //! forwards them to the WebView2 UI as Tauri events. The kernel never knows about
 //! Tauri.
 
-use traits::{CaptureTick, JobStats, Readiness, SidecarStatus};
+use traits::{CaptureTick, JobCompleted, JobStats, Readiness, SidecarStatus, Toast};
 
 /// An event the kernel emits for the UI (forwarded to Tauri events by `src-tauri`).
 ///
@@ -21,7 +21,12 @@ pub enum KernelEvent {
     /// Queue depth changed after a worker finished a job — drives the job-queue
     /// indicator (`job_progress`, `03 §7`).
     JobProgress(JobStats),
+    /// A data-changing enrichment job completed successfully — lets the UI refresh
+    /// affected frame/search/insights queries without broad invalidation.
+    JobCompleted(JobCompleted),
     /// The inference sidecar changed lifecycle state — drives the sidecar status
     /// indicator (`sidecar_status`, `03 §6/§7`).
     SidecarStatus(SidecarStatus),
+    /// A transient user-facing notification.
+    Toast(Toast),
 }

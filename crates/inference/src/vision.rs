@@ -90,7 +90,13 @@ pub struct VisionSidecar {
     supervisor: Arc<ModelSupervisor>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
+    launch: RwLock<LaunchOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaunchOptions {
     ngl: u32,
+    device: Option<String>,
 }
 
 impl VisionSidecar {
@@ -99,12 +105,13 @@ impl VisionSidecar {
         models_root: PathBuf,
         tier: ModelTier,
         ngl: u32,
+        device: Option<String>,
     ) -> Self {
         Self {
             supervisor,
             models_root,
             tier: RwLock::new(tier),
-            ngl,
+            launch: RwLock::new(LaunchOptions { ngl, device }),
         }
     }
 
@@ -114,19 +121,35 @@ impl VisionSidecar {
         *self.tier.write().expect("vision tier lock") = tier;
     }
 
+    /// Updates launch options for the next request (or model restart).
+    pub fn set_launch_options(&self, ngl: u32, device: Option<String>) {
+        *self.launch.write().expect("vision launch lock") = LaunchOptions { ngl, device };
+    }
+
     /// Resolves the current tier's [`ModelSpec`], downloading the model on first use.
     async fn ensure_spec(&self) -> Result<ModelSpec> {
         let tier = *self.tier.read().expect("vision tier lock");
-        if let Some(spec) =
-            models::resolve_spec(&self.models_root, ModelLane::Vision, tier, self.ngl)
-        {
+        let launch = self.launch.read().expect("vision launch lock").clone();
+        if let Some(spec) = models::resolve_spec(
+            &self.models_root,
+            ModelLane::Vision,
+            tier,
+            launch.ngl,
+            launch.device.clone(),
+        ) {
             return Ok(spec);
         }
         download::ensure_model(&self.models_root, ModelLane::Vision, tier)
             .await
             .context("download vision model")?;
-        models::resolve_spec(&self.models_root, ModelLane::Vision, tier, self.ngl)
-            .context("vision model files missing after download")
+        models::resolve_spec(
+            &self.models_root,
+            ModelLane::Vision,
+            tier,
+            launch.ngl,
+            launch.device,
+        )
+        .context("vision model files missing after download")
     }
 }
 

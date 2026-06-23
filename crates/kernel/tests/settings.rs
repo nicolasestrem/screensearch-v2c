@@ -46,6 +46,7 @@ async fn round_trips_non_default_values() {
         answer_thinking: false,
         sidecar_idle_ttl_secs: 600,
         sidecar_ngl: 35,
+        sidecar_device: Some("Vulkan0".to_string()),
         privacy_excluded_apps: vec!["Signal".to_string(), "Element".to_string()],
         privacy_pause_on_lock: false,
     };
@@ -146,5 +147,30 @@ async fn save_settings_persists_sanitized_numeric_values() {
             .unwrap()
             .as_deref(),
         Some("0")
+    );
+}
+
+#[tokio::test]
+async fn sidecar_device_round_trips_empty_as_none() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    let settings = Settings {
+        sidecar_device: Some("   ".to_string()),
+        ..Settings::default()
+    };
+
+    save_settings(dyn_store, &settings)
+        .await
+        .expect("save settings");
+    let loaded = load_settings(dyn_store).await;
+
+    assert_eq!(loaded.sidecar_device, None);
+    assert_eq!(
+        store
+            .get_setting("sidecar.device")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("null")
     );
 }

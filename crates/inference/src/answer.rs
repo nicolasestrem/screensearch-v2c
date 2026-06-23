@@ -33,7 +33,13 @@ pub struct AnswerSidecar {
     supervisor: Arc<ModelSupervisor>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
+    launch: RwLock<LaunchOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaunchOptions {
     ngl: u32,
+    device: Option<String>,
 }
 
 impl AnswerSidecar {
@@ -42,12 +48,13 @@ impl AnswerSidecar {
         models_root: PathBuf,
         tier: ModelTier,
         ngl: u32,
+        device: Option<String>,
     ) -> Self {
         Self {
             supervisor,
             models_root,
             tier: RwLock::new(tier),
-            ngl,
+            launch: RwLock::new(LaunchOptions { ngl, device }),
         }
     }
 
@@ -56,18 +63,35 @@ impl AnswerSidecar {
         *self.tier.write().expect("answer tier lock") = tier;
     }
 
+    /// Updates launch options for the next request (or the next model restart if a
+    /// sidecar is already serving the same spec).
+    pub fn set_launch_options(&self, ngl: u32, device: Option<String>) {
+        *self.launch.write().expect("answer launch lock") = LaunchOptions { ngl, device };
+    }
+
     async fn ensure_spec(&self) -> Result<ModelSpec> {
         let tier = *self.tier.read().expect("answer tier lock");
-        if let Some(spec) =
-            models::resolve_spec(&self.models_root, ModelLane::Answer, tier, self.ngl)
-        {
+        let launch = self.launch.read().expect("answer launch lock").clone();
+        if let Some(spec) = models::resolve_spec(
+            &self.models_root,
+            ModelLane::Answer,
+            tier,
+            launch.ngl,
+            launch.device.clone(),
+        ) {
             return Ok(spec);
         }
         download::ensure_model(&self.models_root, ModelLane::Answer, tier)
             .await
             .context("download answer model")?;
-        models::resolve_spec(&self.models_root, ModelLane::Answer, tier, self.ngl)
-            .context("answer model files missing after download")
+        models::resolve_spec(
+            &self.models_root,
+            ModelLane::Answer,
+            tier,
+            launch.ngl,
+            launch.device,
+        )
+        .context("answer model files missing after download")
     }
 
     /// Runs the request to completion, sending a terminal delta either way. Setup

@@ -44,7 +44,7 @@ export function Component() {
   const today = todayRange();
   const recentsRange = { start: 0, end: today.end }; // newest captures, all-time
   const recents = useFrames(recentsRange, RECENT_LIMIT);
-  const insights = useInsights(today);
+  const insights = useInsights(today, TODAY_BUCKETS);
   const todayDensity = useTimeline(today, TODAY_BUCKETS);
 
   if (readiness.isLoading) return <DeckSkeleton />;
@@ -161,6 +161,12 @@ export function Component() {
         >
           {insights.isLoading ? (
             <Skeleton className="h-24 w-full" />
+          ) : insights.isError ? (
+            <ErrorState
+              title="Couldn't load today's activity"
+              message={String(insights.error)}
+              onRetry={() => insights.refetch()}
+            />
           ) : total === 0 ? (
             <p className="text-body text-ink-muted font-body">No captures today yet.</p>
           ) : (
@@ -169,7 +175,13 @@ export function Component() {
                 <span className="font-mono text-display text-ink">{total}</span>
                 <span className="text-body text-ink-muted font-body">captures today</span>
               </div>
-              {todayDensity.data && todayDensity.data.length > 0 && (
+              {todayDensity.isError ? (
+                <ErrorState
+                  title="Couldn't load today's density"
+                  message={String(todayDensity.error)}
+                  onRetry={() => todayDensity.refetch()}
+                />
+              ) : todayDensity.data && todayDensity.data.length > 0 ? (
                 <TimelineMinimap
                   buckets={todayDensity.data}
                   range={today}
@@ -178,7 +190,7 @@ export function Component() {
                     navigate(`/timeline?t=${t}`);
                   }}
                 />
-              )}
+              ) : null}
               {insights.data && insights.data.top_apps.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {insights.data.top_apps.slice(0, 5).map((a, i) => (
@@ -193,7 +205,17 @@ export function Component() {
         </Panel>
 
         <Panel title="Enrichment queue">
-          {jobStats.data ? <JobQueueMeter stats={jobStats.data} /> : <Skeleton className="h-12 w-full" />}
+          {jobStats.isError ? (
+            <ErrorState
+              title="Couldn't load queue"
+              message={String(jobStats.error)}
+              onRetry={() => jobStats.refetch()}
+            />
+          ) : jobStats.data ? (
+            <JobQueueMeter stats={jobStats.data} />
+          ) : (
+            <Skeleton className="h-12 w-full" />
+          )}
         </Panel>
       </div>
 
@@ -211,6 +233,12 @@ export function Component() {
               <Skeleton key={i} className="aspect-video w-full" />
             ))}
           </div>
+        ) : recents.isError ? (
+          <ErrorState
+            title="Couldn't load recent captures"
+            message={String(recents.error)}
+            onRetry={() => recents.refetch()}
+          />
         ) : recents.data && recents.data.length > 0 ? (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {recents.data.map((f) => (
