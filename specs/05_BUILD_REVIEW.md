@@ -1057,6 +1057,51 @@ $ git diff --exit-code -- ui/src/bindings
 
 ---
 
+## Pass — 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening` branch)
+
+### Review findings addressed
+- **Model-switch request safety** — `ModelSupervisor::acquire` used to stop/restart the running
+  sidecar immediately when the requested `ModelSpec` differed, even if an answer stream or
+  `vision_tag` call still held a lease to that process. The supervisor now uses a `RequestGate`;
+  every sidecar lease owns the permit until its provider finishes, so model switching waits for the
+  active request to drop before killing the process.
+- **Same-model crash/hang recovery** — reusing an already-running sidecar now validates both
+  `pid_alive` and bounded `/health`. If either check fails, the supervisor emits `Crashed`, stops the
+  stale process, and respawns for the current request.
+- **Bounded HTTP waits** — `SidecarClient` now has explicit health, completion, and stream-idle
+  deadlines. A hung localhost sidecar therefore returns an error to the caller instead of pinning a
+  worker or answer stream indefinitely; `vision_tag` uses the existing retry path, and `answer`
+  already maps provider errors to `AnswerDelta::Error`.
+- **Binary override precedence** — `SSV2C_LLAMA_RELEASE_URL` now resolves before normal install reuse
+  and extracts into `<app-data>/sidecar/llama-override/<url-fingerprint>`, preserving the app-managed
+  Vulkan install while letting tests/operators pin a sidecar build.
+
+### Failing-first checks
+```
+$ cargo test -p inference
+error[E0433]: cannot find type `RequestGate` in this scope
+error[E0425]: cannot find function `can_reuse_running_sidecar` in this scope
+error[E0599]: no associated function or constant named `with_timeouts` found for struct `SidecarClient`
+```
+
+### Interface Review
+- No schema, IPC, `ts-rs`, or trait signature changes.
+- The real multi-GB GPU sidecar smokes remain `#[ignore]` and were not run in this pass.
+
+### Verification (targeted during implementation)
+```
+$ cargo test -p inference
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+```
+
+```
+$ cargo clippy -p inference --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.33s
+```
+
+---
+
 ## Pass — 2026-06-23 — PR #17 review comment follow-up (`codex/review-p3-deferred-enrichment` branch)
 
 ### Review Threads Addressed

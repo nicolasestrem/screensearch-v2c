@@ -104,19 +104,37 @@ pub fn pick_gguf_files(
 
 /// Ensures `llama-server.exe` exists under `sidecar_dir`, downloading + extracting the
 /// prebuilt Vulkan release if absent. Returns the path to the binary. Idempotent.
+/// `SSV2C_LLAMA_RELEASE_URL` deliberately wins over a normal existing install and
+/// lands in a URL-specific override directory, so testers can pin a sidecar build
+/// without deleting the app-managed release.
 pub async fn ensure_binary(sidecar_dir: &Path) -> Result<PathBuf> {
+    if let Some((url, name)) = env_binary_override() {
+        let install = sidecar_dir
+            .join("llama-override")
+            .join(url_fingerprint(&url));
+        return ensure_binary_from_url(&install, &url, &name).await;
+    }
+
     let install = sidecar_dir.join("llama");
     if let Some(found) = find_file(&install, "llama-server.exe") {
         return Ok(found);
     }
-    std::fs::create_dir_all(&install).context("create sidecar install dir")?;
 
     let (url, name) = resolve_binary_url().await?;
-    tracing::info!(asset = %name, "downloading llama.cpp Vulkan release");
-    let bytes = http_get_bytes(&url).await?;
-    extract_zip(&bytes, &install).context("extract llama release zip")?;
+    ensure_binary_from_url(&install, &url, &name).await
+}
 
-    find_file(&install, "llama-server.exe")
+async fn ensure_binary_from_url(install: &Path, url: &str, name: &str) -> Result<PathBuf> {
+    if let Some(found) = find_file(install, "llama-server.exe") {
+        return Ok(found);
+    }
+    std::fs::create_dir_all(install).context("create sidecar install dir")?;
+
+    tracing::info!(asset = %name, "downloading llama.cpp Vulkan release");
+    let bytes = http_get_bytes(url).await?;
+    extract_zip(&bytes, install).context("extract llama release zip")?;
+
+    find_file(install, "llama-server.exe")
         .with_context(|| format!("llama-server.exe not found in release asset {name}"))
 }
 
@@ -182,10 +200,6 @@ async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()>
 }
 
 async fn resolve_binary_url() -> Result<(String, String)> {
-    if let Ok(url) = std::env::var("SSV2C_LLAMA_RELEASE_URL") {
-        let name = url.rsplit('/').next().unwrap_or("llama.zip").to_string();
-        return Ok((url, name));
-    }
     let client = reqwest::Client::new();
     let resp = client
         .get(GITHUB_RELEASES)
@@ -198,6 +212,21 @@ async fn resolve_binary_url() -> Result<(String, String)> {
     let releases: Vec<GithubRelease> = resp.json().await.context("decode releases json")?;
     pick_vulkan_from_releases(&releases)
         .context("no win-vulkan-x64 asset in any recent llama.cpp release")
+}
+
+fn env_binary_override() -> Option<(String, String)> {
+    let url = std::env::var("SSV2C_LLAMA_RELEASE_URL").ok()?;
+    let name = url.rsplit('/').next().unwrap_or("llama.zip").to_string();
+    Some((url, name))
+}
+
+fn url_fingerprint(url: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for b in url.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
@@ -258,6 +287,13 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::sync::OnceLock;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    static ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
     #[test]
     fn picks_win_vulkan_x64_asset() {
@@ -331,6 +367,52 @@ mod tests {
         assert!(pick_vulkan_from_releases(&releases).is_none());
     }
 
+    #[tokio::test]
+    async fn env_override_wins_over_existing_install() {
+        let _guard = ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/llama.zip"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(zip_with_llama_server(b"override"), "application/zip"),
+            )
+            .mount(&server)
+            .await;
+
+        let sidecar_dir = unique_temp_dir("override");
+        let normal_binary = sidecar_dir
+            .join("llama")
+            .join("existing")
+            .join("llama-server.exe");
+        std::fs::create_dir_all(normal_binary.parent().unwrap()).unwrap();
+        std::fs::write(&normal_binary, b"normal").unwrap();
+
+        std::env::set_var(
+            "SSV2C_LLAMA_RELEASE_URL",
+            format!("{}/llama.zip", server.uri()),
+        );
+        let found = ensure_binary(&sidecar_dir)
+            .await
+            .expect("override binary should resolve");
+        std::env::remove_var("SSV2C_LLAMA_RELEASE_URL");
+
+        assert_ne!(
+            found, normal_binary,
+            "env override must not reuse a normal existing install"
+        );
+        assert_eq!(std::fs::read(&found).unwrap(), b"override");
+        assert_eq!(
+            std::fs::read(&normal_binary).unwrap(),
+            b"normal",
+            "normal install must be preserved"
+        );
+        let _ = std::fs::remove_dir_all(sidecar_dir);
+    }
+
     #[test]
     fn picks_q4_k_m_weights_and_mmproj_for_vision() {
         let files = vec![
@@ -367,5 +449,31 @@ mod tests {
         let (gguf, _) = pick_gguf_files(&files, false);
         // Sorted, first is the Q5 — a deterministic fallback.
         assert_eq!(gguf.as_deref(), Some("model-Q5_K_M.gguf"));
+    }
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ssv2c-download-{tag}-{}-{suffix}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn zip_with_llama_server(contents: &[u8]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "llama-b-test/bin/llama-server.exe",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(contents).unwrap();
+        writer.finish().unwrap().into_inner()
     }
 }

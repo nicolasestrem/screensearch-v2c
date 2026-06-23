@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P4 sidecar hardening (2026-06-23)
+- **Model switches no longer cut off active sidecar requests.** `ModelSupervisor` now serializes
+  sidecar leases, so a lane/tier switch waits for the current answer stream or vision tag request to
+  finish before killing and replacing the running `llama-server`.
+- **Same-model reuse validates the running sidecar.** Before handing out an existing process, the
+  supervisor checks both OS liveness and bounded `/health`; a dead or unhealthy sidecar is marked
+  crashed, stopped, and respawned for the current request.
+- **Sidecar HTTP calls now have deadlines.** Health checks, non-streaming vision completions, and
+  streaming answer waits are bounded so a hung localhost sidecar returns an error instead of pinning
+  a worker or answer stream forever. Vision jobs retry through the durable queue; answers surface a
+  terminal error delta.
+- **`SSV2C_LLAMA_RELEASE_URL` really overrides existing installs.** The override now resolves before
+  normal install reuse and extracts into a URL-specific override directory, preserving the app-managed
+  Vulkan release.
+
 ### Fixed — P3 deferred enrichment hardening (2026-06-23)
 - **Vision-only enrichment no longer waits on embeddings.** The worker pool now starts from either
   provider slot: embedding jobs are claimed only when an embedder is attached and enabled, while

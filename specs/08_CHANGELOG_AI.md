@@ -769,3 +769,25 @@
 - **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
   --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test enrichment` → **10 passed**;
   `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings` exit 0.
+
+## 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening`)
+- **Context:** a scrupulous P4 review found four lifecycle gaps after the no-orphan foundation:
+  model switches could kill an active request, same-model reuse did not re-check liveness/health,
+  sidecar HTTP calls had no bounded deadlines, and `SSV2C_LLAMA_RELEASE_URL` was documented as
+  highest precedence but lost to an existing normal install.
+- **Failing-first evidence:** `cargo test -p inference` initially failed with missing
+  `RequestGate`, missing `can_reuse_running_sidecar`, and missing `SidecarClient::with_timeouts`,
+  proving the new tests were red before implementation.
+- **Change:** `ModelSupervisor` now serializes sidecar leases with a `RequestGate`; the lease owns the
+  permit until request completion, so lane/tier switches wait before killing the running process.
+  Same-model reuse validates both OS liveness and bounded `/health`; unhealthy state emits
+  `Crashed`, stops the stale process, and respawns for the current request. `SidecarClient` now has
+  default production deadlines plus test-configurable timeouts for health, non-stream completion, and
+  SSE idle waits. `ensure_binary` now checks `SSV2C_LLAMA_RELEASE_URL` first and extracts override
+  zips into a URL-fingerprinted override directory, preserving the normal install.
+- **Docs:** `CHANGELOG.md`, `specs/05_BUILD_REVIEW.md`, `specs/07_KNOWN_GAPS.md`, and this file.
+- **Interface review:** no schema, IPC, `ts-rs`, or trait signature changes. Ignored GPU smokes were
+  not run in this pass unless separately approved.
+- **Verification (targeted during implementation):** `cargo test -p inference` → inference unit
+  **39 passed**, sidecar client **7 passed**, no-orphan **1 passed**, reap **2 passed**, smoke **2
+  ignored**; `cargo clippy -p inference --all-targets -- -D warnings` exit 0.

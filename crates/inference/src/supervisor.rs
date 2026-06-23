@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, Semaphore};
 use traits::{SidecarState, SidecarStatus};
 
 use crate::client::SidecarClient;
@@ -60,6 +60,7 @@ pub struct Lease {
     client: SidecarClient,
     in_flight: Arc<AtomicUsize>,
     last_activity: Arc<StdMutex<Instant>>,
+    _permit: RequestPermit,
 }
 
 impl Lease {
@@ -78,6 +79,46 @@ impl Drop for Lease {
     }
 }
 
+/// Serializes sidecar use so a model switch cannot terminate a process while another
+/// request is still streaming through it. The permit is held by [`Lease`] until the
+/// provider finishes its HTTP call.
+#[derive(Clone)]
+pub struct RequestGate {
+    permits: Arc<Semaphore>,
+}
+
+pub struct RequestPermit {
+    _permit: OwnedSemaphorePermit,
+}
+
+impl RequestGate {
+    pub fn new() -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    pub async fn enter(&self) -> Result<RequestPermit> {
+        let permit = self
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .context("sidecar request gate closed")?;
+        Ok(RequestPermit { _permit: permit })
+    }
+
+    pub async fn enter_for_model_switch(&self) -> Result<RequestPermit> {
+        self.enter().await
+    }
+}
+
+impl Default for RequestGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Owns the sidecar lifecycle. Construct via [`ModelSupervisor::new`] inside a Tokio
 /// runtime (it spawns the idle-evictor task).
 pub struct ModelSupervisor {
@@ -88,6 +129,7 @@ pub struct ModelSupervisor {
     last_activity: Arc<StdMutex<Instant>>,
     events: broadcast::Sender<SidecarStatus>,
     shutdown: AtomicBool,
+    gate: RequestGate,
 }
 
 impl ModelSupervisor {
@@ -112,6 +154,7 @@ impl ModelSupervisor {
             last_activity: Arc::new(StdMutex::new(Instant::now())),
             events,
             shutdown: AtomicBool::new(false),
+            gate: RequestGate::new(),
         });
         me.clone().spawn_evictor();
         Ok(me)
@@ -126,9 +169,11 @@ impl ModelSupervisor {
     /// returns a [`Lease`] to it. The lease keeps the request in-flight; the caller
     /// runs its HTTP request through `lease.client()`.
     pub async fn acquire(&self, spec: ModelSpec) -> Result<Lease> {
+        let permit = self.gate.enter().await?;
         let mut guard = self.state.lock().await;
-        let need_spawn = match guard.as_ref() {
-            Some(p) => needs_restart(&p.spec, &spec),
+        let mut need_spawn = match guard.as_ref() {
+            Some(p) if needs_restart(&p.spec, &spec) => true,
+            Some(_) => false,
             None => true,
         };
         if need_spawn {
@@ -138,6 +183,22 @@ impl ModelSupervisor {
                 // model switch).
                 self.stop_child(old).await;
             }
+        } else if let Some(running) = guard.as_ref() {
+            let process_alive = process::pid_alive(running.child.pid());
+            let health_ok = if process_alive {
+                running.client.health().await
+            } else {
+                false
+            };
+            if !can_reuse_running_sidecar(process_alive, health_ok) {
+                self.emit(SidecarState::Crashed, Some(model_label(&running.spec)));
+                if let Some(old) = guard.take() {
+                    self.stop_child(old).await;
+                }
+                need_spawn = true;
+            }
+        }
+        if need_spawn {
             let proc = self.spawn_with_retries(&spec).await?;
             *guard = Some(proc);
         }
@@ -159,6 +220,7 @@ impl ModelSupervisor {
             client,
             in_flight: self.in_flight.clone(),
             last_activity: self.last_activity.clone(),
+            _permit: permit,
         })
     }
 
@@ -309,6 +371,12 @@ pub fn idle_expired(elapsed: Duration, ttl: Duration) -> bool {
     elapsed >= ttl
 }
 
+/// A running sidecar can be reused only when both the OS process and the HTTP health
+/// endpoint are alive. Anything else is treated as a crash/hang and respawned.
+pub fn can_reuse_running_sidecar(process_alive: bool, health_ok: bool) -> bool {
+    process_alive && health_ok
+}
+
 /// Reaps a stray sidecar a prior run left behind: reads `pidfile`, and only if that
 /// pid is alive **and** its image path is our installed `expected_exe` does it
 /// terminate the process (`03 §6` — never kill an unrelated process that recycled the
@@ -419,6 +487,40 @@ mod tests {
             Duration::from_secs(10),
             Duration::from_secs(180)
         ));
+    }
+
+    #[tokio::test]
+    async fn switch_gate_waits_for_active_request_to_drop() {
+        let gate = RequestGate::new();
+        let first = gate.enter().await.expect("first request enters");
+
+        let gate_for_switch = gate.clone();
+        let switch_wait = tokio::spawn(async move {
+            let _switch = gate_for_switch
+                .enter_for_model_switch()
+                .await
+                .expect("switch enters once first request drops");
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !switch_wait.is_finished(),
+            "model switch must wait while another request lease is active"
+        );
+
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(1), switch_wait)
+            .await
+            .expect("switch should proceed after active request drops")
+            .expect("switch task should not panic");
+    }
+
+    #[test]
+    fn running_sidecar_is_reused_only_when_process_and_health_are_alive() {
+        assert!(can_reuse_running_sidecar(true, true));
+        assert!(!can_reuse_running_sidecar(false, true));
+        assert!(!can_reuse_running_sidecar(true, false));
+        assert!(!can_reuse_running_sidecar(false, false));
     }
 
     #[test]
