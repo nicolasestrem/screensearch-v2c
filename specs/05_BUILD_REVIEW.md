@@ -1119,6 +1119,10 @@ $ cargo clippy -p inference --all-targets -- -D warnings
 - **Multi-install startup reap** — `SupervisorConfig` now carries exact installed binary candidates
   from the normal and override install roots, so toggling `SSV2C_LLAMA_RELEASE_URL` cannot leave an
   app-owned sidecar running from a previous install path.
+- **Second review follow-up** — the crash-recovery path now emits `Crashed` for the model that was
+  observed unhealthy even if another caller switched models before the exclusive recovery permit was
+  acquired. The Tauri composition root also reaps installed binary candidates before `ensure_binary`,
+  so an unreachable or invalid override URL cannot prevent startup cleanup of an old sidecar.
 
 ### Interface Review
 - No schema, IPC, or `ts-rs` binding changes.

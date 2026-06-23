@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests can run concurrently while model switches and crash recovery still drain all request slots
   before stopping `llama-server`. Stream connection and SSE-idle deadlines are split, override zip
   extraction is staged atomically in a `.partial` directory on a blocking thread, and startup reap now
-  recognizes exact binaries from both normal and URL-specific override installs.
+  recognizes exact binaries from both normal and URL-specific override installs. A second review
+  follow-up emits the observed crashed model in a crash-recovery/model-switch race and runs installed
+  binary reaping before override download, so a bad override URL cannot strand an old sidecar.
 
 ### Fixed — P3 deferred enrichment hardening (2026-06-23)
 - **Vision-only enrichment no longer waits on embeddings.** The worker pool now starts from either

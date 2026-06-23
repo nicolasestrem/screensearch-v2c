@@ -245,21 +245,22 @@ impl ModelSupervisor {
                     drop(guard);
                     return Ok(lease);
                 }
-                Some(_) => {
+                Some(running) => {
+                    let crashed_model = model_label(&running.spec);
                     drop(guard);
                     drop(permit);
 
                     let permit = self.gate.enter_for_model_switch().await?;
                     let mut guard = self.state.lock().await;
                     if let Some(running) = guard.as_ref() {
-                        if !needs_restart(&running.spec, &spec) {
-                            if running_sidecar_healthy(running).await {
-                                drop(guard);
-                                drop(permit);
-                                continue;
-                            }
-                            self.emit(SidecarState::Crashed, Some(model_label(&running.spec)));
+                        if !needs_restart(&running.spec, &spec)
+                            && running_sidecar_healthy(running).await
+                        {
+                            drop(guard);
+                            drop(permit);
+                            continue;
                         }
+                        self.emit(SidecarState::Crashed, Some(crashed_model));
                     } else {
                         drop(guard);
                         drop(permit);

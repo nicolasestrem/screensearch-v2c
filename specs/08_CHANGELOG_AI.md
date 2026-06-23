@@ -813,3 +813,15 @@
 - **Verification (targeted during follow-up):** `cargo test -p inference` → inference unit **42
   passed**, no-orphan **1 passed**, reap **3 passed**, sidecar client **8 passed**, smoke **2
   ignored**.
+
+## 2026-06-23 — PR #18 second review follow-up (`codex/p4-sidecar-hardening`)
+- **Context:** fresh PR comments after `df02070` found two remaining edge cases: a status-bus gap
+  when crash recovery races a concurrent model switch, and a startup cleanup gap when a bad
+  `SSV2C_LLAMA_RELEASE_URL` fails before the supervisor has a chance to reap a pidfile from an older
+  normal/override install.
+- **Change:** the crash-recovery branch records the model label observed unhealthy before dropping
+  the shared request permit and emits that `Crashed` transition once the exclusive recovery path takes
+  over. `init_inference` now scans installed normal/override binary candidates and calls
+  `reap_stray_any` before `ensure_binary`, then reuses that candidate list for `SupervisorConfig`.
+- **Interface review:** no schema, IPC, `ts-rs`, or public command changes. The optional multi-GB GPU
+  smokes remain ignored.
