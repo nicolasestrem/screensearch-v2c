@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiled `MIGRATIONS` set and debug-asserts that `LATEST_SCHEMA_VERSION` stays in sync. The
   future-schema regression test now uses `tempfile::tempdir`, with `tempfile` centralized in workspace
   dependency versions for Rust tests.
+- **PR #15 Codex review follow-up:** the periodic enrichment stale-job sweep now skips while the
+  current worker pool has in-flight jobs. A long but live provider call stays `running`, so its later
+  retry/dead-letter failure is accounted by `fail_job` instead of being requeued out from under the
+  worker. Startup recovery still requeues leftover `running` jobs before workers start.
 - Added regression tests for pending/done/dead job finalization and future-schema rejection. No IPC,
   `ts-rs`, schema, or trait signatures changed.
 

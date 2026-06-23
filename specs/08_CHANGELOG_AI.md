@@ -665,3 +665,26 @@
 - **Why:** this tightens the future-schema rejection around the migration set the binary actually
   contains and makes the test robust to panics without changing IPC, `ts-rs`, schema SQL, or trait
   interfaces.
+
+## 2026-06-23 — PR #15 Codex review follow-up (`codex/fix-p0-p1-review-findings`)
+- **Context:** a new Codex review thread on `crates/store/src/jobs.rs` pointed out a production
+  interaction between the stricter `fail_job(... state='running')` guard and the kernel's periodic
+  stale-running sweep: a long but live provider call could be requeued to `pending` after the
+  visibility timeout, then fail later and lose retry/dead-letter accounting because it no longer owned
+  a `running` row.
+- **Change:** `kernel::worker_pool` now tracks this process's active job ids in a small
+  `Arc<Mutex<HashSet<i64>>>`. Each worker holds an RAII guard while `process_job` awaits provider work;
+  the periodic sweep checks that set and skips requeueing while any current-pool job is in flight.
+  Startup recovery still calls `reset_stale_running_jobs(0)` before workers are spawned, so prior-run
+  leftovers are still recovered.
+- **Why not loosen `fail_job`:** the store has no durable claim token. Allowing `fail_job` to mutate a
+  `pending` row after stale requeue would reintroduce stale-worker finalization by id alone, and an old
+  worker could also race with a newly claimed `running` row. The kernel-local guard preserves failure
+  accounting for live long calls without changing IPC, `ts-rs`, schema SQL, or trait interfaces.
+- **Verification (verbatim):** `cargo test -p kernel active_job_guard_tracks_in_flight_job_until_drop`
+  → `test worker_pool::tests::active_job_guard_tracks_in_flight_job_until_drop ... ok`;
+  `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings` exit 0;
+  `cargo test --workspace` exit 0 (new kernel unit test, kernel enrichment **9 passed**, store
+  integration **39 passed**, traits binding tests **32 passed**); `npm --prefix ui run build` exit 0
+  (`✓ built in 1.48s`); `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings`
+  exit 0.

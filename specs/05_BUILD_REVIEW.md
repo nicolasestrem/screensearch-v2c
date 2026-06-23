@@ -1073,3 +1073,74 @@ $ git diff --exit-code -- ui/src/bindings
   compiled migration reality as the source of truth and asserts the public constant matches it.
 - Added `tempfile` only as a Rust test dependency and centralized its version in workspace
   dependencies, including the existing kernel test use.
+
+---
+
+## Pass — 2026-06-23 — PR #15 Codex review follow-up (`codex/fix-p0-p1-review-findings` branch)
+
+### Review Thread Addressed
+- **`crates/store/src/jobs.rs` / kernel stale requeue interaction** — Codex flagged that a provider
+  call running past the 5-minute visibility timeout could be requeued to `pending`; if the same live
+  call later returned a retryable/dead-letter failure, the new `fail_job(... state='running')` guard
+  would reject it, skipping attempts/backoff accounting.
+
+### Resolution
+- Kept the store contract strict: `complete_job` and `fail_job` still mutate only `running` jobs.
+  Without a durable claim token, weakening `fail_job` to touch `pending` jobs would let an old worker
+  mutate a stale/reclaimed job by id alone.
+- Added a process-local active-job set in `kernel::worker_pool`. Worker tasks insert the claimed job id
+  while processing and remove it via an RAII guard on completion/panic. The periodic stale sweep skips
+  while any current-pool job is active, so long-but-live provider calls remain `running` and can record
+  their final retry/dead-letter result normally. Startup recovery is unchanged and still requeues
+  leftover `running` rows before any worker is live.
+
+### Interface Review
+- No IPC, `ts-rs`, schema SQL, or `Store` trait signature changes.
+- The fix is intentionally kernel-local because the durable store has no per-claim lease token.
+
+### Verification (verbatim)
+```
+$ cargo test -p kernel active_job_guard_tracks_in_flight_job_until_drop
+
+running 1 test
+test worker_pool::tests::active_job_guard_tracks_in_flight_job_until_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.95s
+```
+
+```
+$ cargo test --workspace
+test worker_pool::tests::active_job_guard_tracks_in_flight_job_until_drop ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out # kernel enrichment
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out # traits binding tests
+```
+
+```
+$ npm --prefix ui run build
+> screensearch-ui@0.0.0 build
+> tsc --noEmit && vite build
+✓ built in 1.48s
+```
+
+```
+$ npm --prefix ui run lint
+> screensearch-ui@0.0.0 lint
+> eslint .
+```
+
+```
+$ git diff --exit-code -- ui/src/bindings
+```
