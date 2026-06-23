@@ -322,10 +322,13 @@ rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_te
 `answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
 `sidecar.device`. Model tiers and sidecar launch options are applied live for the next request that
 needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool from current
-settings after save. Capture's enqueue decisions for new `embed_*` jobs are still captured when a
-capture session starts, so changing those toggles affects capture enqueueing on the next capture
-start. `storage.retention_days = 0` means keep forever; any positive value is enforced by a startup
-and hourly sweeper that deletes DB rows and safe relative frame files in bounded batches.
+settings after save. If image embeddings are newly enabled, the composition root reloads the
+FastEmbed provider with the optional image lane before workers claim `embed_image` jobs. Capture's
+enqueue decisions for new `embed_*` jobs are still captured when a capture session starts, so
+changing those toggles affects capture enqueueing on the next capture start. A
+`storage.retention_days` value of `0` means keep forever; any positive value is enforced by a
+startup and hourly sweeper that removes
+safe relative frame files first, then deletes their DB rows in bounded batches.
 
 ---
 

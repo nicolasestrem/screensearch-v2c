@@ -17,7 +17,9 @@
   a single DB delete fails; fixed monitor toggling from the empty/all-monitors state; gated/refreshed
   sidecar device listing on sidecar readiness; removed the simultaneous Select + manual sidecar
   device controls; updated stale toast comments; renamed `uuid_like_id` to `next_ask_id`; documented
-  the sidecar-device parser heuristic; and clarified embed-toggle apply timing in Settings/docs.
+  the sidecar-device parser heuristic; clarified embed-toggle apply timing in Settings/docs; reloaded
+  FastEmbed with the image lane when image embeddings are enabled after a text-only startup; and made
+  retention delete JPEG files before DB rows so a locked file remains retryable on the next sweep.
 - **Why:** Reviewers found a real task-map leak race, a retention "poison pill" failure mode, and
   confusing Settings UX/labels. The `enrichTimer` cleanup comment was verified as already fixed in
   `HEAD` and required no code change.

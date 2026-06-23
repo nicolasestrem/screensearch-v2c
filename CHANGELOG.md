@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refreshed sidecar devices when readiness becomes ready, removed redundant device controls, and
   clarified that capture enqueue settings apply on the next capture start while worker claiming
   updates after save.
+- **PR #19 Codex follow-up:** enabling image embeddings after startup now reloads the FastEmbed
+  provider with the image lane instead of letting `embed_image` jobs fail until restart, and
+  retention removes frame files before DB rows so transient Windows file locks do not create
+  permanent orphan JPEGs.
 - Packaging remains deferred as the separate DoD §13.9 follow-up.
 
 ### Docs — Refreshed root `CLAUDE.md` to current state (2026-06-23)

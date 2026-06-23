@@ -91,6 +91,8 @@ struct AppState {
     sidecar_binary: SharedSlot<PathBuf>,
     /// In-flight answer providers keyed by client request id; `cancel_ask` aborts them.
     ask_tasks: AskTasks,
+    /// Whether the currently attached FastEmbed provider loaded the optional image lane.
+    embedder_with_image: Arc<StdMutex<bool>>,
     embed_models_dir: PathBuf,
     db_path: PathBuf,
     frames_dir: PathBuf,
@@ -458,8 +460,8 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 /// Persist user settings (`set_settings`, `03 §7/§8`). All keys are written durably.
 /// Model tiers **hot-apply** to the live providers here (same path as
 /// `set_model_tier`); `answer.thinking` is read per-`ask`; capture/storage/privacy
-/// take effect on the next capture start and the rest on app restart (the Settings
-/// UI labels each accordingly — no fictional live reconfiguration).
+/// take effect on the next capture start; enrichment workers reconfigure after save
+/// and the image embedder reloads when the image lane is newly enabled.
 #[tauri::command]
 async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let store = state
@@ -470,8 +472,7 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         .await
         .map_err(|e| e.to_string())?;
 
-    // Hot-apply the lane tiers to the live providers (the sidecar switches GGUF on
-    // the lane's next request, `03 §6`); everything else is persisted only.
+    // Hot-apply sidecar lane settings; embedding workers are handled below.
     if let Some(v) = state.vision.lock().expect("vision slot").clone() {
         v.set_tier(settings.models_vision_tier);
         v.set_launch_options(settings.sidecar_ngl, settings.sidecar_device.clone());
@@ -483,6 +484,11 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
     if let Some(kernel) = state.kernel.clone() {
         let embeddings_enabled = settings.enrich_embed_text || settings.enrich_image_embeddings;
         let embed_status = kernel.readiness().embed_model.status;
+        let needs_image_embedder = settings.enrich_image_embeddings
+            && !*state
+                .embedder_with_image
+                .lock()
+                .expect("embedder image flag");
         if embeddings_enabled
             && matches!(
                 embed_status,
@@ -498,6 +504,19 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
                 kernel,
                 dyn_store,
                 state.embed_models_dir.clone(),
+                state.embedder_with_image.clone(),
+            ));
+        } else if needs_image_embedder {
+            kernel.set_embed_readiness(
+                ComponentStatus::Initializing,
+                Some("loading image embedding model".to_string()),
+            );
+            let dyn_store: Arc<dyn Store> = store.clone();
+            tauri::async_runtime::spawn(init_embeddings(
+                kernel,
+                dyn_store,
+                state.embed_models_dir.clone(),
+                state.embedder_with_image.clone(),
             ));
         } else {
             kernel.reconfigure_enrichment().await;
@@ -557,6 +576,7 @@ pub fn run() {
             let vision_slot: SharedSlot<Arc<VisionSidecar>> = Arc::new(StdMutex::new(None));
             let answer_slot: SharedSlot<Arc<AnswerSidecar>> = Arc::new(StdMutex::new(None));
             let sidecar_binary_slot: SharedSlot<PathBuf> = Arc::new(StdMutex::new(None));
+            let embedder_with_image = Arc::new(StdMutex::new(false));
 
             // Forward kernel events to the UI, and kick off the off-thread model loads
             // (P3 embeddings + P4 inference) — app launch is never blocked on the
@@ -574,6 +594,7 @@ pub fn run() {
                     kernel.clone(),
                     dyn_store,
                     embed_models_dir.clone(),
+                    embedder_with_image.clone(),
                 ));
 
                 // Resolve the sidecar binary + wire the inference providers off-thread.
@@ -607,6 +628,7 @@ pub fn run() {
                 answer: answer_slot,
                 sidecar_binary: sidecar_binary_slot,
                 ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                embedder_with_image,
                 embed_models_dir,
                 db_path,
                 frames_dir,
@@ -664,9 +686,15 @@ pub fn run() {
 /// first-run download; `embed_model` readiness reflects progress
 /// (Initializing → Ready / Unavailable / Disabled). Skips loading entirely when both
 /// text and image embeddings are off.
-async fn init_embeddings(kernel: Arc<Kernel>, store: Arc<dyn Store>, models_dir: PathBuf) {
+async fn init_embeddings(
+    kernel: Arc<Kernel>,
+    store: Arc<dyn Store>,
+    models_dir: PathBuf,
+    embedder_with_image: Arc<StdMutex<bool>>,
+) {
     let settings = kernel::settings::load_settings(store.as_ref()).await;
     if !settings.enrich_embed_text && !settings.enrich_image_embeddings {
+        *embedder_with_image.lock().expect("embedder image flag") = false;
         kernel.set_embed_readiness(
             ComponentStatus::Disabled,
             Some("embeddings disabled in settings".to_string()),
@@ -679,12 +707,15 @@ async fn init_embeddings(kernel: Arc<Kernel>, store: Arc<dyn Store>, models_dir:
         Ok(Ok(provider)) => {
             tracing::info!("embedding model loaded; attaching to kernel");
             kernel.attach_embedder(Arc::new(provider)).await;
+            *embedder_with_image.lock().expect("embedder image flag") = with_image;
         }
         Ok(Err(e)) => {
+            *embedder_with_image.lock().expect("embedder image flag") = false;
             tracing::error!(error = %e, "embedding model load failed");
             kernel.set_embed_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
         }
         Err(e) => {
+            *embedder_with_image.lock().expect("embedder image flag") = false;
             tracing::error!(error = %e, "embedding model load task panicked");
             kernel.set_embed_readiness(
                 ComponentStatus::Unavailable,
@@ -945,16 +976,17 @@ async fn run_retention_once(
     let mut purged = 0_u64;
     for frame in candidates {
         let image_path = safe_frame_path(data_dir, &frame.image_path);
-        if let Err(e) = store.delete_frame(frame.frame_id).await {
-            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not delete frame from database");
-            continue;
-        }
         if let Some(path) = image_path {
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!(path = %path.display(), error = %e, "retention could not delete frame file");
+                    continue;
                 }
             }
+        }
+        if let Err(e) = store.delete_frame(frame.frame_id).await {
+            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not delete frame from database");
+            continue;
         }
         purged += 1;
     }

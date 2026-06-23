@@ -1116,6 +1116,10 @@ comprehensive review hardening PR.
   an explanatory comment for the llama.cpp device-id parser threshold.
 - Verified the Claude `enrichTimer` cleanup comment was already addressed in `HEAD`; no extra code
   change was needed there.
+- **Second Codex pass:** tracked whether the attached FastEmbed provider has the optional image lane
+  and reloads it when `enrich_image_embeddings` is enabled after a text-only startup. Retention now
+  removes each frame file before deleting its DB row, so a transient file-lock failure keeps the row
+  available for retry instead of orphaning the JPEG.
 
 **Verification.** Rerun after this follow-up before pushing:
 - `cargo fmt --all -- --check`
