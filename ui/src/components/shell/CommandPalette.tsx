@@ -39,6 +39,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listboxId = "command-palette-listbox";
 
   const commands = useMemo<Command[]>(() => {
     const toggleCapture = (control: "start" | "stop") =>
@@ -85,6 +86,7 @@ export function CommandPalette() {
     close();
     cmd.run();
   };
+  const activeOption = filtered[active] ? `command-option-${filtered[active].id}` : undefined;
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key === "Escape") {
@@ -118,26 +120,34 @@ export function CommandPalette() {
         <input
           ref={inputRef}
           type="text"
+          role="combobox"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Jump to… or run a command"
           aria-label="Command palette query"
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-controls={listboxId}
+          aria-activedescendant={activeOption}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
           spellCheck={false}
           className="w-full bg-transparent px-4 py-3 text-body text-ink placeholder:text-ink-faint border-b border-line font-body"
         />
-        <ul className="max-h-80 overflow-y-auto py-2">
+        <ul id={listboxId} role="listbox" className="max-h-80 overflow-y-auto py-2">
           {filtered.length === 0 ? (
             <li className="px-4 py-3 text-body text-ink-muted font-body">No matching command</li>
           ) : (
             filtered.map((c, i) => {
               const Icon = c.icon;
               return (
-                <li key={c.id}>
+                <li key={c.id} role="presentation">
                   <button
+                    id={`command-option-${c.id}`}
                     type="button"
+                    role="option"
+                    aria-selected={i === active}
                     onMouseEnter={() => setActive(i)}
                     onClick={() => run(c)}
                     className={cn(

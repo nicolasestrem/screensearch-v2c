@@ -7,9 +7,10 @@ A standalone, **Windows-only**, local-first desktop app (Rust + Tauri 2) that ca
 makes it searchable by text and meaning, and answers questions about it — fully on-device. This is
 a **clean-slate** project; it shares no code or data with any prior version.
 
-**Current state: P0–P5 complete and merged to `main` (2026-06-21 → 06-23); now in post-merge
-hardening / review passes.** The full app exists — a 9-crate Rust workspace + a React/TS UI. The
-specs remain the contract; the build-loop docs (`05`/`06`/`07`/`08`) are the live status of record.
+**Current state: P0–P5 complete and merged to `main` (2026-06-21 → 06-23); the
+`codex/p5-comprehensive-review-fixes` branch carries the P5 review hardening pass.** The full app
+exists — a 9-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop
+docs (`05`/`06`/`07`/`08`) are the live status of record. Packaging is still the deferred follow-up.
 
 ## ⛔ Read the spec before doing anything (mandatory order)
 1. `specs/01_PROJECT_CONTEXT.md` — what is true today (env, constraints, non-goals)

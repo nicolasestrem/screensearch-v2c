@@ -1055,6 +1055,47 @@ $ npm --prefix ui run lint
 $ git diff --exit-code -- ui/src/bindings
 ```
 
+## Pass — 2026-06-23 — P5 comprehensive review hardening (`codex/p5-comprehensive-review-fixes` branch)
+
+**Scope.** Implemented the approved post-P5 review plan while keeping packaging deferred (`07` #26).
+This pass closes P5-adjacent correctness, boundedness, accessibility, live-refresh, telemetry,
+retention, and sidecar-device gaps without changing the packaging decision.
+
+**Backend / contract changes.**
+- Added range-aware nearest-frame lookup (`get_nearest_frame(at, range?)`) and store coverage so
+  Timeline opens cannot escape the selected window.
+- Clamped direct IPC sizes for frame lists, frame context, Timeline buckets, and Insights buckets.
+- Added storage stats (`get_storage_stats`), monitor enumeration (`get_monitors`), sidecar device
+  enumeration (`list_sidecar_devices` via `llama-server --list-devices`), optional
+  `sidecar.device`, request-scoped `AnswerEvent`, and `cancel_ask`.
+- Added `KernelEvent::Toast` and richer successful data-changing `JobCompleted` events; the UI uses
+  these for operational notices and surgical query invalidation.
+- Enforced `storage.retention_days` at startup and hourly in 1000-row batches, deleting DB rows and
+  only containment-checked relative frame files under `<app-data>/frames`.
+- Reconfigured enrichment workers live after settings changes and when an embedder attaches, so
+  embedding lanes can be re-enabled without restarting the app.
+
+**UI changes.**
+- Reworked local-day helpers to use calendar midnights (`Date(year, month, day + n)`) instead of
+  fixed 24-hour offsets.
+- Added Deck panel-level error/retry states for readiness, insights, frames, timeline, and job
+  stats; completed Command Palette ARIA combobox/listbox semantics.
+- Removed hardcoded Timeline drawing colors in favor of CSS token values.
+- Added StatusRail storage telemetry, monitor picker + manual fallback, sidecar device picker +
+  manual fallback, request-id ask cancellation/stale-delta filtering, embeddings-disabled
+  live-search invalidation, and adaptive Timeline/Insights bucket counts from measured chart width.
+
+**Docs / tracking.** Updated `CHANGELOG.md`, `README.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md`,
+`specs/07_KNOWN_GAPS.md`, and `specs/08_CHANGELOG_AI.md`; `07` #26 remains open for packaging.
+
+**Verification.** Final gates all exited 0 after the last code change:
+- `cargo fmt --all -- --check`
+- `npm --prefix ui run lint`
+- `npm --prefix ui run typecheck`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `npm --prefix ui run build`
+
 ---
 
 ## Pass — 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening` branch)

@@ -458,7 +458,10 @@ impl ModelSupervisor {
 /// Whether switching from `running` to `requested` requires a sidecar restart (a
 /// different GGUF or projector). Same model → reuse the running process.
 pub fn needs_restart(running: &ModelSpec, requested: &ModelSpec) -> bool {
-    running.gguf_path != requested.gguf_path || running.mmproj_path != requested.mmproj_path
+    running.gguf_path != requested.gguf_path
+        || running.mmproj_path != requested.mmproj_path
+        || running.ngl != requested.ngl
+        || running.device != requested.device
 }
 
 /// Pure idle predicate (extracted for testing): idle once `elapsed >= ttl`.
@@ -538,6 +541,10 @@ fn build_args(spec: &ModelSpec, port: u16) -> Vec<String> {
         args.push("--mmproj".to_string());
         args.push(mmproj.to_string_lossy().into_owned());
     }
+    if let Some(device) = &spec.device {
+        args.push("--device".to_string());
+        args.push(device.clone());
+    }
     args
 }
 
@@ -573,6 +580,7 @@ mod tests {
             gguf_path: PathBuf::from(gguf),
             mmproj_path: mmproj.map(PathBuf::from),
             ngl: 99,
+            device: None,
         }
     }
 
@@ -688,5 +696,17 @@ mod tests {
         assert!(vision
             .windows(2)
             .any(|w| w[0] == "--mmproj" && w[1] == r"C:\m\mmproj.gguf"));
+    }
+
+    #[test]
+    fn build_args_adds_device_when_configured() {
+        let mut answer = spec(r"C:\m\a.gguf", None);
+        answer.device = Some("Vulkan0".to_string());
+
+        let args = build_args(&answer, 8080);
+
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--device" && w[1] == "Vulkan0"));
     }
 }

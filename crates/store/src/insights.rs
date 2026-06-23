@@ -14,20 +14,22 @@ use crate::SqliteStore;
 /// Rows returned in the top-apps / activity breakdowns (a readable Insights list,
 /// not the full long tail).
 const TOP_N: i64 = 12;
-/// Capture-density buckets for the Insights over-time chart.
-const INSIGHTS_BUCKETS: u32 = 48;
-
 impl SqliteStore {
     /// Aggregates frame activity over the half-open window `[start, end)`. Returns an
     /// empty summary (all zeros / empty lists) when the window holds no frames.
-    pub async fn insights_summary(&self, start: i64, end: i64) -> Result<InsightsSummary> {
+    pub async fn insights_summary(
+        &self,
+        start: i64,
+        end: i64,
+        bucket_count: u32,
+    ) -> Result<InsightsSummary> {
         // Invalid or unrepresentable window → honest-empty summary up front, skipping
         // four queries (and a `timeline_buckets` call) that would all return
         // zero/empty anyway.
-        if end <= start || end.checked_sub(start).is_none() {
+        if end <= start || end.checked_sub(start).is_none() || bucket_count == 0 {
             return Ok(InsightsSummary::default());
         }
-        let captures = self.timeline_buckets(start, end, INSIGHTS_BUCKETS).await?;
+        let captures = self.timeline_buckets(start, end, bucket_count).await?;
         self.with_conn(move |conn| {
             let total_frames: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM frames WHERE captured_at >= ?1 AND captured_at < ?2",

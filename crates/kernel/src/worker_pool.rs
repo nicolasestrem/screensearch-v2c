@@ -20,7 +20,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
-use traits::{ChunkSource, EmbeddingProvider, Job, JobKind, Store, VisionProvider};
+use traits::{ChunkSource, EmbeddingProvider, Job, JobCompleted, JobKind, Store, VisionProvider};
 
 use crate::events::KernelEvent;
 
@@ -67,12 +67,19 @@ fn backoff_ms(attempts: i64) -> i64 {
 /// What to do with a job after running its provider.
 enum Outcome {
     /// Done (or nothing to do) → `complete_job`.
-    Complete,
+    Complete { changed_data: bool },
     /// Unrecoverable (malformed job, missing file) → dead-letter now, no retry.
     DeadLetter(String),
     /// Recoverable (embed/upsert/read error) → `fail_job` with backoff (the store
     /// dead-letters once attempts are exhausted).
     Retry(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompletedJobInfo {
+    job_id: i64,
+    kind: JobKind,
+    frame_id: i64,
 }
 
 /// Everything a worker needs, shared (via `Arc`) across the pool.
@@ -225,7 +232,7 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 // so missing providers here are defensive against races.
                 let embedder = shared.embedder.read().expect("embedder slot lock").clone();
                 let vision = shared.vision.read().expect("vision slot lock").clone();
-                if let Err(e) = process_job_with_providers(
+                let completed = match process_job_with_providers(
                     &shared.store,
                     embedder.as_ref(),
                     vision.as_ref(),
@@ -234,9 +241,13 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 )
                 .await
                 {
-                    tracing::warn!(error = %e, "worker: finalizing job failed");
-                }
-                emit_progress(&shared).await;
+                    Ok(completed) => completed,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "worker: finalizing job failed");
+                        None
+                    }
+                };
+                emit_progress(&shared, completed).await;
                 backoff = IDLE_MIN;
             }
             None => {
@@ -261,7 +272,9 @@ pub async fn process_job(
     data_dir: &Path,
     job: Job,
 ) -> Result<()> {
-    process_job_with_providers(store, Some(embedder), vision, data_dir, job).await
+    process_job_with_providers(store, Some(embedder), vision, data_dir, job)
+        .await
+        .map(|_| ())
 }
 
 async fn process_job_with_providers(
@@ -270,7 +283,10 @@ async fn process_job_with_providers(
     vision: Option<&Arc<dyn VisionProvider>>,
     data_dir: &Path,
     job: Job,
-) -> Result<()> {
+) -> Result<Option<CompletedJobInfo>> {
+    let job_id = job.id;
+    let kind = job.kind;
+    let frame_id = job.frame_id;
     let outcome = match job.kind {
         JobKind::EmbedText => match embedder {
             Some(embedder) => embed_text_outcome(store, embedder, job.frame_id).await,
@@ -283,16 +299,38 @@ async fn process_job_with_providers(
         JobKind::VisionTag => vision_tag_outcome(store, vision, data_dir, job.frame_id).await,
     };
     match outcome {
-        Outcome::Complete => store.complete_job(job.id).await,
+        Outcome::Complete { changed_data } => {
+            store.complete_job(job.id).await?;
+            Ok(completion_info(job_id, kind, frame_id, changed_data))
+        }
         Outcome::DeadLetter(err) => {
             tracing::warn!(job = job.id, error = %err, "job dead-lettered");
-            store.fail_job(job.id, &err, None).await
+            store.fail_job(job.id, &err, None).await?;
+            Ok(None)
         }
         Outcome::Retry(err) => {
             let retry_at = now_ms() + backoff_ms(job.attempts);
             tracing::debug!(job = job.id, error = %err, retry_at, "job retry scheduled");
-            store.fail_job(job.id, &err, Some(retry_at)).await
+            store.fail_job(job.id, &err, Some(retry_at)).await?;
+            Ok(None)
         }
+    }
+}
+
+fn completion_info(
+    job_id: i64,
+    kind: JobKind,
+    frame_id: Option<i64>,
+    changed_data: bool,
+) -> Option<CompletedJobInfo> {
+    if changed_data {
+        frame_id.map(|frame_id| CompletedJobInfo {
+            job_id,
+            kind,
+            frame_id,
+        })
+    } else {
+        None
     }
 }
 
@@ -318,9 +356,17 @@ async fn sweep_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     }
 }
 
-async fn emit_progress(shared: &Shared) {
+async fn emit_progress(shared: &Shared, completed: Option<CompletedJobInfo>) {
     if let Ok(stats) = shared.store.job_stats().await {
-        let _ = shared.events.send(KernelEvent::JobProgress(stats));
+        let _ = shared.events.send(KernelEvent::JobProgress(stats.clone()));
+        if let Some(c) = completed {
+            let _ = shared.events.send(KernelEvent::JobCompleted(JobCompleted {
+                job_id: c.job_id,
+                kind: c.kind,
+                frame_id: c.frame_id,
+                stats,
+            }));
+        }
     }
 }
 
@@ -337,12 +383,18 @@ async fn embed_text_outcome(
     };
     let input = match store.get_enrichment_input(frame_id).await {
         Ok(Some(i)) => i,
-        Ok(None) => return Outcome::Complete, // frame purged between enqueue and run
+        Ok(None) => {
+            return Outcome::Complete {
+                changed_data: false,
+            }
+        } // frame purged between enqueue and run
         Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
     };
     let text = input.ocr_text.unwrap_or_default();
     if text.trim().is_empty() {
-        return Outcome::Complete; // no OCR text to embed
+        return Outcome::Complete {
+            changed_data: false,
+        }; // no OCR text to embed
     }
     let emb = match embedder.embed_texts(std::slice::from_ref(&text)).await {
         Ok(mut v) => match v.pop() {
@@ -362,7 +414,7 @@ async fn embed_text_outcome(
         )
         .await
     {
-        Ok(()) => Outcome::Complete,
+        Ok(()) => Outcome::Complete { changed_data: true },
         Err(e) => Outcome::Retry(format!("upsert text embedding: {e}")),
     }
 }
@@ -381,7 +433,11 @@ async fn embed_image_outcome(
     };
     let input = match store.get_enrichment_input(frame_id).await {
         Ok(Some(i)) => i,
-        Ok(None) => return Outcome::Complete,
+        Ok(None) => {
+            return Outcome::Complete {
+                changed_data: false,
+            }
+        }
         Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
     };
     let abs = data_dir.join(&input.image_path);
@@ -407,7 +463,7 @@ async fn embed_image_outcome(
         .upsert_image_embedding(frame_id, &emb, embedder.image_model_name())
         .await
     {
-        Ok(()) => Outcome::Complete,
+        Ok(()) => Outcome::Complete { changed_data: true },
         Err(e) => Outcome::Retry(format!("upsert image embedding: {e}")),
     }
 }
@@ -432,7 +488,11 @@ async fn vision_tag_outcome(
     };
     let input = match store.get_enrichment_input(frame_id).await {
         Ok(Some(i)) => i,
-        Ok(None) => return Outcome::Complete, // frame purged between enqueue and run
+        Ok(None) => {
+            return Outcome::Complete {
+                changed_data: false,
+            }
+        } // frame purged between enqueue and run
         Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
     };
     let abs = data_dir.join(&input.image_path);
@@ -451,7 +511,7 @@ async fn vision_tag_outcome(
         Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e}")),
     };
     match store.insert_vision(frame_id, analysis).await {
-        Ok(()) => Outcome::Complete,
+        Ok(()) => Outcome::Complete { changed_data: true },
         Err(e) => Outcome::Retry(format!("insert vision {frame_id}: {e}")),
     }
 }
@@ -480,5 +540,19 @@ mod tests {
         }
 
         assert_eq!(active_job_count(&active_jobs), 0);
+    }
+
+    #[test]
+    fn completion_info_only_for_changed_frame_jobs() {
+        assert_eq!(
+            completion_info(1, JobKind::EmbedText, Some(7), true),
+            Some(CompletedJobInfo {
+                job_id: 1,
+                kind: JobKind::EmbedText,
+                frame_id: 7,
+            })
+        );
+        assert_eq!(completion_info(1, JobKind::EmbedText, Some(7), false), None);
+        assert_eq!(completion_info(1, JobKind::EmbedText, None, true), None);
     }
 }

@@ -1,7 +1,5 @@
-// RetentionControl (UI_REFERENCE §5) — the capture-retention window. The value is
-// persisted honestly but **not yet enforced**: no purge job exists, so nothing is
-// auto-deleted today (a retention sweep is a planned follow-up, logged in
-// specs/07_KNOWN_GAPS.md). The hint says so plainly rather than implying deletion.
+// RetentionControl (UI_REFERENCE §5) — the capture-retention window. A backend
+// sweep runs at startup and hourly; 0 keeps captures forever.
 import { Field } from "../primitives";
 
 export interface RetentionControlProps {
@@ -22,7 +20,7 @@ export function RetentionControl({ days, onChange }: RetentionControlProps) {
         // A cleared field is NaN — fall back to 0 so the input doesn't snap back.
         else if (e.currentTarget.value === "") onChange(0);
       }}
-      hint="0 keeps captures forever. Recorded but not yet enforced — no automatic deletion runs today (a purge job is a planned follow-up)."
+      hint="0 keeps captures forever. Old captures are purged at startup and hourly."
     />
   );
 }

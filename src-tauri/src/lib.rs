@@ -8,33 +8,68 @@
 //! provider slots that start the enrichment workers and light up search, vision
 //! tagging, and grounded answers. P5 adds the full Command Deck command surface.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
-    AnswerDelta, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
+    AnswerEvent, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
     ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary, JobStats,
-    ModelLane, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit, SearchQuery,
-    SetModelTier, Settings, Store, TimeRange, TimelineBucket, VisionTarget,
+    ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit,
+    SearchQuery, SetModelTier, Settings, StorageStats, Store, TimeRange, TimelineBucket,
+    ToastLevel, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
 use inference::{AnswerSidecar, ModelSupervisor, SupervisorConfig, VisionSidecar};
 use kernel::{CaptureFactory, IdleSource, Kernel, KernelEvent};
 use store::SqliteStore;
+use tokio::task::JoinHandle;
 
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
 /// on first run / large quants).
 const SIDECAR_HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 /// Top-K retrieved chunks used as grounding context for an `ask` (`07` decision).
 const ASK_TOP_K: u32 = 8;
+const MAX_FRAME_LIST_LIMIT: u32 = 500;
+const MAX_FRAME_CONTEXT_LIMIT_EACH: u32 = 50;
+const MIN_TIMELINE_BUCKETS: u32 = 120;
+const MAX_TIMELINE_BUCKETS: u32 = 2000;
+const MIN_INSIGHTS_BUCKETS: u32 = 24;
+const MAX_INSIGHTS_BUCKETS: u32 = 720;
+const RETENTION_BATCH: u32 = 1000;
+const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const DAY_MS: i64 = 86_400_000;
+static NEXT_ASK_ID: AtomicU64 = AtomicU64::new(1);
+
+fn uuid_like_id() -> u64 {
+    NEXT_ASK_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn clamp_timeline_buckets(bucket_count: u32) -> u32 {
+    bucket_count.clamp(MIN_TIMELINE_BUCKETS, MAX_TIMELINE_BUCKETS)
+}
+
+fn clamp_insights_buckets(bucket_count: u32) -> u32 {
+    bucket_count.clamp(MIN_INSIGHTS_BUCKETS, MAX_INSIGHTS_BUCKETS)
+}
+
+fn clamp_frame_list_limit(limit: u32) -> u32 {
+    limit.min(MAX_FRAME_LIST_LIMIT)
+}
+
+fn clamp_frame_context_limit(limit_each: u32) -> u32 {
+    limit_each.min(MAX_FRAME_CONTEXT_LIMIT_EACH)
+}
 
 /// A slot the composition root fills off the launch thread, shared with command
 /// handlers (the sidecar supervisor + the concrete tiered providers).
 type SharedSlot<T> = Arc<StdMutex<Option<T>>>;
+type AskTasks = Arc<tokio::sync::Mutex<HashMap<String, JoinHandle<()>>>>;
 
 /// App-wide state owned by the composition root and shared with command handlers.
 struct AppState {
@@ -53,6 +88,12 @@ struct AppState {
     /// as `dyn` traits, which can't switch tier).
     vision: SharedSlot<Arc<VisionSidecar>>,
     answer: SharedSlot<Arc<AnswerSidecar>>,
+    sidecar_binary: SharedSlot<PathBuf>,
+    /// In-flight answer providers keyed by client request id; `cancel_ask` aborts them.
+    ask_tasks: AskTasks,
+    embed_models_dir: PathBuf,
+    db_path: PathBuf,
+    frames_dir: PathBuf,
 }
 
 /// Liveness probe for the typed IPC bridge (P0 smoke test, retained).
@@ -80,6 +121,32 @@ async fn get_job_stats(state: State<'_, AppState>) -> Result<JobStats, String> {
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store.job_stats().await.map_err(|e| e.to_string())
+}
+
+/// Storage footprint for the StatusRail (`get_storage_stats`, P5 follow-up).
+#[tauri::command]
+async fn get_storage_stats(state: State<'_, AppState>) -> Result<StorageStats, String> {
+    storage_stats(state.db_path.clone(), state.frames_dir.clone()).await
+}
+
+/// Connected monitor metadata for Settings.
+#[tauri::command]
+fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
+    Ok(capture::enumerate_monitors())
+}
+
+/// Lists llama.cpp device ids reported by the resolved sidecar binary (`--list-devices`).
+#[tauri::command]
+async fn list_sidecar_devices(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let binary = state
+        .sidecar_binary
+        .lock()
+        .expect("sidecar binary slot")
+        .clone()
+        .ok_or_else(|| "llama-server binary is not resolved yet".to_string())?;
+    tokio::task::spawn_blocking(move || list_devices_from_binary(&binary))
+        .await
+        .map_err(|e| format!("device listing task failed: {e}"))?
 }
 
 /// Full per-frame detail for the timeline (`03 §7`): base row + OCR text + vision +
@@ -153,6 +220,11 @@ async fn ask(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let request_id = request
+        .request_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| format!("legacy-{}", uuid_like_id()));
     let store = state
         .store
         .clone()
@@ -193,13 +265,21 @@ async fn ask(
         })
         .collect();
 
-    // Stream: the provider sends typed deltas on `tx`; a forwarder emits each as an
-    // `answer_delta` event. Both end when the provider finishes (tx drops → rx closes).
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AnswerDelta>(64);
+    // Stream: the provider sends typed deltas on `tx`; a forwarder tags each with
+    // `request_id` before emitting it as an `answer_delta` event. The provider task
+    // is kept in `ask_tasks` so the UI can cancel superseded streams.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let emitter = app.clone();
+    let event_request_id = request_id.clone();
     tokio::spawn(async move {
         while let Some(delta) = rx.recv().await {
-            let _ = emitter.emit("answer_delta", delta);
+            let _ = emitter.emit(
+                "answer_delta",
+                AnswerEvent {
+                    request_id: event_request_id.clone(),
+                    delta,
+                },
+            );
         }
     });
     let opts = AnswerOpts {
@@ -207,9 +287,25 @@ async fn ask(
         max_tokens: request.max_tokens,
     };
     let query = request.query;
-    tokio::spawn(async move {
+    let tasks = state.ask_tasks.clone();
+    let task_request_id = request_id.clone();
+    let handle = tokio::spawn(async move {
         let _ = answer.answer(&query, &context, opts, tx).await;
+        tasks.lock().await.remove(&task_request_id);
     });
+    let mut tasks = state.ask_tasks.lock().await;
+    if let Some(old) = tasks.insert(request_id, handle) {
+        old.abort();
+    }
+    Ok(())
+}
+
+/// Cancel a streaming answer request if it is still running.
+#[tauri::command]
+async fn cancel_ask(request_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(task) = state.ask_tasks.lock().await.remove(&request_id) {
+        task.abort();
+    }
     Ok(())
 }
 
@@ -261,7 +357,7 @@ async fn get_timeline(
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store
-        .timeline_buckets(range.start, range.end, bucket_count.max(1))
+        .timeline_buckets(range.start, range.end, clamp_timeline_buckets(bucket_count))
         .await
         .map_err(|e| e.to_string())
 }
@@ -281,7 +377,7 @@ async fn get_frames(
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store
-        .frames_in_range(range.start, range.end, limit)
+        .frames_in_range(range.start, range.end, clamp_frame_list_limit(limit))
         .await
         .map_err(|e| e.to_string())
 }
@@ -292,13 +388,20 @@ async fn get_frames(
 #[tauri::command]
 async fn get_nearest_frame(
     at: i64,
+    range: Option<TimeRange>,
     state: State<'_, AppState>,
 ) -> Result<Option<FrameMeta>, String> {
     let store = state
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
-    store.nearest_frame(at).await.map_err(|e| e.to_string())
+    match range {
+        Some(range) => store
+            .nearest_frame_in_range(at, range.start, range.end)
+            .await
+            .map_err(|e| e.to_string()),
+        None => store.nearest_frame(at).await.map_err(|e| e.to_string()),
+    }
 }
 
 /// The captures bracketing `at` (unix ms) for a Moment's prev/next + context strip
@@ -318,7 +421,7 @@ async fn get_frame_context(
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store
-        .neighbour_frames(at, half_window_ms, limit_each)
+        .neighbour_frames(at, half_window_ms, clamp_frame_context_limit(limit_each))
         .await
         .map_err(|e| e.to_string())
 }
@@ -328,6 +431,7 @@ async fn get_frame_context(
 #[tauri::command]
 async fn get_insights(
     range: TimeRange,
+    bucket_count: u32,
     state: State<'_, AppState>,
 ) -> Result<InsightsSummary, String> {
     let store = state
@@ -335,7 +439,7 @@ async fn get_insights(
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store
-        .insights_summary(range.start, range.end)
+        .insights_summary(range.start, range.end, clamp_insights_buckets(bucket_count))
         .await
         .map_err(|e| e.to_string())
 }
@@ -370,9 +474,34 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
     // the lane's next request, `03 §6`); everything else is persisted only.
     if let Some(v) = state.vision.lock().expect("vision slot").clone() {
         v.set_tier(settings.models_vision_tier);
+        v.set_launch_options(settings.sidecar_ngl, settings.sidecar_device.clone());
     }
     if let Some(a) = state.answer.lock().expect("answer slot").clone() {
         a.set_tier(settings.models_answer_tier);
+        a.set_launch_options(settings.sidecar_ngl, settings.sidecar_device.clone());
+    }
+    if let Some(kernel) = state.kernel.clone() {
+        let embeddings_enabled = settings.enrich_embed_text || settings.enrich_image_embeddings;
+        let embed_status = kernel.readiness().embed_model.status;
+        if embeddings_enabled
+            && matches!(
+                embed_status,
+                ComponentStatus::Disabled | ComponentStatus::Unavailable | ComponentStatus::Unknown
+            )
+        {
+            kernel.set_embed_readiness(
+                ComponentStatus::Initializing,
+                Some("loading embedding model".to_string()),
+            );
+            let dyn_store: Arc<dyn Store> = store.clone();
+            tauri::async_runtime::spawn(init_embeddings(
+                kernel,
+                dyn_store,
+                state.embed_models_dir.clone(),
+            ));
+        } else {
+            kernel.reconfigure_enrichment().await;
+        }
     }
     Ok(())
 }
@@ -390,6 +519,7 @@ pub fn run() {
 
             let db_path = data_dir.join("screensearch.db");
             let frames_dir = data_dir.join("frames");
+            let embed_models_dir = data_dir.join("models").join("fastembed");
 
             let (store, db_readiness) = open_store(&db_path);
             let readiness = Readiness {
@@ -407,7 +537,7 @@ pub fn run() {
                         dyn_store,
                         ocr,
                         capture_factory(),
-                        frames_dir,
+                        frames_dir.clone(),
                         readiness.clone(),
                         reason,
                     )),
@@ -415,7 +545,7 @@ pub fn run() {
                         dyn_store,
                         ocr,
                         capture_factory(),
-                        frames_dir,
+                        frames_dir.clone(),
                         readiness.clone(),
                     )),
                 }
@@ -426,6 +556,7 @@ pub fn run() {
             let supervisor_slot: SharedSlot<Arc<ModelSupervisor>> = Arc::new(StdMutex::new(None));
             let vision_slot: SharedSlot<Arc<VisionSidecar>> = Arc::new(StdMutex::new(None));
             let answer_slot: SharedSlot<Arc<AnswerSidecar>> = Arc::new(StdMutex::new(None));
+            let sidecar_binary_slot: SharedSlot<PathBuf> = Arc::new(StdMutex::new(None));
 
             // Forward kernel events to the UI, and kick off the off-thread model loads
             // (P3 embeddings + P4 inference) — app launch is never blocked on the
@@ -438,9 +569,12 @@ pub fn run() {
                     ComponentStatus::Initializing,
                     Some("loading embedding model".to_string()),
                 );
-                let models_dir = data_dir.join("models").join("fastembed");
                 let dyn_store: Arc<dyn Store> = store.clone();
-                tauri::async_runtime::spawn(init_embeddings(kernel.clone(), dyn_store, models_dir));
+                tauri::async_runtime::spawn(init_embeddings(
+                    kernel.clone(),
+                    dyn_store,
+                    embed_models_dir.clone(),
+                ));
 
                 // Resolve the sidecar binary + wire the inference providers off-thread.
                 kernel.set_sidecar_readiness(
@@ -455,6 +589,12 @@ pub fn run() {
                     supervisor_slot.clone(),
                     vision_slot.clone(),
                     answer_slot.clone(),
+                    sidecar_binary_slot.clone(),
+                ));
+                tauri::async_runtime::spawn(retention_sweeper(
+                    store.clone(),
+                    kernel.clone(),
+                    data_dir.clone(),
                 ));
             }
 
@@ -465,6 +605,11 @@ pub fn run() {
                 supervisor: supervisor_slot,
                 vision: vision_slot,
                 answer: answer_slot,
+                sidecar_binary: sidecar_binary_slot,
+                ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                embed_models_dir,
+                db_path,
+                frames_dir,
             });
             Ok(())
         })
@@ -472,11 +617,15 @@ pub fn run() {
             ping,
             get_readiness,
             get_job_stats,
+            get_storage_stats,
+            get_monitors,
+            list_sidecar_devices,
             get_frame,
             search,
             capture_control,
             enqueue_vision,
             ask,
+            cancel_ask,
             set_model_tier,
             get_timeline,
             get_frames,
@@ -558,6 +707,7 @@ async fn init_inference(
     supervisor_slot: SharedSlot<Arc<ModelSupervisor>>,
     vision_slot: SharedSlot<Arc<VisionSidecar>>,
     answer_slot: SharedSlot<Arc<AnswerSidecar>>,
+    sidecar_binary_slot: SharedSlot<PathBuf>,
 ) {
     let sidecar_dir = data_dir.join("sidecar");
     let models_root = data_dir.join("models");
@@ -585,6 +735,7 @@ async fn init_inference(
     };
 
     let settings = kernel::settings::load_settings(store.as_ref()).await;
+    *sidecar_binary_slot.lock().expect("sidecar binary slot") = Some(binary.clone());
     reap_binaries.push(binary.clone());
     let config = SupervisorConfig {
         binary,
@@ -607,12 +758,14 @@ async fn init_inference(
         models_root.clone(),
         settings.models_vision_tier,
         settings.sidecar_ngl,
+        settings.sidecar_device.clone(),
     ));
     let answer = Arc::new(AnswerSidecar::new(
         supervisor.clone(),
         models_root,
         settings.models_answer_tier,
         settings.sidecar_ngl,
+        settings.sidecar_device.clone(),
     ));
     *vision_slot.lock().expect("vision slot") = Some(vision.clone());
     *answer_slot.lock().expect("answer slot") = Some(answer.clone());
@@ -661,8 +814,14 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             Ok(KernelEvent::JobProgress(stats)) => {
                 let _ = app.emit("job_progress", stats);
             }
+            Ok(KernelEvent::JobCompleted(completed)) => {
+                let _ = app.emit("job_completed", completed);
+            }
             Ok(KernelEvent::SidecarStatus(status)) => {
                 let _ = app.emit("sidecar_status", status);
+            }
+            Ok(KernelEvent::Toast(toast)) => {
+                let _ = app.emit("toast", toast);
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")
@@ -670,6 +829,168 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             Err(RecvError::Closed) => break,
         }
     }
+}
+
+async fn storage_stats(db_path: PathBuf, frames_dir: PathBuf) -> Result<StorageStats, String> {
+    tokio::task::spawn_blocking(move || {
+        let db_bytes = db_file_family_size(&db_path);
+        let frame_bytes = dir_size(&frames_dir).map_err(|e| e.to_string())?;
+        Ok(StorageStats {
+            db_bytes,
+            frame_bytes,
+            total_bytes: db_bytes.saturating_add(frame_bytes),
+        })
+    })
+    .await
+    .map_err(|e| format!("storage stats task failed: {e}"))?
+}
+
+fn db_file_family_size(db_path: &Path) -> u64 {
+    let mut total = file_size(db_path);
+    for suffix in ["-wal", "-shm"] {
+        let mut os = db_path.as_os_str().to_os_string();
+        os.push(suffix);
+        total = total.saturating_add(file_size(Path::new(&os)));
+    }
+    total
+}
+
+fn file_size(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+fn dir_size(dir: &Path) -> std::io::Result<u64> {
+    let mut total = 0_u64;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(0);
+    };
+    for entry in entries {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            total = total.saturating_add(dir_size(&entry.path())?);
+        } else if meta.is_file() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    Ok(total)
+}
+
+fn list_devices_from_binary(binary: &Path) -> Result<Vec<String>, String> {
+    let output = std::process::Command::new(binary)
+        .arg("--list-devices")
+        .output()
+        .map_err(|e| format!("run {} --list-devices: {e}", binary.display()))?;
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if !output.status.success() {
+        return Err(combined.trim().to_string());
+    }
+    Ok(parse_sidecar_device_ids(&combined))
+}
+
+fn parse_sidecar_device_ids(output: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim().trim_start_matches(['-', '*', ' ']).trim();
+        let token = trimmed
+            .split([':', ' ', '\t'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if token.len() >= 4
+            && token.chars().any(|c| c.is_ascii_digit())
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && !out.iter().any(|d| d == token)
+        {
+            out.push(token.to_string());
+        }
+    }
+    out
+}
+
+async fn retention_sweeper(store: Arc<SqliteStore>, kernel: Arc<Kernel>, data_dir: PathBuf) {
+    loop {
+        match run_retention_once(store.clone(), kernel.clone(), &data_dir).await {
+            Ok(n) if n > 0 => tracing::info!(purged = n, "retention sweep purged captures"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "retention sweep failed"),
+        }
+        tokio::time::sleep(RETENTION_INTERVAL).await;
+    }
+}
+
+async fn run_retention_once(
+    store: Arc<SqliteStore>,
+    kernel: Arc<Kernel>,
+    data_dir: &Path,
+) -> Result<u64, String> {
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    if settings.storage_retention_days == 0 {
+        return Ok(0);
+    }
+    let retention_ms = i64::from(settings.storage_retention_days).saturating_mul(DAY_MS);
+    let cutoff = now_ms().saturating_sub(retention_ms);
+    let candidates = store
+        .frames_older_than(cutoff, RETENTION_BATCH)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut purged = 0_u64;
+    for frame in candidates {
+        let image_path = safe_frame_path(data_dir, &frame.image_path);
+        store
+            .delete_frame(frame.frame_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(path) = image_path {
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path = %path.display(), error = %e, "retention could not delete frame file");
+                }
+            }
+        }
+        purged += 1;
+    }
+    if purged > 0 {
+        kernel.emit_toast(
+            ToastLevel::Info,
+            format!("Retention purged {purged} old captures"),
+        );
+    }
+    Ok(purged)
+}
+
+fn safe_frame_path(data_dir: &Path, image_path: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let rel = Path::new(image_path);
+    if rel.is_absolute() {
+        return None;
+    }
+    let mut components = rel.components();
+    match components.next()? {
+        Component::Normal(first) if first == "frames" => {}
+        _ => return None,
+    }
+    let mut safe = PathBuf::from("frames");
+    for component in components {
+        match component {
+            Component::Normal(part) => safe.push(part),
+            _ => return None,
+        }
+    }
+    Some(data_dir.join(safe))
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Spawns the WinRT OCR worker and records an unavailable reason if OCR cannot
@@ -795,5 +1116,61 @@ mod tests {
 
         assert!(store.is_none());
         assert_eq!(readiness.status, ComponentStatus::Error);
+    }
+
+    #[test]
+    fn ipc_presentation_limits_are_clamped() {
+        assert_eq!(clamp_frame_list_limit(u32::MAX), MAX_FRAME_LIST_LIMIT);
+        assert_eq!(
+            clamp_frame_context_limit(u32::MAX),
+            MAX_FRAME_CONTEXT_LIMIT_EACH
+        );
+        assert_eq!(clamp_timeline_buckets(1), MIN_TIMELINE_BUCKETS);
+        assert_eq!(clamp_timeline_buckets(u32::MAX), MAX_TIMELINE_BUCKETS);
+        assert_eq!(clamp_insights_buckets(1), MIN_INSIGHTS_BUCKETS);
+        assert_eq!(clamp_insights_buckets(u32::MAX), MAX_INSIGHTS_BUCKETS);
+    }
+
+    #[test]
+    fn safe_frame_path_accepts_only_relative_frames_children() {
+        let data = PathBuf::from(r"C:\appdata");
+
+        assert_eq!(
+            safe_frame_path(&data, "frames/day-1/100.jpg"),
+            Some(data.join("frames").join("day-1").join("100.jpg"))
+        );
+        assert!(safe_frame_path(&data, r"C:\outside\100.jpg").is_none());
+        assert!(safe_frame_path(&data, "../frames/100.jpg").is_none());
+        assert!(safe_frame_path(&data, "screens/100.jpg").is_none());
+        assert!(safe_frame_path(&data, "frames/../100.jpg").is_none());
+    }
+
+    #[test]
+    fn parses_llama_cpp_device_ids() {
+        let output = "
+Available devices:
+  Vulkan0: AMD Radeon
+  Vulkan1: NVIDIA RTX
+  CUDA0: NVIDIA RTX
+";
+        assert_eq!(
+            parse_sidecar_device_ids(output),
+            vec!["Vulkan0", "Vulkan1", "CUDA0"]
+        );
+    }
+
+    #[test]
+    fn db_file_family_size_includes_wal_and_shm() {
+        let dir = std::env::temp_dir().join(format!("ssv2c-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("screensearch.db");
+        std::fs::write(&db, [0_u8; 3]).unwrap();
+        std::fs::write(dir.join("screensearch.db-wal"), [0_u8; 5]).unwrap();
+        std::fs::write(dir.join("screensearch.db-shm"), [0_u8; 7]).unwrap();
+
+        assert_eq!(db_file_family_size(&db), 15);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

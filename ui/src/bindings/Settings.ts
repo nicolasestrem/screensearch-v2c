@@ -9,6 +9,9 @@ import type { ModelTier } from "./ModelTier";
  * (UI-triggered) is always available; **timed** and **idle** enrichment are each
  * independent opt-in toggles, off by default, with a user-set threshold. (This
  * replaces `03 §8`'s single `enrich.vision_mode` enum — see specs/06_PATCH_PLAN.)
+ *
+ * `sidecar_device` is the optional llama.cpp `--device` selector (for example,
+ * `Vulkan0`); `None` lets llama.cpp choose its default device.
  */
 export type Settings = { capture_interval_ms: number, 
 /**
@@ -26,4 +29,4 @@ enrich_vision_timer_enabled: boolean, enrich_vision_timer_interval_ms: number,
 /**
  * Opt-in: tag while the user has been idle for at least `vision_idle_secs`.
  */
-enrich_vision_idle_enabled: boolean, enrich_vision_idle_secs: number, enrich_worker_concurrency: number, models_vision_tier: ModelTier, models_answer_tier: ModelTier, answer_thinking: boolean, sidecar_idle_ttl_secs: number, sidecar_ngl: number, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, };
+enrich_vision_idle_enabled: boolean, enrich_vision_idle_secs: number, enrich_worker_concurrency: number, models_vision_tier: ModelTier, models_answer_tier: ModelTier, answer_thinking: boolean, sidecar_idle_ttl_secs: number, sidecar_ngl: number, sidecar_device: string | null, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, };

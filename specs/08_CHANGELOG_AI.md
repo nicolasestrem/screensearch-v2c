@@ -11,6 +11,29 @@
 
 ---
 
+## 2026-06-23 — P5 comprehensive review hardening (`codex/p5-comprehensive-review-fixes`)
+- **Change:** Implemented the approved P5 comprehensive review fix plan. Backend changes include
+  range-aware `get_nearest_frame(at, range?)`, IPC clamping for frame/timeline/insights reads,
+  `get_storage_stats`, startup/hourly retention enforcement, `get_monitors`, `list_sidecar_devices`,
+  optional `sidecar.device`, request-scoped `AnswerEvent`, `cancel_ask`, backend `toast`, and richer
+  `job_completed` events. UI changes include DST-safe local-day helpers, Deck panel errors/retries,
+  Command Palette combobox/listbox ARIA, token-only Timeline drawing colors, StatusRail storage
+  telemetry, request-id ask filtering/cancel, surgical live-event invalidation, embeddings-disabled
+  live-search refresh, monitor/device pickers with manual fallback, and adaptive Timeline/Insights
+  buckets. Regenerated ts-rs bindings for the new IPC shapes.
+- **Why:** The P5 review found correctness and operability gaps that were not packaging work:
+  calendar ranges could drift over DST; Timeline opens could jump outside the active range; direct IPC
+  callers could request oversized reads; failed Deck queries rendered like empties; retention was only
+  persisted; answer streams were global; enrichment refresh was too broad/late; monitor and llama.cpp
+  device selection were manual-only; and chart grains were fixed. Packaging remains deferred in
+  `07` #26 per user decision.
+- **Verification:** Final gates run after the last code change: `cargo fmt --all -- --check`,
+  `npm --prefix ui run lint`, `npm --prefix ui run typecheck`, `cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and `npm --prefix ui run build` all
+  exited 0. The task final response includes the required verbatim command outputs.
+
+---
+
 ## 2026-06-23 — Refresh root `CLAUDE.md` (`docs/refresh-claude-md`)
 - **Change:** Docs-only refresh of the root `CLAUDE.md`. (1) Rewrote the "current state" line —
   was "specification complete, no application code yet; build starts at P0", now "P0–P5 complete

@@ -22,6 +22,7 @@ pub struct ModelSpec {
     pub gguf_path: PathBuf,
     pub mmproj_path: Option<PathBuf>,
     pub ngl: u32,
+    pub device: Option<String>,
 }
 
 /// The HuggingFace source for one `(lane, tier)` (`MODEL_REGISTRY §1/§2`).
@@ -137,6 +138,7 @@ pub fn resolve_spec(
     lane: ModelLane,
     tier: ModelTier,
     ngl: u32,
+    device: Option<String>,
 ) -> Option<ModelSpec> {
     let dir = local_dir(models_root, lane, tier);
     let gguf_path = find_gguf(&dir)?;
@@ -151,6 +153,7 @@ pub fn resolve_spec(
         gguf_path,
         mmproj_path,
         ngl,
+        device,
     })
 }
 
@@ -214,10 +217,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         touch(&dir.join("model-Q4_K_M.gguf"));
         // No mmproj yet → incomplete, must not resolve.
-        assert!(resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99).is_none());
+        assert!(resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99, None).is_none());
 
         touch(&dir.join("mmproj-model.gguf"));
-        let spec = resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99).unwrap();
+        let spec = resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99, None).unwrap();
         assert!(spec.mmproj_path.is_some());
         assert_eq!(spec.ngl, 99);
 
@@ -231,10 +234,30 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         touch(&dir.join("Ministral-3-3B-Reasoning-Q4_K_M.gguf"));
 
-        let spec = resolve_spec(&root, ModelLane::Answer, ModelTier::Default, 50).unwrap();
+        let spec = resolve_spec(&root, ModelLane::Answer, ModelTier::Default, 50, None).unwrap();
         assert!(spec.mmproj_path.is_none());
         assert_eq!(spec.lane, ModelLane::Answer);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolution_carries_device_selector() {
+        let root = temp_dir("device");
+        let dir = local_dir(&root, ModelLane::Answer, ModelTier::Default);
+        std::fs::create_dir_all(&dir).unwrap();
+        touch(&dir.join("answer-Q4_K_M.gguf"));
+
+        let spec = resolve_spec(
+            &root,
+            ModelLane::Answer,
+            ModelTier::Default,
+            99,
+            Some("Vulkan0".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(spec.device.as_deref(), Some("Vulkan0"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

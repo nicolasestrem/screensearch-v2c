@@ -254,8 +254,13 @@ impl Store for SqliteStore {
     ) -> Result<Vec<TimelineBucket>> {
         SqliteStore::timeline_buckets(self, start, end, bucket_count).await
     }
-    async fn insights_summary(&self, start: i64, end: i64) -> Result<InsightsSummary> {
-        SqliteStore::insights_summary(self, start, end).await
+    async fn insights_summary(
+        &self,
+        start: i64,
+        end: i64,
+        bucket_count: u32,
+    ) -> Result<InsightsSummary> {
+        SqliteStore::insights_summary(self, start, end, bucket_count).await
     }
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>> {
         SqliteStore::frame_enrichment_input(self, frame_id).await

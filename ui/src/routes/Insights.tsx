@@ -14,6 +14,7 @@ import { useInsights } from "../lib/ipc/queries";
 import { lastDaysRange } from "../lib/timeRanges";
 import { absoluteDate } from "../lib/time";
 import { cn } from "../lib/cn";
+import { useAdaptiveBucketCount } from "../lib/useAdaptiveBucketCount";
 
 const PRESETS = [
   { label: "Today", days: 1 },
@@ -38,7 +39,8 @@ export function Component() {
   const navigate = useNavigate();
   const [days, setDays] = useState(7);
   const range = lastDaysRange(days);
-  const insights = useInsights(range);
+  const [trendMeasureRef, bucketCount] = useAdaptiveBucketCount(48, 24, 720, 6);
+  const insights = useInsights(range, bucketCount);
 
   const rangeControl = (
     <div className="flex gap-1" role="group" aria-label="Time range">
@@ -136,9 +138,11 @@ export function Component() {
         {partial && <Chip tone="warn">{taggedPct}% tagged</Chip>}
       </div>
 
-      <Panel title="Captures over time">
-        <CapturesTrend buckets={data.captures} range={range} />
-      </Panel>
+      <div ref={trendMeasureRef}>
+        <Panel title="Captures over time">
+          <CapturesTrend buckets={data.captures} range={range} />
+        </Panel>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Top apps">

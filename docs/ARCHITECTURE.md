@@ -1,8 +1,8 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together as of **P5 plus the P3 hardening pass** (capture → OCR
-→ store → embeddings → hybrid search → **inference sidecar**: vision tagging + grounded `ask` →
-Command Deck UI). This describes the
+How ScreenSearch V2c is actually put together as of **P5 plus the comprehensive review hardening
+pass** (capture → OCR → store → embeddings → hybrid search → **inference sidecar**: vision tagging +
+grounded `ask` → Command Deck UI). This describes the
 **implemented** system and how to navigate the code; the design intent and the *why* live in
 [`specs/`](../specs) (`03_MASTER_PRODUCTION_SPEC.md` is authoritative for schema/traits/protocols).
 Where they ever disagree, the specs win — open an issue.
@@ -10,7 +10,9 @@ Where they ever disagree, the specs win — open an issue.
 - Implemented: P0 scaffold, P1 data spine, P2 capture, P3 enrichment + search,
   **P4 inference sidecar** (Job-Object lifecycle, vision tagging, streaming RAG answers,
   tiered runtime-downloaded models), and **P5 Command Deck UI** (Deck, Recall, Timeline, Moment,
-  Insights, Settings).
+  Insights, Settings), plus P5 hardening for bounded IPC, range-aware navigation, retention,
+  storage telemetry, typed operational events, cancellable ask streams, adaptive charts, monitor
+  enumeration, and advanced sidecar device selection.
 - Not yet built: packaging (installer / portable ZIP + signing).
 
 ---
@@ -294,10 +296,12 @@ There is no pending-job dedup; a frame enqueued-but-not-yet-processed can be re-
 ## 8. Events, readiness, settings
 
 **Event bus** (`kernel::events::KernelEvent`, a `tokio::broadcast`): `CaptureTick`,
-`ReadinessChanged`, `JobProgress`, **`SidecarStatus`** (P4). The kernel is shell-agnostic;
+`ReadinessChanged`, `JobProgress`, **`JobCompleted`**, **`SidecarStatus`** (P4), and **`Toast`**.
+The kernel is shell-agnostic;
 `src-tauri::forward_events` bridges these to Tauri events (`capture_tick`, `readiness_changed`,
-`job_progress`, `sidecar_status`). The `ask` command streams **`answer_delta`** events directly from
-its forwarding task.
+`job_progress`, `job_completed`, `sidecar_status`, `toast`). The `ask` command streams
+request-scoped **`answer_delta`** events (`AnswerEvent { request_id, delta }`) directly from its
+forwarding task; `cancel_ask(request_id)` aborts a superseded stream.
 
 **Readiness** (`03 §7`): one `ComponentReadiness { status, detail? }` per subsystem — `capture`,
 `db`, `embed_model`, `sidecar` — where `status ∈ {unknown, disabled, initializing, ready,
@@ -315,24 +319,29 @@ rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_te
 `enrich.worker_concurrency` (2). **P4 keys:** `enrich.vision_timer_enabled` (false) +
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
-`answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99).
+`answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
+`sidecar.device`. Model tiers and sidecar launch options are applied live for the next request that
+needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool from current
+settings. `storage.retention_days = 0` means keep forever; any positive value is enforced by a
+startup + hourly sweeper that deletes DB rows and safe relative frame files in bounded batches.
 
 ---
 
 ## 9. Query → answer path (`ask`)
 
 ```
-ask(AskRequest{query, thinking, max_tokens})
+ask(AskRequest{request_id?, query, thinking, max_tokens})
   → store.hybrid_search(query, top-K = 8)                     # grounding candidates
   → per hit: get_enrichment_input → full OCR text (fallback: snippet) → RetrievedChunk
   → AnswerProvider.answer(query, context, opts, tx)           # background task
        supervisor.acquire(answer spec) → SidecarClient.stream(SSE)
        → AnswerDelta::Thinking / Token / Citation(per frame) / Done|Error
-  → forwarder emits each delta as an `answer_delta` Tauri event
+  → forwarder emits each delta as an `answer_delta` Tauri event tagged with request_id
 ```
 
 The command returns immediately; the answer streams asynchronously. The lease is held for the whole
-stream, so the idle-evictor never stops the model mid-answer.
+stream, so the idle-evictor never stops the model mid-answer. Starting a new UI ask cancels the old
+request id, and the UI ignores stale deltas.
 
 ---
 
@@ -340,8 +349,11 @@ stream, so the idle-evictor never stops the model mid-answer.
 
 1. Resolve `<app-data>`; create `logs/`; init tracing (console + daily-rotating file).
 2. Open the store (`open_store`) → `db` readiness Ready / Error.
-3. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
-4. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
+3. Spawn the retention sweeper. It runs once at startup and then hourly, using
+   `storage.retention_days`, `frames_older_than`, `delete_frame`, and a containment-checked frame
+   path under `<app-data>/frames`.
+4. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
+5. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
    off-thread → `attach_embedder`: store embedder + embedder worker slot, `embed_model = Ready`,
    idempotently start the worker pool). Set `sidecar = Initializing` and spawn **`init_inference`**:
    `ensure_binary` (off-thread) → build `SupervisorConfig` + `ModelSupervisor::new` (creates the job,
@@ -351,14 +363,14 @@ stream, so the idle-evictor never stops the model mid-answer.
    vision scheduler with the idle source) → `sidecar = Ready`. The first worker start, whichever
    provider triggers it, performs the startup stale-job sweep before spawning workers. Failure at any
    step sets `sidecar = Unavailable` with a reason.
-5. Register Tauri commands; run. On `ExitRequested`: `stop_vision_scheduler` + `stop_workers`, then
+6. Register Tauri commands; run. On `ExitRequested`: `stop_vision_scheduler` + `stop_workers`, then
    `supervisor.shutdown()` (kills the sidecar; the Job Object would anyway). All best-effort —
    correctness doesn't depend on it (the startup sweep requeues interrupted jobs).
 
 **Commands** (typed via `ts-rs`): `ping`, `get_readiness`, `get_job_stats`, `get_frame`, `search`,
 `capture_control`, **`enqueue_vision`**, **`ask`**, **`set_model_tier`**, `get_timeline`,
-`get_frames`, `get_nearest_frame`, `get_frame_context`, `get_insights`, `get_settings`, and
-`set_settings`.
+`get_frames`, `get_nearest_frame`, `get_frame_context`, `get_insights`, `get_storage_stats`,
+`get_monitors`, `cancel_ask`, `list_sidecar_devices`, `get_settings`, and `set_settings`.
 
 ---
 
@@ -395,9 +407,9 @@ Deck UI; the no-orphan gate passes. What remains for v1.0:
   build-time artifact) beside the exe; code signing (see `07` — SignPath Foundation / Azure Trusted
   Signing / Certum). The `llama-server` binary and GGUF models are *not* bundled — they download at
   runtime.
-- **Polish carried from P4** (`07` #19): a download-progress %% in `sidecar` readiness, optional
-  pending-job dedup for the vision scheduler, and multi-GPU device selection if `-ngl 99` picks the
-  wrong Vulkan device.
+- **Polish carried from P4** (`07` #19): a download-progress %% in `sidecar` readiness and optional
+  pending-job dedup for the vision scheduler. Multi-GPU device selection is now available through
+  `list_sidecar_devices` + `sidecar.device`.
 
 ---
 

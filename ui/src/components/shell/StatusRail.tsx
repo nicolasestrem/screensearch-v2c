@@ -4,12 +4,25 @@
 // shell the readiness query errors and the rail shows an honest "Kernel offline".
 import { Chip, Skeleton, Tooltip } from "../primitives";
 import { IconCapture, IconCpu, IconDatabase, IconQueue } from "../icons";
-import { useJobStats, useReadiness, useSidecarStatus } from "../../lib/ipc/queries";
+import { useJobStats, useReadiness, useSidecarStatus, useStorageStats } from "../../lib/ipc/queries";
 import { statusLabel, statusTone, worstStatus } from "../../lib/status";
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+}
 
 export function StatusRail() {
   const readiness = useReadiness();
   const jobStats = useJobStats();
+  const storage = useStorageStats();
   const sidecar = useSidecarStatus();
 
   return (
@@ -47,10 +60,17 @@ export function StatusRail() {
               </Chip>
             </Tooltip>
 
-            <Tooltip label={readiness.data.db.detail ?? "Data store"} side="bottom">
+            <Tooltip
+              label={
+                storage.data
+                  ? `${readiness.data.db.detail ?? "Data store"} · DB ${formatBytes(storage.data.db_bytes)} · frames ${formatBytes(storage.data.frame_bytes)}`
+                  : (readiness.data.db.detail ?? "Data store")
+              }
+              side="bottom"
+            >
               <Chip tone={statusTone(readiness.data.db.status)}>
                 <IconDatabase size={14} />
-                DB
+                {storage.data ? formatBytes(storage.data.total_bytes) : "DB"}
               </Chip>
             </Tooltip>
 

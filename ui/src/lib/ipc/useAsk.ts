@@ -1,7 +1,6 @@
 // The `ask` flow: a reducer that folds streamed `answer_delta` events into a
-// stable view-model (UI_REFERENCE §6). One ask runs at a time; calling `ask`
-// resets state and re-streams. The `answer_delta` subscription is owned here (not
-// in useLiveEvents, which handles the StatusRail/timeline events).
+// stable view-model (UI_REFERENCE §6). Each stream is scoped by a request id so
+// superseded deltas are ignored and reset can cancel the backend provider task.
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -62,28 +61,25 @@ function reducer(state: AskState, action: AskAction): AskState {
 
 export interface UseAsk extends AskState {
   /** Start streaming an answer for `request`. */
-  ask: (request: AskRequest) => Promise<void>;
+  ask: (request: Omit<AskRequest, "request_id">) => Promise<void>;
   /** Clear back to idle. */
   reset: () => void;
 }
 
 export function useAsk(): UseAsk {
   const [state, dispatch] = useReducer(reducer, initial);
-
-  // Synchronous in-flight guard. React state lags within an event tick, so two
-  // ask() calls in the same tick would both pass a `state.phase` check and both
-  // hit cmd.ask — and the single global `answer_delta` channel (no request id)
-  // would then interleave the two streams. A ref set *before* dispatch blocks the
-  // second call synchronously; it's released when the stream settles (below) or on
-  // reset. A truly concurrent/cancellable ask needs a backend request-id (07 #28).
-  const inFlight = useRef(false);
+  const activeRequest = useRef<string | null>(null);
 
   // One persistent subscription for the lifetime of the hook; deltas always fold
   // into the latest state via the reducer.
   useEffect(() => {
     let active = true;
     let unlisten: UnlistenFn | undefined;
-    listenTo("answer_delta", (delta) => dispatch({ type: "delta", delta }))
+    listenTo("answer_delta", (event) => {
+      if (event.request_id === activeRequest.current) {
+        dispatch({ type: "delta", delta: event.delta });
+      }
+    })
       .then((u) => {
         if (active) unlisten = u;
         else u();
@@ -102,18 +98,19 @@ export function useAsk(): UseAsk {
   // as deltas), so the guard can't key off the awaited promise.
   useEffect(() => {
     if (state.phase === "done" || state.phase === "error") {
-      inFlight.current = false;
+      activeRequest.current = null;
     }
   }, [state.phase]);
 
-  const ask = useCallback(async (request: AskRequest) => {
-    // Block a concurrent ask synchronously: the ref reflects the in-flight state
-    // immediately, unlike the reducer (which only updates on the next render).
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const ask = useCallback(async (request: Omit<AskRequest, "request_id">) => {
+    if (activeRequest.current) {
+      await cmd.cancelAsk(activeRequest.current).catch(() => undefined);
+    }
+    const requestId = `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    activeRequest.current = requestId;
     dispatch({ type: "start" });
     try {
-      await cmd.ask(request);
+      await cmd.ask({ ...request, request_id: requestId });
     } catch (e) {
       // The command itself failed (e.g. sidecar not ready) before any delta.
       dispatch({ type: "delta", delta: { type: "error", message: String(e) } });
@@ -121,7 +118,11 @@ export function useAsk(): UseAsk {
   }, []);
 
   const reset = useCallback(() => {
-    inFlight.current = false;
+    const requestId = activeRequest.current;
+    if (requestId) {
+      void cmd.cancelAsk(requestId).catch(() => undefined);
+    }
+    activeRequest.current = null;
     dispatch({ type: "reset" });
   }, []);
 

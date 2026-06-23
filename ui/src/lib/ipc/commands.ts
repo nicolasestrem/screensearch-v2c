@@ -18,6 +18,8 @@ import type { TimeRange } from "../../bindings/TimeRange";
 import type { TimelineBucket } from "../../bindings/TimelineBucket";
 import type { InsightsSummary } from "../../bindings/InsightsSummary";
 import type { Settings } from "../../bindings/Settings";
+import type { StorageStats } from "../../bindings/StorageStats";
+import type { MonitorInfo } from "../../bindings/MonitorInfo";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -27,6 +29,17 @@ export const getReadiness = (): Promise<Readiness> => invoke<Readiness>("get_rea
 
 /** Aggregate job-queue counts (`03 §7`). */
 export const getJobStats = (): Promise<JobStats> => invoke<JobStats>("get_job_stats");
+
+/** Storage footprint for the StatusRail. */
+export const getStorageStats = (): Promise<StorageStats> =>
+  invoke<StorageStats>("get_storage_stats");
+
+/** Connected monitor metadata for Settings. */
+export const getMonitors = (): Promise<MonitorInfo[]> => invoke<MonitorInfo[]>("get_monitors");
+
+/** Device ids reported by llama.cpp `--list-devices`. */
+export const listSidecarDevices = (): Promise<string[]> =>
+  invoke<string[]>("list_sidecar_devices");
 
 /** Full per-frame detail; `null` if the id is unknown. */
 export const getFrame = (frameId: number): Promise<FrameDetail | null> =>
@@ -47,6 +60,10 @@ export const enqueueVision = (target: VisionTarget): Promise<number> =>
 /** Ask a grounded question; the answer streams back via `answer_delta` events. */
 export const ask = (request: AskRequest): Promise<void> => invoke<void>("ask", { request });
 
+/** Cancel a streaming grounded answer by request id. */
+export const cancelAsk = (requestId: string): Promise<void> =>
+  invoke<void>("cancel_ask", { requestId });
+
 /** Change the active model tier for a lane (hot-applies on the next request). */
 export const setModelTier = (request: SetModelTier): Promise<void> =>
   invoke<void>("set_model_tier", { request });
@@ -62,8 +79,8 @@ export const getFrames = (range: TimeRange, limit: number): Promise<FrameMeta[]>
 
 /** The frame whose capture time is nearest `at` (unix ms), or `null` if the DB has
  *  no frames — resolves a timeline scan-head position to a concrete frame. */
-export const getNearestFrame = (at: number): Promise<FrameMeta | null> =>
-  invoke<FrameMeta | null>("get_nearest_frame", { at });
+export const getNearestFrame = (at: number, range?: TimeRange): Promise<FrameMeta | null> =>
+  invoke<FrameMeta | null>("get_nearest_frame", { at, range: range ?? null });
 
 /** The captures bracketing `at` (unix ms): up to `limitEach` closest frames on each
  *  side within `±halfWindowMs`, ascending by time, excluding the anchor. Backs a
@@ -76,8 +93,8 @@ export const getFrameContext = (
   invoke<FrameMeta[]>("get_frame_context", { at, halfWindowMs, limitEach });
 
 /** Truthful activity aggregates over `[start, end)` for the Insights screen. */
-export const getInsights = (range: TimeRange): Promise<InsightsSummary> =>
-  invoke<InsightsSummary>("get_insights", { range });
+export const getInsights = (range: TimeRange, bucketCount: number): Promise<InsightsSummary> =>
+  invoke<InsightsSummary>("get_insights", { range, bucketCount });
 
 /** Read the persisted user settings (missing keys fall back to defaults). */
 export const getSettings = (): Promise<Settings> => invoke<Settings>("get_settings");

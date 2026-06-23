@@ -139,7 +139,12 @@ pub trait Store: Send + Sync {
 
     /// Truthful activity aggregates over `[start, end)` for the Insights screen
     /// (`get_insights`, P5). Default returns the honest-empty summary.
-    async fn insights_summary(&self, _start: i64, _end: i64) -> Result<InsightsSummary> {
+    async fn insights_summary(
+        &self,
+        _start: i64,
+        _end: i64,
+        _bucket_count: u32,
+    ) -> Result<InsightsSummary> {
         Ok(InsightsSummary::default())
     }
 

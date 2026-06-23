@@ -4,8 +4,6 @@
 // values across renders, so they don't thrash TanStack Query's structural keys.
 import type { TimeRange } from "../bindings/TimeRange";
 
-const DAY_MS = 86_400_000;
-
 /** Local midnight (ms) of the day containing `at` (defaults to now). */
 export function startOfLocalDay(at: number = Date.now()): number {
   const d = new Date(at);
@@ -13,10 +11,15 @@ export function startOfLocalDay(at: number = Date.now()): number {
   return d.getTime();
 }
 
+function localDayOffset(at: number, offsetDays: number): number {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offsetDays).getTime();
+}
+
 /** `[today 00:00, tomorrow 00:00)` in local time. */
 export function todayRange(): TimeRange {
-  const start = startOfLocalDay();
-  return { start, end: start + DAY_MS };
+  const now = Date.now();
+  return { start: localDayOffset(now, 0), end: localDayOffset(now, 1) };
 }
 
 /**
@@ -24,6 +27,7 @@ export function todayRange(): TimeRange {
  * included. `lastDaysRange(1)` is today; `lastDaysRange(7)` the last week.
  */
 export function lastDaysRange(days: number): TimeRange {
-  const end = startOfLocalDay() + DAY_MS;
-  return { start: end - Math.max(1, days) * DAY_MS, end };
+  const now = Date.now();
+  const count = Math.max(1, Math.round(days));
+  return { start: localDayOffset(now, 1 - count), end: localDayOffset(now, 1) };
 }
