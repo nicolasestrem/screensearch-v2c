@@ -1055,6 +1055,37 @@ $ npm --prefix ui run lint
 $ git diff --exit-code -- ui/src/bindings
 ```
 
+---
+
+## Pass — 2026-06-24 — PR #21 audit artifact review follow-up (`codex/run-audit-v2c` branch)
+
+### Review Threads Addressed
+- **Build-loop ledger completeness** — Claude and Codex both flagged that the audit artifact carried
+  live follow-up gaps without mirroring them into `specs/05_BUILD_REVIEW.md` and
+  `specs/07_KNOWN_GAPS.md`.
+- **CI-runtime wording** — Codex flagged that the report called local frontend checks
+  "CI-equivalent" while the preflight recorded Node `v26.3.0` / npm `11.16.0`, and the GitHub
+  workflow uses Node 22.
+- **Obsolete-term search reproducibility** — Codex flagged that a future repo-wide `rg` would match
+  the audit file's recorded command string.
+
+### Resolution
+- Added this build-review pass entry.
+- Logged PR #21's required documentation fix in `specs/06_PATCH_PLAN.md`.
+- Added open gaps #40-#45 to `specs/07_KNOWN_GAPS.md` for OCR token normalization, no-evidence
+  refusal citation tiles, incomplete P5 keyboard/focus matrix, deterministic route state triggers,
+  VLM image-path logging, and future isolated app-data audit support.
+- Changed the audit wording from "CI-equivalent" to "CI-order local" where appropriate and added the
+  explicit Node 26 vs CI Node 22 caveat.
+- Noted that the obsolete-term no-match search was captured before the audit artifact existed, and
+  that future reruns should exclude the report file.
+
+### Verification (verbatim)
+```
+$ git diff --check
+git diff --check exited 0
+```
+
 ## Pass — 2026-06-23 — P5 comprehensive review hardening (`codex/p5-comprehensive-review-fixes` branch)
 
 **Scope.** Implemented the approved post-P5 review plan while keeping packaging deferred (`07` #26).

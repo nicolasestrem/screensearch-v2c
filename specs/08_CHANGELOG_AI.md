@@ -11,6 +11,31 @@
 
 ---
 
+## 2026-06-23 — Add audit report artifact (`codex/run-audit-v2c`)
+- **Change:** Added `docs/AUDIT_V2C_2026-06-23.md`, a Markdown record of the non-packaging V2c audit
+  pass: preflight, static architecture checks, CI-order local gates, hardware/model-backed smokes,
+  GPU runtime evidence, and the later live GUI follow-up for synthetic capture/search/Ask,
+  no-evidence refusal, persisted Moment VLM analysis, and P5 route/state/a11y observations.
+- **Why:** The audit was originally returned only in chat, which made it hard to find after the
+  session. The repository now carries the audit artifact on the audit branch.
+- **Verification:**
+  ```text
+  git diff --check exited 0
+  ```
+
+## 2026-06-24 — PR #21 audit-doc review follow-up (`codex/run-audit-v2c`)
+- **Change:** Addressed all actionable PR #21 review comments. Added a `05_BUILD_REVIEW.md` pass
+  entry, logged the review-required doc fix in `06_PATCH_PLAN.md`, mirrored six audit follow-ups into
+  `07_KNOWN_GAPS.md`, clarified that the frontend gates were local CI-order smoke checks on Node 26
+  rather than exact CI Node 22 reproduction, and noted that the obsolete-term search was captured
+  before the audit artifact existed.
+- **Why:** Reviewers correctly flagged that the build-loop docs were not complete and that the audit
+  wording overstated the CI-runtime signal.
+- **Verification:**
+  ```text
+  git diff --check exited 0
+  ```
+
 ## 2026-06-23 — PR #19 review follow-up (`codex/p5-comprehensive-review-fixes`)
 - **Change:** Addressed all actionable PR #19 comments. Fixed the ask-task insertion/removal race by
   locking the active-task map before spawning the provider task; made retention log and continue when
