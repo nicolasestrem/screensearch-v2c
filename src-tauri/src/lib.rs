@@ -401,14 +401,24 @@ pub fn run() {
             // (capture starts Disabled) and the event bus.
             let kernel = store.as_ref().map(|store| {
                 let dyn_store: Arc<dyn Store> = store.clone();
-                let ocr = spawn_ocr();
-                Arc::new(Kernel::new(
-                    dyn_store,
-                    ocr,
-                    capture_factory(),
-                    frames_dir,
-                    readiness.clone(),
-                ))
+                let (ocr, ocr_unavailable) = spawn_ocr();
+                match ocr_unavailable {
+                    Some(reason) => Arc::new(Kernel::new_with_ocr_unavailable(
+                        dyn_store,
+                        ocr,
+                        capture_factory(),
+                        frames_dir,
+                        readiness.clone(),
+                        reason,
+                    )),
+                    None => Arc::new(Kernel::new(
+                        dyn_store,
+                        ocr,
+                        capture_factory(),
+                        frames_dir,
+                        readiness.clone(),
+                    )),
+                }
             });
 
             // Slots filled off the launch thread (P4 inference), shared with command
@@ -655,17 +665,23 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
     }
 }
 
-/// Spawns the WinRT OCR worker, falling back to an empty-text provider if no OCR
-/// language is installed (logged; capture still runs, frames just lack text).
-fn spawn_ocr() -> Arc<dyn OcrProvider> {
+/// Spawns the WinRT OCR worker and records an unavailable reason if OCR cannot
+/// be initialized. Capture start is blocked in that state.
+fn spawn_ocr() -> (Arc<dyn OcrProvider>, Option<String>) {
     match ocr::WinRtOcr::spawn() {
         Ok(engine) => {
             tracing::info!("WinRT OCR ready");
-            Arc::new(engine)
+            (Arc::new(engine), None)
         }
         Err(e) => {
-            tracing::error!(error = %e, "OCR unavailable; captured frames will have no text");
-            Arc::new(UnavailableOcr)
+            let reason = e.to_string();
+            tracing::error!(error = %reason, "OCR unavailable; capture cannot start");
+            (
+                Arc::new(UnavailableOcr {
+                    reason: reason.clone(),
+                }),
+                Some(reason),
+            )
         }
     }
 }
@@ -676,20 +692,17 @@ fn capture_factory() -> CaptureFactory {
     Arc::new(|config| Ok(Box::new(capture::WgcCapture::new(config)?) as Box<dyn CaptureSource>))
 }
 
-/// Fallback OCR used only when the WinRT engine can't be created. Returns **empty
-/// text** rather than an error, so capture still runs and frames are stored without
-/// OCR (the capture loop drops a frame on a *real* recognize error — missing OCR is
-/// not one). Surfaced via the warning logged in [`spawn_ocr`].
-struct UnavailableOcr;
+/// Defensive fallback used only when the WinRT engine can't be created. The kernel
+/// refuses to start capture before this provider can be called; if that invariant is
+/// broken, returning an error still prevents silently writing empty OCR rows.
+struct UnavailableOcr {
+    reason: String,
+}
 
 #[async_trait]
 impl OcrProvider for UnavailableOcr {
     async fn recognize(&self, _frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        Ok(OcrResult {
-            text: String::new(),
-            mean_confidence: ocr::CONFIDENCE_UNKNOWN,
-            engine: "unavailable".to_string(),
-        })
+        Err(std::io::Error::other(format!("OCR unavailable: {}", self.reason)).into())
     }
 }
 

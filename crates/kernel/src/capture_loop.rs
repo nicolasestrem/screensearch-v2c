@@ -19,6 +19,15 @@ use traits::{
 
 use crate::events::KernelEvent;
 
+/// Why the capture loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureLoopExit {
+    /// The user or shell requested capture stop.
+    StopRequested,
+    /// The capture source ended without an explicit stop request.
+    SourceShutdown,
+}
+
 /// Everything the capture loop needs besides the [`CaptureSource`] itself. Built
 /// by the kernel on [`start_capture`](crate::Kernel::start_capture) and reused for
 /// the loop's lifetime.
@@ -47,13 +56,13 @@ pub async fn run_capture_loop(
     mut capture: Box<dyn CaptureSource>,
     ctx: LoopCtx,
     mut stop: watch::Receiver<bool>,
-) {
+) -> CaptureLoopExit {
     loop {
         tokio::select! {
             biased;
             _ = stop.changed() => {
                 tracing::info!("capture loop: stop requested");
-                break;
+                return CaptureLoopExit::StopRequested;
             }
             res = capture.next_frame() => match res {
                 Ok(Some(frame)) => {
@@ -65,7 +74,7 @@ pub async fn run_capture_loop(
                 }
                 Ok(None) => {
                     tracing::info!("capture loop: source signaled shutdown");
-                    break;
+                    return CaptureLoopExit::SourceShutdown;
                 }
                 Err(e) => tracing::warn!(error = %e, "capture loop: source error"),
             }

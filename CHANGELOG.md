@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P2 capture hardening (2026-06-23)
+- **Capture readiness now clears after unexpected source shutdown.** If the WGC capture source exits
+  without the user pressing Stop, the kernel removes the live capture handle and reports
+  `capture = Error` with a detail instead of leaving the UI stuck on `Ready`.
+- **OCR-unavailable machines no longer create empty OCR rows.** If WinRT OCR cannot be created (for
+  example, no recognizer language is installed), the app still boots but capture start fails with
+  `capture = Unavailable`; the defensive fallback provider now errors instead of silently returning
+  empty text.
+- **Backend settings are sanitized on load and save.** Direct IPC or hand-edited DB values are clamped
+  to the same numeric bounds as the Settings UI, including a finite `[0,1]` capture diff threshold.
+  Added regression tests for source shutdown, OCR-unavailable start refusal, and malformed persisted
+  settings. No schema, IPC, or `ts-rs` binding changes.
+
 ### Fixed — P0/P1 store hardening (2026-06-23)
 - **Job finalization now requires a claimed running job.** `complete_job` and `fail_job` no longer
   rewrite pending, done, or dead jobs by id alone. This protects the durable queue state machine from

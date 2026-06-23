@@ -12,6 +12,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use tokio::sync::{broadcast, watch, Mutex};
@@ -28,7 +29,7 @@ pub mod settings;
 mod vision_scheduler;
 mod worker_pool;
 
-pub use capture_loop::{run_capture_loop, LoopCtx};
+pub use capture_loop::{run_capture_loop, CaptureLoopExit, LoopCtx};
 pub use events::KernelEvent;
 pub use worker_pool::process_job;
 
@@ -52,6 +53,7 @@ pub type CaptureFactory =
     Arc<dyn Fn(CaptureConfig) -> anyhow::Result<Box<dyn CaptureSource>> + Send + Sync>;
 
 struct CaptureHandle {
+    id: u64,
     stop: watch::Sender<bool>,
     join: JoinHandle<()>,
 }
@@ -62,11 +64,15 @@ struct CaptureHandle {
 pub struct Kernel {
     store: Arc<dyn Store>,
     ocr: Arc<dyn OcrProvider>,
+    /// Set when the composition root could not create a real OCR provider. Capture
+    /// refuses to start rather than silently storing empty text rows.
+    ocr_unavailable: Option<String>,
     capture_factory: CaptureFactory,
     frames_dir: PathBuf,
     events: broadcast::Sender<KernelEvent>,
-    readiness: RwLock<Readiness>,
-    capture: Mutex<Option<CaptureHandle>>,
+    readiness: Arc<RwLock<Readiness>>,
+    capture: Arc<Mutex<Option<CaptureHandle>>>,
+    capture_generation: AtomicU64,
     /// The loaded embedding provider, attached after it finishes loading off the
     /// launch thread (`03 §5`); `None` until [`Kernel::attach_embedder`].
     embedder: Mutex<Option<Arc<dyn EmbeddingProvider>>>,
@@ -90,6 +96,45 @@ impl Kernel {
         ocr: Arc<dyn OcrProvider>,
         capture_factory: CaptureFactory,
         frames_dir: PathBuf,
+        initial_readiness: Readiness,
+    ) -> Self {
+        Self::new_inner(
+            store,
+            ocr,
+            None,
+            capture_factory,
+            frames_dir,
+            initial_readiness,
+        )
+    }
+
+    /// Builds a kernel whose OCR dependency is known unavailable. The app can keep
+    /// running, but `start_capture` fails before opening WGC so it never creates
+    /// misleading empty OCR rows.
+    pub fn new_with_ocr_unavailable(
+        store: Arc<dyn Store>,
+        ocr: Arc<dyn OcrProvider>,
+        capture_factory: CaptureFactory,
+        frames_dir: PathBuf,
+        initial_readiness: Readiness,
+        reason: String,
+    ) -> Self {
+        Self::new_inner(
+            store,
+            ocr,
+            Some(reason),
+            capture_factory,
+            frames_dir,
+            initial_readiness,
+        )
+    }
+
+    fn new_inner(
+        store: Arc<dyn Store>,
+        ocr: Arc<dyn OcrProvider>,
+        ocr_unavailable: Option<String>,
+        capture_factory: CaptureFactory,
+        frames_dir: PathBuf,
         mut initial_readiness: Readiness,
     ) -> Self {
         initial_readiness.capture = ComponentReadiness {
@@ -100,11 +145,13 @@ impl Kernel {
         Self {
             store,
             ocr,
+            ocr_unavailable,
             capture_factory,
             frames_dir,
             events,
-            readiness: RwLock::new(initial_readiness),
-            capture: Mutex::new(None),
+            readiness: Arc::new(RwLock::new(initial_readiness)),
+            capture: Arc::new(Mutex::new(None)),
+            capture_generation: AtomicU64::new(1),
             embedder: Mutex::new(None),
             workers: Mutex::new(None),
             vision: Arc::new(RwLock::new(None)),
@@ -140,6 +187,11 @@ impl Kernel {
         if guard.is_some() {
             return Ok(());
         }
+        if let Some(reason) = &self.ocr_unavailable {
+            let detail = format!("OCR unavailable: {reason}");
+            self.set_capture_readiness(ComponentStatus::Unavailable, Some(detail.clone()));
+            return Err(anyhow::anyhow!(detail));
+        }
         self.set_capture_readiness(ComponentStatus::Initializing, None);
 
         let settings = settings::load_settings(self.store.as_ref()).await;
@@ -163,14 +215,34 @@ impl Kernel {
             jpeg_quality: settings.storage_jpeg_quality,
             max_width: settings.storage_max_width,
         };
-        let join = tokio::spawn(run_capture_loop(capture, ctx, stop_rx));
+        let id = self.capture_generation.fetch_add(1, Ordering::Relaxed);
+        let capture_slot = self.capture.clone();
+        let readiness = self.readiness.clone();
+        let events = self.events.clone();
+        let join = tokio::spawn(async move {
+            let exit = run_capture_loop(capture, ctx, stop_rx).await;
+            if exit == CaptureLoopExit::SourceShutdown {
+                let mut guard = capture_slot.lock().await;
+                if guard.as_ref().is_some_and(|h| h.id == id) {
+                    *guard = None;
+                    drop(guard);
+                    set_capture_readiness(
+                        &readiness,
+                        &events,
+                        ComponentStatus::Error,
+                        Some("capture source shut down unexpectedly".to_string()),
+                    );
+                }
+            }
+        });
         *guard = Some(CaptureHandle {
+            id,
             stop: stop_tx,
             join,
         });
+        self.set_capture_readiness(ComponentStatus::Ready, None);
         drop(guard);
 
-        self.set_capture_readiness(ComponentStatus::Ready, None);
         tracing::info!("capture started");
         Ok(())
     }
@@ -190,12 +262,7 @@ impl Kernel {
     }
 
     fn set_capture_readiness(&self, status: ComponentStatus, detail: Option<String>) {
-        let snapshot = {
-            let mut r = self.readiness.write().expect("readiness lock poisoned");
-            r.capture = ComponentReadiness { status, detail };
-            r.clone()
-        };
-        let _ = self.events.send(KernelEvent::ReadinessChanged(snapshot));
+        set_capture_readiness(&self.readiness, &self.events, status, detail);
     }
 
     /// Attaches the loaded embedding provider: lights up the store's vector arm and
@@ -390,4 +457,18 @@ fn sidecar_component(status: &SidecarStatus) -> (ComponentStatus, Option<String>
         SidecarState::Crashed => (ComponentStatus::Error, Some("sidecar crashed".to_string())),
         SidecarState::Stopped => (ComponentStatus::Disabled, Some("stopped".to_string())),
     }
+}
+
+fn set_capture_readiness(
+    readiness: &RwLock<Readiness>,
+    events: &broadcast::Sender<KernelEvent>,
+    status: ComponentStatus,
+    detail: Option<String>,
+) {
+    let snapshot = {
+        let mut r = readiness.write().expect("readiness lock poisoned");
+        r.capture = ComponentReadiness { status, detail };
+        r.clone()
+    };
+    let _ = events.send(KernelEvent::ReadinessChanged(snapshot));
 }

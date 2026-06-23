@@ -57,3 +57,94 @@ async fn round_trips_non_default_values() {
 
     assert_eq!(loaded, original, "non-default values must round-trip");
 }
+
+#[tokio::test]
+async fn load_settings_sanitizes_persisted_numeric_values() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    store.set_setting("capture.interval_ms", "1").await.unwrap();
+    store
+        .set_setting("capture.diff_threshold", "NaN")
+        .await
+        .unwrap();
+    store
+        .set_setting("storage.jpeg_quality", "0")
+        .await
+        .unwrap();
+    store
+        .set_setting("storage.max_width", "100000")
+        .await
+        .unwrap();
+    store
+        .set_setting("enrich.worker_concurrency", "0")
+        .await
+        .unwrap();
+    store
+        .set_setting("enrich.vision_timer_interval_ms", "1")
+        .await
+        .unwrap();
+    store
+        .set_setting("enrich.vision_idle_secs", "1")
+        .await
+        .unwrap();
+    store
+        .set_setting("sidecar.idle_ttl_secs", "999999")
+        .await
+        .unwrap();
+    store.set_setting("sidecar.ngl", "10000").await.unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+
+    assert_eq!(loaded.capture_interval_ms, 250);
+    assert_eq!(loaded.capture_diff_threshold, 0.0);
+    assert_eq!(loaded.storage_jpeg_quality, 1);
+    assert_eq!(loaded.storage_max_width, 7680);
+    assert_eq!(loaded.enrich_worker_concurrency, 1);
+    assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
+    assert_eq!(loaded.enrich_vision_idle_secs, 60);
+    assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
+    assert_eq!(loaded.sidecar_ngl, 999);
+}
+
+#[tokio::test]
+async fn save_settings_persists_sanitized_numeric_values() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    let original = Settings {
+        capture_interval_ms: 1,
+        capture_diff_threshold: f32::NAN,
+        storage_jpeg_quality: 0,
+        storage_max_width: 100_000,
+        enrich_worker_concurrency: 0,
+        enrich_vision_timer_interval_ms: 1,
+        enrich_vision_idle_secs: 1,
+        sidecar_idle_ttl_secs: 999_999,
+        sidecar_ngl: 10_000,
+        ..Settings::default()
+    };
+
+    save_settings(dyn_store, &original)
+        .await
+        .expect("save settings");
+    let loaded = load_settings(dyn_store).await;
+
+    assert_eq!(loaded.capture_interval_ms, 250);
+    assert_eq!(loaded.capture_diff_threshold, 0.0);
+    assert_eq!(loaded.storage_jpeg_quality, 1);
+    assert_eq!(loaded.storage_max_width, 7680);
+    assert_eq!(loaded.enrich_worker_concurrency, 1);
+    assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
+    assert_eq!(loaded.enrich_vision_idle_secs, 60);
+    assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
+    assert_eq!(loaded.sidecar_ngl, 999);
+
+    assert_eq!(
+        store
+            .get_setting("capture.diff_threshold")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("0")
+    );
+}

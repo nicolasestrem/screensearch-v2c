@@ -688,3 +688,28 @@
   integration **39 passed**, traits binding tests **32 passed**); `npm --prefix ui run build` exit 0
   (`✓ built in 1.48s`); `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings`
   exit 0.
+
+## 2026-06-23 — P2 capture hardening (`codex/fix-p2-capture-hardening`)
+- **Context:** a scrupulous Phase 2 review found three hardening gaps in the capture happy path:
+  capture readiness could remain `Ready` after an unexpected source shutdown; the OCR fallback
+  contradicted `07` by silently returning empty OCR rows; and backend settings trusted persisted/direct
+  numeric values that the UI alone had clamped.
+- **Change:** `run_capture_loop` now reports `CaptureLoopExit::{StopRequested, SourceShutdown}`.
+  `Kernel::start_capture` wraps the loop with a generation-checked supervisor that clears the live
+  handle and emits `capture = Error` when the source shuts down without a user Stop. The kernel can now
+  be built with an OCR-unavailable reason; `start_capture` fails before WGC opens and marks
+  `capture = Unavailable`, while the defensive `UnavailableOcr` returns an error if ever called.
+  `kernel::settings::sanitize_settings` clamps numeric settings on both load and save, matching the
+  Settings UI bounds. Added regression tests for all three behaviors.
+- **Why:** P2 is the privacy-sensitive, always-on path. It must report its real lifecycle, avoid
+  half-searchable empty-OCR data, and survive hand-edited or direct IPC settings without wedging the
+  diff gate. No schema, IPC, `ts-rs`, or trait signature changes.
+- **Docs:** `CHANGELOG.md`, `docs/ARCHITECTURE.md`, `specs/05_BUILD_REVIEW.md`, and the P2 OCR
+  fallback note in `specs/07_KNOWN_GAPS.md` were updated.
+- **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test pipeline` → **5 passed**;
+  `cargo test -p capture` → **9 passed, 1 ignored**; `cargo test -p ocr` → **1 ignored**;
+  `cargo test --workspace` exit 0; `npm --prefix ui run build` → `✓ built in 1.52s`;
+  `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings` exit 0; hardware-gated
+  P2 checks all passed: WGC smoke **1 passed**, WinRT OCR smoke **1 passed**, real e2e capture **1
+  passed**.

@@ -1144,3 +1144,67 @@ $ npm --prefix ui run lint
 ```
 $ git diff --exit-code -- ui/src/bindings
 ```
+
+---
+
+## Pass — 2026-06-23 — P2 capture hardening (`codex/fix-p2-capture-hardening` branch)
+
+### Implemented
+- **Capture lifecycle supervision** — `run_capture_loop` now returns `StopRequested` vs
+  `SourceShutdown`. `Kernel::start_capture` wraps the loop, clears the live capture handle on an
+  unexpected source shutdown, and emits `capture = Error` instead of leaving stale `Ready` readiness.
+  User Stop still maps to `Disabled`.
+- **OCR-unavailable start guard** — if WinRT OCR cannot be created, the app still boots, but
+  `capture_control(Start)` fails before opening WGC with `capture = Unavailable`. The defensive
+  `UnavailableOcr` now returns an error if ever reached, so it cannot silently write empty OCR rows.
+- **Backend settings sanitizer** — `kernel::settings` clamps numeric settings on load and save,
+  matching the Settings UI bounds. Malformed persisted values such as `capture.diff_threshold = NaN`
+  become safe finite values before the capture config is built.
+- **Regression coverage** — added tests for source shutdown readiness cleanup, OCR-unavailable start
+  refusal/no empty rows, and persisted/direct numeric settings sanitization.
+
+### Interface Review
+- No schema, IPC, `ts-rs`, or trait signature changes.
+- `07` OCR fallback wording updated to the stricter start-block behavior.
+- Human changelog, AI changelog, and as-built architecture docs updated.
+
+### Verification (verbatim highlights)
+```
+$ cargo test -p kernel --test pipeline
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+```
+
+```
+$ cargo test -p kernel --test settings
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.08s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits bindings
+```
+
+```
+$ npm --prefix ui run build
+> screensearch-ui@0.0.0 build
+> tsc --noEmit && vite build
+✓ built in 1.52s
+```
+
+```
+$ cargo test -p capture --test wgc_smoke -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+$ cargo test -p ocr -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+$ cargo test -p screensearch --test e2e_capture -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+```

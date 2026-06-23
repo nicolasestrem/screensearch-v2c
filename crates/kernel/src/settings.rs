@@ -13,7 +13,7 @@ use traits::{CaptureConfig, Result, Settings, Store};
 /// Reads every `03 §8` setting, falling back to [`Settings::default`] per key.
 pub async fn load_settings(store: &dyn Store) -> Settings {
     let d = Settings::default();
-    Settings {
+    sanitize_settings(Settings {
         capture_interval_ms: num(store, "capture.interval_ms", d.capture_interval_ms).await,
         capture_monitors: json(store, "capture.monitors", d.capture_monitors).await,
         capture_diff_threshold: num(store, "capture.diff_threshold", d.capture_diff_threshold)
@@ -63,7 +63,7 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
-    }
+    })
 }
 
 /// Persists every `03 §8` setting back to the key/value `settings` table — the
@@ -83,6 +83,7 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
 /// UI (model tiers hot-apply; capture/storage/privacy on next capture start; the
 /// rest on app restart).
 pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
+    let s = sanitize_settings(s.clone());
     let kvs: Vec<(String, String)> = vec![
         (
             "capture.interval_ms".into(),
@@ -157,6 +158,40 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         ),
     ];
     store.set_settings_batch(&kvs).await
+}
+
+/// Backend-side numeric bounds matching the Settings UI's save-time sanitizer. The
+/// UI is not a trust boundary: persisted settings may be hand-edited, migrated from
+/// older builds, or sent directly over IPC, so the kernel clamps before use/write.
+pub fn sanitize_settings(mut s: Settings) -> Settings {
+    s.capture_interval_ms = clamp_u32(s.capture_interval_ms, 250, 3_600_000);
+    s.capture_diff_threshold = clamp_f32(s.capture_diff_threshold, 0.0, 1.0);
+    s.storage_jpeg_quality = clamp_u8(s.storage_jpeg_quality, 1, 100);
+    s.storage_max_width = clamp_u32(s.storage_max_width, 320, 7680);
+    s.storage_retention_days = clamp_u32(s.storage_retention_days, 0, 3650);
+    s.enrich_worker_concurrency = clamp_u32(s.enrich_worker_concurrency, 1, 16);
+    s.enrich_vision_timer_interval_ms =
+        clamp_u32(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000);
+    s.enrich_vision_idle_secs = clamp_u32(s.enrich_vision_idle_secs, 60, 86_400);
+    s.sidecar_idle_ttl_secs = clamp_u32(s.sidecar_idle_ttl_secs, 0, 86_400);
+    s.sidecar_ngl = clamp_u32(s.sidecar_ngl, 0, 999);
+    s
+}
+
+fn clamp_u32(value: u32, min: u32, max: u32) -> u32 {
+    value.clamp(min, max)
+}
+
+fn clamp_u8(value: u8, min: u8, max: u8) -> u8 {
+    value.clamp(min, max)
+}
+
+fn clamp_f32(value: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        min
+    }
 }
 
 /// The canonical string form for a persisted bool (parsed back by [`boolean`]).
