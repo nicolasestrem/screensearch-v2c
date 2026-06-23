@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — Added V2c audit artifact (2026-06-23)
+- Added `docs/AUDIT_V2C_2026-06-23.md`, recording the non-packaging audit pass, including CI
+  gates, hardware/model smokes, GPU runtime evidence, and the later live GUI follow-up for
+  synthetic capture/search/Ask, no-evidence refusal, persisted Moment VLM analysis, and P5
+  route/state/a11y observations.
+- PR #21 review follow-up mirrors the audit follow-up into `specs/05_BUILD_REVIEW.md`,
+  `specs/06_PATCH_PLAN.md`, and `specs/07_KNOWN_GAPS.md`, and clarifies the local Node 26
+  verification caveat against CI's Node 22 runtime.
+
 ### Fixed — P5 comprehensive review hardening (2026-06-23)
 - **Date ranges now use local calendar midnights.** Deck, Timeline, Insights, and Recall no longer
   derive "today" / trailing windows from fixed 24-hour offsets, avoiding DST drift.
