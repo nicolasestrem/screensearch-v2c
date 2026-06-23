@@ -4,9 +4,9 @@
 //! factory (the composition root, `03 §2`).
 //!
 //! P2 landed the always-on half: [`Kernel::start_capture`] spawns the capture loop
-//! (CaptureSource → OcrProvider → Store → `embed_text` job → `capture_tick`). P3 adds
-//! the bounded enrichment worker pool ([`Kernel::attach_embedder`]) that drains those
-//! jobs into vectors; the `ModelSupervisor` lands in P4.
+//! (CaptureSource → OcrProvider → Store → enrichment jobs → `capture_tick`). P3/P4
+//! add the bounded enrichment worker pool that drains embedding and vision jobs as
+//! their providers attach; P5 builds UI flows on top of these events and commands.
 
 #![forbid(unsafe_code)]
 
@@ -74,8 +74,9 @@ pub struct Kernel {
     capture: Arc<Mutex<Option<CaptureHandle>>>,
     capture_generation: AtomicU64,
     /// The loaded embedding provider, attached after it finishes loading off the
-    /// launch thread (`03 §5`); `None` until [`Kernel::attach_embedder`].
-    embedder: Mutex<Option<Arc<dyn EmbeddingProvider>>>,
+    /// launch thread (`03 §5`); `None` until [`Kernel::attach_embedder`]. Shared live
+    /// with the worker pool so inference can start vision workers first.
+    embedder: worker_pool::EmbedderSlot,
     /// The running enrichment worker pool; `None` until workers are started.
     workers: Mutex<Option<worker_pool::WorkerPool>>,
     /// The vision provider, shared live with the worker pool so it can be attached
@@ -152,7 +153,7 @@ impl Kernel {
             readiness: Arc::new(RwLock::new(initial_readiness)),
             capture: Arc::new(Mutex::new(None)),
             capture_generation: AtomicU64::new(1),
-            embedder: Mutex::new(None),
+            embedder: Arc::new(RwLock::new(None)),
             workers: Mutex::new(None),
             vision: Arc::new(RwLock::new(None)),
             answer: Mutex::new(None),
@@ -270,37 +271,34 @@ impl Kernel {
     /// the queue's backlog drains in the background (`02 §5`).
     pub async fn attach_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         self.store.set_embedder(embedder.clone());
-        *self.embedder.lock().await = Some(embedder);
+        *self.embedder.write().expect("embedder slot lock") = Some(embedder);
+        self.set_embed_readiness(ComponentStatus::Ready, None);
         self.start_workers().await;
     }
 
     /// Starts the bounded enrichment worker pool (idempotent — a no-op if already
-    /// running or if no embedder is attached). Runs the startup stale-job sweep
-    /// first so a prior run's interrupted jobs are requeued (`03 §6`).
+    /// running or if no provider-backed lane is available). Runs the startup stale-job
+    /// sweep first so a prior run's interrupted jobs are requeued (`03 §6`).
     pub async fn start_workers(&self) {
         let mut guard = self.workers.lock().await;
         if guard.is_some() {
             return;
         }
-        let Some(embedder) = self.embedder.lock().await.clone() else {
-            tracing::warn!("start_workers: no embedder attached");
+        let settings = settings::load_settings(self.store.as_ref()).await;
+        let embedder_ready = self.embedder.read().expect("embedder slot lock").is_some();
+        let vision_ready = self.vision.read().expect("vision slot lock").is_some();
+        let has_embed_lane =
+            embedder_ready && (settings.enrich_embed_text || settings.enrich_image_embeddings);
+        if !has_embed_lane && !vision_ready {
+            tracing::debug!("start_workers: no provider-backed worker lanes available");
             return;
-        };
+        }
         // With no worker live yet, every `running` job is stale (`03 §6`).
         match self.store.reset_stale_running_jobs(0).await {
             Ok(n) if n > 0 => tracing::info!(requeued = n, "startup sweep requeued stale jobs"),
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "startup sweep failed"),
         }
-        let settings = settings::load_settings(self.store.as_ref()).await;
-        let mut kinds = vec![JobKind::EmbedText];
-        if settings.enrich_image_embeddings {
-            kinds.push(JobKind::EmbedImage);
-        }
-        // Always claim vision_tag: such jobs only exist once a producer enqueues them
-        // (on-demand/timer/idle), and by then the provider is attached via the shared
-        // slot — so this doesn't depend on inference being up yet (`03 §6`).
-        kinds.push(JobKind::VisionTag);
         // `frames.image_path` is stored relative to the app-data root (`frames/…`).
         let data_dir = self
             .frames_dir
@@ -309,17 +307,17 @@ impl Kernel {
             .unwrap_or_else(|| self.frames_dir.clone());
         let pool = worker_pool::WorkerPool::spawn(worker_pool::Shared {
             store: self.store.clone(),
-            embedder,
+            embedder: self.embedder.clone(),
             vision: self.vision.clone(),
+            enable_embed_text: settings.enrich_embed_text,
+            enable_embed_image: settings.enrich_image_embeddings,
             active_jobs: Arc::new(std::sync::Mutex::new(HashSet::new())),
             data_dir,
             events: self.events.clone(),
-            kinds,
             concurrency: settings.enrich_worker_concurrency.max(1) as usize,
         });
         *guard = Some(pool);
-        self.set_embed_readiness(ComponentStatus::Ready, None);
-        tracing::info!("embedding workers started");
+        tracing::info!("enrichment workers started");
     }
 
     /// Stops the worker pool (idempotent), waiting for in-flight jobs to finish.
@@ -327,7 +325,7 @@ impl Kernel {
         let pool = self.workers.lock().await.take();
         if let Some(pool) = pool {
             pool.shutdown().await;
-            tracing::info!("embedding workers stopped");
+            tracing::info!("enrichment workers stopped");
         }
     }
 
@@ -354,6 +352,7 @@ impl Kernel {
     ) {
         *self.vision.write().expect("vision slot lock") = Some(vision);
         *self.answer.lock().await = Some(answer);
+        self.start_workers().await;
         self.start_vision_scheduler(idle).await;
         tracing::info!("inference providers attached");
     }

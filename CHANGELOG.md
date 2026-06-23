@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P3 deferred enrichment hardening (2026-06-23)
+- **Vision-only enrichment no longer waits on embeddings.** The worker pool now starts from either
+  provider slot: embedding jobs are claimed only when an embedder is attached and enabled, while
+  `vision_tag` jobs drain as soon as inference attaches. This fixes stalled vision backlogs when text
+  and image embeddings are disabled or unavailable.
+- **Backend search limits are clamped.** `SearchQuery.limit` is normalized to `1..=100` and the
+  hybrid-search candidate pool is capped at 500, matching the Recall UI and protecting direct IPC
+  callers from oversized hydration work.
+- Added regression coverage for vision jobs draining without an embedder, excessive search limits,
+  and zero-limit normalization. Updated P3 architecture/spec notes and the live-event comment to
+  match the current worker/event behavior. No schema, IPC, `ts-rs`, or trait signature changes.
+
 ### Fixed — P2 capture hardening (2026-06-23)
 - **Capture readiness now clears after unexpected source shutdown.** If the WGC capture source exits
   without the user pressing Stop, the kernel removes the live capture handle and reports

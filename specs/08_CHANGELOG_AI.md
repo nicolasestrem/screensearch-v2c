@@ -727,3 +727,31 @@
   `cargo test --workspace` exit 0, including kernel enrichment **9 passed**, kernel pipeline
   **5 passed**, kernel settings **4 passed**, store integration **39 passed**, and traits bindings
   **32 passed**.
+
+## 2026-06-23 — P3 deferred enrichment hardening (`codex/review-p3-deferred-enrichment`)
+- **Context:** a comprehensive P3 review found that `vision_tag` jobs could stall when embeddings were
+  disabled/unavailable, because `init_embeddings` returns early and `Kernel::start_workers` previously
+  required an embedder before any pool could start. The review also found that direct IPC could pass an
+  unbounded `SearchQuery.limit`, and that worker/event docs had drifted from the P4/P5 implementation.
+- **Failing-first evidence:** `cargo test -p kernel --test enrichment
+  vision_jobs_drain_when_embeddings_disabled` initially failed with `worker pool did not drain the
+  vision_tag job without an embedder`. `cargo test -p store --test store
+  hybrid_search_clamps_excessive_limit` initially failed with `left: 150 right: 100`.
+- **Change:** `kernel::worker_pool` now has shared `EmbedderSlot` and `VisionSlot` provider slots.
+  Workers build claim kinds dynamically each loop: `EmbedText` / `EmbedImage` only when an embedder is
+  attached and the matching setting is enabled; `VisionTag` when the vision provider is attached.
+  `attach_embedder` and `attach_inference` both call the same idempotent `start_workers`, so the first
+  available provider starts the pool and the other can attach later without restart. The first pool
+  start still runs startup stale-running recovery before spawning workers.
+- **Search hardening:** `store::search` now normalizes `SearchQuery.limit` to `1..=100` and caps the
+  candidate pool at 500 (`MAX_SEARCH_LIMIT * 5`), with zero-limit normalization still returning one
+  result. This is deliberately backend-local: no IPC, schema, `ts-rs`, or trait signature changes.
+- **Docs:** `CHANGELOG.md`, `docs/ARCHITECTURE.md`, `specs/05_BUILD_REVIEW.md`, `07_KNOWN_GAPS.md`,
+  this file, `src-tauri` module docs, and the `useLiveEvents` `job_progress` comment now match the
+  current implementation. Known gap #8 remains open by design.
+- **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test enrichment` → **10 passed**;
+  `cargo test -p store --test store` → **40 passed**; `cargo test --workspace` exit 0, including
+  kernel enrichment **10 passed**, store integration **40 passed**, traits bindings **32 passed**;
+  `npm --prefix ui run build` → `✓ built in 2.05s`; `npm --prefix ui run lint` exit 0;
+  `git diff --exit-code -- ui/src/bindings` exit 0.

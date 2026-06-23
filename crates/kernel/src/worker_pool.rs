@@ -1,8 +1,10 @@
 //! The bounded enrichment worker pool — the consumer half of *enrich-deferred*
 //! (`03 §5`). Each worker independently `claim_jobs`→runs the provider→
 //! `complete_job`/`fail_job`, so the durable queue P2 fills is finally drained into
-//! vectors. P3 handles `embed_text` and (optionally) `embed_image`; **never**
-//! `vision_tag` (that needs the P4 sidecar).
+//! vectors and deferred vision analyses. Provider attachment is slot-driven:
+//! embedding jobs are claimed only when an embedder is attached and the matching
+//! setting is enabled, while `vision_tag` jobs are claimed once the sidecar-backed
+//! vision provider is attached.
 //!
 //! Shutdown mirrors the capture loop: one `watch` channel stops every worker after
 //! its in-flight job. A periodic sweep requeues jobs a dead worker left `running`
@@ -21,6 +23,12 @@ use tokio::task::JoinHandle;
 use traits::{ChunkSource, EmbeddingProvider, Job, JobKind, Store, VisionProvider};
 
 use crate::events::KernelEvent;
+
+/// Shared, runtime-settable embedding provider slot (`None` until the embedder loads
+/// off the launch thread). Behind an `Arc<RwLock>` so inference can start the worker
+/// pool before embeddings are available, and the pool can pick up embeddings later
+/// without a restart.
+pub(crate) type EmbedderSlot = Arc<RwLock<Option<Arc<dyn EmbeddingProvider>>>>;
 
 /// Shared, runtime-settable vision provider slot (`None` until the inference sidecar
 /// is attached). Behind an `Arc<RwLock>` so the kernel can attach the provider after
@@ -70,11 +78,11 @@ enum Outcome {
 /// Everything a worker needs, shared (via `Arc`) across the pool.
 pub(crate) struct Shared {
     pub store: Arc<dyn Store>,
-    pub embedder: Arc<dyn EmbeddingProvider>,
+    pub embedder: EmbedderSlot,
     /// The vision provider, attached after the sidecar comes up (`None` until then).
-    /// `vision_tag` jobs only exist once a producer (command/timer/idle) enqueues them,
-    /// which only happens after the provider is attached, so a `None` here is defensive.
     pub vision: VisionSlot,
+    pub enable_embed_text: bool,
+    pub enable_embed_image: bool,
     /// Job ids currently being processed by this worker pool. The periodic sweep
     /// uses this as a process-local guard so long-running provider calls can still
     /// record their final retry/dead-letter outcome instead of being requeued out
@@ -83,7 +91,6 @@ pub(crate) struct Shared {
     /// App-data root; `frames.image_path` is stored relative to it (`frames/…`).
     pub data_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
-    pub kinds: Vec<JobKind>,
     pub concurrency: usize,
 }
 
@@ -163,6 +170,28 @@ fn active_job_count(active_jobs: &Mutex<HashSet<i64>>) -> usize {
         .len()
 }
 
+fn claim_kinds(shared: &Shared) -> Vec<JobKind> {
+    let embedder_ready = shared
+        .embedder
+        .read()
+        .expect("embedder slot lock")
+        .is_some();
+    let vision_ready = shared.vision.read().expect("vision slot lock").is_some();
+    let mut kinds = Vec::with_capacity(3);
+    if embedder_ready {
+        if shared.enable_embed_text {
+            kinds.push(JobKind::EmbedText);
+        }
+        if shared.enable_embed_image {
+            kinds.push(JobKind::EmbedImage);
+        }
+    }
+    if vision_ready {
+        kinds.push(JobKind::VisionTag);
+    }
+    kinds
+}
+
 /// One worker: claim a job, process it, emit progress; back off when the queue is
 /// empty; stop promptly when signalled.
 async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
@@ -171,22 +200,29 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if *stop.borrow() {
             break;
         }
-        let claimed = match shared.store.claim_jobs(&shared.kinds, 1, now_ms()).await {
-            Ok(mut jobs) => jobs.pop(),
-            Err(e) => {
-                tracing::warn!(error = %e, "worker: claim failed");
-                None
+        let kinds = claim_kinds(&shared);
+        let claimed = if kinds.is_empty() {
+            None
+        } else {
+            match shared.store.claim_jobs(&kinds, 1, now_ms()).await {
+                Ok(mut jobs) => jobs.pop(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "worker: claim failed");
+                    None
+                }
             }
         };
         match claimed {
             Some(job) => {
                 let _active = ActiveJobGuard::new(shared.active_jobs.clone(), job.id);
-                // Snapshot the vision provider out of the shared slot before the await
-                // (the std RwLock guard must not cross it).
+                // Snapshot providers out of the shared slots before the await (the std
+                // RwLock guards must not cross it). Claim kinds are also slot-gated,
+                // so missing providers here are defensive against races.
+                let embedder = shared.embedder.read().expect("embedder slot lock").clone();
                 let vision = shared.vision.read().expect("vision slot lock").clone();
-                if let Err(e) = process_job(
+                if let Err(e) = process_job_with_providers(
                     &shared.store,
-                    &shared.embedder,
+                    embedder.as_ref(),
                     vision.as_ref(),
                     &shared.data_dir,
                     job,
@@ -206,6 +242,51 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
                 }
                 backoff = (backoff * 2).min(IDLE_MAX);
             }
+        }
+    }
+}
+
+/// Runs one already-claimed job to a terminal state: executes the provider, then
+/// `complete_job` / `fail_job` (with backoff) / dead-letter. Exposed so tests can
+/// drive a single job deterministically without the polling loop.
+pub async fn process_job(
+    store: &Arc<dyn Store>,
+    embedder: &Arc<dyn EmbeddingProvider>,
+    vision: Option<&Arc<dyn VisionProvider>>,
+    data_dir: &Path,
+    job: Job,
+) -> Result<()> {
+    process_job_with_providers(store, Some(embedder), vision, data_dir, job).await
+}
+
+async fn process_job_with_providers(
+    store: &Arc<dyn Store>,
+    embedder: Option<&Arc<dyn EmbeddingProvider>>,
+    vision: Option<&Arc<dyn VisionProvider>>,
+    data_dir: &Path,
+    job: Job,
+) -> Result<()> {
+    let outcome = match job.kind {
+        JobKind::EmbedText => match embedder {
+            Some(embedder) => embed_text_outcome(store, embedder, job.frame_id).await,
+            None => Outcome::Retry("embedding provider not attached".to_string()),
+        },
+        JobKind::EmbedImage => match embedder {
+            Some(embedder) => embed_image_outcome(store, embedder, data_dir, job.frame_id).await,
+            None => Outcome::Retry("embedding provider not attached".to_string()),
+        },
+        JobKind::VisionTag => vision_tag_outcome(store, vision, data_dir, job.frame_id).await,
+    };
+    match outcome {
+        Outcome::Complete => store.complete_job(job.id).await,
+        Outcome::DeadLetter(err) => {
+            tracing::warn!(job = job.id, error = %err, "job dead-lettered");
+            store.fail_job(job.id, &err, None).await
+        }
+        Outcome::Retry(err) => {
+            let retry_at = now_ms() + backoff_ms(job.attempts);
+            tracing::debug!(job = job.id, error = %err, retry_at, "job retry scheduled");
+            store.fail_job(job.id, &err, Some(retry_at)).await
         }
     }
 }
@@ -235,35 +316,6 @@ async fn sweep_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
 async fn emit_progress(shared: &Shared) {
     if let Ok(stats) = shared.store.job_stats().await {
         let _ = shared.events.send(KernelEvent::JobProgress(stats));
-    }
-}
-
-/// Runs one already-claimed job to a terminal state: executes the provider, then
-/// `complete_job` / `fail_job` (with backoff) / dead-letter. Exposed so tests can
-/// drive a single job deterministically without the polling loop.
-pub async fn process_job(
-    store: &Arc<dyn Store>,
-    embedder: &Arc<dyn EmbeddingProvider>,
-    vision: Option<&Arc<dyn VisionProvider>>,
-    data_dir: &Path,
-    job: Job,
-) -> Result<()> {
-    let outcome = match job.kind {
-        JobKind::EmbedText => embed_text_outcome(store, embedder, job.frame_id).await,
-        JobKind::EmbedImage => embed_image_outcome(store, embedder, data_dir, job.frame_id).await,
-        JobKind::VisionTag => vision_tag_outcome(store, vision, data_dir, job.frame_id).await,
-    };
-    match outcome {
-        Outcome::Complete => store.complete_job(job.id).await,
-        Outcome::DeadLetter(err) => {
-            tracing::warn!(job = job.id, error = %err, "job dead-lettered");
-            store.fail_job(job.id, &err, None).await
-        }
-        Outcome::Retry(err) => {
-            let retry_at = now_ms() + backoff_ms(job.attempts);
-            tracing::debug!(job = job.id, error = %err, retry_at, "job retry scheduled");
-            store.fail_job(job.id, &err, Some(retry_at)).await
-        }
     }
 }
 

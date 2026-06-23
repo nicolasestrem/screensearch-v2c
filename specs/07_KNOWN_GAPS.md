@@ -44,6 +44,7 @@
 | 35 | 2026-06-22 | **Settings apply-timing** (M5) — `03 §8` lists the settings but not *when* a runtime change takes effect; there is no live `kernel::reconfigure()`. | **Resolved (agent, M5, matches backend `set_settings`):** persist every key always; **hot-apply only the model tiers** (via `set_model_tier`, read by the running provider on its next request); `answer.thinking` is read per-`ask`; **capture/storage/privacy** take effect on the next capture start; **enrichment/sidecar** on app restart. The Settings UI labels each field with its apply point — no fictional live reconfiguration. | agent | ✅ done (M5) |
 | 36 | 2026-06-22 | **No monitor enumeration for the capture-monitors setting** (M5) — `Settings.capture_monitors` is a list of monitor indices, but no command lists the connected monitors (the `MonitorInfo` type exists but is unused), so the UI can't show monitor names. | **Resolved (agent, M5, honest minimal control):** the Settings field edits a **comma-separated list of 0-based indices** (empty = all monitors), parsed/validated client-side — no fabricated names. A `get_monitors -> Vec<MonitorInfo>` command + a per-monitor checklist (also feeding a capture-source picker) is a follow-up. | agent | open (follow-up) |
 | 37 | 2026-06-22 | **Insights capture-density grain fixed at 48 buckets** (M5) — `insights_summary` reuses `timeline_buckets` with a hard-coded `INSIGHTS_BUCKETS = 48`; the spec defines no Insights grain. | **Resolved (agent, M5):** 48 is ample for an at-a-glance over-time chart; the `CapturesTrend` chart positions the sparse buckets by their **true time offset** within the range (and clips bar widths to span), so it stays correct regardless of the count and isn't coupled to it. A presentation-driven count is an optional later refinement. | agent | open (optional refinement) |
+| 38 | 2026-06-23 | **`SearchQuery.limit` maximum** — `03 §7` defines the field but no backend maximum; the UI caps Recall at 100, but a direct IPC caller could request far larger result/candidate/hydration work. | **Resolved (agent, P3 hardening):** backend `hybrid_search` now normalizes `limit` to `1..=100` and caps the per-arm candidate pool at 500 (`MAX_SEARCH_LIMIT * 5`). This is intentionally an implementation constraint only: no IPC, schema, `ts-rs`, or trait shape changes. | agent | ✅ done |
 
 Resolved engineering decisions (spec silent on *how*, recorded for traceability):
 - **ts-rs 64-bit ints → TS `number`** via per-field `#[ts(type = "number")]` (Tauri JSON wire);
@@ -56,8 +57,9 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
   `spawn_blocking`. SQLite is single-writer, so this is correct and simple, and `:memory:` persists
   for the store's lifetime (clean tests). Trade-off: no reader/writer concurrency — revisit a read
   pool only if search latency demands it.
-- **RRF (P1):** `k = 60` (de-facto standard); per-arm candidate pool = `max(limit·5, 50)`;
-  `time_range` filters both arms (vec arm over-fetches the pool then post-filters on the join).
+- **RRF (P1/P3 hardening):** `k = 60` (de-facto standard); backend search normalizes
+  `SearchQuery.limit` to `1..=100`, then uses per-arm candidate pool `max(limit·5, 50)` capped at
+  500; `time_range` filters both arms (vec arm over-fetches the pool then post-filters on the join).
 - **Crates (P1):** `rusqlite` 0.40 `bundled` (FTS5 is in the amalgamation — no `fts5` feature in
   0.40); `sqlite-vec` pinned to **0.1.9** (the 0.1.10-alpha line ships a broken amalgamation —
   references a missing `sqlite-vec-diskann.c`); `blake3` for `embeddings.content_hash`.

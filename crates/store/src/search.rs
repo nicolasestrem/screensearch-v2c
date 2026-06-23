@@ -16,11 +16,18 @@ use crate::SqliteStore;
 /// RRF damping constant (the conventional value). A larger `k` flattens the
 /// contribution of top ranks; 60 is the de-facto standard.
 const RRF_K: f64 = 60.0;
+/// Backend ceiling for one search response, matching the Recall UI's current max.
+const MAX_SEARCH_LIMIT: usize = 100;
+const MAX_CANDIDATE_POOL: usize = MAX_SEARCH_LIMIT * 5;
+
+fn normalized_limit(limit: u32) -> usize {
+    (limit as usize).clamp(1, MAX_SEARCH_LIMIT)
+}
 
 /// Per-arm candidate pool. We over-fetch beyond `limit` so fusion (and the vector
 /// arm's time-range post-filter) have material to work with.
 fn candidate_pool(limit: usize) -> u32 {
-    (limit * 5).max(50) as u32
+    limit.saturating_mul(5).clamp(50, MAX_CANDIDATE_POOL) as u32
 }
 
 /// Builds a safe FTS5 MATCH expression from free user text: each whitespace term
@@ -70,7 +77,7 @@ impl SqliteStore {
     /// Hybrid search over OCR text + (optional) text embeddings, fused via RRF
     /// (`03 §3/§13`).
     pub async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
-        let limit = (q.limit as usize).max(1);
+        let limit = normalized_limit(q.limit);
         let pool = candidate_pool(limit);
         // Half-open `[start, end)` per the `TimeRange` contract: both arms filter
         // `captured_at >= start AND captured_at < end`. No range → the full line.

@@ -453,6 +453,23 @@ async fn hybrid_search_respects_limit() {
     }
     let hits = store.hybrid_search(&query("keyword", 3)).await.unwrap();
     assert_eq!(hits.len(), 3);
+
+    let one = store.hybrid_search(&query("keyword", 0)).await.unwrap();
+    assert_eq!(one.len(), 1);
+}
+
+#[tokio::test]
+async fn hybrid_search_clamps_excessive_limit() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    for i in 0..150 {
+        seed(&store, 10_000 + i, "common keyword here", None).await;
+    }
+
+    let hits = store
+        .hybrid_search(&query("keyword", u32::MAX))
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 100);
 }
 
 #[tokio::test]

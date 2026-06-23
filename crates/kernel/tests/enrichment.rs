@@ -17,8 +17,9 @@ use image::RgbaImage;
 use kernel::{process_job, CaptureFactory, Kernel};
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
-    CaptureConfig, CaptureSource, Embedding, EmbeddingProvider, JobKind, NewFrame, NewJob,
-    OcrProvider, OcrResult, Readiness, Result, SearchQuery, Store, VisionAnalysis, VisionProvider,
+    AnswerDelta, AnswerOpts, AnswerProvider, CaptureConfig, CaptureSource, Embedding,
+    EmbeddingProvider, JobKind, NewFrame, NewJob, OcrProvider, OcrResult, Readiness, Result,
+    RetrievedChunk, SearchQuery, Store, VisionAnalysis, VisionProvider,
 };
 
 /// A deterministic embedder: maps each text to a pre-registered vector (so the
@@ -351,6 +352,20 @@ impl OcrProvider for NoOcr {
     }
 }
 
+struct NoAnswer;
+#[async_trait]
+impl AnswerProvider for NoAnswer {
+    async fn answer(
+        &self,
+        _query: &str,
+        _context: &[RetrievedChunk],
+        _opts: AnswerOpts,
+        _tx: tokio::sync::mpsc::Sender<AnswerDelta>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn attach_embedder_drains_backlog_and_vector_arm_finds_frame() {
     let tmp = tempfile::tempdir().unwrap();
@@ -488,6 +503,70 @@ async fn process_job_vision_tag_writes_analysis() {
     let analysis = frame.vision.expect("vision analysis was written");
     assert_eq!(analysis.description, "a Rust editor with tests");
     assert_eq!(frame.activity_type.as_deref(), Some("coding")); // mirrored onto the frame
+}
+
+/// Vision-only startup must not depend on the embedding provider. Users can disable
+/// embeddings while still asking the sidecar to tag stored frames, and those jobs
+/// should drain as soon as inference is attached.
+#[tokio::test]
+async fn vision_jobs_drain_when_embeddings_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    let concrete = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = concrete.clone();
+
+    let fid = store.insert_frame(new_frame(10_000)).await.unwrap();
+    store.enqueue_job(vision_tag_job(Some(fid))).await.unwrap();
+
+    let abs = data_dir.join("frames").join("10000.jpg");
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([40, 50, 60, 255])))
+        .to_rgb8()
+        .save(&abs)
+        .unwrap();
+
+    let factory: CaptureFactory =
+        Arc::new(|_cfg: CaptureConfig| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
+    let kernel = Kernel::new(
+        store.clone(),
+        Arc::new(NoOcr) as Arc<dyn OcrProvider>,
+        factory,
+        data_dir.join("frames"),
+        Readiness::default(),
+    );
+    kernel
+        .attach_inference(
+            Arc::new(FakeVision {
+                description: "a code review window".to_string(),
+            }) as Arc<dyn VisionProvider>,
+            Arc::new(NoAnswer) as Arc<dyn AnswerProvider>,
+            None,
+        )
+        .await;
+
+    let mut drained = false;
+    for _ in 0..100 {
+        if store.job_stats().await.unwrap().done >= 1 {
+            drained = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        drained,
+        "worker pool did not drain the vision_tag job without an embedder"
+    );
+
+    let frame = concrete
+        .get_frame(fid)
+        .await
+        .unwrap()
+        .expect("frame exists");
+    let analysis = frame.vision.expect("vision analysis was written");
+    assert_eq!(analysis.description, "a code review window");
+
+    kernel.stop_vision_scheduler().await;
+    kernel.stop_workers().await;
 }
 
 /// With no vision provider attached, a `vision_tag` job retries (stays pending) rather

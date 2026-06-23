@@ -1250,3 +1250,96 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # store integration
 test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits bindings
 ```
+
+---
+
+## Pass — 2026-06-23 — P3 deferred enrichment hardening (`codex/review-p3-deferred-enrichment` branch)
+
+### Implemented
+- **Provider-slot worker startup** — `kernel::worker_pool` now stores both the embedder and vision
+  provider in shared runtime slots. Worker claim kinds are built on each poll: `EmbedText` /
+  `EmbedImage` only when an embedder is attached and the matching setting is enabled; `VisionTag`
+  once the vision provider is attached. `attach_embedder` and `attach_inference` both call the same
+  idempotent `start_workers`, and the startup stale-running recovery still runs before the first pool
+  spawn.
+- **Vision-only regression fix** — `vision_tag` jobs now drain when inference is attached even if
+  embeddings are disabled or unavailable. Added `vision_jobs_drain_when_embeddings_disabled`.
+- **Backend search limit clamp** — `store::search` normalizes `SearchQuery.limit` to `1..=100` and
+  caps the per-arm candidate pool at 500, matching the Recall UI and protecting direct IPC callers.
+  Added `hybrid_search_clamps_excessive_limit` and extended zero-limit coverage.
+- **Docs** — updated `CHANGELOG.md`, this build review, `08_CHANGELOG_AI.md`,
+  `docs/ARCHITECTURE.md`, `07_KNOWN_GAPS.md`, the composition-root module comment, and the UI
+  `job_progress` comment.
+
+### Failing-first checks
+```
+$ cargo test -p kernel --test enrichment vision_jobs_drain_when_embeddings_disabled
+test vision_jobs_drain_when_embeddings_disabled ... FAILED
+worker pool did not drain the vision_tag job without an embedder
+```
+
+```
+$ cargo test -p store --test store hybrid_search_clamps_excessive_limit
+test hybrid_search_clamps_excessive_limit ... FAILED
+assertion `left == right` failed
+  left: 150
+ right: 100
+```
+
+### Interface Review
+- No schema, IPC, `ts-rs`, or trait signature changes.
+- Known gap #8 (vector-arm tight-window post-KNN recall caveat) remains intentionally open.
+
+### Hallucinated / corrected
+- The first version of the new kernel fixture passed the app-data root to `Kernel::new`; the kernel
+  expects the frames directory and derives app-data from its parent. Corrected the test fixture to
+  pass `data_dir.join("frames")`.
+- Clippy rejected the candidate-pool `.max().min()` form as `manual_clamp`; changed it to
+  `clamp(50, MAX_CANDIDATE_POOL)`.
+
+### Verification (verbatim status)
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking store v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\store)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.51s
+```
+
+```
+$ cargo test -p kernel --test enrichment
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+```
+
+```
+$ cargo test -p store --test store
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s # kernel enrichment
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s # traits bindings
+```
+
+```
+$ npm --prefix ui run build
+> screensearch-ui@0.0.0 build
+> tsc --noEmit && vite build
+✓ built in 2.05s
+```
+
+```
+$ npm --prefix ui run lint
+> screensearch-ui@0.0.0 lint
+> eslint .
+```
+
+```
+$ git diff --exit-code -- ui/src/bindings
+```
