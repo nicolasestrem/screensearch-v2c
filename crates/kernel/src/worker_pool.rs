@@ -170,26 +170,30 @@ fn active_job_count(active_jobs: &Mutex<HashSet<i64>>) -> usize {
         .len()
 }
 
-fn claim_kinds(shared: &Shared) -> Vec<JobKind> {
+fn claim_kinds(shared: &Shared) -> ([JobKind; 3], usize) {
     let embedder_ready = shared
         .embedder
         .read()
         .expect("embedder slot lock")
         .is_some();
     let vision_ready = shared.vision.read().expect("vision slot lock").is_some();
-    let mut kinds = Vec::with_capacity(3);
+    let mut kinds = [JobKind::EmbedText; 3];
+    let mut len = 0;
     if embedder_ready {
         if shared.enable_embed_text {
-            kinds.push(JobKind::EmbedText);
+            kinds[len] = JobKind::EmbedText;
+            len += 1;
         }
         if shared.enable_embed_image {
-            kinds.push(JobKind::EmbedImage);
+            kinds[len] = JobKind::EmbedImage;
+            len += 1;
         }
     }
     if vision_ready {
-        kinds.push(JobKind::VisionTag);
+        kinds[len] = JobKind::VisionTag;
+        len += 1;
     }
-    kinds
+    (kinds, len)
 }
 
 /// One worker: claim a job, process it, emit progress; back off when the queue is
@@ -200,11 +204,12 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if *stop.borrow() {
             break;
         }
-        let kinds = claim_kinds(&shared);
+        let (kinds_arr, len) = claim_kinds(&shared);
+        let kinds = &kinds_arr[..len];
         let claimed = if kinds.is_empty() {
             None
         } else {
-            match shared.store.claim_jobs(&kinds, 1, now_ms()).await {
+            match shared.store.claim_jobs(kinds, 1, now_ms()).await {
                 Ok(mut jobs) => jobs.pop(),
                 Err(e) => {
                     tracing::warn!(error = %e, "worker: claim failed");

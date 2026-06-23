@@ -755,3 +755,17 @@
   kernel enrichment **10 passed**, store integration **40 passed**, traits bindings **32 passed**;
   `npm --prefix ui run build` → `✓ built in 2.05s`; `npm --prefix ui run lint` exit 0;
   `git diff --exit-code -- ui/src/bindings` exit 0.
+
+## 2026-06-23 — PR #17 review comment follow-up (`codex/review-p3-deferred-enrichment`)
+- **Context:** PR #17 received two unresolved Gemini inline comments and two actionable Claude notes.
+  The Gemini threads asked to avoid allocating a `Vec` in the worker polling loop; Claude asked for a
+  more precise `job_progress` comment and a known-gap note for startup-scoped embed lane flags.
+- **Change:** `claim_kinds` now returns `([JobKind; 3], usize)` and the worker loop passes the active
+  array slice into `claim_jobs`, eliminating the heap allocation on every idle poll. `useLiveEvents`
+  now says `job_progress` is emitted after each job attempt completes. `07_KNOWN_GAPS.md` records
+  that live re-enabling of embedding lanes requires a future worker restart/reconfigure path, matching
+  the current Settings apply policy.
+- **Interface review:** no schema, IPC, `ts-rs`, or trait signature changes.
+- **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test enrichment` → **10 passed**;
+  `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings` exit 0.

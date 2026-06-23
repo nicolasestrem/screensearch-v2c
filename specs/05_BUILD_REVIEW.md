@@ -1057,6 +1057,52 @@ $ git diff --exit-code -- ui/src/bindings
 
 ---
 
+## Pass — 2026-06-23 — PR #17 review comment follow-up (`codex/review-p3-deferred-enrichment` branch)
+
+### Review Threads Addressed
+- **Gemini inline threads (`crates/kernel/src/worker_pool.rs`)** — `claim_kinds` no longer allocates a
+  `Vec` on each worker poll. It returns a fixed `[JobKind; 3]` plus active length, and the worker loop
+  passes the active slice into `claim_jobs`.
+- **Claude comment precision (`ui/src/lib/ipc/useLiveEvents.ts`)** — clarified that `job_progress` is
+  emitted after each worker attempt completes, not only after terminal success.
+- **Claude known-gap note (`specs/07_KNOWN_GAPS.md`)** — tracked that embedding lane enablement flags
+  remain a pool-start snapshot. This matches the current Settings apply policy (enrichment changes
+  take effect on restart) and belongs to a future live-reconfigure pass.
+
+### Interface Review
+- No schema, IPC, `ts-rs`, or trait signature changes.
+- This follow-up is allocation/documentation cleanup only; the provider-slot behavior from the main
+  P3 hardening commit is unchanged.
+
+### Verification (verbatim status)
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.65s
+```
+
+```
+$ cargo test -p kernel --test enrichment
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+```
+
+```
+$ npm --prefix ui run lint
+> screensearch-ui@0.0.0 lint
+> eslint .
+```
+
+```
+$ git diff --exit-code -- ui/src/bindings
+```
+
+---
+
 ## Pass — 2026-06-23 — PR #15 review comment follow-up (`codex/fix-p0-p1-review-findings` branch)
 
 ### Review Threads Addressed

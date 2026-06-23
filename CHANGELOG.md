@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added regression coverage for vision jobs draining without an embedder, excessive search limits,
   and zero-limit normalization. Updated P3 architecture/spec notes and the live-event comment to
   match the current worker/event behavior. No schema, IPC, `ts-rs`, or trait signature changes.
+- **PR #17 review follow-up:** the worker loop now builds claim kinds in a fixed stack array instead
+  of allocating a `Vec` on every idle poll, the `job_progress` comment now says it fires after each
+  job attempt completes, and the startup-scoped embedding-lane flags are tracked as a live
+  reconfiguration follow-up.
 
 ### Fixed — P2 capture hardening (2026-06-23)
 - **Capture readiness now clears after unexpected source shutdown.** If the WGC capture source exits
