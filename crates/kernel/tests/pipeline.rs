@@ -19,9 +19,16 @@ use traits::{
     Readiness, Result, Store,
 };
 
+#[derive(Debug, Clone, Copy)]
+enum AfterFrames {
+    Shutdown,
+    Pending,
+}
+
 /// A capture source that replays a fixed list of frames, then `None` (shutdown).
 struct FakeCapture {
     frames: VecDeque<CapturedFrame>,
+    after_frames: AfterFrames,
 }
 
 #[async_trait]
@@ -36,7 +43,13 @@ impl CaptureSource for FakeCapture {
         }]
     }
     async fn next_frame(&mut self) -> Result<Option<CapturedFrame>> {
-        Ok(self.frames.pop_front())
+        if let Some(frame) = self.frames.pop_front() {
+            return Ok(Some(frame));
+        }
+        match self.after_frames {
+            AfterFrames::Shutdown => Ok(None),
+            AfterFrames::Pending => std::future::pending().await,
+        }
     }
 }
 
@@ -51,6 +64,16 @@ impl OcrProvider for FakeOcr {
             mean_confidence: 0.9,
             engine: "fake".to_string(),
         })
+    }
+}
+
+/// OCR provider used to model a missing WinRT OCR engine/language pack.
+struct ErrorOcr;
+
+#[async_trait]
+impl OcrProvider for ErrorOcr {
+    async fn recognize(&self, _frame: &CapturedFrame) -> Result<OcrResult> {
+        anyhow::bail!("OCR unavailable: no recognizer language installed")
     }
 }
 
@@ -93,7 +116,15 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
         max_width: 1280,
     };
 
-    run_capture_loop(Box::new(FakeCapture { frames: caps }), ctx, stop_rx).await;
+    run_capture_loop(
+        Box::new(FakeCapture {
+            frames: caps,
+            after_frames: AfterFrames::Shutdown,
+        }),
+        ctx,
+        stop_rx,
+    )
+    .await;
 
     // every frame: row stored with OCR text + foreground context + a JPEG on disk
     for i in 0..3 {
@@ -157,7 +188,15 @@ async fn capture_loop_skips_embed_jobs_when_disabled() {
         max_width: 1280,
     };
 
-    run_capture_loop(Box::new(FakeCapture { frames: caps }), ctx, stop_rx).await;
+    run_capture_loop(
+        Box::new(FakeCapture {
+            frames: caps,
+            after_frames: AfterFrames::Shutdown,
+        }),
+        ctx,
+        stop_rx,
+    )
+    .await;
 
     // frames are still stored, but no jobs are enqueued
     assert!(db.get_frame(1).await.unwrap().is_some());
@@ -173,7 +212,10 @@ async fn kernel_start_then_stop_flips_capture_readiness() {
     // factory yields a fresh fake source each Start (drains 2 frames, then ends)
     let factory: CaptureFactory = Arc::new(|_cfg| {
         let caps: VecDeque<CapturedFrame> = (0..2).map(|i| frame(2_000 + i)).collect();
-        Ok(Box::new(FakeCapture { frames: caps }) as Box<dyn CaptureSource>)
+        Ok(Box::new(FakeCapture {
+            frames: caps,
+            after_frames: AfterFrames::Pending,
+        }) as Box<dyn CaptureSource>)
     });
 
     let kernel = Kernel::new(
@@ -202,4 +244,77 @@ async fn kernel_start_then_stop_flips_capture_readiness() {
     assert!(!kernel.is_capturing().await);
     kernel.stop_capture().await;
     assert_eq!(kernel.readiness().capture.status, ComponentStatus::Disabled);
+}
+
+#[tokio::test]
+async fn kernel_clears_capture_and_marks_error_when_source_shuts_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+
+    let factory: CaptureFactory = Arc::new(|_cfg| {
+        Ok(Box::new(FakeCapture {
+            frames: VecDeque::new(),
+            after_frames: AfterFrames::Shutdown,
+        }) as Box<dyn CaptureSource>)
+    });
+
+    let kernel = Kernel::new(
+        store,
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    kernel.start_capture().await.unwrap();
+
+    for _ in 0..50 {
+        if !kernel.is_capturing().await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(!kernel.is_capturing().await);
+    let readiness = kernel.readiness().capture;
+    assert_eq!(readiness.status, ComponentStatus::Error);
+    assert!(readiness
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .contains("source shut down"));
+}
+
+#[tokio::test]
+async fn kernel_refuses_to_start_capture_when_ocr_is_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(ErrorOcr);
+    let factory: CaptureFactory =
+        Arc::new(|_cfg| panic!("capture factory should not run without OCR"));
+
+    let kernel = Kernel::new_with_ocr_unavailable(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+        "no OCR recognizer languages are installed".to_string(),
+    );
+
+    let err = kernel
+        .start_capture()
+        .await
+        .expect_err("capture start fails");
+
+    assert!(err.to_string().contains("OCR unavailable"));
+    assert_eq!(
+        kernel.readiness().capture.status,
+        ComponentStatus::Unavailable
+    );
+    assert!(!kernel.is_capturing().await);
+    assert!(db.get_frame(1).await.unwrap().is_none());
+    assert_eq!(store.job_stats().await.unwrap().pending, 0);
 }

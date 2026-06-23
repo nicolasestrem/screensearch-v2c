@@ -1144,3 +1144,109 @@ $ npm --prefix ui run lint
 ```
 $ git diff --exit-code -- ui/src/bindings
 ```
+
+---
+
+## Pass — 2026-06-23 — P2 capture hardening (`codex/fix-p2-capture-hardening` branch)
+
+### Implemented
+- **Capture lifecycle supervision** — `run_capture_loop` now returns `StopRequested` vs
+  `SourceShutdown`. `Kernel::start_capture` wraps the loop, clears the live capture handle on an
+  unexpected source shutdown, and emits `capture = Error` instead of leaving stale `Ready` readiness.
+  User Stop still maps to `Disabled`.
+- **OCR-unavailable start guard** — if WinRT OCR cannot be created, the app still boots, but
+  `capture_control(Start)` fails before opening WGC with `capture = Unavailable`. The defensive
+  `UnavailableOcr` now returns an error if ever reached, so it cannot silently write empty OCR rows.
+- **Backend settings sanitizer** — `kernel::settings` clamps numeric settings on load and save,
+  matching the Settings UI bounds. Malformed persisted values such as `capture.diff_threshold = NaN`
+  become safe finite values before the capture config is built.
+- **Regression coverage** — added tests for source shutdown readiness cleanup, OCR-unavailable start
+  refusal/no empty rows, and persisted/direct numeric settings sanitization.
+
+### Interface Review
+- No schema, IPC, `ts-rs`, or trait signature changes.
+- `07` OCR fallback wording updated to the stricter start-block behavior.
+- Human changelog, AI changelog, and as-built architecture docs updated.
+
+### Verification (verbatim highlights)
+```
+$ cargo test -p kernel --test pipeline
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+```
+
+```
+$ cargo test -p kernel --test settings
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.08s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits bindings
+```
+
+```
+$ npm --prefix ui run build
+> screensearch-ui@0.0.0 build
+> tsc --noEmit && vite build
+✓ built in 1.52s
+```
+
+```
+$ cargo test -p capture --test wgc_smoke -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+$ cargo test -p ocr -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+$ cargo test -p screensearch --test e2e_capture -- --ignored
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+```
+
+---
+
+## Pass — 2026-06-23 — PR #16 review comment follow-up (`codex/fix-p2-capture-hardening` branch)
+
+### Review Thread Addressed
+- **`crates/kernel/src/lib.rs` capture supervisor race** — Gemini flagged that the unexpected-source-
+  shutdown supervisor cleared the capture handle, dropped the capture mutex, and then published
+  `capture = Error`. A fast restart could acquire the mutex in that gap, publish the new session as
+  `Ready`, and then be overwritten by the old loop's error.
+
+### Resolution
+- Kept the existing generation-id guard, but now the supervisor keeps the capture mutex held while it
+  clears the stale handle and publishes `capture = Error`. This preserves the established lock order
+  (`capture` mutex before readiness lock) and prevents a new `start_capture` from entering until the
+  old source-shutdown state is fully published.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.98s
+```
+
+```
+$ cargo test -p kernel --test pipeline
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # kernel enrichment
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # kernel pipeline
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s # kernel settings
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits bindings
+```

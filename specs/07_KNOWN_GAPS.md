@@ -96,8 +96,9 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
   `capture.interval_ms` (drain-to-latest + diff gate), rather than start/stop per tick. Simple and
   correct; a single-shot-per-tick optimization to cut idle GPU work can come later.
 - **OCR fallback (P2):** if the WinRT engine can't be created (no language pack), the composition
-  root substitutes an `UnavailableOcr` that errors per frame (logged) so the app still runs and
-  capture readiness/logs surface the problem — never a silent half-working state.
+  root substitutes a defensive `UnavailableOcr` and marks OCR unavailable in the kernel; the app still
+  runs, but `capture_control(Start)` fails with `capture = Unavailable` before WGC opens, so no empty
+  OCR rows are written and the problem is surfaced — never a silent half-working state.
 - **fastembed model variant (P3):** confirmed `fastembed` 5.17.2 exposes
   `EmbeddingModel::EmbeddingGemma300MQ` (768-dim, quantized — the `MODEL_REGISTRY §3` name is exact)
   and `ImageEmbeddingModel::NomicEmbedVisionV15`; both verified by the real-model `#[ignore]` test.

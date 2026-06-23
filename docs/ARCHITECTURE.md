@@ -105,8 +105,12 @@ WgcCapture.next_frame()           # diff-gated + privacy-gated; only *changed* f
   → emit KernelEvent::CaptureTick # drives the live timeline
 ```
 
-Capture is **off until the user starts it** (privacy-first). Per-frame errors are logged and the
-frame skipped — capture keeps running. No screen content or OCR text is logged at info level.
+Capture is **off until the user starts it** (privacy-first). If WinRT OCR cannot be created, the app
+still boots but capture start fails with `capture = Unavailable` rather than storing empty OCR rows.
+Per-frame errors are logged and the frame skipped — capture keeps running. If the capture source
+itself shuts down without a user Stop, the kernel clears the live handle and reports
+`capture = Error` so the UI cannot remain stuck on a stale Ready state. No screen content or OCR text
+is logged at info level.
 `vision_tag` is **never** auto-enqueued per frame — it is produced only on-demand (the
 `enqueue_vision` command) or by the opt-in timer/idle scheduler (§7), so vision work never runs in
 the always-on hot path.
@@ -299,7 +303,9 @@ maps live — `Starting`→Initializing, `Ready`→Ready, `Evicted`→Ready ("re
 
 **Settings** (`kernel::settings`): the strongly-typed `Settings` is assembled from the opaque
 key/value `settings` table; a missing/unparsable value falls back to the per-key default (never an
-error). Enrichment keys: `enrich.embed_text` (true), `enrich.image_embeddings` (false),
+error), and numeric values are backend-sanitized on both load and save so direct IPC or hand-edited DB
+rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_text` (true),
+`enrich.image_embeddings` (false),
 `enrich.worker_concurrency` (2). **P4 keys:** `enrich.vision_timer_enabled` (false) +
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
