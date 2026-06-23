@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the same numeric bounds as the Settings UI, including a finite `[0,1]` capture diff threshold.
   Added regression tests for source shutdown, OCR-unavailable start refusal, and malformed persisted
   settings. No schema, IPC, or `ts-rs` binding changes.
+- **PR #16 review follow-up:** the unexpected-source-shutdown supervisor now keeps the capture mutex
+  held while publishing `capture = Error`, closing a restart race where a new capture session could
+  report `Ready` and then be overwritten by the old loop's shutdown error.
 
 ### Fixed — P0/P1 store hardening (2026-06-23)
 - **Job finalization now requires a claimed running job.** `complete_job` and `fail_job` no longer

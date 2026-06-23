@@ -1208,3 +1208,45 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 $ cargo test -p screensearch --test e2e_capture -- --ignored
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
 ```
+
+---
+
+## Pass — 2026-06-23 — PR #16 review comment follow-up (`codex/fix-p2-capture-hardening` branch)
+
+### Review Thread Addressed
+- **`crates/kernel/src/lib.rs` capture supervisor race** — Gemini flagged that the unexpected-source-
+  shutdown supervisor cleared the capture handle, dropped the capture mutex, and then published
+  `capture = Error`. A fast restart could acquire the mutex in that gap, publish the new session as
+  `Ready`, and then be overwritten by the old loop's error.
+
+### Resolution
+- Kept the existing generation-id guard, but now the supervisor keeps the capture mutex held while it
+  clears the stale handle and publishes `capture = Error`. This preserves the established lock order
+  (`capture` mutex before readiness lock) and prevents a new `start_capture` from entering until the
+  old source-shutdown state is fully published.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.98s
+```
+
+```
+$ cargo test -p kernel --test pipeline
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # kernel enrichment
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # kernel pipeline
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s # kernel settings
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # store integration
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits bindings
+```

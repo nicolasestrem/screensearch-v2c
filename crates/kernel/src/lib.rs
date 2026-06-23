@@ -225,7 +225,6 @@ impl Kernel {
                 let mut guard = capture_slot.lock().await;
                 if guard.as_ref().is_some_and(|h| h.id == id) {
                     *guard = None;
-                    drop(guard);
                     set_capture_readiness(
                         &readiness,
                         &events,

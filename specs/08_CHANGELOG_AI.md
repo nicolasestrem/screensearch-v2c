@@ -713,3 +713,17 @@
   `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings` exit 0; hardware-gated
   P2 checks all passed: WGC smoke **1 passed**, WinRT OCR smoke **1 passed**, real e2e capture **1
   passed**.
+
+## 2026-06-23 — PR #16 review comment follow-up (`codex/fix-p2-capture-hardening`)
+- **Context:** Gemini identified a remaining restart race in the unexpected-source-shutdown supervisor:
+  after the loop cleared the capture handle, it dropped the capture mutex before publishing
+  `capture = Error`, so a fast restart could publish a new `Ready` status and then be overwritten by
+  the old loop's error.
+- **Change:** the supervisor now holds the capture mutex until after it clears the stale handle and
+  calls `set_capture_readiness(Error, ...)`. This keeps the generation-id guard and existing lock order
+  intact while closing the gap.
+- **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test pipeline` → **5 passed**;
+  `cargo test --workspace` exit 0, including kernel enrichment **9 passed**, kernel pipeline
+  **5 passed**, kernel settings **4 passed**, store integration **39 passed**, and traits bindings
+  **32 passed**.
