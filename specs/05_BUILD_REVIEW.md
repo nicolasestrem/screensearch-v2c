@@ -976,3 +976,81 @@ Addressed three correct automated-review findings on PR #14 (gemini-code-assist 
   two-tone frame — a genuinely low-signal image — now returns **no activity / unknown confidence** (an
   honest decline), where the *forced-enum* schema had it confidently report `browsing` @ `0.95`. This
   is the review's point demonstrated, not just patched.
+
+---
+
+## Pass — 2026-06-23 — P0/P1 review findings fix (`codex/fix-p0-p1-review-findings` branch)
+
+### Implemented
+- **Job finalization state safety (`03 §5`)** — `complete_job` / `fail_job` now update only
+  `state='running'` rows. A pending, done, dead, stale, or unknown id returns an error instead of
+  mutating the queue behind the worker state machine.
+- **Forward-migration guard (`03 §12`)** — `SqliteStore::open_path` / `open_in_memory` now reject a
+  database whose `schema_version` is newer than this build's `LATEST_SCHEMA_VERSION`, preventing an
+  older binary from treating an unknown future schema as ready.
+- **Regression coverage** — added `complete_job_requires_running_state`,
+  `fail_job_requires_running_state`, and `open_path_rejects_future_schema_version`.
+
+### Verification (verbatim)
+```
+$ cargo test -p store --test store complete_job_requires_running_state -- --exact
+
+running 1 test
+test complete_job_requires_running_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s
+```
+
+```
+$ cargo test -p store --test store fail_job_requires_running_state -- --exact
+
+running 1 test
+test fail_job_requires_running_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s
+```
+
+```
+$ cargo test -p store --test store open_path_rejects_future_schema_version -- --exact
+
+running 1 test
+test open_path_rejects_future_schema_version ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.01s
+```
+
+```
+$ cargo fmt --all -- --check
+```
+
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Checking store v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\store)
+    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.92s
+```
+
+```
+$ cargo test --workspace
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s # store integration tests
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s # traits binding tests
+Finished `test` profile [unoptimized + debuginfo] target(s) in 18.65s
+```
+
+```
+$ npm --prefix ui run build
+> screensearch-ui@0.0.0 build
+> tsc --noEmit && vite build
+✓ built in 2.21s
+```
+
+```
+$ npm --prefix ui run lint
+> screensearch-ui@0.0.0 lint
+> eslint .
+```
+
+```
+$ git diff --exit-code -- ui/src/bindings
+```

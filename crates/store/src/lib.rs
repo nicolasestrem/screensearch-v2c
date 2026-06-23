@@ -106,6 +106,12 @@ fn bootstrap_and_migrate(conn: &mut Connection) -> Result<()> {
     }
     let mut current: i32 =
         conn.query_row("SELECT version FROM schema_version", [], |r| r.get(0))?;
+    if current > schema::LATEST_SCHEMA_VERSION {
+        anyhow::bail!(
+            "database has newer schema_version {current}; this build supports up to {}",
+            schema::LATEST_SCHEMA_VERSION
+        );
+    }
     for (version, sql) in schema::MIGRATIONS {
         if *version > current {
             let tx = conn.transaction()?;

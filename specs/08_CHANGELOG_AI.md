@@ -625,3 +625,28 @@
   real-GPU gated smoke `real_vision_tags_an_image` **passed** on the RTX 5060 Ti — `VISION: The screen
   is divided into two vertical sections … | activity=None | conf=-1` (honest decline on the low-signal
   synthetic frame; the test asserts confidence ∈ {-1.0} ∪ (0,1] and activity ∈ {none} ∪ the set).
+
+## 2026-06-23 — P0/P1 review findings fix (`codex/fix-p0-p1-review-findings`)
+- **Context:** a scrupulous review of Phase 0/Phase 1 found two P1 data-spine hardening issues: job
+  finalization was keyed by id only (so pending/done/dead jobs could be rewritten), and a DB with a
+  future `schema_version` opened as if it were compatible.
+- **Change:** `complete_job` and `fail_job` now finalize only `state='running'` rows and return
+  `"missing or not running"` errors otherwise. `bootstrap_and_migrate` now rejects
+  `schema_version > LATEST_SCHEMA_VERSION` before applying migrations. Added regression tests:
+  `complete_job_requires_running_state`, `fail_job_requires_running_state`, and
+  `open_path_rejects_future_schema_version`.
+- **Why:** this preserves the `03 §5` queue state machine (`claim_jobs` → run → finalize) and the
+  `03 §12` forward-only migration guarantee. No IPC, `ts-rs`, schema, or trait interface changed.
+- **Verification (verbatim):**
+  `cargo test -p store --test store complete_job_requires_running_state -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo test -p store --test store fail_job_requires_running_state -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo test -p store --test store open_path_rejects_future_schema_version -- --exact` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out`;
+  `cargo fmt --all -- --check` exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0;
+  `cargo test --workspace` exit 0 (store integration tests now **39 passed**; traits **32 passed**);
+  `npm --prefix ui run build` exit 0 (`✓ built in 2.21s`);
+  `npm --prefix ui run lint` exit 0;
+  `git diff --exit-code -- ui/src/bindings` exit 0.

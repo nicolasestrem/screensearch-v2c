@@ -129,16 +129,18 @@ impl SqliteStore {
         .await
     }
 
-    /// Marks a job `done` (`03 §5`). Errors if no such job exists (a zero-row
-    /// update means a stale id — surfaced rather than silently dropped).
+    /// Marks a claimed job `done` (`03 §5`). Errors if no such running job exists
+    /// (a zero-row update means an unknown/stale/wrong-state id — surfaced rather
+    /// than silently dropped).
     pub async fn complete_job(&self, id: i64) -> Result<()> {
         self.with_conn(move |conn| {
             let changed = conn.execute(
-                "UPDATE jobs SET state = 'done', updated_at = (unixepoch()*1000) WHERE id = ?1",
+                "UPDATE jobs SET state = 'done', updated_at = (unixepoch()*1000)
+                 WHERE id = ?1 AND state = 'running'",
                 rusqlite::params![id],
             )?;
             if changed == 0 {
-                bail!("complete_job: no job with id {id}");
+                bail!("complete_job: job {id} is missing or not running");
             }
             Ok(())
         })
@@ -149,6 +151,7 @@ impl SqliteStore {
     /// `err`. If `retry_at` is `Some` *and* attempts remain (`< max_attempts`), the
     /// job returns to `pending` with `not_before = retry_at` (backoff); otherwise
     /// it is dead-lettered (`state='dead'`) — surfaced in diagnostics, never lost.
+    /// Only a claimed/running job may be failed.
     pub async fn fail_job(&self, id: i64, err: &str, retry_at: Option<i64>) -> Result<()> {
         let err = err.to_string();
         self.with_conn(move |conn| {
@@ -163,11 +166,11 @@ impl SqliteStore {
                      WHEN :retry IS NOT NULL AND attempts + 1 < max_attempts THEN :retry
                      ELSE not_before END,
                    updated_at = (unixepoch()*1000)
-                 WHERE id = :id",
+                 WHERE id = :id AND state = 'running'",
                 named_params! { ":err": err, ":retry": retry_at, ":id": id },
             )?;
             if changed == 0 {
-                bail!("fail_job: no job with id {id}");
+                bail!("fail_job: job {id} is missing or not running");
             }
             Ok(())
         })

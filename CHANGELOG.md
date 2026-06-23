@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — P0/P1 store hardening (2026-06-23)
+- **Job finalization now requires a claimed running job.** `complete_job` and `fail_job` no longer
+  rewrite pending, done, or dead jobs by id alone. This protects the durable queue state machine from
+  stale-worker finalization after a retry, dead-letter, or stale-running recovery.
+- **Older builds reject newer database schemas.** Opening a SQLite store with a `schema_version`
+  greater than the compiled migration set now fails clearly instead of reporting the DB as ready.
+- Added regression tests for pending/done/dead job finalization and future-schema rejection. No IPC,
+  `ts-rs`, schema, or trait signatures changed.
+
 ### Fixed — Vision-tagging quality (2026-06-22)
 - **Vision tags no longer record a fabricated confidence.** The vision prompt previously showed a
   literal `"confidence": 0.0`, which the model echoed — so every tag was stored with a `0.0`
