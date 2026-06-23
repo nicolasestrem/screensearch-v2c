@@ -565,6 +565,11 @@ async fn init_inference(
         kernel.set_sidecar_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
         return;
     }
+    let pidfile = sidecar_dir.join("llama-server.pid");
+    let mut reap_binaries = inference::download::installed_binary_candidates(&sidecar_dir);
+    if inference::supervisor::reap_stray_any(&pidfile, &reap_binaries) {
+        tracing::warn!("startup reap terminated a stray sidecar before binary resolution");
+    }
 
     // Fetch the prebuilt Vulkan llama-server (idempotent; skipped if already present).
     let binary = match inference::download::ensure_binary(&sidecar_dir).await {
@@ -580,9 +585,11 @@ async fn init_inference(
     };
 
     let settings = kernel::settings::load_settings(store.as_ref()).await;
+    reap_binaries.push(binary.clone());
     let config = SupervisorConfig {
         binary,
-        pidfile: sidecar_dir.join("llama-server.pid"),
+        reap_binaries,
+        pidfile,
         idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
         health_timeout: SIDECAR_HEALTH_TIMEOUT,
     };

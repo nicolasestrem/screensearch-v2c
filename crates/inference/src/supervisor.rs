@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, Semaphore};
 use traits::{SidecarState, SidecarStatus};
 
 use crate::client::SidecarClient;
@@ -31,13 +31,20 @@ const HEALTH_POLL: Duration = Duration::from_millis(250);
 const PROCESS_EXIT_WAIT: Duration = Duration::from_secs(3);
 /// How many times to (re)spawn the sidecar before surfacing a startup failure.
 const SPAWN_ATTEMPTS: u32 = 3;
+/// Large enough to allow practical same-model parallelism while letting a model switch
+/// drain every request slot before terminating the old process.
+const REQUEST_GATE_PERMITS: u32 = 1024;
 
 /// Static configuration for a [`ModelSupervisor`].
 #[derive(Debug, Clone)]
 pub struct SupervisorConfig {
     /// Path to the resolved `llama-server.exe` (under app-data, per the runtime
-    /// download). Used both to launch and as the reap sentinel.
+    /// download). Used to launch and always included as a reap sentinel.
     pub binary: PathBuf,
+    /// Additional exact `llama-server.exe` image paths this app previously installed.
+    /// Startup reap checks these alongside [`Self::binary`] so an override toggle does
+    /// not leave an app-owned sidecar running from the old normal/override install.
+    pub reap_binaries: Vec<PathBuf>,
     /// Where the child's pid is recorded for the startup reap.
     pub pidfile: PathBuf,
     /// Stop the sidecar after this long with no in-flight request (`sidecar.idle_ttl_secs`).
@@ -60,6 +67,7 @@ pub struct Lease {
     client: SidecarClient,
     in_flight: Arc<AtomicUsize>,
     last_activity: Arc<StdMutex<Instant>>,
+    _permit: RequestPermit,
 }
 
 impl Lease {
@@ -78,6 +86,72 @@ impl Drop for Lease {
     }
 }
 
+/// Serializes sidecar use so a model switch cannot terminate a process while another
+/// request is still streaming through it. Normal requests acquire one permit and may
+/// run concurrently; any path that stops the child drains all permits first.
+#[derive(Clone)]
+pub struct RequestGate {
+    permits: Arc<Semaphore>,
+    capacity: u32,
+}
+
+pub struct RequestPermit {
+    _permit: OwnedSemaphorePermit,
+}
+
+impl RequestGate {
+    pub fn new() -> Self {
+        Self::with_capacity(REQUEST_GATE_PERMITS)
+    }
+
+    fn with_capacity(capacity: u32) -> Self {
+        assert!(capacity > 0, "request gate capacity must be non-zero");
+        Self {
+            permits: Arc::new(Semaphore::new(capacity as usize)),
+            capacity,
+        }
+    }
+
+    pub async fn enter(&self) -> Result<RequestPermit> {
+        let permit = self
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .context("sidecar request gate closed")?;
+        Ok(RequestPermit { _permit: permit })
+    }
+
+    pub async fn enter_for_model_switch(&self) -> Result<RequestPermit> {
+        let permit = self
+            .permits
+            .clone()
+            .acquire_many_owned(self.capacity)
+            .await
+            .context("sidecar request gate closed")?;
+        Ok(RequestPermit { _permit: permit })
+    }
+}
+
+impl Default for RequestGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RequestPermit {
+    fn into_single(mut self) -> Self {
+        if self._permit.num_permits() == 1 {
+            return self;
+        }
+        let permit = self
+            ._permit
+            .split(1)
+            .expect("exclusive sidecar permit should contain at least one permit");
+        Self { _permit: permit }
+    }
+}
+
 /// Owns the sidecar lifecycle. Construct via [`ModelSupervisor::new`] inside a Tokio
 /// runtime (it spawns the idle-evictor task).
 pub struct ModelSupervisor {
@@ -88,6 +162,7 @@ pub struct ModelSupervisor {
     last_activity: Arc<StdMutex<Instant>>,
     events: broadcast::Sender<SidecarStatus>,
     shutdown: AtomicBool,
+    gate: RequestGate,
 }
 
 impl ModelSupervisor {
@@ -98,8 +173,10 @@ impl ModelSupervisor {
         let job = JobObject::new().context("create job object")?;
 
         // Startup reap: kill a stray sidecar from a prior run, identified by pidfile +
-        // image-path sentinel (never an unrelated process) — `03 §6`.
-        if reap_stray(&config.pidfile, &config.binary) {
+        // exact image-path sentinels (never an unrelated process) — `03 §6`.
+        let mut reap_binaries = config.reap_binaries.clone();
+        reap_binaries.push(config.binary.clone());
+        if reap_stray_any(&config.pidfile, &reap_binaries) {
             tracing::warn!("startup reap terminated a stray sidecar from a prior run");
         }
 
@@ -112,6 +189,7 @@ impl ModelSupervisor {
             last_activity: Arc::new(StdMutex::new(Instant::now())),
             events,
             shutdown: AtomicBool::new(false),
+            gate: RequestGate::new(),
         });
         me.clone().spawn_evictor();
         Ok(me)
@@ -126,26 +204,106 @@ impl ModelSupervisor {
     /// returns a [`Lease`] to it. The lease keeps the request in-flight; the caller
     /// runs its HTTP request through `lease.client()`.
     pub async fn acquire(&self, spec: ModelSpec) -> Result<Lease> {
-        let mut guard = self.state.lock().await;
-        let need_spawn = match guard.as_ref() {
-            Some(p) => needs_restart(&p.spec, &spec),
-            None => true,
-        };
-        if need_spawn {
-            if let Some(old) = guard.take() {
-                // Wait for the old process to fully exit before spawning the new model
-                // so its GPU memory is released first (avoids a VRAM-allocation race on
-                // model switch).
-                self.stop_child(old).await;
+        loop {
+            if self.needs_exclusive_switch(&spec).await {
+                let permit = self.gate.enter_for_model_switch().await?;
+                let mut guard = self.state.lock().await;
+                if !guard
+                    .as_ref()
+                    .is_some_and(|p| needs_restart(&p.spec, &spec))
+                {
+                    drop(guard);
+                    drop(permit);
+                    continue;
+                }
+                if let Some(old) = guard.take() {
+                    // Wait for the old process to fully exit before spawning the new model
+                    // so its GPU memory is released first (avoids a VRAM-allocation race on
+                    // model switch).
+                    self.stop_child(old).await;
+                }
+                let proc = self.spawn_with_retries(&spec).await?;
+                *guard = Some(proc);
+                let lease = self.lease_from_state(
+                    guard.as_ref().expect("sidecar present after switch"),
+                    permit.into_single(),
+                );
+                drop(guard);
+                return Ok(lease);
             }
-            let proc = self.spawn_with_retries(&spec).await?;
-            *guard = Some(proc);
+
+            let permit = self.gate.enter().await?;
+            let mut guard = self.state.lock().await;
+            match guard.as_ref() {
+                Some(running) if needs_restart(&running.spec, &spec) => {
+                    drop(guard);
+                    drop(permit);
+                    continue;
+                }
+                Some(running) if running_sidecar_healthy(running).await => {
+                    let lease = self.lease_from_state(running, permit);
+                    drop(guard);
+                    return Ok(lease);
+                }
+                Some(running) => {
+                    let crashed_model = model_label(&running.spec);
+                    drop(guard);
+                    drop(permit);
+
+                    let permit = self.gate.enter_for_model_switch().await?;
+                    let mut guard = self.state.lock().await;
+                    if let Some(running) = guard.as_ref() {
+                        if !needs_restart(&running.spec, &spec)
+                            && running_sidecar_healthy(running).await
+                        {
+                            drop(guard);
+                            drop(permit);
+                            continue;
+                        }
+                        self.emit(SidecarState::Crashed, Some(crashed_model));
+                    } else {
+                        drop(guard);
+                        drop(permit);
+                        continue;
+                    }
+                    if let Some(old) = guard.take() {
+                        self.stop_child(old).await;
+                    }
+                    let proc = self.spawn_with_retries(&spec).await?;
+                    *guard = Some(proc);
+                    let lease = self.lease_from_state(
+                        guard
+                            .as_ref()
+                            .expect("sidecar present after crash recovery"),
+                        permit.into_single(),
+                    );
+                    drop(guard);
+                    return Ok(lease);
+                }
+                None => {
+                    let proc = self.spawn_with_retries(&spec).await?;
+                    *guard = Some(proc);
+                    let lease = self.lease_from_state(
+                        guard.as_ref().expect("sidecar present after initial spawn"),
+                        permit,
+                    );
+                    drop(guard);
+                    return Ok(lease);
+                }
+            }
         }
-        let client = guard
+    }
+
+    async fn needs_exclusive_switch(&self, spec: &ModelSpec) -> bool {
+        self.state
+            .lock()
+            .await
             .as_ref()
-            .expect("sidecar present after ensure")
-            .client
-            .clone();
+            .is_some_and(|p| needs_restart(&p.spec, spec))
+    }
+
+    fn lease_from_state(&self, running: &SidecarProcess, permit: RequestPermit) -> Lease {
+        let client = running.client.clone();
         // Count the request in-flight **while still holding the state lock**: the
         // evictor re-checks `in_flight` under this same lock before killing, so it can
         // never evict the sidecar we are handing out (closes the drop→fetch_add race).
@@ -153,13 +311,12 @@ impl ModelSupervisor {
         if let Ok(mut g) = self.last_activity.lock() {
             *g = Instant::now();
         }
-        drop(guard);
-
-        Ok(Lease {
+        Lease {
             client,
             in_flight: self.in_flight.clone(),
             last_activity: self.last_activity.clone(),
-        })
+            _permit: permit,
+        }
     }
 
     /// Kills a running sidecar and waits (bounded) for the OS to release it, so its GPU
@@ -309,11 +466,33 @@ pub fn idle_expired(elapsed: Duration, ttl: Duration) -> bool {
     elapsed >= ttl
 }
 
+/// A running sidecar can be reused only when both the OS process and the HTTP health
+/// endpoint are alive. Anything else is treated as a crash/hang and respawned.
+pub fn can_reuse_running_sidecar(process_alive: bool, health_ok: bool) -> bool {
+    process_alive && health_ok
+}
+
+async fn running_sidecar_healthy(running: &SidecarProcess) -> bool {
+    let process_alive = process::pid_alive(running.child.pid());
+    let health_ok = if process_alive {
+        running.client.health().await
+    } else {
+        false
+    };
+    can_reuse_running_sidecar(process_alive, health_ok)
+}
+
 /// Reaps a stray sidecar a prior run left behind: reads `pidfile`, and only if that
 /// pid is alive **and** its image path is our installed `expected_exe` does it
 /// terminate the process (`03 §6` — never kill an unrelated process that recycled the
 /// pid). Returns whether a process was killed. Stale/foreign pidfiles are cleaned up.
 pub fn reap_stray(pidfile: &Path, expected_exe: &Path) -> bool {
+    reap_stray_any(pidfile, &[expected_exe.to_path_buf()])
+}
+
+/// Like [`reap_stray`], but accepts every exact sidecar executable path the app owns
+/// (the selected binary plus prior normal/override installs).
+pub fn reap_stray_any(pidfile: &Path, expected_exes: &[PathBuf]) -> bool {
     let Ok(content) = std::fs::read_to_string(pidfile) else {
         return false;
     };
@@ -325,7 +504,8 @@ pub fn reap_stray(pidfile: &Path, expected_exe: &Path) -> bool {
         let _ = std::fs::remove_file(pidfile);
         return false;
     }
-    let is_ours = process::image_path(pid).is_some_and(|p| paths_eq(&p, expected_exe));
+    let is_ours = process::image_path(pid)
+        .is_some_and(|p| expected_exes.iter().any(|expected| paths_eq(&p, expected)));
     if is_ours {
         let killed = process::terminate(pid);
         let _ = std::fs::remove_file(pidfile);
@@ -419,6 +599,81 @@ mod tests {
             Duration::from_secs(10),
             Duration::from_secs(180)
         ));
+    }
+
+    #[tokio::test]
+    async fn request_gate_allows_concurrent_regular_requests() {
+        let gate = RequestGate::with_capacity(2);
+        let first = gate.enter().await.expect("first request enters");
+        let second = gate.enter().await.expect("second request enters");
+
+        let gate_for_third = gate.clone();
+        let third_wait = tokio::spawn(async move {
+            let _third = gate_for_third
+                .enter()
+                .await
+                .expect("third enters once a request drops");
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !third_wait.is_finished(),
+            "only capacity, not one, should limit regular request concurrency"
+        );
+
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(1), third_wait)
+            .await
+            .expect("third request should proceed after one slot frees")
+            .expect("third request task should not panic");
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn switch_gate_waits_for_active_request_to_drop() {
+        let gate = RequestGate::with_capacity(2);
+        let first = gate.enter().await.expect("first request enters");
+        let second = gate.enter().await.expect("second request enters");
+
+        let gate_for_switch = gate.clone();
+        let switch_wait = tokio::spawn(async move {
+            let switch = gate_for_switch
+                .enter_for_model_switch()
+                .await
+                .expect("switch enters once first request drops");
+            assert_eq!(
+                switch._permit.num_permits(),
+                2,
+                "switch should drain every request permit"
+            );
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !switch_wait.is_finished(),
+            "model switch must wait while another request lease is active"
+        );
+
+        drop(first);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !switch_wait.is_finished(),
+            "model switch must wait for every active request lease"
+        );
+
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(1), switch_wait)
+            .await
+            .expect("switch should proceed after active request drops")
+            .expect("switch task should not panic");
+    }
+
+    #[test]
+    fn running_sidecar_is_reused_only_when_process_and_health_are_alive() {
+        assert!(can_reuse_running_sidecar(true, true));
+        assert!(!can_reuse_running_sidecar(false, true));
+        assert!(!can_reuse_running_sidecar(true, false));
+        assert!(!can_reuse_running_sidecar(false, false));
     }
 
     #[test]

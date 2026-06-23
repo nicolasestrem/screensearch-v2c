@@ -11,6 +11,29 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Sender;
+use tokio::time::{timeout, Duration};
+
+/// Bounded waits for the localhost sidecar. The defaults are intentionally long
+/// enough for real model work while still preventing an unresponsive process from
+/// pinning a worker or answer stream forever.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientTimeouts {
+    pub health: Duration,
+    pub completion: Duration,
+    pub stream_connect: Duration,
+    pub stream_idle: Duration,
+}
+
+impl Default for ClientTimeouts {
+    fn default() -> Self {
+        Self {
+            health: Duration::from_secs(2),
+            completion: Duration::from_secs(120),
+            stream_connect: Duration::from_secs(30),
+            stream_idle: Duration::from_secs(30),
+        }
+    }
+}
 
 /// One message in a chat request. `content` is either a plain string (answer lane) or
 /// a multimodal parts array (vision lane: text + an image data URL).
@@ -135,21 +158,53 @@ struct Delta {
 pub struct SidecarClient {
     http: reqwest::Client,
     base: String,
+    timeouts: ClientTimeouts,
 }
 
 impl SidecarClient {
     /// Builds a client for `base` (scheme + host + port, no trailing slash).
     pub fn new(base: impl Into<String>) -> Self {
+        Self::with_client_timeouts(base, ClientTimeouts::default())
+    }
+
+    /// Builds a client with custom timeout values. Tests use very short durations;
+    /// production uses [`ClientTimeouts::default`] via [`Self::new`]. The stream
+    /// value is applied to both initial stream connection and per-chunk idle waits;
+    /// use [`Self::with_client_timeouts`] when those phases need different budgets.
+    pub fn with_timeouts(
+        base: impl Into<String>,
+        health: Duration,
+        completion: Duration,
+        stream_idle: Duration,
+    ) -> Self {
         Self {
             http: reqwest::Client::new(),
             base: base.into(),
+            timeouts: ClientTimeouts {
+                health,
+                completion,
+                stream_connect: stream_idle,
+                stream_idle,
+            },
+        }
+    }
+
+    /// Builds a client with fully specified timeout values.
+    pub fn with_client_timeouts(base: impl Into<String>, timeouts: ClientTimeouts) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base: base.into(),
+            timeouts,
         }
     }
 
     /// `GET /health` — true once the model is loaded and the server is serving.
     pub async fn health(&self) -> bool {
         let url = format!("{}/health", self.base);
-        matches!(self.http.get(url).send().await, Ok(r) if r.status().is_success())
+        matches!(
+            timeout(self.timeouts.health, self.http.get(url).send()).await,
+            Ok(Ok(r)) if r.status().is_success()
+        )
     }
 
     /// Non-streaming chat completion; returns the assistant message text. Used by the
@@ -162,31 +217,35 @@ impl SidecarClient {
         max_tokens: u32,
         response_format: Option<serde_json::Value>,
     ) -> Result<String> {
-        let req = ChatRequest {
-            messages,
-            max_tokens,
-            stream: false,
-            temperature: Some(0.2),
-            response_format,
-        };
-        let url = format!("{}/v1/chat/completions", self.base);
-        let resp = self
-            .http
-            .post(url)
-            .json(&req)
-            .send()
-            .await
-            .context("sidecar chat request failed")?
-            .error_for_status()
-            .context("sidecar returned an error status")?;
-        let body: ChatResponse = resp.json().await.context("decode chat response")?;
-        let content = body
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.message.content)
-            .context("chat response had no message content")?;
-        Ok(content)
+        timeout(self.timeouts.completion, async {
+            let req = ChatRequest {
+                messages,
+                max_tokens,
+                stream: false,
+                temperature: Some(0.2),
+                response_format,
+            };
+            let url = format!("{}/v1/chat/completions", self.base);
+            let resp = self
+                .http
+                .post(url)
+                .json(&req)
+                .send()
+                .await
+                .context("sidecar chat request failed")?
+                .error_for_status()
+                .context("sidecar returned an error status")?;
+            let body: ChatResponse = resp.json().await.context("decode chat response")?;
+            let content = body
+                .choices
+                .into_iter()
+                .next()
+                .and_then(|c| c.message.content)
+                .context("chat response had no message content")?;
+            Ok(content)
+        })
+        .await
+        .context("sidecar completion timed out")?
     }
 
     /// Streaming chat completion; forwards each SSE delta to `tx` as a [`StreamPiece`]
@@ -205,22 +264,31 @@ impl SidecarClient {
             response_format: None,
         };
         let url = format!("{}/v1/chat/completions", self.base);
-        let resp = self
-            .http
-            .post(url)
-            .json(&req)
-            .send()
-            .await
-            .context("sidecar stream request failed")?
-            .error_for_status()
-            .context("sidecar returned an error status")?;
+        let resp = timeout(self.timeouts.stream_connect, async {
+            self.http
+                .post(url)
+                .json(&req)
+                .send()
+                .await
+                .context("sidecar stream request failed")?
+                .error_for_status()
+                .context("sidecar returned an error status")
+        })
+        .await
+        .context("sidecar stream timed out")??;
 
         let mut bytes = resp.bytes_stream();
         // Buffer raw bytes (not a lossy string): a chunk boundary can fall in the
         // middle of a multi-byte UTF-8 character, so only convert *complete lines* —
         // delimited by `\n`, which is ASCII and so always a safe split point.
         let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = bytes.next().await {
+        loop {
+            let next = timeout(self.timeouts.stream_idle, bytes.next())
+                .await
+                .context("sidecar stream timed out waiting for SSE data")?;
+            let Some(chunk) = next else {
+                break;
+            };
             let chunk = chunk.context("sidecar stream chunk failed")?;
             buf.extend_from_slice(&chunk);
             // Process complete lines; keep any partial trailing line in `buf`.

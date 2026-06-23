@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use inference::supervisor::reap_stray;
+use inference::supervisor::{reap_stray, reap_stray_any};
 
 fn spawn_ping() -> std::process::Child {
     Command::new("ping")
@@ -49,6 +49,27 @@ fn reaps_a_matching_stray() {
     assert!(
         reap_stray(&pidfile, &exe),
         "a matching stray should be reaped"
+    );
+    assert!(wait_dead(pid), "the reaped process should terminate");
+    assert!(!pidfile.exists(), "the pidfile should be cleaned up");
+    let _ = child.wait();
+}
+
+#[test]
+fn reaps_a_matching_stray_from_any_owned_install_path() {
+    let mut child = spawn_ping();
+    let pid = child.id();
+    let exe = inference::process::image_path(pid).expect("ping image path");
+    let pidfile = tmp_pidfile("multi-match");
+    std::fs::write(&pidfile, pid.to_string()).unwrap();
+
+    let old_or_current_installs = vec![
+        PathBuf::from(r"C:\definitely\not\our\llama-server.exe"),
+        exe,
+    ];
+    assert!(
+        reap_stray_any(&pidfile, &old_or_current_installs),
+        "a pid matching any owned install path should be reaped"
     );
     assert!(wait_dead(pid), "the reaped process should terminate");
     assert!(!pidfile.exists(), "the pidfile should be cleaned up");

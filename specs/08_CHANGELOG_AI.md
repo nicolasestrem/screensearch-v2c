@@ -769,3 +769,59 @@
 - **Verification (verbatim status):** `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace
   --all-targets -- -D warnings` exit 0; `cargo test -p kernel --test enrichment` → **10 passed**;
   `npm --prefix ui run lint` exit 0; `git diff --exit-code -- ui/src/bindings` exit 0.
+
+## 2026-06-23 — P4 sidecar hardening (`codex/p4-sidecar-hardening`)
+- **Context:** a scrupulous P4 review found four lifecycle gaps after the no-orphan foundation:
+  model switches could kill an active request, same-model reuse did not re-check liveness/health,
+  sidecar HTTP calls had no bounded deadlines, and `SSV2C_LLAMA_RELEASE_URL` was documented as
+  highest precedence but lost to an existing normal install.
+- **Failing-first evidence:** `cargo test -p inference` initially failed with missing
+  `RequestGate`, missing `can_reuse_running_sidecar`, and missing `SidecarClient::with_timeouts`,
+  proving the new tests were red before implementation.
+- **Change:** `ModelSupervisor` now serializes sidecar leases with a `RequestGate`; the lease owns the
+  permit until request completion, so lane/tier switches wait before killing the running process.
+  Same-model reuse validates both OS liveness and bounded `/health`; unhealthy state emits
+  `Crashed`, stops the stale process, and respawns for the current request. `SidecarClient` now has
+  default production deadlines plus test-configurable timeouts for health, non-stream completion, and
+  SSE idle waits. `ensure_binary` now checks `SSV2C_LLAMA_RELEASE_URL` first and extracts override
+  zips into a URL-fingerprinted override directory, preserving the normal install.
+- **Docs:** `CHANGELOG.md`, `specs/05_BUILD_REVIEW.md`, `specs/07_KNOWN_GAPS.md`, and this file.
+- **Interface review:** no schema, IPC, `ts-rs`, or trait signature changes. Ignored GPU smokes were
+  not run in this pass unless separately approved.
+- **Verification (targeted during implementation):** `cargo test -p inference` → inference unit
+  **39 passed**, sidecar client **7 passed**, no-orphan **1 passed**, reap **2 passed**, smoke **2
+  ignored**; `cargo clippy -p inference --all-targets -- -D warnings` exit 0.
+
+## 2026-06-23 — PR #18 P4 sidecar review follow-up (`codex/p4-sidecar-hardening`)
+- **Context:** PR #18 reviewers found that the first `RequestGate` implementation over-serialized all
+  sidecar use, that `enter_for_model_switch` was only an alias, that stream timeout naming collapsed
+  initial POST latency with SSE idle waits, that override extraction was synchronous/non-atomic, and
+  that startup reap only recognized the currently selected binary path.
+- **Change:** `RequestGate` now behaves like a reader/writer gate: same-model requests acquire one of
+  many permits and can run concurrently, while model switches and crash recovery drain every permit
+  before stopping the child. The exclusive permit is downgraded to one request permit after the new
+  model is ready. `ClientTimeouts` now has separate `stream_connect` and `stream_idle` deadlines.
+  Override downloads extract on a blocking task into a `.partial` directory and rename into place only
+  after a complete extraction, with failed partials cleaned up. Startup reap now scans exact
+  app-owned binaries under both `<sidecar>/llama` and `<sidecar>/llama-override/*`.
+- **Tests:** added/updated regressions for concurrent regular gate entry, all-permit model-switch
+  draining, multi-path reaping, override partial cleanup, installed-binary candidate discovery, and
+  separate stream connect vs SSE idle timeout behavior.
+- **Interface review:** no schema, IPC, or `ts-rs` binding changes. Workspace Rust API additions are
+  `SupervisorConfig::reap_binaries`, `ClientTimeouts::stream_connect`, and
+  `SidecarClient::with_client_timeouts`.
+- **Verification (targeted during follow-up):** `cargo test -p inference` → inference unit **42
+  passed**, no-orphan **1 passed**, reap **3 passed**, sidecar client **8 passed**, smoke **2
+  ignored**.
+
+## 2026-06-23 — PR #18 second review follow-up (`codex/p4-sidecar-hardening`)
+- **Context:** fresh PR comments after `df02070` found two remaining edge cases: a status-bus gap
+  when crash recovery races a concurrent model switch, and a startup cleanup gap when a bad
+  `SSV2C_LLAMA_RELEASE_URL` fails before the supervisor has a chance to reap a pidfile from an older
+  normal/override install.
+- **Change:** the crash-recovery branch records the model label observed unhealthy before dropping
+  the shared request permit and emits that `Crashed` transition once the exclusive recovery path takes
+  over. `init_inference` now scans installed normal/override binary candidates and calls
+  `reap_stray_any` before `ensure_binary`, then reuses that candidate list for `SupervisorConfig`.
+- **Interface review:** no schema, IPC, `ts-rs`, or public command changes. The optional multi-GB GPU
+  smokes remain ignored.
