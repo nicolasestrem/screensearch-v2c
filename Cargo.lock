@@ -4668,6 +4668,7 @@ dependencies = [
  "image",
  "rusqlite",
  "sqlite-vec",
+ "tempfile",
  "tokio",
  "tracing",
  "traits",

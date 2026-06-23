@@ -650,3 +650,18 @@
   `npm --prefix ui run build` exit 0 (`✓ built in 2.21s`);
   `npm --prefix ui run lint` exit 0;
   `git diff --exit-code -- ui/src/bindings` exit 0.
+
+## 2026-06-23 — PR #15 review follow-up (`codex/fix-p0-p1-review-findings`)
+- **Context:** PR #15 received two unresolved Gemini review threads after the initial P0/P1 hardening
+  commit. Both were actionable and compatible with the existing store design.
+- **(1) Schema-version guard source of truth.** `bootstrap_and_migrate` now derives `max_version` from
+  the maximum version in `schema::MIGRATIONS` and rejects `schema_version > max_version`. A
+  `debug_assert_eq!` catches any drift between `LATEST_SCHEMA_VERSION` and the compiled migrations in
+  development/test builds, while the public constant stays available for readiness/status and tests.
+- **(2) Temp DB cleanup in regression test.** `open_path_rejects_future_schema_version` now uses
+  `tempfile::tempdir()` instead of manually composing and removing a directory under the OS temp path.
+  `tempfile` is now a workspace dependency for Rust tests, and the existing kernel dev-dependency was
+  switched to the centralized version to avoid drift.
+- **Why:** this tightens the future-schema rejection around the migration set the binary actually
+  contains and makes the test robust to panics without changing IPC, `ts-rs`, schema SQL, or trait
+  interfaces.

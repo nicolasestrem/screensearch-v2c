@@ -1054,3 +1054,22 @@ $ npm --prefix ui run lint
 ```
 $ git diff --exit-code -- ui/src/bindings
 ```
+
+---
+
+## Pass — 2026-06-23 — PR #15 review comment follow-up (`codex/fix-p0-p1-review-findings` branch)
+
+### Review Threads Addressed
+- **`crates/store/src/lib.rs` future-schema guard** — the rejection path now compares the DB
+  `schema_version` against the maximum version present in the compiled `schema::MIGRATIONS` set, not
+  a separately-maintained constant alone. A `debug_assert_eq!` keeps `LATEST_SCHEMA_VERSION` synced
+  with the migration set during development and CI test runs.
+- **`crates/store/tests/store.rs` temp DB setup** — the future-schema regression test now uses
+  `tempfile::tempdir()` so cleanup is owned by the `TempDir` guard even if the test panics.
+
+### Interface Review
+- No IPC, `ts-rs`, schema SQL, or `Store` trait signatures changed.
+- `LATEST_SCHEMA_VERSION` remains the exported readiness/status constant; the open-time guard now uses
+  compiled migration reality as the source of truth and asserts the public constant matches it.
+- Added `tempfile` only as a Rust test dependency and centralized its version in workspace
+  dependencies, including the existing kernel test use.

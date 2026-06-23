@@ -89,16 +89,8 @@ async fn open_in_memory_migrates_to_latest_schema_version() {
 
 #[test]
 fn open_path_rejects_future_schema_version() {
-    let dir = std::env::temp_dir().join(format!(
-        "ssv2c-future-schema-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db = dir.join("screensearch.db");
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("screensearch.db");
 
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
@@ -119,8 +111,6 @@ fn open_path_rejects_future_schema_version() {
         err.contains("newer schema_version"),
         "future schema should be rejected, got {err:?}"
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]

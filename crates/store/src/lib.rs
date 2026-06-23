@@ -106,10 +106,19 @@ fn bootstrap_and_migrate(conn: &mut Connection) -> Result<()> {
     }
     let mut current: i32 =
         conn.query_row("SELECT version FROM schema_version", [], |r| r.get(0))?;
-    if current > schema::LATEST_SCHEMA_VERSION {
+    let max_version = schema::MIGRATIONS
+        .iter()
+        .map(|(version, _)| *version)
+        .max()
+        .unwrap_or(0);
+    debug_assert_eq!(
+        schema::LATEST_SCHEMA_VERSION,
+        max_version,
+        "LATEST_SCHEMA_VERSION is out of sync with MIGRATIONS"
+    );
+    if current > max_version {
         anyhow::bail!(
-            "database has newer schema_version {current}; this build supports up to {}",
-            schema::LATEST_SCHEMA_VERSION
+            "database has newer schema_version {current}; this build supports up to {max_version}"
         );
     }
     for (version, sql) in schema::MIGRATIONS {

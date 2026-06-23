@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stale-worker finalization after a retry, dead-letter, or stale-running recovery.
 - **Older builds reject newer database schemas.** Opening a SQLite store with a `schema_version`
   greater than the compiled migration set now fails clearly instead of reporting the DB as ready.
+- **PR #15 review follow-up:** the future-schema guard now derives the supported version from the
+  compiled `MIGRATIONS` set and debug-asserts that `LATEST_SCHEMA_VERSION` stays in sync. The
+  future-schema regression test now uses `tempfile::tempdir`, with `tempfile` centralized in workspace
+  dependency versions for Rust tests.
 - Added regression tests for pending/done/dead job finalization and future-schema rejection. No IPC,
   `ts-rs`, schema, or trait signatures changed.
 
