@@ -1,15 +1,17 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together as of **P4** (capture → OCR → store → embeddings →
-hybrid search → **inference sidecar**: vision tagging + grounded `ask`). This describes the
+How ScreenSearch V2c is actually put together as of **P5 plus the P3 hardening pass** (capture → OCR
+→ store → embeddings → hybrid search → **inference sidecar**: vision tagging + grounded `ask` →
+Command Deck UI). This describes the
 **implemented** system and how to navigate the code; the design intent and the *why* live in
 [`specs/`](../specs) (`03_MASTER_PRODUCTION_SPEC.md` is authoritative for schema/traits/protocols).
 Where they ever disagree, the specs win — open an issue.
 
 - Implemented: P0 scaffold, P1 data spine, P2 capture, P3 enrichment + search,
   **P4 inference sidecar** (Job-Object lifecycle, vision tagging, streaming RAG answers,
-  tiered runtime-downloaded models).
-- Not yet built: P5 full Command-Deck UI + packaging (installer / portable ZIP + signing).
+  tiered runtime-downloaded models), and **P5 Command Deck UI** (Deck, Recall, Timeline, Moment,
+  Insights, Settings).
+- Not yet built: packaging (installer / portable ZIP + signing).
 
 ---
 
@@ -141,12 +143,14 @@ downloading from HuggingFace on first run.
 
 ### 5.3 Worker pool (`kernel::worker_pool`)
 
-`Kernel::attach_embedder` injects the loaded provider into the store (lighting up the vector arm)
-and starts the pool — **independent of capture**, so the queue's backlog drains in the background.
+`Kernel::attach_embedder` injects the loaded provider into the store (lighting up the vector arm) and
+fills the worker pool's shared embedder slot. `Kernel::attach_inference` fills the shared vision slot.
+Both call the same idempotent `start_workers`, so the pool can start from either provider —
+**independent of capture** — and pick up the other provider later without a restart.
 `N = enrich.worker_concurrency` workers each loop:
 
 ```
-claim_jobs([EmbedText (+EmbedImage), VisionTag], 1, now)
+claim_jobs(dynamic provider-backed lanes, 1, now)
   → process_job:                       # public, so tests drive one job deterministically
       embed_text:  read OCR text → embed_texts → upsert_text_embedding(chunk 0, source=ocr)
       embed_image: load JPEG → embed_image → upsert_image_embedding
@@ -155,11 +159,12 @@ claim_jobs([EmbedText (+EmbedImage), VisionTag], 1, now)
   → emit KernelEvent::JobProgress(job_stats)
 ```
 
-The pool always claims `VisionTag` too. The vision provider is attached **after** the pool may have
-started (the sidecar resolves later than fastembed), so it lives in a shared `Arc<RwLock<Option<…>>>`
-**slot** that `process_job` reads per job — no pool restart on attach. `vision_tag` jobs only exist
-once a producer enqueues them, by which point the provider is in the slot; if it somehow isn't, the
-job **retries** (not fails) so the backlog drains when the sidecar comes up.
+Workers build the claim-kind list on every poll. `EmbedText` / `EmbedImage` are claimed only when an
+embedder is attached and the matching setting is enabled; `VisionTag` is claimed once the sidecar
+vision provider is attached. Both providers live in `Arc<RwLock<Option<…>>>` **slots** that are
+snapshotted per job, so `vision_tag` backlogs drain even when embeddings are disabled or unavailable.
+If a claimed job somehow lacks its provider because of a race, it **retries** (not fails) so the
+backlog drains when the provider appears.
 
 Outcome rules: missing `frame_id` or a missing JPEG → **dead-letter** (won't fix itself); a purged
 frame or empty/whitespace OCR → **complete** (nothing to embed is success, not failure); embed/
@@ -183,8 +188,9 @@ upsert/analyze errors → **retry** with backoff `1 s · 2^attempts` (cap 60 s).
   cosine KNN over `embedding_vectors`, de-duped by frame. Active only once an embedder is attached;
   before that, search degrades to FTS-only.
 
-Both arms over-fetch a candidate pool (`max(limit·5, 50)`) and filter to the half-open time range
-`[start, end)`. Results hydrate in two bulk `IN` queries (frame context + fallback snippets).
+`SearchQuery.limit` is normalized at the backend to `1..=100` (matching the Recall UI). Both arms
+over-fetch a candidate pool (`max(limit·5, 50)`, capped at 500) and filter to the half-open time
+range `[start, end)`. Results hydrate in two bulk `IN` queries (frame context + fallback snippets).
 
 The embedder is **runtime-settable** (`SqliteStore.embedder` is `Arc<RwLock<Option<…>>>` +
 `set_embedder`), so the composition root can attach the model *after* the off-thread load without
@@ -336,20 +342,23 @@ stream, so the idle-evictor never stops the model mid-answer.
 2. Open the store (`open_store`) → `db` readiness Ready / Error.
 3. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
 4. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
-   off-thread → `attach_embedder`: store embedder, startup stale-job sweep, start worker pool,
-   `embed_model = Ready`). Set `sidecar = Initializing` and spawn **`init_inference`**:
+   off-thread → `attach_embedder`: store embedder + embedder worker slot, `embed_model = Ready`,
+   idempotently start the worker pool). Set `sidecar = Initializing` and spawn **`init_inference`**:
    `ensure_binary` (off-thread) → build `SupervisorConfig` + `ModelSupervisor::new` (creates the job,
    reaps a stray) → build `VisionSidecar`/`AnswerSidecar` → fill the supervisor/vision/answer slots →
    bridge `supervisor.subscribe()` into `kernel.emit_sidecar_status` → `attach_inference`
-   (vision into the worker slot, answer for `ask`, start the vision scheduler with the idle source) →
-   `sidecar = Ready`. Failure at any step sets `sidecar = Unavailable` with a reason.
+   (vision into the worker slot, answer for `ask`, idempotently start the worker pool, start the
+   vision scheduler with the idle source) → `sidecar = Ready`. The first worker start, whichever
+   provider triggers it, performs the startup stale-job sweep before spawning workers. Failure at any
+   step sets `sidecar = Unavailable` with a reason.
 5. Register Tauri commands; run. On `ExitRequested`: `stop_vision_scheduler` + `stop_workers`, then
    `supervisor.shutdown()` (kills the sidecar; the Job Object would anyway). All best-effort —
    correctness doesn't depend on it (the startup sweep requeues interrupted jobs).
 
 **Commands** (typed via `ts-rs`): `ping`, `get_readiness`, `get_job_stats`, `get_frame`, `search`,
-`capture_control`, **`enqueue_vision`**, **`ask`**, **`set_model_tier`** (P4). (`get_timeline` +
-settings commands arrive with P5.)
+`capture_control`, **`enqueue_vision`**, **`ask`**, **`set_model_tier`**, `get_timeline`,
+`get_frames`, `get_nearest_frame`, `get_frame_context`, `get_insights`, `get_settings`, and
+`set_settings`.
 
 ---
 
@@ -357,10 +366,12 @@ settings commands arrive with P5.)
 
 - **Unit / integration, platform-agnostic (run in CI):** store state-machine + retrieval + the
   `untagged_frame_ids` query against `:memory:` SQLite; capture-loop and worker-pool tests with
-  **fake** sources/OCR/embedders/vision; the P3 end-to-end test
+  **fake** sources/OCR/embedders/vision; the P3 end-to-end tests
   (`crates/kernel/tests/enrichment.rs`) drains a real job and proves the vector arm via a
-  non-FTS-matching query; the P4 `vision_tag` routing tests drive `process_job` with a fake
-  `VisionProvider` (writes the analysis; retries with no provider).
+  non-FTS-matching query, and prove that `vision_tag` jobs drain when inference attaches without an
+  embedder; the P4 `vision_tag` routing tests drive `process_job` with a fake `VisionProvider`
+  (writes the analysis; retries with no provider). Store search tests cover the backend
+  `SearchQuery.limit` clamp.
 - **Inference, deterministic (run in CI, no GPU/network):** the **no-orphan gate**
   (`tests/no_orphan.rs` — kill a parent, assert the Job-Object child dies), startup **reap**
   (`tests/reap.rs` — reaps a matching stray, never a foreign pid), the HTTP **client** against a
@@ -375,13 +386,11 @@ settings commands arrive with P5.)
 
 ---
 
-## 12. Deferred — P5 (UI & packaging)
+## 12. Deferred — packaging and polish
 
-P4 completed the inference sidecar (vision tagging + grounded `ask`); the no-orphan gate passes. What
-remains for v1.0:
+P4 completed the inference sidecar (vision tagging + grounded `ask`) and P5 completed the Command
+Deck UI; the no-orphan gate passes. What remains for v1.0:
 
-- **Full Command-Deck UI** — search / ask / timeline / settings screens with the `UI_REFERENCE.md`
-  identity and the complete state matrix (the P2/P3 UI is a minimal live timeline).
 - **Packaging** — Inno Setup installer + portable ZIP; must bundle `onnxruntime.dll` (the `ort`
   build-time artifact) beside the exe; code signing (see `07` — SignPath Foundation / Azure Trusted
   Signing / Certum). The `llama-server` binary and GGUF models are *not* bundled — they download at

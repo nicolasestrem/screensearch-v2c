@@ -39,8 +39,9 @@ export function useLiveEvents() {
       }),
     );
 
-    // job_progress fires on every job state change. Update the live queue counter
-    // immediately, then debounce-invalidate the data a *completed* job changed:
+    // job_progress is a worker progress snapshot emitted after each job attempt
+    // completes. Update the live queue counter immediately, then
+    // debounce-invalidate the data a completed attempt may have changed:
     // vision_tag → frame detail + insights (tags / activity); embed_* → search
     // (the vector arm). The event carries only counts (no kind / frame id), so the
     // families are invalidated broadly — invalidateQueries refetches only the

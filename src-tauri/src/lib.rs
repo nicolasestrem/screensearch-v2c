@@ -4,9 +4,9 @@
 //! P2 wired the **capture happy path**: it opens the data spine (P1), spawns the
 //! WinRT OCR worker and the WGC capture factory, builds the [`Kernel`], forwards
 //! kernel events to the WebView2 UI, and exposes `capture_control` / `get_frame`.
-//! P3 loads the fastembed model off the launch thread, attaches it to the kernel
-//! (starting the enrichment workers + lighting the vector arm), and adds `search`.
-//! The inference sidecar lands in P4.
+//! P3/P4 load fastembed and the inference sidecar off the launch thread, attaching
+//! provider slots that start the enrichment workers and light up search, vision
+//! tagging, and grounded answers. P5 adds the full Command Deck command surface.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
