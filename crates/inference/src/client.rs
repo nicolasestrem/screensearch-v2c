@@ -20,6 +20,7 @@ use tokio::time::{timeout, Duration};
 pub struct ClientTimeouts {
     pub health: Duration,
     pub completion: Duration,
+    pub stream_connect: Duration,
     pub stream_idle: Duration,
 }
 
@@ -28,6 +29,7 @@ impl Default for ClientTimeouts {
         Self {
             health: Duration::from_secs(2),
             completion: Duration::from_secs(120),
+            stream_connect: Duration::from_secs(30),
             stream_idle: Duration::from_secs(30),
         }
     }
@@ -162,16 +164,13 @@ pub struct SidecarClient {
 impl SidecarClient {
     /// Builds a client for `base` (scheme + host + port, no trailing slash).
     pub fn new(base: impl Into<String>) -> Self {
-        Self::with_timeouts(
-            base,
-            ClientTimeouts::default().health,
-            ClientTimeouts::default().completion,
-            ClientTimeouts::default().stream_idle,
-        )
+        Self::with_client_timeouts(base, ClientTimeouts::default())
     }
 
     /// Builds a client with custom timeout values. Tests use very short durations;
-    /// production uses [`ClientTimeouts::default`] via [`Self::new`].
+    /// production uses [`ClientTimeouts::default`] via [`Self::new`]. The stream
+    /// value is applied to both initial stream connection and per-chunk idle waits;
+    /// use [`Self::with_client_timeouts`] when those phases need different budgets.
     pub fn with_timeouts(
         base: impl Into<String>,
         health: Duration,
@@ -184,8 +183,18 @@ impl SidecarClient {
             timeouts: ClientTimeouts {
                 health,
                 completion,
+                stream_connect: stream_idle,
                 stream_idle,
             },
+        }
+    }
+
+    /// Builds a client with fully specified timeout values.
+    pub fn with_client_timeouts(base: impl Into<String>, timeouts: ClientTimeouts) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base: base.into(),
+            timeouts,
         }
     }
 
@@ -255,7 +264,7 @@ impl SidecarClient {
             response_format: None,
         };
         let url = format!("{}/v1/chat/completions", self.base);
-        let resp = timeout(self.timeouts.stream_idle, async {
+        let resp = timeout(self.timeouts.stream_connect, async {
             self.http
                 .post(url)
                 .json(&req)

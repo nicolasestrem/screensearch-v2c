@@ -580,8 +580,11 @@ async fn init_inference(
     };
 
     let settings = kernel::settings::load_settings(store.as_ref()).await;
+    let mut reap_binaries = inference::download::installed_binary_candidates(&sidecar_dir);
+    reap_binaries.push(binary.clone());
     let config = SupervisorConfig {
         binary,
+        reap_binaries,
         pidfile: sidecar_dir.join("llama-server.pid"),
         idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
         health_timeout: SIDECAR_HEALTH_TIMEOUT,

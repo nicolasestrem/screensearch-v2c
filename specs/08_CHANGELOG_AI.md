@@ -791,3 +791,25 @@
 - **Verification (targeted during implementation):** `cargo test -p inference` → inference unit
   **39 passed**, sidecar client **7 passed**, no-orphan **1 passed**, reap **2 passed**, smoke **2
   ignored**; `cargo clippy -p inference --all-targets -- -D warnings` exit 0.
+
+## 2026-06-23 — PR #18 P4 sidecar review follow-up (`codex/p4-sidecar-hardening`)
+- **Context:** PR #18 reviewers found that the first `RequestGate` implementation over-serialized all
+  sidecar use, that `enter_for_model_switch` was only an alias, that stream timeout naming collapsed
+  initial POST latency with SSE idle waits, that override extraction was synchronous/non-atomic, and
+  that startup reap only recognized the currently selected binary path.
+- **Change:** `RequestGate` now behaves like a reader/writer gate: same-model requests acquire one of
+  many permits and can run concurrently, while model switches and crash recovery drain every permit
+  before stopping the child. The exclusive permit is downgraded to one request permit after the new
+  model is ready. `ClientTimeouts` now has separate `stream_connect` and `stream_idle` deadlines.
+  Override downloads extract on a blocking task into a `.partial` directory and rename into place only
+  after a complete extraction, with failed partials cleaned up. Startup reap now scans exact
+  app-owned binaries under both `<sidecar>/llama` and `<sidecar>/llama-override/*`.
+- **Tests:** added/updated regressions for concurrent regular gate entry, all-permit model-switch
+  draining, multi-path reaping, override partial cleanup, installed-binary candidate discovery, and
+  separate stream connect vs SSE idle timeout behavior.
+- **Interface review:** no schema, IPC, or `ts-rs` binding changes. Workspace Rust API additions are
+  `SupervisorConfig::reap_binaries`, `ClientTimeouts::stream_connect`, and
+  `SidecarClient::with_client_timeouts`.
+- **Verification (targeted during follow-up):** `cargo test -p inference` → inference unit **42
+  passed**, no-orphan **1 passed**, reap **3 passed**, sidecar client **8 passed**, smoke **2
+  ignored**.

@@ -128,14 +128,86 @@ async fn ensure_binary_from_url(install: &Path, url: &str, name: &str) -> Result
     if let Some(found) = find_file(install, "llama-server.exe") {
         return Ok(found);
     }
-    std::fs::create_dir_all(install).context("create sidecar install dir")?;
 
     tracing::info!(asset = %name, "downloading llama.cpp Vulkan release");
     let bytes = http_get_bytes(url).await?;
-    extract_zip(&bytes, install).context("extract llama release zip")?;
+    let install = install.to_path_buf();
+    let partial = partial_install_dir(&install);
+    let install_for_task = install.clone();
+    let partial_for_task = partial.clone();
+    let partial_for_cleanup = partial.clone();
+    let install_result = tokio::task::spawn_blocking(move || {
+        if let Some(parent) = install_for_task.parent() {
+            std::fs::create_dir_all(parent).context("create sidecar install parent dir")?;
+        }
+        if partial_for_task.exists() {
+            std::fs::remove_dir_all(&partial_for_task).with_context(|| {
+                format!(
+                    "remove stale partial install {}",
+                    partial_for_task.display()
+                )
+            })?;
+        }
+        std::fs::create_dir_all(&partial_for_task).context("create sidecar partial install dir")?;
+        extract_zip(&bytes, &partial_for_task).context("extract llama release zip")?;
+        if find_file(&install_for_task, "llama-server.exe").is_some() {
+            std::fs::remove_dir_all(&partial_for_task).with_context(|| {
+                format!(
+                    "remove redundant partial install {}",
+                    partial_for_task.display()
+                )
+            })?;
+            return Ok(());
+        }
+        if install_for_task.exists() {
+            std::fs::remove_dir_all(&install_for_task).with_context(|| {
+                format!(
+                    "remove incomplete sidecar install dir {}",
+                    install_for_task.display()
+                )
+            })?;
+        }
+        std::fs::rename(&partial_for_task, &install_for_task).with_context(|| {
+            format!(
+                "finalize sidecar install {} -> {}",
+                partial_for_task.display(),
+                install_for_task.display()
+            )
+        })?;
+        Ok(())
+    })
+    .await
+    .context("sidecar binary install task failed")?;
+    if let Err(err) = install_result {
+        cleanup_partial_install(partial_for_cleanup).await;
+        return Err(err);
+    }
 
-    find_file(install, "llama-server.exe")
+    find_file(&install, "llama-server.exe")
         .with_context(|| format!("llama-server.exe not found in release asset {name}"))
+}
+
+/// Exact installed `llama-server.exe` paths this app owns under the normal and
+/// URL-specific override sidecar install roots. Used as startup reap sentinels.
+pub fn installed_binary_candidates(sidecar_dir: &Path) -> Vec<PathBuf> {
+    let mut binaries = Vec::new();
+    collect_files_named(
+        &sidecar_dir.join("llama"),
+        "llama-server.exe",
+        &mut binaries,
+    );
+    collect_files_named(
+        &sidecar_dir.join("llama-override"),
+        "llama-server.exe",
+        &mut binaries,
+    );
+    binaries.sort_by_key(|p| p.to_string_lossy().to_ascii_lowercase());
+    binaries.dedup_by(|a, b| {
+        a.to_string_lossy()
+            .as_ref()
+            .eq_ignore_ascii_case(b.to_string_lossy().as_ref())
+    });
+    binaries
 }
 
 /// Ensures the `(lane, tier)` model files are present under the app-data models dir,
@@ -229,6 +301,23 @@ fn url_fingerprint(url: &str) -> String {
     format!("{hash:016x}")
 }
 
+fn partial_install_dir(install: &Path) -> PathBuf {
+    let name = install
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("llama");
+    install.with_file_name(format!("{name}.partial"))
+}
+
+async fn cleanup_partial_install(partial: PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if partial.exists() {
+            let _ = std::fs::remove_dir_all(partial);
+        }
+    })
+    .await;
+}
+
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::Client::new();
     let resp = client
@@ -282,6 +371,24 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn collect_files_named(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_named(&path, name, out);
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            out.push(path);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -391,24 +498,100 @@ mod tests {
         std::fs::create_dir_all(normal_binary.parent().unwrap()).unwrap();
         std::fs::write(&normal_binary, b"normal").unwrap();
 
-        std::env::set_var(
-            "SSV2C_LLAMA_RELEASE_URL",
-            format!("{}/llama.zip", server.uri()),
-        );
+        let override_url = format!("{}/llama.zip", server.uri());
+        std::env::set_var("SSV2C_LLAMA_RELEASE_URL", &override_url);
         let found = ensure_binary(&sidecar_dir)
             .await
             .expect("override binary should resolve");
         std::env::remove_var("SSV2C_LLAMA_RELEASE_URL");
 
+        let override_install = sidecar_dir
+            .join("llama-override")
+            .join(url_fingerprint(&override_url));
         assert_ne!(
             found, normal_binary,
             "env override must not reuse a normal existing install"
+        );
+        assert!(
+            found.starts_with(&override_install),
+            "override binary should live under {} but got {}",
+            override_install.display(),
+            found.display()
+        );
+        assert!(
+            !partial_install_dir(&override_install).exists(),
+            "successful install should not leave a partial directory"
         );
         assert_eq!(std::fs::read(&found).unwrap(), b"override");
         assert_eq!(
             std::fs::read(&normal_binary).unwrap(),
             b"normal",
             "normal install must be preserved"
+        );
+        let _ = std::fs::remove_dir_all(sidecar_dir);
+    }
+
+    #[tokio::test]
+    async fn failed_binary_extraction_cleans_partial_install() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/bad.zip"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(b"this is not a zip".to_vec(), "application/zip"),
+            )
+            .mount(&server)
+            .await;
+
+        let root = unique_temp_dir("bad-zip");
+        let install = root.join("llama");
+        let err = ensure_binary_from_url(&install, &format!("{}/bad.zip", server.uri()), "bad.zip")
+            .await
+            .expect_err("invalid zip should fail");
+
+        assert!(
+            err.to_string().contains("extract llama release zip"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !partial_install_dir(&install).exists(),
+            "failed extraction must clean up the partial install dir"
+        );
+        assert!(
+            !install.exists(),
+            "failed extraction must not publish an install dir"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_binary_candidates_include_normal_and_overrides() {
+        let sidecar_dir = unique_temp_dir("candidates");
+        let normal = sidecar_dir
+            .join("llama")
+            .join("release")
+            .join("llama-server.exe");
+        let override_a = sidecar_dir
+            .join("llama-override")
+            .join("aaaaaaaaaaaaaaaa")
+            .join("bin")
+            .join("llama-server.exe");
+        let unrelated = sidecar_dir.join("other").join("llama-server.exe");
+        for path in [&normal, &override_a, &unrelated] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"exe").unwrap();
+        }
+
+        let found = installed_binary_candidates(&sidecar_dir);
+
+        assert!(found.contains(&normal), "missing normal install candidate");
+        assert!(
+            found.contains(&override_a),
+            "missing override install candidate"
+        );
+        assert!(
+            !found.contains(&unrelated),
+            "candidate scan must stay inside owned install roots"
         );
         let _ = std::fs::remove_dir_all(sidecar_dir);
     }

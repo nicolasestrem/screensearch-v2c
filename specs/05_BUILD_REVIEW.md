@@ -1102,6 +1102,41 @@ $ cargo clippy -p inference --all-targets -- -D warnings
 
 ---
 
+## Pass — 2026-06-23 — PR #18 P4 sidecar review follow-up (`codex/p4-sidecar-hardening` branch)
+
+### Review Threads Addressed
+- **Shared/exclusive sidecar gate** — `RequestGate` now uses a large semaphore capacity. Ordinary
+  same-model requests acquire one permit and can overlap; model switches and same-model crash
+  recovery acquire all permits before stopping the process, then downgrade to one permit before the
+  request leaves `acquire()`.
+- **Dead alias removed by behavior** — `enter_for_model_switch` now has distinct drain-all-permits
+  semantics and is used by the stop/spawn paths instead of being a test-only alias for `enter`.
+- **Stream timeout semantics** — `ClientTimeouts` now separates `stream_connect` from
+  `stream_idle`; the initial streaming POST and later SSE chunk waits have independent deadlines.
+- **Atomic override install** — release zips are extracted inside a `.partial` directory on a blocking
+  task and renamed into place only after extraction completes; failed extractions clean up the partial
+  directory.
+- **Multi-install startup reap** — `SupervisorConfig` now carries exact installed binary candidates
+  from the normal and override install roots, so toggling `SSV2C_LLAMA_RELEASE_URL` cannot leave an
+  app-owned sidecar running from a previous install path.
+
+### Interface Review
+- No schema, IPC, or `ts-rs` binding changes.
+- Rust API shape changed only inside the workspace: `SupervisorConfig` gained `reap_binaries`, and
+  `SidecarClient` gained `with_client_timeouts` plus a `stream_connect` timeout field.
+- The ignored multi-GB GPU smokes remain optional gated verification and were not run during this
+  follow-up.
+
+### Verification (targeted during follow-up)
+```
+$ cargo test -p inference
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+---
+
 ## Pass — 2026-06-23 — PR #17 review comment follow-up (`codex/review-p3-deferred-enrichment` branch)
 
 ### Review Threads Addressed

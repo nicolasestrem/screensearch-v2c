@@ -30,8 +30,11 @@ fn supervisor_for(
     binary: PathBuf,
     sidecar_dir: &std::path::Path,
 ) -> std::sync::Arc<ModelSupervisor> {
+    let mut reap_binaries = download::installed_binary_candidates(sidecar_dir);
+    reap_binaries.push(binary.clone());
     ModelSupervisor::new(SupervisorConfig {
         binary,
+        reap_binaries,
         pidfile: sidecar_dir.join("llama-server.pid"),
         idle_ttl: Duration::from_secs(60),
         // First-run model load + GPU warmup can be slow; allow plenty of headroom.

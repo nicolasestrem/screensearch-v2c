@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SSV2C_LLAMA_RELEASE_URL` really overrides existing installs.** The override now resolves before
   normal install reuse and extracts into a URL-specific override directory, preserving the app-managed
   Vulkan release.
+- **PR #18 review follow-up:** sidecar leases now use shared/exclusive gate semantics, so same-model
+  requests can run concurrently while model switches and crash recovery still drain all request slots
+  before stopping `llama-server`. Stream connection and SSE-idle deadlines are split, override zip
+  extraction is staged atomically in a `.partial` directory on a blocking thread, and startup reap now
+  recognizes exact binaries from both normal and URL-specific override installs.
 
 ### Fixed — P3 deferred enrichment hardening (2026-06-23)
 - **Vision-only enrichment no longer waits on embeddings.** The worker pool now starts from either
