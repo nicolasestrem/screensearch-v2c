@@ -15,7 +15,7 @@ use std::sync::RwLock;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc::{self, Sender};
-use traits::{AnswerDelta, AnswerOpts, AnswerProvider, ModelTier, RetrievedChunk};
+use traits::{AnswerDelta, AnswerOpts, AnswerProvider, ModelTier, RetrievedChunk, SidecarParams};
 
 use crate::client::{ChatMessage, StreamPiece};
 use crate::download;
@@ -33,13 +33,7 @@ pub struct AnswerSidecar {
     supervisor: Arc<ModelSupervisor>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
-    launch: RwLock<LaunchOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LaunchOptions {
-    ngl: u32,
-    device: Option<String>,
+    launch: RwLock<SidecarParams>,
 }
 
 impl AnswerSidecar {
@@ -47,14 +41,13 @@ impl AnswerSidecar {
         supervisor: Arc<ModelSupervisor>,
         models_root: PathBuf,
         tier: ModelTier,
-        ngl: u32,
-        device: Option<String>,
+        params: SidecarParams,
     ) -> Self {
         Self {
             supervisor,
             models_root,
             tier: RwLock::new(tier),
-            launch: RwLock::new(LaunchOptions { ngl, device }),
+            launch: RwLock::new(params),
         }
     }
 
@@ -64,34 +57,25 @@ impl AnswerSidecar {
     }
 
     /// Updates launch options for the next request (or the next model restart if a
-    /// sidecar is already serving the same spec).
-    pub fn set_launch_options(&self, ngl: u32, device: Option<String>) {
-        *self.launch.write().expect("answer launch lock") = LaunchOptions { ngl, device };
+    /// sidecar is already serving the same spec). A change to any tuning field makes the
+    /// next `resolve_spec` differ, so the supervisor relaunches.
+    pub fn set_launch_options(&self, params: SidecarParams) {
+        *self.launch.write().expect("answer launch lock") = params;
     }
 
     async fn ensure_spec(&self) -> Result<ModelSpec> {
         let tier = *self.tier.read().expect("answer tier lock");
-        let launch = self.launch.read().expect("answer launch lock").clone();
-        if let Some(spec) = models::resolve_spec(
-            &self.models_root,
-            ModelLane::Answer,
-            tier,
-            launch.ngl,
-            launch.device.clone(),
-        ) {
+        let params = self.launch.read().expect("answer launch lock").clone();
+        if let Some(spec) =
+            models::resolve_spec(&self.models_root, ModelLane::Answer, tier, params.clone())
+        {
             return Ok(spec);
         }
         download::ensure_model(&self.models_root, ModelLane::Answer, tier)
             .await
             .context("download answer model")?;
-        models::resolve_spec(
-            &self.models_root,
-            ModelLane::Answer,
-            tier,
-            launch.ngl,
-            launch.device,
-        )
-        .context("answer model files missing after download")
+        models::resolve_spec(&self.models_root, ModelLane::Answer, tier, params)
+            .context("answer model files missing after download")
     }
 
     /// Runs the request to completion, sending a terminal delta either way. Setup

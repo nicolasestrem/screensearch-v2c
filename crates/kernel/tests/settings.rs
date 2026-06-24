@@ -5,7 +5,7 @@
 
 use kernel::settings::{load_settings, save_settings};
 use store::SqliteStore;
-use traits::{ModelTier, Settings, Store};
+use traits::{FlashAttnSetting, KvCacheType, ModelTier, Settings, Store};
 
 #[tokio::test]
 async fn round_trips_defaults() {
@@ -48,6 +48,9 @@ async fn round_trips_non_default_values() {
         sidecar_idle_ttl_secs: 600,
         sidecar_ngl: 35,
         sidecar_device: Some("Vulkan0".to_string()),
+        sidecar_ctx_size: 4096,
+        sidecar_kv_cache_type: KvCacheType::F16,
+        sidecar_flash_attn: FlashAttnSetting::Off,
         privacy_excluded_apps: vec!["Signal".to_string(), "Element".to_string()],
         privacy_pause_on_lock: false,
     };
@@ -99,6 +102,10 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
         .await
         .unwrap();
     store.set_setting("sidecar.ngl", "10000").await.unwrap();
+    store
+        .set_setting("sidecar.ctx_size", "999999")
+        .await
+        .unwrap();
 
     let loaded = load_settings(dyn_store).await;
 
@@ -112,6 +119,22 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
     assert_eq!(loaded.enrich_vision_batch_size, 500);
     assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
     assert_eq!(loaded.sidecar_ngl, 999);
+    assert_eq!(loaded.sidecar_ctx_size, 32_768);
+}
+
+#[tokio::test]
+async fn sidecar_ctx_size_zero_is_preserved_as_auto_sentinel() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    // 0 must survive sanitization (it means "automatic per-lane default"), not get
+    // clamped up to the 512 floor.
+    store.set_setting("sidecar.ctx_size", "0").await.unwrap();
+    assert_eq!(load_settings(dyn_store).await.sidecar_ctx_size, 0);
+
+    // A small non-zero value below the floor is clamped up.
+    store.set_setting("sidecar.ctx_size", "100").await.unwrap();
+    assert_eq!(load_settings(dyn_store).await.sidecar_ctx_size, 512);
 }
 
 #[tokio::test]
@@ -129,6 +152,7 @@ async fn save_settings_persists_sanitized_numeric_values() {
         enrich_vision_batch_size: 9_999,
         sidecar_idle_ttl_secs: 999_999,
         sidecar_ngl: 10_000,
+        sidecar_ctx_size: 999_999,
         ..Settings::default()
     };
 
@@ -147,6 +171,7 @@ async fn save_settings_persists_sanitized_numeric_values() {
     assert_eq!(loaded.enrich_vision_batch_size, 500);
     assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
     assert_eq!(loaded.sidecar_ngl, 999);
+    assert_eq!(loaded.sidecar_ctx_size, 32_768);
 
     assert_eq!(
         store

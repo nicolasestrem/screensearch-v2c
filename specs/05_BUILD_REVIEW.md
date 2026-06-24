@@ -1673,3 +1673,56 @@ $ git diff --exit-code -- ui/src/bindings
   dead-job loop, the missing index, and the read-then-insert race were all real.
 - **Broke / regressed:** None. The v2 migration is forward-only (`schema_version` 1→2); existing DBs
   add the index on next open.
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning + user settings (`feat/sidecar-memory-tuning` branch)
+
+### Implemented (with verbatim verification)
+- **Pinned context + KV quantization + flash attention for the sidecar.** `build_args`
+  (`crates/inference/src/supervisor.rs`) now emits `--ctx-size`, `--flash-attn`, and
+  `--cache-type-k/-v`, gated by a one-shot `--help` capability probe (`crates/inference/src/flags.rs`,
+  `probe_caps`/`parse_caps`) so only flags the bundled (auto-updating) Vulkan binary accepts are
+  passed; quantized KV is emitted only when flash attention ends up active. New
+  `traits::SidecarParams` (built from `Settings`) threads `ngl/device/ctx_size/kv_cache_type/
+  flash_attn` through both providers → `models::resolve_spec` (substitutes the `0 = auto` context
+  sentinel with vision 4096 / answer 8192) → `ModelSpec` → `build_args`, and the new fields join
+  `needs_restart` so a settings change relaunches on the next request. Three new `Settings` fields
+  (`sidecar_ctx_size`, `sidecar_kv_cache_type: KvCacheType`, `sidecar_flash_attn: FlashAttnSetting`)
+  are wired through `kernel::settings` load/save/sanitize and the Settings → Sidecar UI panel.
+- **Automated gates:**
+  ```text
+  cargo fmt --all -- --check                              → exit 0
+  cargo clippy --workspace --all-targets -- -D warnings   → exit 0
+  cargo build --workspace                                 → Finished (exit 0)
+  cargo test --workspace                                  → all suites ok (exit 0)
+  cd ui && npm run lint && npm run build                  → eslint 0; tsc+vite built (exit 0)
+  git diff ui/src/bindings → Settings.ts updated + KvCacheType.ts / FlashAttnSetting.ts generated
+  ```
+- **Live GPU proof** (RTX 5060 Ti, bundled Vulkan `llama-server` build 9754, default answer model,
+  baseline VRAM 1660 MiB):
+  ```text
+  Untuned (old args  --model M -ngl 99):  n_ctx_seq 118272  → peak VRAM 14082 MiB
+  Tuned (--ctx-size 8192 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0):
+                                          n_ctx_seq   8192  → peak VRAM  4253 MiB
+  → ~9.8 GB / ~70% reduction; sidecar exited cleanly, VRAM returned to 1660 MiB.
+  ```
+
+### Skipped / deferred (explicitly out of the approved plan)
+- **Embedder idle-unload** (RAM lever): the ~0.5–1 GB resident fastembed model stays loaded — the
+  user chose a VRAM-only scope.
+- **`--parallel 1`**: `llama-server` auto-picks `n_parallel = 4` but with `kv_unified = true`, so the
+  shared KV pool is sized by context, not multiplied by slots; context pinning already captures the
+  win. Noted as a possible future lever.
+- **`--batch/--ubatch`, `--no-mmap`/`--mlock`**: throughput trade or wrong direction for RAM.
+
+### Hallucinated / corrected
+- None. The root cause was confirmed against the real binary: its `--ctx-size` help reads
+  `(default: 0, 0 = loaded from model)` and the default models report `n_ctx_train = 262144`, so the
+  untuned launch genuinely allocated a ~118 k-token KV cache.
+
+### Still risky
+- KV quantization is gated behind flash attention and the `--help` probe, and degrades to f16 if
+  unsupported; if a future Vulkan build accepts `--cache-type-k` in `--help` but rejects q8_0 K at
+  model load, the escape hatch is the new `f16` KV setting. The live proof above used the currently
+  bundled build, where q8_0 K+V loaded cleanly.

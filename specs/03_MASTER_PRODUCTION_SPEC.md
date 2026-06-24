@@ -294,6 +294,9 @@ optional human-readable explanation.
 `enrich.worker_concurrency` (2) ·
 `models.vision_tier` (`default`) · `models.answer_tier` (`default`) ·
 `answer.thinking` (true) · `sidecar.idle_ttl_secs` (180) · `sidecar.ngl` (99) ·
+`sidecar.ctx_size` (0=auto → per-lane default vision 4096 / answer 8192, else clamped 512–32768 —
+the dominant VRAM lever) · `sidecar.kv_cache_type` (`q8_0`; one of `f16`/`q8_0`/`q4_0`, quantized
+only when flash attention is active) · `sidecar.flash_attn` (`auto`; one of `auto`/`on`/`off`) ·
 `privacy.excluded_apps` (["1Password","KeePass","Bitwarden"]) · `privacy.pause_on_lock` (true).
 
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and

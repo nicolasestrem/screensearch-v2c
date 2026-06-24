@@ -11,6 +11,58 @@
 
 ---
 
+## 2026-06-24 — Sidecar memory tuning + user settings (`feat/sidecar-memory-tuning`)
+- **Change:** The llama.cpp sidecar now pins a small context window and quantizes the KV cache, and
+  three new settings expose the knobs. `build_args` (`crates/inference/src/supervisor.rs`) emits
+  `--ctx-size`, `--flash-attn`, and `--cache-type-k/-v` — gated by a new `--help` capability probe
+  (`crates/inference/src/flags.rs`) so only flags the bundled binary accepts are passed. A new
+  `traits::SidecarParams { ngl, device, ctx_size, kv_cache_type, flash_attn }` (built from `Settings`
+  via `From<&Settings>`) threads the knobs through `VisionSidecar`/`AnswerSidecar` →
+  `models::resolve_spec` (which substitutes the `0 = auto` context sentinel with a per-lane default,
+  vision 4096 / answer 8192) → `ModelSpec` → `build_args`; the new fields also join `needs_restart`
+  so a settings change relaunches the sidecar on the next request. New `Settings` fields:
+  `sidecar_ctx_size` (u32, default 0, clamp 0 ∪ 512–32768), `sidecar_kv_cache_type` (`KvCacheType`
+  enum, default `q8_0`), `sidecar_flash_attn` (`FlashAttnSetting` enum, default `auto`), wired through
+  `kernel::settings` load/save/sanitize and surfaced in `ui/src/routes/Settings.tsx` (Sidecar panel).
+- **Why:** `01 §1` (Windows-native, local-first, on-device) + the user report that processing used
+  ~16 GB VRAM — 2–3× the models' own footprint. Root cause: with no `--ctx-size`, llama.cpp used the
+  models' full trained context (262 144 tokens for the defaults), so the KV cache dominated VRAM.
+  Pinning context + quantizing KV is the standard, low-risk lever; exposing it as settings (`03 §8`)
+  lets a constrained user trade memory for quality. Default tuning is "balanced" (no expected quality
+  loss); `f16` KV / larger context are escape hatches.
+- **Verification:**
+  - **Automated gates (all green):**
+    ```text
+    cargo fmt --all -- --check        → exit 0
+    cargo clippy --workspace --all-targets -- -D warnings → exit 0
+    cargo build --workspace           → Finished (exit 0)
+    cargo test --workspace            → all suites ok (exit 0)
+    cd ui && npm run lint && npm run build → eslint exit 0; tsc+vite built (exit 0)
+    inference lib: 55 passed (incl. flags::* parser tests, supervisor::build_args_* and
+      restart_on_tuning_change, models::auto_ctx_size_resolves_per_lane_and_override_passes_through)
+    kernel --test settings: 6 passed (incl. sidecar_ctx_size_zero_is_preserved_as_auto_sentinel)
+    ```
+  - **Live GPU proof** (RTX 5060 Ti, bundled Vulkan `llama-server` build 9754, default answer model
+    `Ministral-3-3B-Reasoning-2512-Q4_K_M`, baseline VRAM 1660 MiB):
+    ```text
+    # The probe matches the real binary's --help:
+    -c,  --ctx-size N            (default: 0, 0 = loaded from model)
+    -fa, --flash-attn [on|off|auto]
+    -ctk,--cache-type-k TYPE   /  -ctv,--cache-type-v TYPE
+      → parse_caps → { ctx_size: true, cache_type_k: true, cache_type_v: true,
+                       flash_attn_kind: EnumOnOffAuto }
+
+    # Untuned (old app args: --model M -ngl 99):
+    llama_context: n_ctx_seq (118272) < n_ctx_train (262144)
+    peak total VRAM used = 14082 MiB   (~12.4 GiB model footprint)
+
+    # Tuned (new defaults: --ctx-size 8192 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0):
+    llama_context: n_ctx_seq (8192) < n_ctx_train (262144)
+    peak total VRAM used = 4253 MiB    (~2.5 GiB model footprint)
+
+    → ~9.8 GB / ~70% VRAM reduction for the answer model; sidecar exited cleanly, VRAM back to 1660 MiB.
+    ```
+
 ## 2026-06-23 — Add audit report artifact (`codex/run-audit-v2c`)
 - **Change:** Added `docs/AUDIT_V2C_2026-06-23.md`, a Markdown record of the non-packaging V2c audit
   pass: preflight, static architecture checks, CI-order local gates, hardware/model-backed smokes,

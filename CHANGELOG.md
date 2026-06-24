@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sidecar memory tuning: pinned context + KV quantization + flash attention (2026-06-24)
+- **The llama.cpp sidecar now pins a small, workload-appropriate context window and quantizes its
+  KV cache**, instead of inheriting the model's full trained context. `build_args` previously passed
+  no `--ctx-size`, so llama.cpp defaulted to `0` ("loaded from model") — for the default models that
+  is a **262 144-token** trained context, and the server auto-sized a ~118 k-token KV cache that
+  alone consumed most of a 16 GB GPU. New balanced defaults: context **auto** (vision 4096 / answer
+  8192), KV cache **q8_0**, flash attention **auto**.
+  - **Measured (RTX 5060 Ti, bundled Vulkan `llama-server`, default answer model):** peak VRAM for
+    the answer model dropped from **14082 MiB** (untuned, `n_ctx` 118272) to **4253 MiB** (tuned,
+    `n_ctx` 8192) — a **~9.8 GB / ~70%** reduction, with no expected quality loss for this workload.
+- **Three new user-adjustable settings** (Settings → Sidecar (advanced)), all applied on the next
+  sidecar launch via the existing relaunch-on-next-request path:
+  - `sidecar.ctx_size` (`Settings.sidecar_ctx_size`, default **0 = auto**, else clamped
+    **512–32768**) — `0` substitutes a per-lane default (vision 4096 / answer 8192); any other value
+    overrides both lanes.
+  - `sidecar.kv_cache_type` (`Settings.sidecar_kv_cache_type`, new `KvCacheType` enum: `f16` /
+    `q8_0` / `q4_0`, default **q8_0**) — quantized KV is emitted only when flash attention is active.
+  - `sidecar.flash_attn` (`Settings.sidecar_flash_attn`, new `FlashAttnSetting` enum: `auto` / `on` /
+    `off`, default **auto**).
+- **Version-safe flag emission.** The bundled `llama-server` is the *latest* llama.cpp Vulkan release
+  fetched at runtime, so its flag spelling varies (`--flash-attn` bare boolean vs. `on|off|auto`;
+  quantized `--cache-type-v` needs flash attention). A new `inference::flags::probe_caps` reads the
+  binary's `--help` once at init; `build_args` emits only verified flags and silently degrades (e.g.
+  drops KV quantization when flash attention is unavailable) rather than producing an arg list the
+  binary would reject.
+
 ### Fixed — Vision scheduler: configurable batch size + pending-job dedup (2026-06-24)
 - **The timer/idle vision batch size is now a setting.** It was a hardcoded `const BATCH = 20`, so
   the scheduler logs showed a fixed `count=20` every tick with no way to drain a backlog faster.

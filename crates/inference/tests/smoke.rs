@@ -18,7 +18,21 @@ use inference::download;
 use inference::models::{ModelLane, ModelTier};
 use inference::{AnswerSidecar, ModelSupervisor, SupervisorConfig, VisionSidecar};
 use tokio::sync::mpsc;
-use traits::{AnswerDelta, AnswerOpts, RetrievedChunk};
+use traits::{
+    AnswerDelta, AnswerOpts, FlashAttnSetting, KvCacheType, RetrievedChunk, SidecarParams,
+};
+
+/// Default-tuned launch params for the smoke runs (auto context, q8_0 KV, auto flash) —
+/// exercises the real `build_args` tuning path against the live binary.
+fn smoke_params() -> SidecarParams {
+    SidecarParams {
+        ngl: 99,
+        device: None,
+        ctx_size: 0,
+        kv_cache_type: KvCacheType::Q8_0,
+        flash_attn: FlashAttnSetting::Auto,
+    }
+}
 
 fn smoke_dir() -> PathBuf {
     std::env::var("SSV2C_SMOKE_DIR")
@@ -32,6 +46,7 @@ fn supervisor_for(
 ) -> std::sync::Arc<ModelSupervisor> {
     let mut reap_binaries = download::installed_binary_candidates(sidecar_dir);
     reap_binaries.push(binary.clone());
+    let caps = inference::probe_caps(&binary);
     ModelSupervisor::new(SupervisorConfig {
         binary,
         reap_binaries,
@@ -39,6 +54,7 @@ fn supervisor_for(
         idle_ttl: Duration::from_secs(60),
         // First-run model load + GPU warmup can be slow; allow plenty of headroom.
         health_timeout: Duration::from_secs(600),
+        caps,
     })
     .expect("build supervisor")
 }
@@ -64,8 +80,7 @@ async fn real_answer_streams_tokens() {
         supervisor.clone(),
         models_root,
         ModelTier::Default,
-        99,
-        None,
+        smoke_params(),
     );
 
     let context = vec![RetrievedChunk {
@@ -133,8 +148,7 @@ async fn real_vision_tags_an_image() {
         supervisor.clone(),
         models_root,
         ModelTier::Default,
-        99,
-        None,
+        smoke_params(),
     );
 
     // A simple two-tone image — enough for the model to produce a description.

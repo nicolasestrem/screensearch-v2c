@@ -79,6 +79,9 @@ function sanitizeSettings(s: Settings): Settings {
     enrich_vision_batch_size: clampInt(s.enrich_vision_batch_size, 1, 500),
     sidecar_idle_ttl_secs: clampInt(s.sidecar_idle_ttl_secs, 0, 86_400),
     sidecar_ngl: clampInt(s.sidecar_ngl, 0, 999),
+    // 0 = automatic (per-lane default chosen in the backend); any other value is clamped
+    // to a sane window. The two enum fields are constrained by their Select options.
+    sidecar_ctx_size: s.sidecar_ctx_size === 0 ? 0 : clampInt(s.sidecar_ctx_size, 512, 32_768),
     sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
   };
 }
@@ -438,6 +441,40 @@ export function Component() {
             value={draft.sidecar_ngl}
             onChange={intHandler("sidecar_ngl")}
             hint={`How many model layers to offload to the GPU. ${APPLY_SIDECAR}`}
+          />
+          <Field
+            label="Context size (tokens)"
+            type="number"
+            min={0}
+            value={draft.sidecar_ctx_size}
+            onChange={intHandler("sidecar_ctx_size")}
+            hint={`Max tokens kept in memory. 0 = automatic (small, tuned per lane); lower = less VRAM, but too low can truncate long answers. ${APPLY_SIDECAR}`}
+          />
+          <Select
+            label="KV cache precision"
+            value={draft.sidecar_kv_cache_type}
+            onChange={(e) =>
+              set("sidecar_kv_cache_type", e.currentTarget.value as Settings["sidecar_kv_cache_type"])
+            }
+            options={[
+              { value: "f16", label: "f16 (max quality)" },
+              { value: "q8_0", label: "q8_0 (balanced)" },
+              { value: "q4_0", label: "q4_0 (smallest)" },
+            ]}
+            hint={`Lower precision shrinks the KV cache (less VRAM). Applied only when flash attention is active. ${APPLY_SIDECAR}`}
+          />
+          <Select
+            label="Flash attention"
+            value={draft.sidecar_flash_attn}
+            onChange={(e) =>
+              set("sidecar_flash_attn", e.currentTarget.value as Settings["sidecar_flash_attn"])
+            }
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+            hint={`Reduces attention memory and unlocks KV quantization. Auto uses it when the bundled engine supports it. ${APPLY_SIDECAR}`}
           />
           {hasDetectedSidecarDevices ? (
             <Select

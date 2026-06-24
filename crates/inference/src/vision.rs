@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine as _;
 use serde::Deserialize;
-use traits::{ModelTier, VisionAnalysis, VisionProvider};
+use traits::{ModelTier, SidecarParams, VisionAnalysis, VisionProvider};
 
 use crate::client::ChatMessage;
 use crate::download;
@@ -90,13 +90,7 @@ pub struct VisionSidecar {
     supervisor: Arc<ModelSupervisor>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
-    launch: RwLock<LaunchOptions>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LaunchOptions {
-    ngl: u32,
-    device: Option<String>,
+    launch: RwLock<SidecarParams>,
 }
 
 impl VisionSidecar {
@@ -104,14 +98,13 @@ impl VisionSidecar {
         supervisor: Arc<ModelSupervisor>,
         models_root: PathBuf,
         tier: ModelTier,
-        ngl: u32,
-        device: Option<String>,
+        params: SidecarParams,
     ) -> Self {
         Self {
             supervisor,
             models_root,
             tier: RwLock::new(tier),
-            launch: RwLock::new(LaunchOptions { ngl, device }),
+            launch: RwLock::new(params),
         }
     }
 
@@ -121,35 +114,26 @@ impl VisionSidecar {
         *self.tier.write().expect("vision tier lock") = tier;
     }
 
-    /// Updates launch options for the next request (or model restart).
-    pub fn set_launch_options(&self, ngl: u32, device: Option<String>) {
-        *self.launch.write().expect("vision launch lock") = LaunchOptions { ngl, device };
+    /// Updates launch options for the next request (or model restart). A change to any
+    /// tuning field makes the next `resolve_spec` differ, so the supervisor relaunches.
+    pub fn set_launch_options(&self, params: SidecarParams) {
+        *self.launch.write().expect("vision launch lock") = params;
     }
 
     /// Resolves the current tier's [`ModelSpec`], downloading the model on first use.
     async fn ensure_spec(&self) -> Result<ModelSpec> {
         let tier = *self.tier.read().expect("vision tier lock");
-        let launch = self.launch.read().expect("vision launch lock").clone();
-        if let Some(spec) = models::resolve_spec(
-            &self.models_root,
-            ModelLane::Vision,
-            tier,
-            launch.ngl,
-            launch.device.clone(),
-        ) {
+        let params = self.launch.read().expect("vision launch lock").clone();
+        if let Some(spec) =
+            models::resolve_spec(&self.models_root, ModelLane::Vision, tier, params.clone())
+        {
             return Ok(spec);
         }
         download::ensure_model(&self.models_root, ModelLane::Vision, tier)
             .await
             .context("download vision model")?;
-        models::resolve_spec(
-            &self.models_root,
-            ModelLane::Vision,
-            tier,
-            launch.ngl,
-            launch.device,
-        )
-        .context("vision model files missing after download")
+        models::resolve_spec(&self.models_root, ModelLane::Vision, tier, params)
+            .context("vision model files missing after download")
     }
 }
 
