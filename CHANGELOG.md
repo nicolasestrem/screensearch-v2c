@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pidfile unconditionally; if the process outlived the kill, the next launch's
   `reap_stray_any` then had no record to clean it up. The pidfile is now kept when the
   process is still alive (and only removed once it has exited). (`crates/inference/src/supervisor.rs`.)
+- **The Ask context budget no longer undercounts non-Latin text.** The token estimate used a
+  `chars/3` ratio, which *under*-counts dense scripts (a CJK character is ~3 bytes yet ≈1 token),
+  so CJK OCR snippets could admit ~3× too much context and re-trigger the very
+  `exceed_context_size_error` the budgeting prevents. It now estimates from UTF-8 *bytes*
+  (conservative for both Latin and CJK) and truncates on char boundaries. (`crates/inference/src/answer.rs`.)
+- **The binary-download network calls can't hang either.** `resolve_binary_url` (GitHub releases
+  JSON) gained the same 15 s request timeout, and `http_get_bytes` (the multi-MB llama.cpp zip)
+  gained a 15 s **connect** timeout — fail-fast on a dead host without capping a slow-but-progressing
+  transfer. (`crates/inference/src/download.rs`.)
+- **Documented (not yet fixed):** a stall-abort can't cancel hf-hub 0.4.3's *detached* per-chunk
+  tasks; the blast radius is bounded (committed-counter resume + per-lane serialization) and a real
+  fix needs a cancellable downloader we own — tracked as known gap #46 (`specs/07_KNOWN_GAPS.md`).
 
 ### Fixed — "Ask" answer truncated to nothing; download now visible from anywhere (2026-06-24)
 - **The Ask answer is no longer cut off / "always thinking."** The default answer models are

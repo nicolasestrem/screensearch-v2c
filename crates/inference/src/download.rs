@@ -38,11 +38,16 @@ const PROGRESS_POLL: Duration = Duration::from_millis(750);
 /// new bytes are streamed).
 const STALL_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Timeout for the best-effort HF tree-API size probe. This request runs *before* the
-/// stall watchdog is spawned, so without its own timeout a hung/slow API would block the
-/// whole download from starting (the watchdog can't rescue it yet). Bounded and short:
-/// the size is only used to render a percentage, and the download proceeds either way.
-const SIZE_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+/// Timeout for small JSON API probes (the HF tree-API size lookup, the GitHub releases
+/// query). These run *before* any stall watchdog, so without a per-request timeout a hung
+/// or slow endpoint would block the whole flow from starting (the watchdog can't rescue
+/// it yet). Short and bounded — the responses are tiny and the work proceeds either way.
+const HTTP_API_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Connect timeout for the (large) binary download. A total timeout would wrongly abort a
+/// legitimately slow multi-MB transfer, so we only guard the *connect* phase — enough to
+/// fail fast on a dead host without capping a download that is actually making progress.
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
@@ -318,7 +323,10 @@ async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()>
 }
 
 async fn resolve_binary_url() -> Result<(String, String)> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_API_TIMEOUT)
+        .build()
+        .context("build releases http client")?;
     let resp = client
         .get(GITHUB_RELEASES)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -365,7 +373,10 @@ async fn cleanup_partial_install(partial: PathBuf) {
 }
 
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .build()
+        .context("build download http client")?;
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -764,7 +775,7 @@ async fn total_download_bytes(repo_id: &str, needs_mmproj: bool) -> Option<u64> 
     }
     let url = format!("https://huggingface.co/api/models/{repo_id}/tree/main");
     let client = reqwest::Client::builder()
-        .timeout(SIZE_FETCH_TIMEOUT)
+        .timeout(HTTP_API_TIMEOUT)
         .build()
         .ok()?;
     let resp = client

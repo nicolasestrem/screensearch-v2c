@@ -207,17 +207,24 @@ const TEMPLATE_OVERHEAD_TOKENS: usize = 96;
 /// Per-snippet framing cost (`[frame <id>] ` + newline), in estimated tokens.
 const ID_FRAMING_TOKENS: usize = 6;
 
-/// Rough token estimate. llama.cpp exposes no tokenizer here, so we use a deliberately
-/// conservative chars→tokens ratio (≈3 chars/token, which *over*-counts vs. the usual ~4)
-/// so the assembled prompt stays comfortably under the model's context window.
+/// Rough token estimate. llama.cpp exposes no tokenizer here, so we use a conservative
+/// **bytes**→tokens ratio (≈3 UTF-8 bytes/token). A *chars*/token ratio over-counts Latin
+/// text (good) but badly *under*-counts dense scripts: a CJK character is ~3 bytes yet
+/// often ~1 token, so `chars/3` would admit ~3× too much context and re-trigger the
+/// `exceed_context_size_error` this budgeting exists to prevent (Codex review, PR #26).
+/// The byte ratio stays conservative for both: ASCII ≈ chars/3, CJK ≈ chars.
 fn estimate_tokens(text: &str) -> usize {
-    text.chars().count() / 3 + 1
+    text.len() / 3 + 1
 }
 
-/// Truncates `text` to roughly `budget_tokens` worth of characters, on a char boundary.
+/// Truncates `text` to roughly `budget_tokens` worth of UTF-8 bytes, snapped down to a
+/// char boundary (so multibyte characters are never split).
 fn truncate_to_tokens(text: &str, budget_tokens: usize) -> String {
-    let max_chars = budget_tokens.saturating_mul(3);
-    text.chars().take(max_chars).collect()
+    let mut max_bytes = budget_tokens.saturating_mul(3).min(text.len());
+    while max_bytes > 0 && !text.is_char_boundary(max_bytes) {
+        max_bytes -= 1;
+    }
+    text[..max_bytes].to_string()
 }
 
 /// Builds the chat messages: a grounding system prompt + a user message listing the
@@ -451,6 +458,34 @@ mod tests {
         assert!(
             user.len() < huge.len(),
             "the oversized chunk must be truncated"
+        );
+    }
+
+    #[test]
+    fn estimate_tokens_does_not_undercount_cjk() {
+        // 40 CJK chars = 120 UTF-8 bytes, tokenizing ~1 token/char. A chars/3 ratio would
+        // estimate ~14 and overflow the context; the byte ratio must stay >= the char count.
+        let cjk = "你好世界".repeat(10);
+        assert_eq!(cjk.chars().count(), 40);
+        assert!(
+            estimate_tokens(&cjk) >= cjk.chars().count(),
+            "CJK estimate {} must not undercount {} chars",
+            estimate_tokens(&cjk),
+            cjk.chars().count()
+        );
+    }
+
+    #[test]
+    fn truncate_to_tokens_never_splits_a_multibyte_char() {
+        // 3-byte chars; a byte budget that lands mid-character must snap back to a boundary
+        // (a naive byte slice would panic). 10 tokens → 30 bytes → exactly 10 chars here.
+        let cjk = "世".repeat(100);
+        let out = truncate_to_tokens(&cjk, 10);
+        assert!(cjk.starts_with(&out));
+        assert!(out.len() <= 30 && !out.is_empty());
+        assert!(
+            out.chars().all(|c| c == '世'),
+            "no split / replacement chars"
         );
     }
 }
