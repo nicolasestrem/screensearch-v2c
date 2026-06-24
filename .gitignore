@@ -43,4 +43,3 @@ desktop.ini
 .vscode/*
 !.vscode/extensions.json
 /.codex
-docs/0.2.0.md

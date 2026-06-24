@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — Planned 0.2.0 roadmap: attention-first text retrieval + recall reports
+- **Added `docs/0.2.0.md` (now tracked).** Plans the 0.2.0 line. Core fix: today the app indexes
+  raw full-screen OCR with no filtering, so search / Ask / embeddings get dominated by static
+  chrome (toolbars, taskbar, desktop icons, the app's own sidebar labels). 0.2.0 derives a filtered
+  **content-text** layer used by default; raw full-screen text is preserved and stays searchable
+  opt-in via `include_chrome`.
+- **Scope:** PR1 specs → PR2 data model + OCR bounding-box spans → PR3 attention-first filtering
+  (clean DB, no backfill) → PR6 Recall reports + premade prompt cards → PR7 audit. Event-driven
+  capture, UIA text, and smart enrichment throttling are deferred to **0.2.1**. Each PR recycles
+  `specs/04_CLAUDE_CODE_BUILD_PROMPT.md` as its operating prompt.
+- **Planning doc only — no runtime or code changes.** Also un-ignored `docs/0.2.0.md` in
+  `.gitignore` so the roadmap is version-controlled.
+
 ## [0.1.0] — 2026-06-24
 
 ### Packaging — First public release: standalone unsigned Windows installer
