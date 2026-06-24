@@ -9,6 +9,7 @@ import type { Readiness } from "../../bindings/Readiness";
 import type { JobStats } from "../../bindings/JobStats";
 import type { JobCompleted } from "../../bindings/JobCompleted";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
+import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { AnswerEvent } from "../../bindings/AnswerEvent";
 import type { Toast } from "../../bindings/Toast";
 
@@ -19,6 +20,7 @@ export interface AppEvents {
   job_progress: JobStats;
   job_completed: JobCompleted;
   sidecar_status: SidecarStatus;
+  model_download: ModelDownloadStatus;
   answer_delta: AnswerEvent;
   toast: Toast;
 }

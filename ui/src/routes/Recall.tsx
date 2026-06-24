@@ -21,7 +21,12 @@ type Mode = "search" | "ask";
 
 const SEARCH_LIMIT = 100;
 const SEARCH_DEBOUNCE_MS = 250;
-const ASK_MAX_TOKENS = 512;
+// Generation budget (n_predict) for an Ask reply. The default answer models are *reasoning*
+// models that emit a `<think>…</think>` trace before the answer; 512 was exhausted mid-thought,
+// so the answer was truncated to nothing (only the Thinking box showed). 2048 leaves room to
+// finish reasoning *and* produce the answer while still preserving most of the 8K context
+// window for retrieved snippets (`answer.rs::build_messages` reserves this from the budget).
+const ASK_MAX_TOKENS = 2048;
 const ROW_ESTIMATE = 104;
 
 export function Component() {

@@ -167,6 +167,14 @@ pub struct ModelSupervisor {
     last_activity: Arc<StdMutex<Instant>>,
     events: broadcast::Sender<SidecarStatus>,
     shutdown: AtomicBool,
+    /// When set, the idle-evictor holds off (the kernel's idle vision backfill is draining
+    /// the backlog and wants the model kept warm). Cleared when the backlog is empty or
+    /// the user resumes, after which normal idle eviction frees the VRAM (`03 §5/§6`).
+    backfill_active: AtomicBool,
+    /// Set by a manual "Load model" and cleared by "Unload": the user explicitly asked to
+    /// keep this model resident, so the idle-TTL must not evict it (that was the
+    /// "evicted right after I downloaded it" surprise). Unload or app exit clears it.
+    pinned: AtomicBool,
     gate: RequestGate,
 }
 
@@ -194,6 +202,8 @@ impl ModelSupervisor {
             last_activity: Arc::new(StdMutex::new(Instant::now())),
             events,
             shutdown: AtomicBool::new(false),
+            backfill_active: AtomicBool::new(false),
+            pinned: AtomicBool::new(false),
             gate: RequestGate::new(),
         });
         me.clone().spawn_evictor();
@@ -224,7 +234,10 @@ impl ModelSupervisor {
                 if let Some(old) = guard.take() {
                     // Wait for the old process to fully exit before spawning the new model
                     // so its GPU memory is released first (avoids a VRAM-allocation race on
-                    // model switch).
+                    // model switch). A switch to a *different* model also drops any manual
+                    // pin — it belonged to the model being replaced (a manual Load re-pins
+                    // after this returns).
+                    self.pinned.store(false, Ordering::SeqCst);
                     self.stop_child(old).await;
                 }
                 let proc = self.spawn_with_retries(&spec).await?;
@@ -251,7 +264,7 @@ impl ModelSupervisor {
                     return Ok(lease);
                 }
                 Some(running) => {
-                    let crashed_model = model_label(&running.spec);
+                    let crashed_spec = running.spec.clone();
                     drop(guard);
                     drop(permit);
 
@@ -265,7 +278,7 @@ impl ModelSupervisor {
                             drop(permit);
                             continue;
                         }
-                        self.emit(SidecarState::Crashed, Some(crashed_model));
+                        self.emit(SidecarState::Crashed, Some(&crashed_spec));
                     } else {
                         drop(guard);
                         drop(permit);
@@ -325,16 +338,37 @@ impl ModelSupervisor {
     }
 
     /// Kills a running sidecar and waits (bounded) for the OS to release it, so its GPU
-    /// memory is freed before the next model spawns. Polls rather than blocking the
-    /// executor on `WaitForSingleObject`.
+    /// memory is freed before the next model spawns.
     async fn stop_child(&self, old: SidecarProcess) {
-        let pid = old.child.pid();
-        old.child.kill();
+        self.kill_and_confirm("model switch", old.child).await;
+    }
+
+    /// Kills `child`, waits (bounded) for the OS to release the process so its VRAM/RAM is
+    /// actually freed, removes the pidfile, and logs whether the kill took effect. Every
+    /// teardown path (idle eviction, manual unload, model switch, shutdown) routes through
+    /// here so a kill that silently fails is visible instead of leaving VRAM occupied
+    /// while the UI claims the model is gone (`03 §6`). Polls rather than blocking the
+    /// executor on `WaitForSingleObject`.
+    async fn kill_and_confirm(&self, reason: &str, child: process::SuspendedChild) {
+        let pid = child.pid();
+        let killed = child.kill();
         let deadline = Instant::now() + PROCESS_EXIT_WAIT;
         while process::pid_alive(pid) && Instant::now() < deadline {
             tokio::time::sleep(HEALTH_POLL).await;
         }
+        let still_alive = process::pid_alive(pid);
         let _ = std::fs::remove_file(&self.config.pidfile);
+        if still_alive {
+            tracing::warn!(
+                reason,
+                pid,
+                killed,
+                "sidecar kill did not terminate the process within the exit wait; VRAM may \
+                 still be held"
+            );
+        } else {
+            tracing::debug!(reason, pid, killed, "sidecar process terminated");
+        }
     }
 
     /// Spawns the sidecar, retrying a few times. Each attempt allocates a fresh port,
@@ -360,10 +394,40 @@ impl ModelSupervisor {
         self.shutdown.store(true, Ordering::SeqCst);
         let mut guard = self.state.lock().await;
         if let Some(p) = guard.take() {
-            p.child.kill();
-            let _ = std::fs::remove_file(&self.config.pidfile);
+            self.kill_and_confirm("shutdown", p.child).await;
         }
         self.emit(SidecarState::Stopped, None);
+    }
+
+    /// Eagerly loads `spec` (spawning or switching as needed) so the next real request is
+    /// instant — the manual "Load model" control. The lease is dropped immediately, which
+    /// starts the idle clock; the model then stays resident until the idle-TTL or a manual
+    /// [`Self::unload`] reclaims it.
+    pub async fn preload(&self, spec: ModelSpec) -> Result<()> {
+        let _lease = self.acquire(spec).await?;
+        // Pin: an explicit Load means "keep this resident" — don't idle-evict it until the
+        // user unloads (otherwise the model the user just waited to download/load would be
+        // evicted the moment the idle-TTL elapsed).
+        self.pinned.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Manually stops the resident sidecar, freeing its VRAM/RAM now — the "Unload" control.
+    /// Drains the request gate first so a live request is never torn out, then kills the
+    /// process and reports `Evicted` (the next request lazily respawns). No-op when nothing
+    /// is resident.
+    pub async fn unload(&self) {
+        // Clear the manual pin first: an explicit unload overrides "keep resident".
+        self.pinned.store(false, Ordering::SeqCst);
+        let Ok(_permit) = self.gate.enter_for_model_switch().await else {
+            return;
+        };
+        let mut guard = self.state.lock().await;
+        if let Some(p) = guard.take() {
+            self.kill_and_confirm("manual unload", p.child).await;
+            self.emit(SidecarState::Evicted, Some(&p.spec));
+            tracing::info!("sidecar unloaded on request");
+        }
     }
 
     /// Spawns `llama-server` for `spec`, binds it to the job **before** resuming, then
@@ -371,7 +435,7 @@ impl ModelSupervisor {
     async fn spawn_for(&self, spec: &ModelSpec) -> Result<SidecarProcess> {
         let port = free_port().context("allocate sidecar port")?;
         let args = build_args(spec, port, &self.config.caps);
-        self.emit(SidecarState::Starting, Some(model_label(spec)));
+        self.emit(SidecarState::Starting, Some(spec));
 
         let child = process::spawn_suspended(&self.config.binary, &args)
             .with_context(|| format!("spawn {}", self.config.binary.display()))?;
@@ -392,7 +456,7 @@ impl ModelSupervisor {
         let deadline = Instant::now() + self.config.health_timeout;
         loop {
             if !process::pid_alive(child.pid()) {
-                self.emit(SidecarState::Crashed, None);
+                self.emit(SidecarState::Crashed, Some(spec));
                 bail!("llama-server exited during startup");
             }
             if client.health().await {
@@ -400,7 +464,7 @@ impl ModelSupervisor {
             }
             if Instant::now() >= deadline {
                 child.kill();
-                self.emit(SidecarState::Crashed, None);
+                self.emit(SidecarState::Crashed, Some(spec));
                 bail!(
                     "llama-server did not become healthy within {:?}",
                     self.config.health_timeout
@@ -409,7 +473,7 @@ impl ModelSupervisor {
             tokio::time::sleep(HEALTH_POLL).await;
         }
 
-        self.emit(SidecarState::Ready, Some(model_label(spec)));
+        self.emit(SidecarState::Ready, Some(spec));
         Ok(SidecarProcess {
             child,
             client,
@@ -429,34 +493,44 @@ impl ModelSupervisor {
         });
     }
 
-    /// Stops the sidecar if it has been idle past the TTL and nothing is in flight.
+    /// Stops the sidecar if it has been idle past the TTL, nothing is in flight, and the
+    /// kernel's idle backfill is not asking us to stay warm.
     async fn maybe_evict(&self) {
-        if self.in_flight.load(Ordering::SeqCst) > 0 {
-            return;
-        }
         let elapsed = self
             .last_activity
             .lock()
             .map(|g| g.elapsed())
             .unwrap_or_default();
-        if !idle_expired(elapsed, self.config.idle_ttl) {
+        if !should_evict(
+            self.in_flight.load(Ordering::SeqCst),
+            elapsed,
+            self.config.idle_ttl,
+            self.backfill_active.load(Ordering::SeqCst) || self.pinned.load(Ordering::SeqCst),
+        ) {
             return;
         }
         let mut guard = self.state.lock().await;
-        // Re-check under the lock — a request may have arrived between checks.
+        // Re-check in-flight under the lock — a request may have arrived between checks.
+        // (Backfill is a coarse keep-warm hint, so it's only checked above, not re-locked.)
         if self.in_flight.load(Ordering::SeqCst) > 0 {
             return;
         }
         if let Some(p) = guard.take() {
-            p.child.kill();
-            let _ = std::fs::remove_file(&self.config.pidfile);
-            self.emit(SidecarState::Evicted, None);
+            self.kill_and_confirm("idle TTL", p.child).await;
+            self.emit(SidecarState::Evicted, Some(&p.spec));
             tracing::info!("sidecar evicted after idle TTL");
         }
     }
 
-    fn emit(&self, state: SidecarState, model: Option<String>) {
-        let _ = self.events.send(SidecarStatus { state, model });
+    /// Broadcasts a lifecycle transition. `spec` (the model this transition concerns)
+    /// supplies both the human label and the lane, so the readiness panel can show *which*
+    /// model is — or was last — resident. `None` only for the no-model-yet `Stopped`.
+    fn emit(&self, state: SidecarState, spec: Option<&ModelSpec>) {
+        let _ = self.events.send(SidecarStatus {
+            state,
+            model: spec.map(model_label),
+            lane: spec.map(|s| s.lane),
+        });
     }
 }
 
@@ -475,6 +549,25 @@ pub fn needs_restart(running: &ModelSpec, requested: &ModelSpec) -> bool {
 /// Pure idle predicate (extracted for testing): idle once `elapsed >= ttl`.
 pub fn idle_expired(elapsed: Duration, ttl: Duration) -> bool {
     elapsed >= ttl
+}
+
+/// Pure eviction predicate (extracted for testing): evict only when nothing is in flight,
+/// the model has been idle past the TTL, **and** the kernel's idle backfill is not asking
+/// us to stay warm. Keeping the model loaded during a backfill drain is the whole point of
+/// the keep-warm flag (`03 §5/§6`).
+pub fn should_evict(
+    in_flight: usize,
+    elapsed: Duration,
+    ttl: Duration,
+    backfill_active: bool,
+) -> bool {
+    in_flight == 0 && !backfill_active && idle_expired(elapsed, ttl)
+}
+
+impl traits::BackfillControl for ModelSupervisor {
+    fn set_backfill_active(&self, active: bool) {
+        self.backfill_active.store(active, Ordering::SeqCst);
+    }
 }
 
 /// A running sidecar can be reused only when both the OS process and the HTTP health
@@ -750,6 +843,21 @@ mod tests {
             Duration::from_secs(10),
             Duration::from_secs(180)
         ));
+    }
+
+    #[test]
+    fn evict_predicate_respects_inflight_backfill_and_ttl() {
+        let ttl = Duration::from_secs(180);
+        let past = Duration::from_secs(200);
+        let recent = Duration::from_secs(10);
+        // Idle past TTL, nothing in flight, no backfill → evict.
+        assert!(should_evict(0, past, ttl, false));
+        // A request in flight → never evict.
+        assert!(!should_evict(1, past, ttl, false));
+        // Backfill draining the backlog → keep warm even when idle past TTL.
+        assert!(!should_evict(0, past, ttl, true));
+        // Not idle long enough → don't evict.
+        assert!(!should_evict(0, recent, ttl, false));
     }
 
     #[tokio::test]

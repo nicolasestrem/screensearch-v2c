@@ -18,9 +18,9 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio::task::JoinHandle;
 use traits::{
-    AnswerProvider, CaptureConfig, CaptureSource, ComponentReadiness, ComponentStatus,
-    EmbeddingProvider, JobKind, NewJob, OcrProvider, Readiness, SidecarState, SidecarStatus, Store,
-    Toast, ToastLevel, VisionProvider, VisionTarget,
+    AnswerProvider, BackfillControl, CaptureConfig, CaptureSource, ComponentReadiness,
+    ComponentStatus, EmbeddingProvider, JobKind, ModelDownloadStatus, NewJob, OcrProvider,
+    Readiness, SidecarState, SidecarStatus, Store, Toast, ToastLevel, VisionProvider, VisionTarget,
 };
 
 mod capture_loop;
@@ -360,11 +360,12 @@ impl Kernel {
         vision: Arc<dyn VisionProvider>,
         answer: Arc<dyn AnswerProvider>,
         idle: Option<IdleSource>,
+        backfill: Option<Arc<dyn BackfillControl>>,
     ) {
         *self.vision.write().expect("vision slot lock") = Some(vision);
         *self.answer.lock().await = Some(answer);
         self.start_workers().await;
-        self.start_vision_scheduler(idle).await;
+        self.start_vision_scheduler(idle, backfill).await;
         tracing::info!("inference providers attached");
     }
 
@@ -428,6 +429,12 @@ impl Kernel {
         }
     }
 
+    /// Re-broadcasts a model-download progress update for the UI (`model_download`). The
+    /// composition root bridges the downloader's progress channel here.
+    pub fn emit_model_download(&self, status: ModelDownloadStatus) {
+        let _ = self.events.send(KernelEvent::ModelDownload(status));
+    }
+
     /// Emits a transient user-facing notification through the shell event bridge.
     pub fn emit_toast(&self, level: ToastLevel, message: impl Into<String>) {
         let _ = self.events.send(KernelEvent::Toast(Toast {
@@ -449,13 +456,18 @@ impl Kernel {
     }
 
     /// Starts the timer/idle vision scheduler (idempotent). `idle` is `None` when no
-    /// platform idle source is available (timer-only).
-    async fn start_vision_scheduler(&self, idle: Option<IdleSource>) {
+    /// platform idle source is available (timer-only); `backfill` lets the idle loop keep
+    /// the sidecar warm while it drains the backlog.
+    async fn start_vision_scheduler(
+        &self,
+        idle: Option<IdleSource>,
+        backfill: Option<Arc<dyn BackfillControl>>,
+    ) {
         let mut guard = self.scheduler.lock().await;
         if guard.is_some() {
             return;
         }
-        *guard = Some(vision_scheduler::spawn(self.store.clone(), idle));
+        *guard = Some(vision_scheduler::spawn(self.store.clone(), idle, backfill));
         tracing::info!("vision scheduler started");
     }
 
@@ -469,14 +481,17 @@ impl Kernel {
 }
 
 /// Maps a sidecar lifecycle state to a `sidecar` readiness component (`03 §6/§7`). An
-/// evicted sidecar is still `Ready` — it can lazily respawn on the next request.
+/// evicted (idle-unloaded) sidecar maps to `Disabled`, **not** `Ready`: the process is not
+/// running, so claiming "Ready" lied to the user (the panel reads the raw `SidecarState`
+/// for the precise "Idle — unloaded (loads on demand)" label). It still respawns on the
+/// next request — `Disabled` is the neutral, non-alarming "not currently loaded".
 fn sidecar_component(status: &SidecarStatus) -> (ComponentStatus, Option<String>) {
     match status.state {
         SidecarState::Starting => (ComponentStatus::Initializing, status.model.clone()),
         SidecarState::Ready => (ComponentStatus::Ready, status.model.clone()),
         SidecarState::Evicted => (
-            ComponentStatus::Ready,
-            Some("evicted (idle); respawns on demand".to_string()),
+            ComponentStatus::Disabled,
+            Some("idle — unloaded (loads on demand)".to_string()),
         ),
         SidecarState::Crashed => (ComponentStatus::Error, Some("sidecar crashed".to_string())),
         SidecarState::Stopped => (ComponentStatus::Disabled, Some("stopped".to_string())),

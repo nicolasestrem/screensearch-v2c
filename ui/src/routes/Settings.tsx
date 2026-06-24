@@ -13,7 +13,7 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 
 import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState, Select } from "../components/primitives";
-import { ModelTierPicker, RetentionControl, ScheduleControl } from "../components/domain";
+import { ModelPanel, ModelTierPicker, RetentionControl, ScheduleControl } from "../components/domain";
 import { useMonitors, useReadiness, useSettings, useSidecarDevices } from "../lib/ipc/queries";
 import { useSetModelTier, useSetSettings } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
@@ -101,8 +101,11 @@ export function Component() {
   const settings = useSettings();
   const readiness = useReadiness();
   const monitors = useMonitors();
-  const sidecarReady = readiness.data?.sidecar.status === "ready";
-  const sidecarDevices = useSidecarDevices(sidecarReady);
+  // The device list only needs the binary resolved, so an idle-unloaded sidecar
+  // (now reported as "disabled", not "ready") is still "available" for this probe.
+  const sidecarAvailable =
+    readiness.data?.sidecar.status === "ready" || readiness.data?.sidecar.status === "disabled";
+  const sidecarDevices = useSidecarDevices(sidecarAvailable);
   const setSettings = useSetSettings();
   const setTier = useSetModelTier();
 
@@ -368,6 +371,10 @@ export function Component() {
             hint={`Stream the answer model's reasoning before its reply. ${APPLY_ASK}`}
           />
         </div>
+      </Panel>
+
+      <Panel title="Inference engine">
+        <ModelPanel />
       </Panel>
 
       <Panel title="Enrichment">

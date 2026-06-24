@@ -35,6 +35,9 @@ pub mod vision;
 /// Sidecar flag-capability probe (used by the composition root to tune `build_args`).
 pub use flags::{probe_caps, FlashAttnKind, SidecarCaps};
 
+/// The model downloader (coordinated, progress-reporting). Shared by both lane providers.
+pub use download::ModelDownloader;
+
 // The composition root (`src-tauri`) wires these concrete impls (`03 §2`).
 #[cfg(windows)]
 pub use answer::AnswerSidecar;

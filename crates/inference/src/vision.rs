@@ -18,7 +18,6 @@ use serde::Deserialize;
 use traits::{ModelTier, SidecarParams, VisionAnalysis, VisionProvider};
 
 use crate::client::ChatMessage;
-use crate::download;
 use crate::models::{self, ModelLane, ModelSpec};
 use crate::supervisor::ModelSupervisor;
 
@@ -88,6 +87,7 @@ fn vision_response_format() -> serde_json::Value {
 /// downloads the model on first use, then drives it through the supervisor.
 pub struct VisionSidecar {
     supervisor: Arc<ModelSupervisor>,
+    downloader: Arc<crate::download::ModelDownloader>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
     launch: RwLock<SidecarParams>,
@@ -96,12 +96,14 @@ pub struct VisionSidecar {
 impl VisionSidecar {
     pub fn new(
         supervisor: Arc<ModelSupervisor>,
+        downloader: Arc<crate::download::ModelDownloader>,
         models_root: PathBuf,
         tier: ModelTier,
         params: SidecarParams,
     ) -> Self {
         Self {
             supervisor,
+            downloader,
             models_root,
             tier: RwLock::new(tier),
             launch: RwLock::new(params),
@@ -129,11 +131,20 @@ impl VisionSidecar {
         {
             return Ok(spec);
         }
-        download::ensure_model(&self.models_root, ModelLane::Vision, tier)
+        self.downloader
+            .ensure(ModelLane::Vision, tier)
             .await
             .context("download vision model")?;
         models::resolve_spec(&self.models_root, ModelLane::Vision, tier, params)
             .context("vision model files missing after download")
+    }
+
+    /// Eagerly loads the current vision model into the sidecar (the manual "Load" control
+    /// for the vision lane). Downloads on first use, then keeps it resident until the
+    /// idle-TTL or a manual unload reclaims it.
+    pub async fn preload(&self) -> Result<()> {
+        let spec = self.ensure_spec().await?;
+        self.supervisor.preload(spec).await
     }
 }
 

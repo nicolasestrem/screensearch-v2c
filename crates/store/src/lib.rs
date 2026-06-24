@@ -286,6 +286,9 @@ impl Store for SqliteStore {
     async fn job_stats(&self) -> Result<JobStats> {
         SqliteStore::job_stats(self).await
     }
+    async fn pending_vision_job_count(&self) -> Result<u64> {
+        SqliteStore::pending_vision_job_count(self).await
+    }
     async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
         SqliteStore::reset_stale_running_jobs(self, older_than_ms).await
     }

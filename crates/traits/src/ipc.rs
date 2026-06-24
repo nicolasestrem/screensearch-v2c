@@ -527,12 +527,45 @@ pub enum SidecarState {
     Crashed,
 }
 
-/// Sidecar status update (`sidecar_status` event).
+/// Sidecar status update (`sidecar_status` event). `lane` says which model is (or was
+/// last) resident — vision vs. answer — so the UI can label the engine truthfully instead
+/// of guessing from the filename. `None` when no model has loaded yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct SidecarStatus {
     pub state: SidecarState,
     pub model: Option<String>,
+    pub lane: Option<ModelLane>,
+}
+
+/// Phase of a model download (`model_download` event). Drives the progress UI so a
+/// multi-GB model fetch communicates progress + completion/error instead of just opaque
+/// network activity (`03 §6/§7`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum ModelDownloadPhase {
+    Downloading,
+    Done,
+    Failed,
+}
+
+/// Progress of a model download for one lane. `total_bytes` is `None` when the size could
+/// not be probed (the UI then shows bytes-downloaded without a percentage). `error` is set
+/// only on the `Failed` phase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ModelDownloadStatus {
+    pub lane: ModelLane,
+    pub model: Option<String>,
+    pub phase: ModelDownloadPhase,
+    // `#[ts(type = "number")]`: Tauri's JSON wire delivers 64-bit ints as JS numbers, and
+    // byte counts stay well under 2^53 — same convention as `JobStats`.
+    #[ts(type = "number")]
+    pub downloaded_bytes: u64,
+    #[ts(type = "number | null")]
+    pub total_bytes: Option<u64>,
+    pub error: Option<String>,
 }
 
 /// Severity of a UI toast (`toast` event).

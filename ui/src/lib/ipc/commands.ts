@@ -14,6 +14,7 @@ import type { CaptureControl } from "../../bindings/CaptureControl";
 import type { VisionTarget } from "../../bindings/VisionTarget";
 import type { AskRequest } from "../../bindings/AskRequest";
 import type { SetModelTier } from "../../bindings/SetModelTier";
+import type { ModelLane } from "../../bindings/ModelLane";
 import type { TimeRange } from "../../bindings/TimeRange";
 import type { TimelineBucket } from "../../bindings/TimelineBucket";
 import type { InsightsSummary } from "../../bindings/InsightsSummary";
@@ -67,6 +68,13 @@ export const cancelAsk = (requestId: string): Promise<void> =>
 /** Change the active model tier for a lane (hot-applies on the next request). */
 export const setModelTier = (request: SetModelTier): Promise<void> =>
   invoke<void>("set_model_tier", { request });
+
+/** Eagerly load a lane's model into the sidecar so the next request is instant. */
+export const loadModel = (lane: ModelLane): Promise<void> =>
+  invoke<void>("load_model", { lane });
+
+/** Unload the resident sidecar model now, freeing VRAM/RAM. */
+export const unloadModel = (): Promise<void> => invoke<void>("unload_model");
 
 /** Frame-count density buckets over `[start, end)` for the Scanline Timeline. */
 export const getTimeline = (range: TimeRange, bucketCount: number): Promise<TimelineBucket[]> =>

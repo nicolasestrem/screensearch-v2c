@@ -63,6 +63,17 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
     wasStreaming.current = streaming;
   }, [streaming]);
 
+  // Auto-follow the reasoning trace: while it streams, keep the thinking box pinned to
+  // the latest line so it doesn't get cut off — but only when the user is already near the
+  // bottom, so scrolling up to re-read isn't yanked back down.
+  const thinkingRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = thinkingRef.current;
+    if (!el || !streaming || !thinkingOpen) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [thinking, streaming, thinkingOpen]);
+
   if (phase === "idle") return null;
 
   if (phase === "error") {
@@ -86,7 +97,10 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
           <summary className="cursor-pointer select-none px-3 py-2 text-caption text-ink-muted font-body">
             Thinking
           </summary>
-          <pre className="overflow-x-auto whitespace-pre-wrap px-3 pb-3 text-caption text-ink-faint font-mono">
+          <pre
+            ref={thinkingRef}
+            className="max-h-64 overflow-auto whitespace-pre-wrap px-3 pb-3 text-caption text-ink-faint font-mono"
+          >
             {thinking}
           </pre>
         </details>

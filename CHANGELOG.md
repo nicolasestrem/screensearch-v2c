@@ -9,6 +9,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — "Ask" answer truncated to nothing; download now visible from anywhere (2026-06-24)
+- **The Ask answer is no longer cut off / "always thinking."** The default answer models are
+  *reasoning* models that stream a `<think>…</think>` trace before the answer; the reply budget was
+  `ASK_MAX_TOKENS = 512`, which the reasoning alone exhausted — so generation was truncated
+  mid-thought and the answer area stayed empty (only the Thinking box rendered). Raised to **2048**,
+  enough to finish reasoning *and* produce the answer while still leaving most of the 8K context
+  window for retrieved snippets. (`ui/src/routes/Recall.tsx`.)
+- **Model downloads now show in the top status rail**, not just on the Settings page — a "↓ 42%"
+  chip (with a model/size tooltip) appears whenever a fetch is in progress, so the multi-GB download
+  is visible from any screen. (`ui/src/components/shell/StatusRail.tsx`, new `IconDownload`.)
+
+### Fixed — Model download could hang on a resumed/incomplete fetch; progress bar was untruthful (2026-06-24)
+- **The Inference-engine download no longer hangs on an interrupted prior attempt, and the
+  progress bar now shows *real* progress.** Root cause (proven against the live partial 8B fetch):
+  the previous bar polled the on-disk file size, but hf-hub `set_len`s the `.sync.part` to the file's
+  full length *up front* — so the bar jumped to ~81% (≈5 GB allocated of 6.2 GB) while only **33%**
+  had actually downloaded, then froze. The fetch itself stalled because hf-hub 0.4.3 builds a
+  `reqwest` client with **no socket timeout** and we ran it with no retries, so a dead CDN connection
+  blocks forever. Fixes:
+  - Progress is now driven by hf-hub's `Progress` callbacks (true streamed bytes, **resume-aware** —
+    a restart picks up where it left off), not the pre-allocated file size.
+  - A **stall watchdog** aborts a download that receives no new bytes for 180 s and surfaces a clear,
+    retryable error (`"download stalled — no data received; click Load to resume"`) instead of hanging
+    indefinitely; the partial is kept on disk so the next Load/tag **resumes** from there.
+  - A finalized-but-not-copied cached blob is now reused instead of re-downloaded (cache pre-check).
+  - The **Inference engine** panel shows a failed-download banner with the reason and resume hint.
+  (`crates/inference/src/download.rs`, `ui/src/components/domain/ModelPanel.tsx`.)
+
+### Added/Fixed — Model-download progress, download reliability, load-pinning, thinking auto-scroll (2026-06-24)
+- **Model downloads now show progress and surface errors.** A new coordinated
+  `ModelDownloader` broadcasts `model_download` events (`downloaded_bytes` / `total_bytes` from the
+  HF tree API); the **Settings → Inference engine** panel renders a live progress bar (e.g.
+  "Downloading vision model… 42% · 2.6 / 6.2 GB") and toasts on completion/failure. Previously a
+  multi-GB fetch was opaque network activity with no feedback. (`crates/inference/src/download.rs`,
+  `ui/src/components/domain/ModelPanel.tsx`.)
+- **Quality vision tagging no longer dead-letters from concurrent download races.** Downloads are
+  now serialized per lane, so multiple enrichment workers can't fetch the same multi-GB model at
+  once (the race that left `vision_tag` jobs `dead` with "download vision model"). The model
+  downloads once (with progress); jobs then tag normally.
+- **A manually loaded model stays loaded.** "Load model" now *pins* the model so the idle-TTL won't
+  evict it (the "evicted right after it downloaded" surprise); "Unload" (or switching models) clears
+  the pin. (`crates/inference/src/supervisor.rs`.)
+- **The answer's "Thinking" trace auto-scrolls** and is height-bounded, so a long reasoning stream
+  follows the latest line instead of overflowing the view (it stays put if you scroll up to re-read).
+  (`ui/src/components/domain/AnswerStream.tsx`.)
+
+### Fixed — Idle backfill, sidecar reload/status, and the "Ask" context-overflow failure (2026-06-24)
+- **Idle vision tagging now drains the whole backlog while the PC is idle, instead of one batch
+  then dormant.** The idle scheduler used to enqueue a single batch *only* on the transition into
+  idle, so a long idle period processed one batch and stopped. It now keeps topping the queue up to
+  a batch whenever in-flight vision work falls below a low watermark, and tells the sidecar to stay
+  loaded (keep-warm) for the duration of the drain. When the backlog is empty or the user returns,
+  keep-warm is released so the normal idle-TTL eviction frees the VRAM. The timer trigger is
+  unchanged. (`crates/kernel/src/vision_scheduler.rs`, new `Store::pending_vision_job_count`.)
+- **The sidecar idle-TTL no longer fights idle backfill.** A new keep-warm flag
+  (`BackfillControl`, implemented by the supervisor) suppresses idle eviction *only* while the idle
+  backfill is actively draining, so the model isn't evicted between batches. Extracted a pure
+  `should_evict` predicate (unit-tested). (`crates/inference/src/supervisor.rs`, `crates/traits`.)
+- **Model status no longer lies about "Ready".** An idle-evicted sidecar used to map to
+  `ComponentStatus::Ready`; it now maps to a neutral `Disabled`, and the UI labels the engine from
+  the *raw* `SidecarState` — "Loaded" / "Loading…" / "Idle — unloaded" / "Error" — in both the
+  StatusRail chip and a new **Settings → Inference engine** panel. `SidecarStatus` gained a `lane`
+  field so the panel shows vision vs. answer truthfully. (`crates/kernel/src/lib.rs`,
+  `crates/traits/src/ipc.rs`, `ui/src/components/domain/ModelPanel.tsx`, `ui/src/lib/status.ts`.)
+- **Manual Load / Unload controls.** The Inference engine panel can pre-load the answer model (so
+  the next Ask is instant) or unload the resident model now to free VRAM, via new `load_model` /
+  `unload_model` commands backed by `ModelSupervisor::{preload, unload}`.
+- **"Ask" no longer fails with the opaque "sidecar returned an error status."** Root cause (verified
+  by reproducing it directly against `llama-server`): the grounded prompt concatenated *all*
+  retrieved chunks with no token budget, so a large context exceeded the model's window and
+  llama-server returned `HTTP 400 exceed_context_size_error` — which the client swallowed. Fixes:
+  (1) the client now surfaces the real HTTP status + response body; (2) `build_messages` budgets the
+  included context to the model's `ctx_size` (reserving the reply + prompt overhead), dropping or
+  truncating chunks that don't fit and citing only the frames actually included.
+  (`crates/inference/src/client.rs`, `crates/inference/src/answer.rs`.)
+- **Eviction/unload now verify the kill.** Every sidecar teardown (idle eviction, manual unload,
+  model switch, shutdown) routes through a shared `kill_and_confirm` that waits for the process to
+  exit and logs `killed` / `still_alive`, so a kill that fails to free VRAM is visible rather than
+  silent. (`crates/inference/src/supervisor.rs`.)
+
 ### Added — Sidecar memory tuning: pinned context + KV quantization + flash attention (2026-06-24)
 - **The llama.cpp sidecar now pins a small, workload-appropriate context window and quantizes its
   KV cache**, instead of inheriting the model's full trained context. `build_args` previously passed

@@ -541,6 +541,7 @@ async fn vision_jobs_drain_when_embeddings_disabled() {
             }) as Arc<dyn VisionProvider>,
             Arc::new(NoAnswer) as Arc<dyn AnswerProvider>,
             None,
+            None,
         )
         .await;
 

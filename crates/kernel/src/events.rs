@@ -5,7 +5,9 @@
 //! forwards them to the WebView2 UI as Tauri events. The kernel never knows about
 //! Tauri.
 
-use traits::{CaptureTick, JobCompleted, JobStats, Readiness, SidecarStatus, Toast};
+use traits::{
+    CaptureTick, JobCompleted, JobStats, ModelDownloadStatus, Readiness, SidecarStatus, Toast,
+};
 
 /// An event the kernel emits for the UI (forwarded to Tauri events by `src-tauri`).
 ///
@@ -27,6 +29,9 @@ pub enum KernelEvent {
     /// The inference sidecar changed lifecycle state — drives the sidecar status
     /// indicator (`sidecar_status`, `03 §6/§7`).
     SidecarStatus(SidecarStatus),
+    /// A model download advanced — drives the download progress UI (`model_download`,
+    /// `03 §6/§7`).
+    ModelDownload(ModelDownloadStatus),
     /// A transient user-facing notification.
     Toast(Toast),
 }

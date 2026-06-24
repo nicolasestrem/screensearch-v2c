@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use inference::download;
 use inference::models::{ModelLane, ModelTier};
-use inference::{AnswerSidecar, ModelSupervisor, SupervisorConfig, VisionSidecar};
+use inference::{AnswerSidecar, ModelDownloader, ModelSupervisor, SupervisorConfig, VisionSidecar};
 use tokio::sync::mpsc;
 use traits::{
     AnswerDelta, AnswerOpts, FlashAttnSetting, KvCacheType, RetrievedChunk, SidecarParams,
@@ -76,8 +76,10 @@ async fn real_answer_streams_tokens() {
         .expect("ensure answer model");
 
     let supervisor = supervisor_for(binary, &sidecar_dir);
+    let downloader = ModelDownloader::new(models_root.clone());
     let answer = AnswerSidecar::new(
         supervisor.clone(),
+        downloader,
         models_root,
         ModelTier::Default,
         smoke_params(),
@@ -144,8 +146,10 @@ async fn real_vision_tags_an_image() {
         .expect("ensure vision model");
 
     let supervisor = supervisor_for(binary, &sidecar_dir);
+    let downloader = ModelDownloader::new(models_root.clone());
     let vision = VisionSidecar::new(
         supervisor.clone(),
+        downloader,
         models_root,
         ModelTier::Default,
         smoke_params(),
