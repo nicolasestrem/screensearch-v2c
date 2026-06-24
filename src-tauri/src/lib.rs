@@ -468,6 +468,11 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
+    // Clamp once up front so the values handed to the live providers below are exactly what
+    // gets persisted. `save_settings` sanitizes internally too, but a direct IPC call could
+    // pass out-of-range values (e.g. a huge `sidecar_ctx_size`); without this, the DB would
+    // store the clamped value while the next sidecar spawn ran the raw one until restart.
+    let settings = kernel::settings::sanitize_settings(settings);
     kernel::settings::save_settings(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())?;

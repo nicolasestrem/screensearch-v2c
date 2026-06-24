@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `push_kv_cache` warns when quantization is configured but the binary advertises neither
     `--cache-type-k` nor `--cache-type-v` (previously a silent f16 fallback).
   - The `--flash-attn` capability probe also recognizes a parenthesised value set (`(on/off/auto)`).
+  - **Round 2 (diagnostics + robustness):** `push_flash_attn` now returns a `FlashState`
+    (`Active` / `BinaryUnsupported` / `UserDisabled`) so the quantized-KV downgrade warning names the
+    real cause — a binary limitation vs. the user turning flash attention off — instead of always
+    blaming the build. An explicit `flash_attn = on` on a binary that lacks the flag now logs a warn
+    rather than being dropped silently. And `set_settings` sanitizes the incoming `Settings` *before*
+    building `SidecarParams`, so a direct (non-UI) IPC call with an out-of-range `sidecar_ctx_size`
+    can no longer run the raw value in the next sidecar spawn while the DB stores the clamped one.
 
 ### Fixed — Vision scheduler: configurable batch size + pending-job dedup (2026-06-24)
 - **The timer/idle vision batch size is now a setting.** It was a hardcoded `const BATCH = 20`, so

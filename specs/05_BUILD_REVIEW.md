@@ -1761,3 +1761,35 @@ PR #25 (additive follow-up commit; no force-push, per ship-it).
   exit 0; `cargo test --workspace` all crates **0 failed**; `cargo test -p inference` **57 passed, 0
   failed** (incl. the two new tests).
 - Binding guard: `git diff --exit-code -- ui/src/bindings` clean (no IPC type changes this round).
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning: PR #25 review round 2
+
+Second review pass: `@codex` (`chatgpt-codex-connector`) posted inline findings and `@claude`'s
+follow-up verified round 1 and surfaced two more diagnostic gaps. `gemini-code-assist` approved
+("ready for merge"). Addressed the three remaining actionable items (additive commit).
+
+- **Accurate KV-downgrade diagnostics** (claude `supervisor.rs:616`). `push_flash_attn` now returns a
+  `FlashState` enum (`Active` / `BinaryUnsupported` / `UserDisabled`); `push_kv_cache` matches on it
+  so the warn distinguishes "this build has no `--flash-attn`" from "you turned flash attention off"
+  — previously both printed "build does not enable".
+- **No silent drop of an explicit `On`** (claude `supervisor.rs:581`). `(Unsupported, On)` now logs a
+  warn that the requested flag is unavailable and ignored, instead of returning `false` silently. New
+  test `build_args_drops_explicit_on_flash_when_binary_unsupported`.
+- **Sanitize before hot-apply** (codex + claude `lib.rs:479`). `set_settings` clamps the incoming
+  `Settings` once up front, so the `SidecarParams` handed to the live providers match the values
+  persisted to the DB; a direct IPC call with an out-of-range `sidecar_ctx_size` can no longer run the
+  raw value until restart.
+
+### Already addressed earlier in the round (replied + resolved)
+- Blocking `--help` syscall on the executor (claude `flags.rs:83`) — handled by the round-1
+  `spawn_blocking` wrap at the `probe_caps` call site.
+- Flash-attn `auto` treated as forced-on (codex, outdated thread) — handled by the round-1 Auto→`auto`
+  split.
+
+### Verification (verbatim)
+- Rust: `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings`
+  exit 0; `cargo test -p inference` **58 passed, 0 failed**; `cargo test --workspace` all crates **0
+  failed**.
+- No UI or IPC-type changes this round (no `ts-rs` regeneration; binding guard stays clean).
