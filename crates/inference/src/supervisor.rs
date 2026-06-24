@@ -569,8 +569,13 @@ fn build_args(spec: &ModelSpec, port: u16, caps: &SidecarCaps) -> Vec<String> {
 
 /// Appends the `--flash-attn` flag in whatever spelling the binary accepts and returns
 /// whether flash attention will be **active** (which gates KV-cache quantization).
-/// `Auto` resolves to on when the flag exists — we have already probed support, so
-/// enabling it is both the memory-optimal choice and what unlocks quantized KV.
+///
+/// On a value-taking binary the three settings map to distinct args: `Auto` emits
+/// `--flash-attn auto` (defer to llama.cpp's own readiness check), `On` emits
+/// `--flash-attn on` (force it), and `Off` emits `--flash-attn off`. `auto` resolves to
+/// on for every build that advertises the flag, so it still counts as active for the
+/// purpose of unlocking quantized KV. A legacy bare-switch binary has no `auto` spelling,
+/// so `Auto`/`On` both append the bare flag.
 fn push_flash_attn(args: &mut Vec<String>, kind: FlashAttnKind, setting: FlashAttnSetting) -> bool {
     match (kind, setting) {
         (FlashAttnKind::Unsupported, _) => false,
@@ -584,7 +589,12 @@ fn push_flash_attn(args: &mut Vec<String>, kind: FlashAttnKind, setting: FlashAt
             args.push("off".to_string());
             false
         }
-        (FlashAttnKind::EnumOnOffAuto, _) => {
+        (FlashAttnKind::EnumOnOffAuto, FlashAttnSetting::Auto) => {
+            args.push("--flash-attn".to_string());
+            args.push("auto".to_string());
+            true
+        }
+        (FlashAttnKind::EnumOnOffAuto, FlashAttnSetting::On) => {
             args.push("--flash-attn".to_string());
             args.push("on".to_string());
             true
@@ -604,6 +614,13 @@ fn push_kv_cache(args: &mut Vec<String>, caps: &SidecarCaps, kv: KvCacheType, fl
         tracing::warn!(
             "KV-cache quantization requires flash attention, which this llama-server \
              build does not enable; using the default f16 KV cache"
+        );
+        return;
+    }
+    if !caps.cache_type_k && !caps.cache_type_v {
+        tracing::warn!(
+            "KV-cache quantization is configured, but this llama-server build advertises \
+             neither --cache-type-k nor --cache-type-v; using the default f16 KV cache"
         );
         return;
     }
@@ -823,14 +840,34 @@ mod tests {
 
     #[test]
     fn build_args_emits_full_tuning_when_supported() {
-        // Modern binary + quantized KV + flash auto → all four flags, flash forced on.
+        // Modern binary + quantized KV + flash Auto → all four flags. Auto defers to
+        // llama.cpp (`--flash-attn auto`), which still counts as active for quantized KV.
         let mut s = spec(r"C:\m\a.gguf", None);
         s.ctx_size = 8192;
         let args = build_args(&s, 8080, &caps_full());
         assert_eq!(value_after(&args, "--ctx-size"), Some("8192"));
-        assert_eq!(value_after(&args, "--flash-attn"), Some("on"));
+        assert_eq!(value_after(&args, "--flash-attn"), Some("auto"));
         assert_eq!(value_after(&args, "--cache-type-k"), Some("q8_0"));
         assert_eq!(value_after(&args, "--cache-type-v"), Some("q8_0"));
+    }
+
+    #[test]
+    fn build_args_distinguishes_auto_from_on_flash_attn() {
+        // On a value-taking binary, `Auto` and `On` must produce distinct args so the
+        // setting is observable: Auto → `auto` (defer), On → `on` (force).
+        let mut auto = spec(r"C:\m\a.gguf", None);
+        auto.flash_attn = FlashAttnSetting::Auto;
+        assert_eq!(
+            value_after(&build_args(&auto, 8080, &caps_full()), "--flash-attn"),
+            Some("auto")
+        );
+
+        let mut on = spec(r"C:\m\a.gguf", None);
+        on.flash_attn = FlashAttnSetting::On;
+        let on_args = build_args(&on, 8080, &caps_full());
+        assert_eq!(value_after(&on_args, "--flash-attn"), Some("on"));
+        // Forcing flash on still unlocks quantized KV.
+        assert_eq!(value_after(&on_args, "--cache-type-v"), Some("q8_0"));
     }
 
     #[test]

@@ -448,7 +448,7 @@ export function Component() {
             min={0}
             value={draft.sidecar_ctx_size}
             onChange={intHandler("sidecar_ctx_size")}
-            hint={`Max tokens kept in memory. 0 = automatic (small, tuned per lane); lower = less VRAM, but too low can truncate long answers. ${APPLY_SIDECAR}`}
+            hint={`Max tokens kept in memory. 0 — or clearing the field — = automatic (small, tuned per lane); lower = less VRAM, but too low can truncate long answers. ${APPLY_SIDECAR}`}
           />
           <Select
             label="KV cache precision"

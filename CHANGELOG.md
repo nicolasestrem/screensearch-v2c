@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary's `--help` once at init; `build_args` emits only verified flags and silently degrades (e.g.
   drops KV quantization when flash attention is unavailable) rather than producing an arg list the
   binary would reject.
+- **Review-round hardening (PR #25):**
+  - `FlashAttnSetting::Auto` now emits `--flash-attn auto` (defer to llama.cpp) on value-taking
+    binaries instead of forcing `on`, so `Auto` and `On` are observably distinct; `On` still forces
+    `on`. Both keep flash active for the purpose of unlocking quantized KV.
+  - The `probe_caps` `--help` call (a blocking syscall) now runs on `spawn_blocking` so it never
+    parks the async executor, falling back to the conservative flag set if the task fails.
+  - `push_kv_cache` warns when quantization is configured but the binary advertises neither
+    `--cache-type-k` nor `--cache-type-v` (previously a silent f16 fallback).
+  - The `--flash-attn` capability probe also recognizes a parenthesised value set (`(on/off/auto)`).
 
 ### Fixed — Vision scheduler: configurable batch size + pending-job dedup (2026-06-24)
 - **The timer/idle vision batch size is now a setting.** It was a hardcoded `const BATCH = 20`, so

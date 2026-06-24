@@ -112,7 +112,7 @@ pub fn parse_caps(help: &str) -> SidecarCaps {
 /// `{on,off,auto}` / `[on|off|auto]`), marking the newer value-taking form. The token
 /// hints are specific enough not to match the bare-boolean line's prose.
 fn flash_line_takes_value(line: &str) -> bool {
-    const VALUE_HINTS: &[&str] = &["{on", "[on", "<on", "on,off", "on|off", "on/off"];
+    const VALUE_HINTS: &[&str] = &["{on", "[on", "<on", "(on", "on,off", "on|off", "on/off"];
     VALUE_HINTS.iter().any(|hint| line.contains(hint))
 }
 
@@ -133,6 +133,16 @@ mod tests {
         assert!(caps.cache_type_k);
         assert!(caps.cache_type_v);
         assert_eq!(caps.flash_attn_kind, FlashAttnKind::EnumOnOffAuto);
+    }
+
+    #[test]
+    fn parses_parenthesised_value_taking_flash_attn() {
+        // A future build could spell the value set with parentheses, e.g. `(on/off/auto)`.
+        let help = "  -fa, --flash-attn (on/off/auto)  set Flash Attention use (default: 'auto')";
+        assert_eq!(
+            parse_caps(help).flash_attn_kind,
+            FlashAttnKind::EnumOnOffAuto
+        );
     }
 
     #[test]

@@ -773,8 +773,15 @@ async fn init_inference(
     *sidecar_binary_slot.lock().expect("sidecar binary slot") = Some(binary.clone());
     reap_binaries.push(binary.clone());
     // Probe the bundled binary once so `build_args` only emits memory-tuning flags it
-    // actually accepts (the binary auto-updates to the latest llama.cpp release).
-    let caps = inference::probe_caps(&binary);
+    // actually accepts. The probe spawns `llama-server --help` (a blocking syscall), so it
+    // runs on a blocking pool rather than parking this async worker; on failure we fall
+    // back to the conservative caps (context-only) the probe itself would return.
+    // Probed once per process: the binary download path is idempotent (skip-if-present),
+    // so a running app keeps the same binary — and thus the same caps — until restart.
+    let binary_for_probe = binary.clone();
+    let caps = tokio::task::spawn_blocking(move || inference::probe_caps(&binary_for_probe))
+        .await
+        .unwrap_or_else(|_| inference::SidecarCaps::conservative());
     let config = SupervisorConfig {
         binary,
         reap_binaries,

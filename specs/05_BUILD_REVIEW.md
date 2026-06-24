@@ -1726,3 +1726,38 @@ $ git diff --exit-code -- ui/src/bindings
   unsupported; if a future Vulkan build accepts `--cache-type-k` in `--help` but rejects q8_0 K at
   model load, the escape hatch is the new `f16` KV setting. The live proof above used the currently
   bundled build, where q8_0 K+V loaded cleanly.
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning: PR #25 review round
+
+Addressed the actionable findings from the `@claude` and `@codex`/`gemini-code-assist` reviews on
+PR #25 (additive follow-up commit; no force-push, per ship-it).
+
+- **`FlashAttnSetting::Auto` now defers to llama.cpp** (`supervisor.rs::push_flash_attn`). On a
+  value-taking binary, `Auto` emits `--flash-attn auto` and `On` emits `--flash-attn on` — previously
+  both emitted `on`, making the two settings indistinguishable. `auto` still counts as flash-active
+  (it resolves to on for every build advertising the flag), so it keeps unlocking quantized KV. New
+  test `build_args_distinguishes_auto_from_on_flash_attn`.
+- **`probe_caps` no longer blocks the async executor** (`src-tauri/src/lib.rs::init_inference`). The
+  `llama-server --help` syscall runs on `tokio::task::spawn_blocking`, falling back to
+  `SidecarCaps::conservative()` if the join fails.
+- **Silent KV-quant fallback now warns** (`supervisor.rs::push_kv_cache`). When quantization is
+  configured but the binary advertises neither `--cache-type-k` nor `--cache-type-v`, it logs a warn
+  instead of silently dropping to f16.
+- **Probe recognizes a parenthesised value set** (`flags.rs::flash_line_takes_value`): added `(on` to
+  the value hints so a future `--flash-attn (on/off/auto)` help line is detected as value-taking. New
+  test `parses_parenthesised_value_taking_flash_attn`.
+- **Doc nit:** the Settings "Context size" hint now states that clearing the field also means auto.
+
+### Declined / not in this round
+- **Stale-caps-on-auto-update (nit):** documented as a code comment rather than re-probing on every
+  spawn — the binary download path is idempotent (skip-if-present), so a running app keeps one binary
+  (hence one cap set) until restart.
+
+### Verification (verbatim)
+- UI: `npm run lint` exit 0; `npm run build` exit 0 (`✓ built in 1.43s`).
+- Rust: `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings`
+  exit 0; `cargo test --workspace` all crates **0 failed**; `cargo test -p inference` **57 passed, 0
+  failed** (incl. the two new tests).
+- Binding guard: `git diff --exit-code -- ui/src/bindings` clean (no IPC type changes this round).
