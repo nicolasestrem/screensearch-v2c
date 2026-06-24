@@ -43,8 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`crates/inference/src/supervisor.rs`.)
 - **The binary-download network calls can't hang either.** `resolve_binary_url` (GitHub releases
   JSON) gained the same 15 s request timeout, and `http_get_bytes` (the multi-MB llama.cpp zip)
-  gained a 15 s **connect** timeout — fail-fast on a dead host without capping a slow-but-progressing
-  transfer. (`crates/inference/src/download.rs`.)
+  gained a 15 s **connect** timeout **plus a 30 s per-read-chunk `read_timeout`** — so a CDN that
+  accepts the socket then goes silent mid-transfer fails fast (the binary path has no separate
+  stall watchdog) without aborting a slow-but-progressing download. (`crates/inference/src/download.rs`.)
+- **A small `ctx_size` no longer breaks grounded Ask.** With a low `sidecar.ctx_size` (Settings
+  allows down to 512) the fixed 2048-token reply budget could reserve the *entire* window, so every
+  Ask dropped all retrieved snippets and answered "(no relevant snippets found)". The reply budget
+  is now capped to half the context window, leaving room for grounding; normal 4K/8K windows are
+  unaffected. (`crates/inference/src/answer.rs`.)
+- **A slow disk no longer makes a download falsely "stall".** Publishing a cached or
+  just-downloaded multi-GB blob into the clean layout is local disk I/O, but it ran under the 180 s
+  *network* stall watchdog — on a slow disk the copy could exceed it and report a spurious failure.
+  The watchdog now pauses its stall counter during the clean-layout copy phase. (`crates/inference/src/download.rs`.)
 - **Documented (not yet fixed):** a stall-abort can't cancel hf-hub 0.4.3's *detached* per-chunk
   tasks; the blast radius is bounded (committed-counter resume + per-lane serialization) and a real
   fix needs a cancellable downloader we own — tracked as known gap #46 (`specs/07_KNOWN_GAPS.md`).

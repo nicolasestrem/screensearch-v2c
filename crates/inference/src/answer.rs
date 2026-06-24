@@ -102,12 +102,15 @@ impl AnswerSidecar {
         let spec = self.ensure_spec().await?;
         let ctx_size = spec.ctx_size;
         let lease = self.supervisor.acquire(spec).await?;
-        let (messages, cited) = build_messages(query, context, ctx_size, opts.max_tokens);
+        // Cap the reply budget so a large requested `max_tokens` can't consume the whole
+        // context window and leave nothing for grounding snippets when `ctx_size` is small
+        // (the UI sends a fixed 2048, but Settings allows ctx down to 512). (Codex review.)
+        let max_tokens = effective_reply_budget(opts.max_tokens, ctx_size);
+        let (messages, cited) = build_messages(query, context, ctx_size, max_tokens);
 
         // Bridge the client's low-level SSE pieces onto the typed AnswerDelta stream.
         let (ptx, mut prx) = mpsc::channel::<StreamPiece>(64);
         let client = lease.client().clone();
-        let max_tokens = opts.max_tokens;
         let stream_task =
             tokio::spawn(async move { client.stream(messages, max_tokens, &ptx).await });
 
@@ -216,6 +219,15 @@ const ID_FRAMING_TOKENS: usize = 6;
 /// over-reserved (safe, with ample context still admitted) and worst-case CJK is covered.
 /// (Gemini/Claude/Codex review, PR #26.)
 const BYTES_PER_TOKEN: usize = 2;
+
+/// The reply token budget actually used. Caps a large requested `max_tokens` to half the
+/// context window so it can never reserve the *entire* window and force `build_messages` to
+/// drop all grounding snippets (the symptom: every Ask answers "(no relevant snippets
+/// found)"). For the normal 4K/8K windows the UI's 2048 is well under half and passes
+/// through unchanged; only a small `ctx_size` (Settings allows down to 512) shrinks it.
+fn effective_reply_budget(requested: u32, ctx_size: u32) -> u32 {
+    requested.min((ctx_size / 2).max(1))
+}
 
 /// Rough token estimate. Deliberately over-counts (see [`BYTES_PER_TOKEN`]) so the
 /// assembled prompt stays under the model's context window.
@@ -467,6 +479,19 @@ mod tests {
             user.len() < huge.len(),
             "the oversized chunk must be truncated"
         );
+    }
+
+    #[test]
+    fn reply_budget_leaves_room_for_grounding_in_a_small_context() {
+        // Ample window: the UI's 2048 is under half, so it passes through unchanged.
+        assert_eq!(effective_reply_budget(2048, 8192), 2048);
+        // Small window: capped to half so the prompt/context still has room.
+        assert_eq!(effective_reply_budget(2048, 2048), 1024);
+        assert!(effective_reply_budget(2048, 512) <= 256);
+        // With the cap, a small ctx still grounds instead of dropping every chunk.
+        let budget = effective_reply_budget(2048, 2048);
+        let (_, cited) = build_messages("q", &[chunk(1, "hello world")], 2048, budget);
+        assert_eq!(cited, vec![1], "grounding survives a small context window");
     }
 
     #[test]

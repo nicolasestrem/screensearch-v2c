@@ -12,7 +12,7 @@
 //! smoke (they are not exercised by `cargo test`).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,9 +33,9 @@ const PROGRESS_POLL: Duration = Duration::from_millis(750);
 /// hf-hub 0.4.3 builds its own `reqwest` client with **no** socket timeout and we run it
 /// with no retries, so a dead CDN connection would otherwise block `bytes_stream().next()`
 /// forever (the exact "download hanging" the partial 8B fetch hit). The partial is left on
-/// disk, so the next attempt resumes where this one stopped. The window is generous enough
-/// to span the post-download copy of a multi-GB blob into the clean layout (during which no
-/// new bytes are streamed).
+/// disk, so the next attempt resumes where this one stopped. The local clean-layout copy of a
+/// multi-GB blob (during which no new bytes are streamed) is *not* counted against this
+/// window — the watchdog pauses while the `copying` flag is set (see `run_download`).
 const STALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Timeout for small JSON API probes (the HF tree-API size lookup, the GitHub releases
@@ -48,6 +48,12 @@ const HTTP_API_TIMEOUT: Duration = Duration::from_secs(15);
 /// legitimately slow multi-MB transfer, so we only guard the *connect* phase — enough to
 /// fail fast on a dead host without capping a download that is actually making progress.
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Per-read-chunk timeout for the binary download body. Unlike a wall-clock `timeout`, this
+/// fails a connection that goes *silent* mid-transfer (CDN accepts the socket then stalls)
+/// without aborting a slow-but-progressing download — the binary path has no separate stall
+/// watchdog, so `resp.bytes().await` would otherwise hang `init_inference` forever.
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
@@ -375,6 +381,7 @@ async fn cleanup_partial_install(partial: PathBuf) {
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .read_timeout(HTTP_READ_TIMEOUT)
         .build()
         .context("build download http client")?;
     let resp = client
@@ -529,16 +536,29 @@ impl ModelDownloader {
             None,
         );
 
-        // Fetch on a child task so the watchdog can abort it on a stall.
+        // Fetch on a child task so the watchdog can abort it on a stall. `copying` flags the
+        // local clean-layout copy phases (publishing a cached/just-downloaded blob), which are
+        // disk I/O — not network — and can exceed the stall timeout on a slow disk for a
+        // multi-GB file. The watchdog pauses its stall counter while it is set.
         let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
         let task = {
             let cache_dir = cache_dir.clone();
             let dir = dir.clone();
             let repo_id = repo.repo_id.to_string();
             let needs_mmproj = repo.needs_mmproj;
             let downloaded = downloaded.clone();
+            let copying = copying.clone();
             tokio::spawn(async move {
-                download_repo_files(&cache_dir, &repo_id, needs_mmproj, &dir, downloaded).await
+                download_repo_files(
+                    &cache_dir,
+                    &repo_id,
+                    needs_mmproj,
+                    &dir,
+                    downloaded,
+                    copying,
+                )
+                .await
             })
         };
 
@@ -560,6 +580,14 @@ impl ModelDownloader {
                 total,
                 None,
             );
+            if copying.load(Ordering::Relaxed) {
+                // A local clean-layout copy is in progress — disk I/O, not a network
+                // transfer. Don't let the network stall watchdog fire on it (a multi-GB copy
+                // on a slow disk can outlast the timeout). Hold the counter steady.
+                last_seen = d;
+                stale = 0;
+                continue;
+            }
             (last_seen, stale) = stall_step(d, last_seen, stale);
             if stale >= limit {
                 task.abort();
@@ -677,6 +705,7 @@ async fn download_repo_files(
     needs_mmproj: bool,
     dir: &Path,
     downloaded: Arc<AtomicU64>,
+    copying: Arc<AtomicBool>,
 ) -> Result<()> {
     let api = ApiBuilder::new()
         .with_progress(false)
@@ -693,11 +722,29 @@ async fn download_repo_files(
     let (gguf, mmproj) = pick_gguf_files(&names, needs_mmproj);
 
     let gguf = gguf.with_context(|| format!("no GGUF weights found in {repo_id}"))?;
-    fetch_one(&repo_api, cache_dir, repo_id, &gguf, dir, &downloaded).await?;
+    fetch_one(
+        &repo_api,
+        cache_dir,
+        repo_id,
+        &gguf,
+        dir,
+        &downloaded,
+        &copying,
+    )
+    .await?;
 
     if needs_mmproj {
         let mmproj = mmproj.with_context(|| format!("no mmproj projector found in {repo_id}"))?;
-        fetch_one(&repo_api, cache_dir, repo_id, &mmproj, dir, &downloaded).await?;
+        fetch_one(
+            &repo_api,
+            cache_dir,
+            repo_id,
+            &mmproj,
+            dir,
+            &downloaded,
+            &copying,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -714,6 +761,7 @@ async fn fetch_one(
     filename: &str,
     dir: &Path,
     downloaded: &Arc<AtomicU64>,
+    copying: &Arc<AtomicBool>,
 ) -> Result<()> {
     let base = clean_base(filename);
     let dest = dir.join(base);
@@ -725,14 +773,18 @@ async fn fetch_one(
     }
 
     // A finalized blob already in the cache (a prior run downloaded it but never copied it
-    // into the clean layout): copy it — no network round-trip, no re-download.
+    // into the clean layout): copy it — no network round-trip, no re-download. The copy is
+    // disk I/O, so flag it so the network stall watchdog doesn't fire on a slow multi-GB copy.
     let cache = Cache::new(cache_dir.to_path_buf());
     if let Some(cached) = cache
         .repo(Repo::new(repo_id.to_string(), RepoType::Model))
         .get(filename)
     {
         let size = std::fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
-        place_in_clean_layout_async(cached, dir, base).await?;
+        copying.store(true, Ordering::Relaxed);
+        let placed = place_in_clean_layout_async(cached, dir, base).await;
+        copying.store(false, Ordering::Relaxed);
+        placed?;
         downloaded.fetch_add(size, Ordering::Relaxed);
         return Ok(());
     }
@@ -744,7 +796,12 @@ async fn fetch_one(
         .download_with_progress(filename, progress)
         .await
         .with_context(|| format!("download {filename}"))?;
-    place_in_clean_layout_async(cached, dir, base).await
+    // The streamed bytes are already counted; the publish copy is local I/O, so flag it to
+    // pause the stall watchdog rather than re-counting (which would push the bar past 100%).
+    copying.store(true, Ordering::Relaxed);
+    let placed = place_in_clean_layout_async(cached, dir, base).await;
+    copying.store(false, Ordering::Relaxed);
+    placed
 }
 
 /// Number of `poll`-interval watchdog ticks with no new bytes that constitutes a stall
