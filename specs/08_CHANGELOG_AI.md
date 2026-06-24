@@ -11,6 +11,33 @@
 
 ---
 
+## 2026-06-24 — Fix Quality (8B) vision download lock-race + storm (`release/v0.1.0`)
+- **Change:**
+  1. *Single-instance.* `src-tauri/src/lib.rs` registers `tauri-plugin-single-instance` (first plugin):
+     a 2nd launch focuses the running window and exits. New dep in `src-tauri/Cargo.toml`.
+  2. *Resilient downloader.* `crates/inference/src/download.rs` adds `download_with_lock_retry` — on
+     hf-hub `ApiError::LockAcquisition` it backs off (linear 2 s·attempt, ≤5 tries) and retries instead
+     of returning a hard error; `fetch_one` now routes through it. A `#[doc(hidden)]` diagnostics
+     entry + `examples/repro_8b.rs` reproduce contention out-of-app.
+- **Why:** User testing the v0.1.0 installer hit "Download failed: Qwen3VL-8B-Instruct-Q4_K_M.gguf" in a
+  loop. **Root cause (reproduced):** two concurrent app instances (relaunch/spam during testing — the
+  process list showed two `screensearch.exe`) share one app-data `.hf-cache`; hf-hub's per-blob
+  **advisory** lock lets the loser fail with `LockAcquisition` after ~5 s, and the vision scheduler
+  retried instantly → storm. The 8B suffered most (largest file → longest lock hold). A clean,
+  single-downloader fetch always works; a lock left by a *dead* process is OS-released (so stale locks
+  don't wedge a later run — verified). Single-instance removes the race; the backoff covers any residual
+  startup-overlap contention without storming.
+- **Verification:**
+  - Repro: two concurrent downloaders on one cache → one streams, the other dies in **5.29 s** with
+    `LockAcquisition` (the exact in-app symptom).
+  - Fix, downloader: with the backoff, the loser logs `backing off and retrying … attempt=1/2/3
+    backoff_secs=2/4/6` instead of hard-failing.
+  - Fix, single-instance: launching the rebuilt `target/release/screensearch.exe` twice leaves **1**
+    process (2nd launch `HasExited=True`).
+  - Gates: `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test --workspace`
+    124 passed / 0 failed; release `tauri build` re-emitted `ScreenSearch_0.1.0_x64-setup.exe` (11 MB).
+  - **Pending: user retest of the rebuilt installer** (fresh install → Quality 8B downloads to completion).
+
 ## 2026-06-24 — Release v0.1.0: standalone unsigned NSIS installer (`release/v0.1.0`)
 - **Change:**
   1. Version `0.0.0` → `0.1.0` across workspace `Cargo.toml`, `src-tauri/tauri.conf.json`, and root +

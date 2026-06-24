@@ -20,6 +20,9 @@ tempfile = "3"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
+# Single-instance guard: a second launch focuses the running window and exits, so two copies
+# never share the app-data dir (racing the SQLite DB + hf-hub model-cache locks). See specs/07 #26.
+tauri-plugin-single-instance = "2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

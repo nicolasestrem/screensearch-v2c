@@ -146,4 +146,11 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
   reputation) → **Certum Open Source Code Signing** (cheap annual cloud cert for OSS devs). Note:
   since 2023 all OV certs require a hardware token or cloud HSM, so a plain file-based cert is no
   longer available; budget for that. Decide owner before P5.
+- **TODO (0.1.1) — parallel model download.** The GGUF/mmproj fetch goes through `hf-hub` 0.4.3,
+  which downloads **single-stream**; HuggingFace's CDN throttles a single connection to ~20 MB/s, so
+  the ~5 GB Quality (8B) vision model takes a few minutes (slower than `hf` CLI / browsers that open
+  many parallel connections). Plan: a multi-connection **chunked downloader** (N parallel HTTP Range
+  requests → one pre-allocated file) wired into the existing progress/resume/stall/clean-layout path
+  in `crates/inference/src/download.rs`, to saturate the user's bandwidth. Deferred from v0.1.0 (works,
+  just slow); needs its own focused tests (resume, stall, partial integrity).
 - ~~esbuild `allow-scripts` postinstall~~ — **resolved** locally via `npm approve-scripts --all`.

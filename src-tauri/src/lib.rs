@@ -578,6 +578,17 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
 /// Application entry point (called from `main.rs`).
 pub fn run() {
     tauri::Builder::default()
+        // MUST be the first plugin. Users double-click or relaunch when nothing seems to be
+        // happening; without this a second instance runs against the *same* app-data dir and
+        // races the first — corrupting the SQLite DB and colliding on hf-hub's per-model cache
+        // lock (the ~5 s `LockAcquisition` download failure + retry storm we diagnosed). Instead,
+        // focus the existing window and let the second process exit.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             // Resolve the per-user app data dir from the bundle identifier and make
             // sure it (and the log dir) exist before we open anything in them.
@@ -1006,8 +1017,14 @@ fn dir_size(dir: &Path) -> std::io::Result<u64> {
 }
 
 fn list_devices_from_binary(binary: &Path) -> Result<Vec<String>, String> {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW: enumerating GPU devices for the Settings panel runs
+    // `llama-server --list-devices`, a console exe; without this flag it flashes a terminal
+    // window every time Settings opens. Mirrors `inference::flags`/`inference::process`.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = std::process::Command::new(binary)
         .arg("--list-devices")
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("run {} --list-devices: {e}", binary.display()))?;
     let combined = format!(

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use hf_hub::api::tokio::{ApiBuilder, ApiRepo, Progress};
+use hf_hub::api::tokio::{ApiBuilder, ApiError, ApiRepo, Progress};
 use hf_hub::{Cache, Repo, RepoType};
 use serde::Deserialize;
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
@@ -54,6 +54,17 @@ const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// without aborting a slow-but-progressing download — the binary path has no separate stall
 /// watchdog, so `resp.bytes().await` would otherwise hang `init_inference` forever.
 const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// hf-hub guards each cached blob with a per-file **advisory** lock and gives up after a few
+/// seconds with [`ApiError::LockAcquisition`] when another *live* downloader holds it. The app
+/// enforces single-instance (so this is rare) and serializes per lane in-process, but a brief
+/// old-instance→new-instance startup overlap could still race a fetch. Rather than surface a
+/// hard error — which the vision scheduler then retries in a tight loop (the observed "download
+/// storm") — we wait for the holder to release and re-attempt with linear backoff. A lock
+/// failure streams no bytes, so retrying never double-counts progress. (A lock left by a *dead*
+/// process is released by the OS, so this only ever waits on a genuinely live holder.)
+const LOCK_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+const LOCK_RETRY_MAX_ATTEMPTS: u32 = 5;
 
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
@@ -697,6 +708,9 @@ impl Progress for ByteCounter {
     async fn finish(&mut self) {}
 }
 
+// TODO(0.1.1, perf): hf-hub fetches single-stream (~20 MB/s, HF CDN throttles one connection).
+// Replace with a parallel chunked downloader (N HTTP Range requests -> one pre-allocated file) to
+// saturate bandwidth — tracked in specs/07_KNOWN_GAPS.md ("parallel model download").
 /// Resolves the repo's GGUF (+ same-repo mmproj for vision) and fetches each into the clean
 /// layout, accumulating real downloaded bytes into `downloaded` for the progress watchdog.
 async fn download_repo_files(
@@ -789,11 +803,7 @@ async fn fetch_one(
         return Ok(());
     }
 
-    let progress = ByteCounter {
-        downloaded: downloaded.clone(),
-    };
-    let cached = repo_api
-        .download_with_progress(filename, progress)
+    let cached = download_with_lock_retry(repo_api, filename, downloaded)
         .await
         .with_context(|| format!("download {filename}"))?;
     // The streamed bytes are already counted; the publish copy is local I/O, so flag it to
@@ -802,6 +812,63 @@ async fn fetch_one(
     let placed = place_in_clean_layout_async(cached, dir, base).await;
     copying.store(false, Ordering::Relaxed);
     placed
+}
+
+/// Downloads one repo file via hf-hub, retrying with linear backoff when another *live*
+/// downloader holds the per-blob advisory lock ([`ApiError::LockAcquisition`]) — the contention
+/// that surfaced as the ~5 s "download failed" + retry storm when two app instances raced the
+/// same model. Progress accrues into `downloaded`; a lock failure streams no bytes, so a retry
+/// never double-counts. Non-lock errors propagate immediately.
+async fn download_with_lock_retry(
+    repo_api: &ApiRepo,
+    filename: &str,
+    downloaded: &Arc<AtomicU64>,
+) -> std::result::Result<PathBuf, ApiError> {
+    let mut attempt: u32 = 0;
+    loop {
+        let progress = ByteCounter {
+            downloaded: downloaded.clone(),
+        };
+        match repo_api.download_with_progress(filename, progress).await {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                attempt += 1;
+                if matches!(e, ApiError::LockAcquisition(_)) && attempt < LOCK_RETRY_MAX_ATTEMPTS {
+                    let backoff = LOCK_RETRY_BACKOFF * attempt;
+                    tracing::warn!(
+                        filename,
+                        attempt,
+                        backoff_secs = backoff.as_secs(),
+                        "model file lock held by another download; backing off and retrying"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// Diagnostic entry point for `examples/repro_8b.rs` (not used by the app): download a single
+/// repo file into `cache_dir` with the same lock-contention backoff [`fetch_one`] uses, so the
+/// fix can be exercised under concurrent contention without driving the whole app.
+#[doc(hidden)]
+pub async fn download_file_with_lock_retry_for_diagnostics(
+    cache_dir: &Path,
+    repo_id: &str,
+    filename: &str,
+) -> Result<PathBuf> {
+    let api = ApiBuilder::new()
+        .with_progress(false)
+        .with_cache_dir(cache_dir.to_path_buf())
+        .build()
+        .context("build hf-hub api")?;
+    let repo_api = api.model(repo_id.to_string());
+    let downloaded = Arc::new(AtomicU64::new(0));
+    download_with_lock_retry(&repo_api, filename, &downloaded)
+        .await
+        .with_context(|| format!("download {filename}"))
 }
 
 /// Number of `poll`-interval watchdog ticks with no new bytes that constitutes a stall

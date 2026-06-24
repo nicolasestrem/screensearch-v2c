@@ -28,6 +28,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Everything below (P0–P5: capture, data spine, OCR/embeddings, vision + sidecar inference, the
   Command-Deck UI) is part of this first release.
 
+### Fixed — Quality (8B) vision download stuck in a retry storm (2026-06-24)
+- **Selecting the Quality vision tier could leave the model perpetually "downloading" / failing.**
+  Root cause (reproduced deterministically): nothing prevented a *second* app instance from running
+  against the **same** app-data dir — and users relaunch/spam when nothing seems to be happening — so
+  two processes raced hf-hub's per-model cache lock. The loser failed with `LockAcquisition` after
+  ~5 s and the vision scheduler retried instantly (a download "storm"); the largest model (8B) was the
+  most exposed because it holds the lock longest. Two complementary fixes:
+  - **Single-instance enforcement** (`tauri-plugin-single-instance`, registered first): a second
+    launch focuses the running window and exits, so only one ScreenSearch ever touches the SQLite DB
+    and the model cache (also prevents DB corruption / double-capture). (`src-tauri/src/lib.rs`.)
+  - **Resilient downloader**: a `LockAcquisition` during any residual contention now **backs off and
+    retries** (linear, bounded) instead of hard-failing into a storm. A lock left by a force-killed
+    process is released by the OS, so this only ever waits on a genuinely live holder.
+    (`crates/inference/src/download.rs`.)
+
+### Fixed — Settings opened a flashing console window (2026-06-24)
+- **Opening Settings briefly flashed a terminal window.** Enumerating GPU devices for the inference
+  panel ran `llama-server --list-devices` as a console process without Windows' `CREATE_NO_WINDOW`
+  flag, so a console flashed each time Settings opened (alarming, looks malware-ish). Now suppressed,
+  matching the sidecar/`probe_caps` spawns. (`src-tauri/src/lib.rs::list_devices_from_binary`.)
+
+### Known limitation — first-run model download speed (tracked for 0.1.1)
+- Models download **single-stream** via hf-hub (~20 MB/s; HuggingFace's CDN throttles single
+  connections), so the ~5 GB Quality vision model takes a few minutes. A parallel/chunked downloader
+  to saturate bandwidth is a tracked follow-up — see `specs/07_KNOWN_GAPS.md`.
+
 ### Added — Model-tier tooltips (2026-06-24)
 - **The Default / Quality / Beta tier buttons now show which model they map to** on hover and
   keyboard focus (e.g. Answer → Quality → "Qwen3-4B-Thinking"), so the tier names aren't opaque.
