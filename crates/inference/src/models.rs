@@ -11,10 +11,13 @@
 
 use std::path::{Path, PathBuf};
 
-pub use traits::{ModelLane, ModelTier};
+pub use traits::{FlashAttnSetting, KvCacheType, ModelLane, ModelTier, SidecarParams};
 
 /// A resolved model the supervisor can launch (`03 §6`). `mmproj_path` is `Some` only
-/// for the vision lane.
+/// for the vision lane. The memory-tuning fields (`ctx_size`, `kv_cache_type`,
+/// `flash_attn`) come from [`SidecarParams`] and feed the sidecar's argument list; they
+/// also participate in `needs_restart`, so changing one in Settings relaunches the
+/// sidecar on the next request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSpec {
     pub lane: ModelLane,
@@ -23,6 +26,21 @@ pub struct ModelSpec {
     pub mmproj_path: Option<PathBuf>,
     pub ngl: u32,
     pub device: Option<String>,
+    /// Resolved context window in tokens (never `0` — the auto sentinel is replaced
+    /// with the lane default in [`resolve_spec`]).
+    pub ctx_size: u32,
+    pub kv_cache_type: KvCacheType,
+    pub flash_attn: FlashAttnSetting,
+}
+
+/// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. Vision
+/// sends one image + a short (≤512-token) JSON reply; the answer lane carries ~8 RAG
+/// chunks + a streamed reply, so it gets a larger window.
+fn default_ctx_for(lane: ModelLane) -> u32 {
+    match lane {
+        ModelLane::Vision => 4096,
+        ModelLane::Answer => 8192,
+    }
 }
 
 /// The HuggingFace source for one `(lane, tier)` (`MODEL_REGISTRY §1/§2`).
@@ -137,8 +155,7 @@ pub fn resolve_spec(
     models_root: &Path,
     lane: ModelLane,
     tier: ModelTier,
-    ngl: u32,
-    device: Option<String>,
+    params: SidecarParams,
 ) -> Option<ModelSpec> {
     let dir = local_dir(models_root, lane, tier);
     let gguf_path = find_gguf(&dir)?;
@@ -147,19 +164,42 @@ pub fn resolve_spec(
     } else {
         None
     };
+    // `0` means "automatic" — substitute the lane-appropriate default here so the spec
+    // (and every downstream comparison / launch arg) always carries a concrete window.
+    let ctx_size = if params.ctx_size == 0 {
+        default_ctx_for(lane)
+    } else {
+        params.ctx_size
+    };
     Some(ModelSpec {
         lane,
         tier,
         gguf_path,
         mmproj_path,
-        ngl,
-        device,
+        ngl: params.ngl,
+        device: params.device,
+        ctx_size,
+        kv_cache_type: params.kv_cache_type,
+        flash_attn: params.flash_attn,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A [`SidecarParams`] with the given `ngl`/`device` and otherwise-default tuning
+    /// (auto context, q8_0 KV, auto flash) — the test analogue of the old `(ngl, device)`
+    /// call shape.
+    fn params(ngl: u32, device: Option<&str>) -> SidecarParams {
+        SidecarParams {
+            ngl,
+            device: device.map(str::to_string),
+            ctx_size: 0,
+            kv_cache_type: KvCacheType::Q8_0,
+            flash_attn: FlashAttnSetting::Auto,
+        }
+    }
 
     /// Unique temp dir for a test (no external tempfile dep).
     fn temp_dir(tag: &str) -> PathBuf {
@@ -217,10 +257,22 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         touch(&dir.join("model-Q4_K_M.gguf"));
         // No mmproj yet → incomplete, must not resolve.
-        assert!(resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99, None).is_none());
+        assert!(resolve_spec(
+            &root,
+            ModelLane::Vision,
+            ModelTier::Default,
+            params(99, None)
+        )
+        .is_none());
 
         touch(&dir.join("mmproj-model.gguf"));
-        let spec = resolve_spec(&root, ModelLane::Vision, ModelTier::Default, 99, None).unwrap();
+        let spec = resolve_spec(
+            &root,
+            ModelLane::Vision,
+            ModelTier::Default,
+            params(99, None),
+        )
+        .unwrap();
         assert!(spec.mmproj_path.is_some());
         assert_eq!(spec.ngl, 99);
 
@@ -234,7 +286,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         touch(&dir.join("Ministral-3-3B-Reasoning-Q4_K_M.gguf"));
 
-        let spec = resolve_spec(&root, ModelLane::Answer, ModelTier::Default, 50, None).unwrap();
+        let spec = resolve_spec(
+            &root,
+            ModelLane::Answer,
+            ModelTier::Default,
+            params(50, None),
+        )
+        .unwrap();
         assert!(spec.mmproj_path.is_none());
         assert_eq!(spec.lane, ModelLane::Answer);
 
@@ -252,12 +310,54 @@ mod tests {
             &root,
             ModelLane::Answer,
             ModelTier::Default,
-            99,
-            Some("Vulkan0".to_string()),
+            params(99, Some("Vulkan0")),
         )
         .unwrap();
 
         assert_eq!(spec.device.as_deref(), Some("Vulkan0"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn auto_ctx_size_resolves_per_lane_and_override_passes_through() {
+        let root = temp_dir("ctx");
+        let vdir = local_dir(&root, ModelLane::Vision, ModelTier::Default);
+        let adir = local_dir(&root, ModelLane::Answer, ModelTier::Default);
+        std::fs::create_dir_all(&vdir).unwrap();
+        std::fs::create_dir_all(&adir).unwrap();
+        touch(&vdir.join("vision-Q4_K_M.gguf"));
+        touch(&vdir.join("mmproj-vision.gguf"));
+        touch(&adir.join("answer-Q4_K_M.gguf"));
+
+        // 0 = auto: vision and answer get their distinct lane defaults.
+        let v = resolve_spec(
+            &root,
+            ModelLane::Vision,
+            ModelTier::Default,
+            params(99, None),
+        )
+        .unwrap();
+        let a = resolve_spec(
+            &root,
+            ModelLane::Answer,
+            ModelTier::Default,
+            params(99, None),
+        )
+        .unwrap();
+        assert_eq!(v.ctx_size, 4096, "vision auto ctx");
+        assert_eq!(a.ctx_size, 8192, "answer auto ctx");
+        // The tuning fields are carried through unchanged.
+        assert_eq!(v.kv_cache_type, KvCacheType::Q8_0);
+        assert_eq!(v.flash_attn, FlashAttnSetting::Auto);
+
+        // A non-zero value overrides both lanes.
+        let mut p = params(99, None);
+        p.ctx_size = 2048;
+        let v2 = resolve_spec(&root, ModelLane::Vision, ModelTier::Default, p.clone()).unwrap();
+        let a2 = resolve_spec(&root, ModelLane::Answer, ModelTier::Default, p).unwrap();
+        assert_eq!(v2.ctx_size, 2048);
+        assert_eq!(a2.ctx_size, 2048);
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

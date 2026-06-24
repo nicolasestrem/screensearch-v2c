@@ -67,6 +67,9 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         sidecar_idle_ttl_secs: num(store, "sidecar.idle_ttl_secs", d.sidecar_idle_ttl_secs).await,
         sidecar_ngl: num(store, "sidecar.ngl", d.sidecar_ngl).await,
         sidecar_device: json(store, "sidecar.device", d.sidecar_device).await,
+        sidecar_ctx_size: num(store, "sidecar.ctx_size", d.sidecar_ctx_size).await,
+        sidecar_kv_cache_type: json(store, "sidecar.kv_cache_type", d.sidecar_kv_cache_type).await,
+        sidecar_flash_attn: json(store, "sidecar.flash_attn", d.sidecar_flash_attn).await,
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
@@ -163,6 +166,15 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "sidecar.device".into(),
             serde_json::to_string(&s.sidecar_device)?,
         ),
+        ("sidecar.ctx_size".into(), s.sidecar_ctx_size.to_string()),
+        (
+            "sidecar.kv_cache_type".into(),
+            serde_json::to_string(&s.sidecar_kv_cache_type)?,
+        ),
+        (
+            "sidecar.flash_attn".into(),
+            serde_json::to_string(&s.sidecar_flash_attn)?,
+        ),
         (
             "privacy.excluded_apps".into(),
             serde_json::to_string(&s.privacy_excluded_apps)?,
@@ -191,6 +203,13 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.enrich_vision_batch_size = clamp_u32(s.enrich_vision_batch_size, 1, 500);
     s.sidecar_idle_ttl_secs = clamp_u32(s.sidecar_idle_ttl_secs, 0, 86_400);
     s.sidecar_ngl = clamp_u32(s.sidecar_ngl, 0, 999);
+    // 0 is the "automatic" sentinel (per-lane default chosen at resolution); any other
+    // value is a real context window, clamped to a sane band.
+    s.sidecar_ctx_size = if s.sidecar_ctx_size == 0 {
+        0
+    } else {
+        clamp_u32(s.sidecar_ctx_size, 512, 32_768)
+    };
     s.sidecar_device = s
         .sidecar_device
         .and_then(|d| (!d.trim().is_empty()).then(|| d.trim().to_string()));

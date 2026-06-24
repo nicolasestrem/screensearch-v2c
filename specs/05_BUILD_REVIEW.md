@@ -1673,3 +1673,123 @@ $ git diff --exit-code -- ui/src/bindings
   dead-job loop, the missing index, and the read-then-insert race were all real.
 - **Broke / regressed:** None. The v2 migration is forward-only (`schema_version` 1→2); existing DBs
   add the index on next open.
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning + user settings (`feat/sidecar-memory-tuning` branch)
+
+### Implemented (with verbatim verification)
+- **Pinned context + KV quantization + flash attention for the sidecar.** `build_args`
+  (`crates/inference/src/supervisor.rs`) now emits `--ctx-size`, `--flash-attn`, and
+  `--cache-type-k/-v`, gated by a one-shot `--help` capability probe (`crates/inference/src/flags.rs`,
+  `probe_caps`/`parse_caps`) so only flags the bundled (auto-updating) Vulkan binary accepts are
+  passed; quantized KV is emitted only when flash attention ends up active. New
+  `traits::SidecarParams` (built from `Settings`) threads `ngl/device/ctx_size/kv_cache_type/
+  flash_attn` through both providers → `models::resolve_spec` (substitutes the `0 = auto` context
+  sentinel with vision 4096 / answer 8192) → `ModelSpec` → `build_args`, and the new fields join
+  `needs_restart` so a settings change relaunches on the next request. Three new `Settings` fields
+  (`sidecar_ctx_size`, `sidecar_kv_cache_type: KvCacheType`, `sidecar_flash_attn: FlashAttnSetting`)
+  are wired through `kernel::settings` load/save/sanitize and the Settings → Sidecar UI panel.
+- **Automated gates:**
+  ```text
+  cargo fmt --all -- --check                              → exit 0
+  cargo clippy --workspace --all-targets -- -D warnings   → exit 0
+  cargo build --workspace                                 → Finished (exit 0)
+  cargo test --workspace                                  → all suites ok (exit 0)
+  cd ui && npm run lint && npm run build                  → eslint 0; tsc+vite built (exit 0)
+  git diff ui/src/bindings → Settings.ts updated + KvCacheType.ts / FlashAttnSetting.ts generated
+  ```
+- **Live GPU proof** (RTX 5060 Ti, bundled Vulkan `llama-server` build 9754, default answer model,
+  baseline VRAM 1660 MiB):
+  ```text
+  Untuned (old args  --model M -ngl 99):  n_ctx_seq 118272  → peak VRAM 14082 MiB
+  Tuned (--ctx-size 8192 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0):
+                                          n_ctx_seq   8192  → peak VRAM  4253 MiB
+  → ~9.8 GB / ~70% reduction; sidecar exited cleanly, VRAM returned to 1660 MiB.
+  ```
+
+### Skipped / deferred (explicitly out of the approved plan)
+- **Embedder idle-unload** (RAM lever): the ~0.5–1 GB resident fastembed model stays loaded — the
+  user chose a VRAM-only scope.
+- **`--parallel 1`**: `llama-server` auto-picks `n_parallel = 4` but with `kv_unified = true`, so the
+  shared KV pool is sized by context, not multiplied by slots; context pinning already captures the
+  win. Noted as a possible future lever.
+- **`--batch/--ubatch`, `--no-mmap`/`--mlock`**: throughput trade or wrong direction for RAM.
+
+### Hallucinated / corrected
+- None. The root cause was confirmed against the real binary: its `--ctx-size` help reads
+  `(default: 0, 0 = loaded from model)` and the default models report `n_ctx_train = 262144`, so the
+  untuned launch genuinely allocated a ~118 k-token KV cache.
+
+### Still risky
+- KV quantization is gated behind flash attention and the `--help` probe, and degrades to f16 if
+  unsupported; if a future Vulkan build accepts `--cache-type-k` in `--help` but rejects q8_0 K at
+  model load, the escape hatch is the new `f16` KV setting. The live proof above used the currently
+  bundled build, where q8_0 K+V loaded cleanly.
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning: PR #25 review round
+
+Addressed the actionable findings from the `@claude` and `@codex`/`gemini-code-assist` reviews on
+PR #25 (additive follow-up commit; no force-push, per ship-it).
+
+- **`FlashAttnSetting::Auto` now defers to llama.cpp** (`supervisor.rs::push_flash_attn`). On a
+  value-taking binary, `Auto` emits `--flash-attn auto` and `On` emits `--flash-attn on` — previously
+  both emitted `on`, making the two settings indistinguishable. `auto` still counts as flash-active
+  (it resolves to on for every build advertising the flag), so it keeps unlocking quantized KV. New
+  test `build_args_distinguishes_auto_from_on_flash_attn`.
+- **`probe_caps` no longer blocks the async executor** (`src-tauri/src/lib.rs::init_inference`). The
+  `llama-server --help` syscall runs on `tokio::task::spawn_blocking`, falling back to
+  `SidecarCaps::conservative()` if the join fails.
+- **Silent KV-quant fallback now warns** (`supervisor.rs::push_kv_cache`). When quantization is
+  configured but the binary advertises neither `--cache-type-k` nor `--cache-type-v`, it logs a warn
+  instead of silently dropping to f16.
+- **Probe recognizes a parenthesised value set** (`flags.rs::flash_line_takes_value`): added `(on` to
+  the value hints so a future `--flash-attn (on/off/auto)` help line is detected as value-taking. New
+  test `parses_parenthesised_value_taking_flash_attn`.
+- **Doc nit:** the Settings "Context size" hint now states that clearing the field also means auto.
+
+### Declined / not in this round
+- **Stale-caps-on-auto-update (nit):** documented as a code comment rather than re-probing on every
+  spawn — the binary download path is idempotent (skip-if-present), so a running app keeps one binary
+  (hence one cap set) until restart.
+
+### Verification (verbatim)
+- UI: `npm run lint` exit 0; `npm run build` exit 0 (`✓ built in 1.43s`).
+- Rust: `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings`
+  exit 0; `cargo test --workspace` all crates **0 failed**; `cargo test -p inference` **57 passed, 0
+  failed** (incl. the two new tests).
+- Binding guard: `git diff --exit-code -- ui/src/bindings` clean (no IPC type changes this round).
+
+---
+
+## Pass — 2026-06-24 — Sidecar memory tuning: PR #25 review round 2
+
+Second review pass: `@codex` (`chatgpt-codex-connector`) posted inline findings and `@claude`'s
+follow-up verified round 1 and surfaced two more diagnostic gaps. `gemini-code-assist` approved
+("ready for merge"). Addressed the three remaining actionable items (additive commit).
+
+- **Accurate KV-downgrade diagnostics** (claude `supervisor.rs:616`). `push_flash_attn` now returns a
+  `FlashState` enum (`Active` / `BinaryUnsupported` / `UserDisabled`); `push_kv_cache` matches on it
+  so the warn distinguishes "this build has no `--flash-attn`" from "you turned flash attention off"
+  — previously both printed "build does not enable".
+- **No silent drop of an explicit `On`** (claude `supervisor.rs:581`). `(Unsupported, On)` now logs a
+  warn that the requested flag is unavailable and ignored, instead of returning `false` silently. New
+  test `build_args_drops_explicit_on_flash_when_binary_unsupported`.
+- **Sanitize before hot-apply** (codex + claude `lib.rs:479`). `set_settings` clamps the incoming
+  `Settings` once up front, so the `SidecarParams` handed to the live providers match the values
+  persisted to the DB; a direct IPC call with an out-of-range `sidecar_ctx_size` can no longer run the
+  raw value until restart.
+
+### Already addressed earlier in the round (replied + resolved)
+- Blocking `--help` syscall on the executor (claude `flags.rs:83`) — handled by the round-1
+  `spawn_blocking` wrap at the `probe_caps` call site.
+- Flash-attn `auto` treated as forced-on (codex, outdated thread) — handled by the round-1 Auto→`auto`
+  split.
+
+### Verification (verbatim)
+- Rust: `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D warnings`
+  exit 0; `cargo test -p inference` **58 passed, 0 failed**; `cargo test --workspace` all crates **0
+  failed**.
+- No UI or IPC-type changes this round (no `ts-rs` regeneration; binding guard stays clean).

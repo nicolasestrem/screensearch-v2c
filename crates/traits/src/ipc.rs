@@ -207,6 +207,80 @@ pub enum ModelTier {
     Beta,
 }
 
+/// KV-cache element type for the llama.cpp sidecar (`--cache-type-k`/`--cache-type-v`).
+/// Lower precision shrinks the on-GPU KV cache (less VRAM) for a small quality cost.
+/// `Q8_0` is a near-lossless default; `F16` is the no-compromise escape hatch; `Q4_0`
+/// is the smallest. The `#[serde(rename)]`s pin the wire/TS strings to the exact tokens
+/// `llama-server` expects, so a stored value is also the launch-arg value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum KvCacheType {
+    #[serde(rename = "f16")]
+    F16,
+    #[serde(rename = "q8_0")]
+    Q8_0,
+    #[serde(rename = "q4_0")]
+    Q4_0,
+}
+
+impl KvCacheType {
+    /// The `--cache-type-k`/`--cache-type-v` argument value llama.cpp expects.
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            KvCacheType::F16 => "f16",
+            KvCacheType::Q8_0 => "q8_0",
+            KvCacheType::Q4_0 => "q4_0",
+        }
+    }
+
+    /// Whether this is a quantized (non-`f16`) cache type. Quantized KV requires flash
+    /// attention, so the sidecar only emits `--cache-type-*` for a quantized type when
+    /// flash attention is active.
+    pub fn is_quantized(self) -> bool {
+        !matches!(self, KvCacheType::F16)
+    }
+}
+
+/// Flash-attention mode for the llama.cpp sidecar (`--flash-attn`). `Auto` follows what
+/// the bundled binary supports (it resolves to on when the flag exists, off otherwise);
+/// `On`/`Off` force the choice. Flash attention reduces the attention compute buffer and
+/// is a prerequisite for quantized KV cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum FlashAttnSetting {
+    Auto,
+    On,
+    Off,
+}
+
+/// The llama.cpp launch knobs derived from [`Settings`], threaded to both inference
+/// providers and on into the sidecar's argument list. Bundled into one struct so adding
+/// a knob does not ripple through every provider/`resolve_spec` signature. Not an IPC
+/// type (constructed in the core from [`Settings`]), so it carries no `ts-rs` derive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarParams {
+    pub ngl: u32,
+    pub device: Option<String>,
+    /// `0` = automatic (a per-lane default chosen at model resolution); otherwise the
+    /// shared context-window override for both lanes.
+    pub ctx_size: u32,
+    pub kv_cache_type: KvCacheType,
+    pub flash_attn: FlashAttnSetting,
+}
+
+impl From<&Settings> for SidecarParams {
+    fn from(s: &Settings) -> Self {
+        Self {
+            ngl: s.sidecar_ngl,
+            device: s.sidecar_device.clone(),
+            ctx_size: s.sidecar_ctx_size,
+            kv_cache_type: s.sidecar_kv_cache_type,
+            flash_attn: s.sidecar_flash_attn,
+        }
+    }
+}
+
 /// Input to `set_model_tier`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
@@ -263,6 +337,16 @@ pub struct Settings {
     pub sidecar_idle_ttl_secs: u32,
     pub sidecar_ngl: u32,
     pub sidecar_device: Option<String>,
+    /// Sidecar context window in tokens (`--ctx-size`). `0` = automatic: a small
+    /// per-lane default (vision 4096, answer 8192). A non-zero value overrides both
+    /// lanes. Lower = less VRAM (smaller KV cache); too low can truncate long answers.
+    pub sidecar_ctx_size: u32,
+    /// KV-cache precision (`--cache-type-k`/`--cache-type-v`). A quantized cache uses
+    /// less VRAM and is applied only when flash attention is active.
+    pub sidecar_kv_cache_type: KvCacheType,
+    /// Flash-attention mode (`--flash-attn`). Reduces attention memory and unlocks KV
+    /// quantization; `Auto` enables it when the bundled binary supports it.
+    pub sidecar_flash_attn: FlashAttnSetting,
     pub privacy_excluded_apps: Vec<String>,
     pub privacy_pause_on_lock: bool,
 }
@@ -293,6 +377,15 @@ impl Default for Settings {
             sidecar_idle_ttl_secs: 180,
             sidecar_ngl: 99,
             sidecar_device: None,
+            // Memory-tuning defaults (balanced): pin a small per-lane context (0 =
+            // auto → vision 4096 / answer 8192), quantize the KV cache to q8_0, and let
+            // flash attention turn on where the bundled llama.cpp build supports it.
+            // Together these cut VRAM well below the uncontrolled-context default with
+            // no expected quality loss; the f16 / larger-context escape hatches let a
+            // user trade memory back for quality.
+            sidecar_ctx_size: 0,
+            sidecar_kv_cache_type: KvCacheType::Q8_0,
+            sidecar_flash_attn: FlashAttnSetting::Auto,
             privacy_excluded_apps: vec![
                 "1Password".to_string(),
                 "KeePass".to_string(),

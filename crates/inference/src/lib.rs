@@ -18,6 +18,7 @@ pub use traits::{AnswerProvider, VisionProvider};
 
 pub mod client;
 pub mod download;
+pub mod flags;
 pub mod models;
 
 #[cfg(windows)]
@@ -30,6 +31,9 @@ pub mod process;
 pub mod supervisor;
 #[cfg(windows)]
 pub mod vision;
+
+/// Sidecar flag-capability probe (used by the composition root to tune `build_args`).
+pub use flags::{probe_caps, FlashAttnKind, SidecarCaps};
 
 // The composition root (`src-tauri`) wires these concrete impls (`03 §2`).
 #[cfg(windows)]

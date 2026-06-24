@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use tokio::sync::{broadcast, Mutex, OwnedSemaphorePermit, Semaphore};
-use traits::{SidecarState, SidecarStatus};
+use traits::{FlashAttnSetting, KvCacheType, SidecarState, SidecarStatus};
 
 use crate::client::SidecarClient;
+use crate::flags::{FlashAttnKind, SidecarCaps};
 use crate::job_object::JobObject;
 use crate::models::ModelSpec;
 use crate::process;
@@ -51,6 +52,10 @@ pub struct SupervisorConfig {
     pub idle_ttl: Duration,
     /// Max time to wait for `/health` after a spawn before declaring failure.
     pub health_timeout: Duration,
+    /// Which memory-tuning flags the bundled `llama-server` accepts (probed once at
+    /// init). `build_args` consults this so it only emits flags the binary understands —
+    /// the binary auto-updates to the latest release, so its flag set is not fixed.
+    pub caps: SidecarCaps,
 }
 
 /// A currently-running sidecar process and the client bound to it.
@@ -365,7 +370,7 @@ impl ModelSupervisor {
     /// waits for `/health`. On any failure the child is killed so nothing leaks.
     async fn spawn_for(&self, spec: &ModelSpec) -> Result<SidecarProcess> {
         let port = free_port().context("allocate sidecar port")?;
-        let args = build_args(spec, port);
+        let args = build_args(spec, port, &self.config.caps);
         self.emit(SidecarState::Starting, Some(model_label(spec)));
 
         let child = process::spawn_suspended(&self.config.binary, &args)
@@ -462,6 +467,9 @@ pub fn needs_restart(running: &ModelSpec, requested: &ModelSpec) -> bool {
         || running.mmproj_path != requested.mmproj_path
         || running.ngl != requested.ngl
         || running.device != requested.device
+        || running.ctx_size != requested.ctx_size
+        || running.kv_cache_type != requested.kv_cache_type
+        || running.flash_attn != requested.flash_attn
 }
 
 /// Pure idle predicate (extracted for testing): idle once `elapsed >= ttl`.
@@ -525,8 +533,11 @@ fn paths_eq(a: &Path, b: &Path) -> bool {
 }
 
 /// The launch arguments for `llama-server` (`MODEL_REGISTRY §4`): model + host/port +
-/// GPU offload, plus the same-repo projector on the vision lane.
-fn build_args(spec: &ModelSpec, port: u16) -> Vec<String> {
+/// GPU offload, plus the same-repo projector on the vision lane, plus the memory-tuning
+/// flags (`--ctx-size`, `--flash-attn`, `--cache-type-k/-v`) — but only those `caps`
+/// reports the bundled binary actually accepts, so a future auto-updated build that
+/// renames or drops a flag degrades gracefully instead of failing to spawn.
+fn build_args(spec: &ModelSpec, port: u16, caps: &SidecarCaps) -> Vec<String> {
     let mut args = vec![
         "--model".to_string(),
         spec.gguf_path.to_string_lossy().into_owned(),
@@ -545,7 +556,118 @@ fn build_args(spec: &ModelSpec, port: u16) -> Vec<String> {
         args.push("--device".to_string());
         args.push(device.clone());
     }
+    // Pin the context window (the dominant VRAM lever). `spec.ctx_size` is already the
+    // resolved value (the auto sentinel was substituted in `resolve_spec`).
+    if caps.ctx_size {
+        args.push("--ctx-size".to_string());
+        args.push(spec.ctx_size.to_string());
+    }
+    let flash = push_flash_attn(&mut args, caps.flash_attn_kind, spec.flash_attn);
+    push_kv_cache(&mut args, caps, spec.kv_cache_type, flash);
     args
+}
+
+/// Whether flash attention ends up active and, when it doesn't, *why* — so a quantized-KV
+/// downgrade can be diagnosed accurately (a binary limitation vs. the user's own choice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlashState {
+    /// Flash attention will be on — quantized KV is safe to emit.
+    Active,
+    /// The binary has no `--flash-attn` flag, so it can't be enabled.
+    BinaryUnsupported,
+    /// The binary supports it, but the user set `FlashAttnSetting::Off`.
+    UserDisabled,
+}
+
+/// Appends the `--flash-attn` flag in whatever spelling the binary accepts and reports the
+/// resulting [`FlashState`] (which gates KV-cache quantization).
+///
+/// On a value-taking binary the three settings map to distinct args: `Auto` emits
+/// `--flash-attn auto` (defer to llama.cpp's own readiness check), `On` emits
+/// `--flash-attn on` (force it), and `Off` emits `--flash-attn off`. `auto` resolves to
+/// on for every build that advertises the flag, so it still counts as active for the
+/// purpose of unlocking quantized KV. A legacy bare-switch binary has no `auto` spelling,
+/// so `Auto`/`On` both append the bare flag. When the binary lacks the flag entirely an
+/// explicit `On` is warned about (the user asked for something unavailable) rather than
+/// dropped silently.
+fn push_flash_attn(
+    args: &mut Vec<String>,
+    kind: FlashAttnKind,
+    setting: FlashAttnSetting,
+) -> FlashState {
+    match (kind, setting) {
+        (FlashAttnKind::Unsupported, FlashAttnSetting::On) => {
+            tracing::warn!(
+                "flash attention was explicitly enabled in settings, but this llama-server \
+                 build does not support --flash-attn; the setting is ignored"
+            );
+            FlashState::BinaryUnsupported
+        }
+        (FlashAttnKind::Unsupported, _) => FlashState::BinaryUnsupported,
+        (FlashAttnKind::BoolFlag, FlashAttnSetting::Off) => FlashState::UserDisabled,
+        (FlashAttnKind::BoolFlag, _) => {
+            args.push("--flash-attn".to_string());
+            FlashState::Active
+        }
+        (FlashAttnKind::EnumOnOffAuto, FlashAttnSetting::Off) => {
+            args.push("--flash-attn".to_string());
+            args.push("off".to_string());
+            FlashState::UserDisabled
+        }
+        (FlashAttnKind::EnumOnOffAuto, FlashAttnSetting::Auto) => {
+            args.push("--flash-attn".to_string());
+            args.push("auto".to_string());
+            FlashState::Active
+        }
+        (FlashAttnKind::EnumOnOffAuto, FlashAttnSetting::On) => {
+            args.push("--flash-attn".to_string());
+            args.push("on".to_string());
+            FlashState::Active
+        }
+    }
+}
+
+/// Appends `--cache-type-k`/`--cache-type-v` only for a quantized type **and** only when
+/// flash attention is active (quantized KV requires it). `f16` (the llama.cpp default) is
+/// left implicit, and a quantized request without flash attention degrades to that
+/// default with a warning — phrased to match *why* flash is off — rather than producing an
+/// arg list the binary would reject.
+fn push_kv_cache(args: &mut Vec<String>, caps: &SidecarCaps, kv: KvCacheType, flash: FlashState) {
+    if !kv.is_quantized() {
+        return; // f16 is the default; nothing to pass.
+    }
+    match flash {
+        FlashState::Active => {}
+        FlashState::BinaryUnsupported => {
+            tracing::warn!(
+                "KV-cache quantization requires flash attention, which this llama-server \
+                 build does not support; using the default f16 KV cache"
+            );
+            return;
+        }
+        FlashState::UserDisabled => {
+            tracing::warn!(
+                "KV-cache quantization requires flash attention, which is turned off in \
+                 settings; using the default f16 KV cache"
+            );
+            return;
+        }
+    }
+    if !caps.cache_type_k && !caps.cache_type_v {
+        tracing::warn!(
+            "KV-cache quantization is configured, but this llama-server build advertises \
+             neither --cache-type-k nor --cache-type-v; using the default f16 KV cache"
+        );
+        return;
+    }
+    if caps.cache_type_k {
+        args.push("--cache-type-k".to_string());
+        args.push(kv.as_arg().to_string());
+    }
+    if caps.cache_type_v {
+        args.push("--cache-type-v".to_string());
+        args.push(kv.as_arg().to_string());
+    }
 }
 
 /// A short label (the GGUF filename) for status events.
@@ -581,7 +703,28 @@ mod tests {
             mmproj_path: mmproj.map(PathBuf::from),
             ngl: 99,
             device: None,
+            ctx_size: 4096,
+            kv_cache_type: KvCacheType::Q8_0,
+            flash_attn: FlashAttnSetting::Auto,
         }
+    }
+
+    /// Caps for a modern binary that advertises every memory-tuning flag with a
+    /// value-taking `--flash-attn`.
+    fn caps_full() -> SidecarCaps {
+        SidecarCaps {
+            ctx_size: true,
+            cache_type_k: true,
+            cache_type_v: true,
+            flash_attn_kind: FlashAttnKind::EnumOnOffAuto,
+        }
+    }
+
+    /// Returns the value following `flag` in an arg list, if present.
+    fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.windows(2)
+            .find(|w| w[0] == flag)
+            .map(|w| w[1].as_str())
     }
 
     #[test]
@@ -685,14 +828,35 @@ mod tests {
     }
 
     #[test]
+    fn restart_on_tuning_change() {
+        let base = spec(r"C:\m\a.gguf", None);
+
+        let mut ctx = base.clone();
+        ctx.ctx_size = 2048;
+        assert!(needs_restart(&base, &ctx), "ctx_size change → restart");
+
+        let mut kv = base.clone();
+        kv.kv_cache_type = KvCacheType::F16;
+        assert!(needs_restart(&base, &kv), "kv_cache_type change → restart");
+
+        let mut fa = base.clone();
+        fa.flash_attn = FlashAttnSetting::Off;
+        assert!(needs_restart(&base, &fa), "flash_attn change → restart");
+    }
+
+    #[test]
     fn build_args_adds_mmproj_only_for_vision() {
-        let answer = build_args(&spec(r"C:\m\a.gguf", None), 8080);
+        let answer = build_args(&spec(r"C:\m\a.gguf", None), 8080, &caps_full());
         assert!(!answer.iter().any(|a| a == "--mmproj"));
         assert!(answer
             .windows(2)
             .any(|w| w[0] == "--port" && w[1] == "8080"));
 
-        let vision = build_args(&spec(r"C:\m\v.gguf", Some(r"C:\m\mmproj.gguf")), 8080);
+        let vision = build_args(
+            &spec(r"C:\m\v.gguf", Some(r"C:\m\mmproj.gguf")),
+            8080,
+            &caps_full(),
+        );
         assert!(vision
             .windows(2)
             .any(|w| w[0] == "--mmproj" && w[1] == r"C:\m\mmproj.gguf"));
@@ -703,10 +867,110 @@ mod tests {
         let mut answer = spec(r"C:\m\a.gguf", None);
         answer.device = Some("Vulkan0".to_string());
 
-        let args = build_args(&answer, 8080);
+        let args = build_args(&answer, 8080, &caps_full());
 
         assert!(args
             .windows(2)
             .any(|w| w[0] == "--device" && w[1] == "Vulkan0"));
+    }
+
+    #[test]
+    fn build_args_emits_full_tuning_when_supported() {
+        // Modern binary + quantized KV + flash Auto → all four flags. Auto defers to
+        // llama.cpp (`--flash-attn auto`), which still counts as active for quantized KV.
+        let mut s = spec(r"C:\m\a.gguf", None);
+        s.ctx_size = 8192;
+        let args = build_args(&s, 8080, &caps_full());
+        assert_eq!(value_after(&args, "--ctx-size"), Some("8192"));
+        assert_eq!(value_after(&args, "--flash-attn"), Some("auto"));
+        assert_eq!(value_after(&args, "--cache-type-k"), Some("q8_0"));
+        assert_eq!(value_after(&args, "--cache-type-v"), Some("q8_0"));
+    }
+
+    #[test]
+    fn build_args_distinguishes_auto_from_on_flash_attn() {
+        // On a value-taking binary, `Auto` and `On` must produce distinct args so the
+        // setting is observable: Auto → `auto` (defer), On → `on` (force).
+        let mut auto = spec(r"C:\m\a.gguf", None);
+        auto.flash_attn = FlashAttnSetting::Auto;
+        assert_eq!(
+            value_after(&build_args(&auto, 8080, &caps_full()), "--flash-attn"),
+            Some("auto")
+        );
+
+        let mut on = spec(r"C:\m\a.gguf", None);
+        on.flash_attn = FlashAttnSetting::On;
+        let on_args = build_args(&on, 8080, &caps_full());
+        assert_eq!(value_after(&on_args, "--flash-attn"), Some("on"));
+        // Forcing flash on still unlocks quantized KV.
+        assert_eq!(value_after(&on_args, "--cache-type-v"), Some("q8_0"));
+    }
+
+    #[test]
+    fn build_args_uses_bare_flash_attn_for_bool_flag() {
+        // Legacy binary spells --flash-attn as a bare switch (no value), and flash is
+        // active, so quantized KV is still emitted.
+        let caps = SidecarCaps {
+            flash_attn_kind: FlashAttnKind::BoolFlag,
+            ..caps_full()
+        };
+        let args = build_args(&spec(r"C:\m\a.gguf", None), 8080, &caps);
+        assert!(args.iter().any(|a| a == "--flash-attn"));
+        // The token after --flash-attn must NOT be a value (it's the next real flag).
+        assert_ne!(value_after(&args, "--flash-attn"), Some("on"));
+        assert_eq!(value_after(&args, "--cache-type-k"), Some("q8_0"));
+    }
+
+    #[test]
+    fn build_args_omits_kv_quant_without_flash() {
+        // No flash support → quantized KV would be rejected, so it is dropped (f16
+        // default), and no --flash-attn is emitted. Context is still pinned.
+        let caps = SidecarCaps {
+            flash_attn_kind: FlashAttnKind::Unsupported,
+            ..caps_full()
+        };
+        let args = build_args(&spec(r"C:\m\a.gguf", None), 8080, &caps);
+        assert!(!args.iter().any(|a| a == "--flash-attn"));
+        assert!(!args.iter().any(|a| a == "--cache-type-k"));
+        assert!(!args.iter().any(|a| a == "--cache-type-v"));
+        assert_eq!(value_after(&args, "--ctx-size"), Some("4096"));
+    }
+
+    #[test]
+    fn build_args_drops_explicit_on_flash_when_binary_unsupported() {
+        // User forces flash On but the binary has no flag: it must not appear, quantized KV
+        // is dropped to f16, and context is still pinned. (The arm also logs a warn so the
+        // ignored setting is diagnosable; the args are what we assert here.)
+        let caps = SidecarCaps {
+            flash_attn_kind: FlashAttnKind::Unsupported,
+            ..caps_full()
+        };
+        let mut s = spec(r"C:\m\a.gguf", None);
+        s.flash_attn = FlashAttnSetting::On;
+        let args = build_args(&s, 8080, &caps);
+        assert!(!args.iter().any(|a| a == "--flash-attn"));
+        assert!(!args.iter().any(|a| a == "--cache-type-k"));
+        assert!(!args.iter().any(|a| a == "--cache-type-v"));
+        assert_eq!(value_after(&args, "--ctx-size"), Some("4096"));
+    }
+
+    #[test]
+    fn build_args_omits_ctx_when_unsupported() {
+        let caps = SidecarCaps {
+            ctx_size: false,
+            ..caps_full()
+        };
+        let args = build_args(&spec(r"C:\m\a.gguf", None), 8080, &caps);
+        assert!(!args.iter().any(|a| a == "--ctx-size"));
+    }
+
+    #[test]
+    fn build_args_leaves_f16_kv_implicit() {
+        // f16 is the llama.cpp default, so no --cache-type-* is passed even with full caps.
+        let mut s = spec(r"C:\m\a.gguf", None);
+        s.kv_cache_type = KvCacheType::F16;
+        let args = build_args(&s, 8080, &caps_full());
+        assert!(!args.iter().any(|a| a == "--cache-type-k"));
+        assert!(!args.iter().any(|a| a == "--cache-type-v"));
     }
 }

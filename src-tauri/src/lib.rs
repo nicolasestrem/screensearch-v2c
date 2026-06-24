@@ -468,18 +468,27 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
+    // Clamp once up front so the values handed to the live providers below are exactly what
+    // gets persisted. `save_settings` sanitizes internally too, but a direct IPC call could
+    // pass out-of-range values (e.g. a huge `sidecar_ctx_size`); without this, the DB would
+    // store the clamped value while the next sidecar spawn ran the raw one until restart.
+    let settings = kernel::settings::sanitize_settings(settings);
     kernel::settings::save_settings(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Hot-apply sidecar lane settings; embedding workers are handled below.
+    // Hot-apply sidecar lane settings; embedding workers are handled below. The launch
+    // params (ngl/device/ctx/KV/flash) are all launch args, so they take effect when the
+    // supervisor relaunches on the next request (a changed param makes `needs_restart`
+    // true) — no immediate process kill here.
+    let sidecar_params = traits::SidecarParams::from(&settings);
     if let Some(v) = state.vision.lock().expect("vision slot").clone() {
         v.set_tier(settings.models_vision_tier);
-        v.set_launch_options(settings.sidecar_ngl, settings.sidecar_device.clone());
+        v.set_launch_options(sidecar_params.clone());
     }
     if let Some(a) = state.answer.lock().expect("answer slot").clone() {
         a.set_tier(settings.models_answer_tier);
-        a.set_launch_options(settings.sidecar_ngl, settings.sidecar_device.clone());
+        a.set_launch_options(sidecar_params);
     }
     if let Some(kernel) = state.kernel.clone() {
         let embeddings_enabled = settings.enrich_embed_text || settings.enrich_image_embeddings;
@@ -768,12 +777,23 @@ async fn init_inference(
     let settings = kernel::settings::load_settings(store.as_ref()).await;
     *sidecar_binary_slot.lock().expect("sidecar binary slot") = Some(binary.clone());
     reap_binaries.push(binary.clone());
+    // Probe the bundled binary once so `build_args` only emits memory-tuning flags it
+    // actually accepts. The probe spawns `llama-server --help` (a blocking syscall), so it
+    // runs on a blocking pool rather than parking this async worker; on failure we fall
+    // back to the conservative caps (context-only) the probe itself would return.
+    // Probed once per process: the binary download path is idempotent (skip-if-present),
+    // so a running app keeps the same binary — and thus the same caps — until restart.
+    let binary_for_probe = binary.clone();
+    let caps = tokio::task::spawn_blocking(move || inference::probe_caps(&binary_for_probe))
+        .await
+        .unwrap_or_else(|_| inference::SidecarCaps::conservative());
     let config = SupervisorConfig {
         binary,
         reap_binaries,
         pidfile,
         idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
         health_timeout: SIDECAR_HEALTH_TIMEOUT,
+        caps,
     };
     let supervisor = match ModelSupervisor::new(config) {
         Ok(s) => s,
@@ -784,19 +804,18 @@ async fn init_inference(
         }
     };
 
+    let sidecar_params = traits::SidecarParams::from(&settings);
     let vision = Arc::new(VisionSidecar::new(
         supervisor.clone(),
         models_root.clone(),
         settings.models_vision_tier,
-        settings.sidecar_ngl,
-        settings.sidecar_device.clone(),
+        sidecar_params.clone(),
     ));
     let answer = Arc::new(AnswerSidecar::new(
         supervisor.clone(),
         models_root,
         settings.models_answer_tier,
-        settings.sidecar_ngl,
-        settings.sidecar_device.clone(),
+        sidecar_params,
     ));
     *vision_slot.lock().expect("vision slot") = Some(vision.clone());
     *answer_slot.lock().expect("answer slot") = Some(answer.clone());

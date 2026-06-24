@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Sidecar memory tuning: pinned context + KV quantization + flash attention (2026-06-24)
+- **The llama.cpp sidecar now pins a small, workload-appropriate context window and quantizes its
+  KV cache**, instead of inheriting the model's full trained context. `build_args` previously passed
+  no `--ctx-size`, so llama.cpp defaulted to `0` ("loaded from model") — for the default models that
+  is a **262 144-token** trained context, and the server auto-sized a ~118 k-token KV cache that
+  alone consumed most of a 16 GB GPU. New balanced defaults: context **auto** (vision 4096 / answer
+  8192), KV cache **q8_0**, flash attention **auto**.
+  - **Measured (RTX 5060 Ti, bundled Vulkan `llama-server`, default answer model):** peak VRAM for
+    the answer model dropped from **14082 MiB** (untuned, `n_ctx` 118272) to **4253 MiB** (tuned,
+    `n_ctx` 8192) — a **~9.8 GB / ~70%** reduction, with no expected quality loss for this workload.
+- **Three new user-adjustable settings** (Settings → Sidecar (advanced)), all applied on the next
+  sidecar launch via the existing relaunch-on-next-request path:
+  - `sidecar.ctx_size` (`Settings.sidecar_ctx_size`, default **0 = auto**, else clamped
+    **512–32768**) — `0` substitutes a per-lane default (vision 4096 / answer 8192); any other value
+    overrides both lanes.
+  - `sidecar.kv_cache_type` (`Settings.sidecar_kv_cache_type`, new `KvCacheType` enum: `f16` /
+    `q8_0` / `q4_0`, default **q8_0**) — quantized KV is emitted only when flash attention is active.
+  - `sidecar.flash_attn` (`Settings.sidecar_flash_attn`, new `FlashAttnSetting` enum: `auto` / `on` /
+    `off`, default **auto**).
+- **Version-safe flag emission.** The bundled `llama-server` is the *latest* llama.cpp Vulkan release
+  fetched at runtime, so its flag spelling varies (`--flash-attn` bare boolean vs. `on|off|auto`;
+  quantized `--cache-type-v` needs flash attention). A new `inference::flags::probe_caps` reads the
+  binary's `--help` once at init; `build_args` emits only verified flags and silently degrades (e.g.
+  drops KV quantization when flash attention is unavailable) rather than producing an arg list the
+  binary would reject.
+- **Review-round hardening (PR #25):**
+  - `FlashAttnSetting::Auto` now emits `--flash-attn auto` (defer to llama.cpp) on value-taking
+    binaries instead of forcing `on`, so `Auto` and `On` are observably distinct; `On` still forces
+    `on`. Both keep flash active for the purpose of unlocking quantized KV.
+  - The `probe_caps` `--help` call (a blocking syscall) now runs on `spawn_blocking` so it never
+    parks the async executor, falling back to the conservative flag set if the task fails.
+  - `push_kv_cache` warns when quantization is configured but the binary advertises neither
+    `--cache-type-k` nor `--cache-type-v` (previously a silent f16 fallback).
+  - The `--flash-attn` capability probe also recognizes a parenthesised value set (`(on/off/auto)`).
+  - **Round 2 (diagnostics + robustness):** `push_flash_attn` now returns a `FlashState`
+    (`Active` / `BinaryUnsupported` / `UserDisabled`) so the quantized-KV downgrade warning names the
+    real cause — a binary limitation vs. the user turning flash attention off — instead of always
+    blaming the build. An explicit `flash_attn = on` on a binary that lacks the flag now logs a warn
+    rather than being dropped silently. And `set_settings` sanitizes the incoming `Settings` *before*
+    building `SidecarParams`, so a direct (non-UI) IPC call with an out-of-range `sidecar_ctx_size`
+    can no longer run the raw value in the next sidecar spawn while the DB stores the clamped one.
+
 ### Fixed — Vision scheduler: configurable batch size + pending-job dedup (2026-06-24)
 - **The timer/idle vision batch size is now a setting.** It was a hardcoded `const BATCH = 20`, so
   the scheduler logs showed a fixed `count=20` every tick with no way to drain a backlog faster.
