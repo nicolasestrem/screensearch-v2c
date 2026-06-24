@@ -152,3 +152,11 @@ export const IconCpu = (p: IconProps) => (
     <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
   </Svg>
 );
+
+/** Download — an arrow into a tray (model fetch in progress). */
+export const IconDownload = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3v12M7 10l5 5 5-5" />
+    <path d="M5 21h14" />
+  </Svg>
+);

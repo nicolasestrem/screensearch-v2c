@@ -3,9 +3,21 @@
 // caches that the live event stream keeps fresh (useLiveEvents). Outside the Tauri
 // shell the readiness query errors and the rail shows an honest "Kernel offline".
 import { Chip, Skeleton, Tooltip } from "../primitives";
-import { IconCapture, IconCpu, IconDatabase, IconQueue } from "../icons";
-import { useJobStats, useReadiness, useSidecarStatus, useStorageStats } from "../../lib/ipc/queries";
-import { statusLabel, statusTone, worstStatus } from "../../lib/status";
+import { IconCapture, IconCpu, IconDatabase, IconDownload, IconQueue } from "../icons";
+import {
+  useJobStats,
+  useModelDownload,
+  useReadiness,
+  useSidecarStatus,
+  useStorageStats,
+} from "../../lib/ipc/queries";
+import {
+  sidecarStateLabel,
+  sidecarStateTone,
+  statusLabel,
+  statusTone,
+  worstStatus,
+} from "../../lib/status";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -24,6 +36,15 @@ export function StatusRail() {
   const jobStats = useJobStats();
   const storage = useStorageStats();
   const sidecar = useSidecarStatus();
+  const download = useModelDownload();
+
+  // A model fetch is global, slow (multi-GB) work — surface it in the rail so it's visible
+  // from any screen, not just the Settings panel. Percent shown when the total is known.
+  const dl = download.data?.phase === "downloading" ? download.data : null;
+  const dlPct =
+    dl && dl.total_bytes && dl.total_bytes > 0
+      ? Math.min(100, Math.round((dl.downloaded_bytes / dl.total_bytes) * 100))
+      : null;
 
   return (
     <header className="flex items-center justify-between gap-4 h-12 px-4 bg-surface border-b border-line">
@@ -35,6 +56,22 @@ export function StatusRail() {
       </div>
 
       <div className="flex items-center gap-2">
+        {dl && (
+          <Tooltip
+            label={
+              dlPct !== null
+                ? `Downloading ${dl.model ?? `${dl.lane} model`} · ${formatBytes(dl.downloaded_bytes)} / ${formatBytes(dl.total_bytes ?? 0)}`
+                : `Downloading ${dl.model ?? `${dl.lane} model`}…`
+            }
+            side="bottom"
+          >
+            <Chip tone="accent" dot>
+              <IconDownload size={14} />
+              {dlPct !== null ? `${dlPct}%` : "Downloading"}
+            </Chip>
+          </Tooltip>
+        )}
+
         {readiness.isLoading && (
           <>
             <Skeleton className="w-24 h-6" />
@@ -96,9 +133,20 @@ export function StatusRail() {
               }
               side="bottom"
             >
-              <Chip tone={statusTone(readiness.data.sidecar.status)}>
+              {/* Label from the raw lifecycle state when known (truthful: an idle-evicted
+                  model reads "Idle — unloaded", never "Ready"); fall back to the aggregate
+                  ComponentStatus until the first sidecar_status event arrives. */}
+              <Chip
+                tone={
+                  sidecar.data
+                    ? sidecarStateTone(sidecar.data.state)
+                    : statusTone(readiness.data.sidecar.status)
+                }
+              >
                 <IconCpu size={14} />
-                {statusLabel(readiness.data.sidecar.status)}
+                {sidecar.data
+                  ? sidecarStateLabel(sidecar.data.state)
+                  : statusLabel(readiness.data.sidecar.status)}
               </Chip>
             </Tooltip>
 

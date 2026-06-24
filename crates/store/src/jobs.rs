@@ -231,4 +231,20 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// Count of `vision_tag` jobs currently `pending` or `running` — the in-flight
+    /// vision backlog the idle backfill watches as a low-watermark (index-backed by
+    /// `idx_jobs_frame_kind_state`).
+    pub async fn pending_vision_job_count(&self) -> Result<u64> {
+        self.with_conn(move |conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM jobs
+                 WHERE kind = 'vision_tag' AND state IN ('pending', 'running')",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(count as u64)
+        })
+        .await
+    }
 }

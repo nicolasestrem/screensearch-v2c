@@ -9,6 +9,7 @@ export { ScanlineTimeline, type ScanlineTimelineProps } from "./ScanlineTimeline
 export { TimelineMinimap, type TimelineMinimapProps } from "./TimelineMinimap";
 export { MomentDetail, type MomentDetailProps } from "./MomentDetail";
 export { ModelTierPicker, type ModelTierPickerProps } from "./ModelTierPicker";
+export { ModelPanel } from "./ModelPanel";
 export { ScheduleControl, type ScheduleControlProps } from "./ScheduleControl";
 export { RetentionControl, type RetentionControlProps } from "./RetentionControl";
 export { InsightsBars, type InsightsBarsProps, type RankedItem } from "./InsightsBars";

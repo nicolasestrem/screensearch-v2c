@@ -16,15 +16,18 @@ use std::time::Duration;
 
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
-use traits::{JobKind, NewJob, Store};
+use traits::{BackfillControl, JobKind, NewJob, Store};
 
 use crate::settings;
 use crate::IdleSource;
 
 /// How often the timer loop re-checks settings while the timer trigger is disabled.
 const DISABLED_RECHECK: Duration = Duration::from_secs(30);
-/// How often the idle loop samples the platform idle time.
+/// How often the idle loop samples the platform idle time while *not* draining a backlog.
 const IDLE_POLL: Duration = Duration::from_secs(30);
+/// How often the idle loop tops up the queue while it *is* actively draining a backlog —
+/// short so the worker pool is never starved between batches during a keep-warm drain.
+const DRAIN_POLL: Duration = Duration::from_secs(5);
 /// Floor on the user-set timer interval, so a misconfigured tiny value can't busy-loop.
 const MIN_TIMER_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -53,8 +56,13 @@ impl Drop for SchedulerHandle {
 
 /// Spawns the timer loop (always) and, when an idle source is available, the idle loop.
 /// Both honor their settings toggle each tick, so enabling/disabling in settings takes
-/// effect without a restart.
-pub(crate) fn spawn(store: Arc<dyn Store>, idle: Option<IdleSource>) -> SchedulerHandle {
+/// effect without a restart. `backfill` lets the idle loop keep the sidecar warm while it
+/// drains the backlog (`None` when no inference supervisor is wired).
+pub(crate) fn spawn(
+    store: Arc<dyn Store>,
+    idle: Option<IdleSource>,
+    backfill: Option<Arc<dyn BackfillControl>>,
+) -> SchedulerHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
     // Serializes the timer and idle producers' read-then-enqueue. `untagged_frame_ids`
     // only excludes jobs already committed at query time, so without this a simultaneous
@@ -70,7 +78,9 @@ pub(crate) fn spawn(store: Arc<dyn Store>, idle: Option<IdleSource>) -> Schedule
         stop_rx.clone(),
     ))];
     if let Some(idle) = idle {
-        joins.push(tokio::spawn(idle_loop(store, idle, gate, stop_rx)));
+        joins.push(tokio::spawn(idle_loop(
+            store, idle, gate, backfill, stop_rx,
+        )));
     }
     SchedulerHandle {
         stop: stop_tx,
@@ -99,47 +109,88 @@ async fn timer_loop(store: Arc<dyn Store>, gate: Arc<Mutex<()>>, mut stop: watch
     }
 }
 
-/// Enqueues a batch when the user transitions *into* idle (idle ≥ threshold), while the
-/// idle trigger is enabled. Only on the transition, so a long idle period doesn't
-/// re-enqueue every poll.
+/// Drains the untagged-frame backlog while the user is idle, keeping the sidecar warm for
+/// the whole drain instead of tagging one batch and going dormant. Each tick (faster while
+/// draining): if the user is idle and a backlog remains, it tops the queue up to a batch
+/// whenever in-flight vision work has fallen below a low watermark, and tells the sidecar
+/// to stay loaded (`set_backfill_active(true)`). When the backlog is empty or the user
+/// resumes, it clears keep-warm so the normal idle-TTL eviction frees the VRAM (`03 §5`).
 async fn idle_loop(
     store: Arc<dyn Store>,
     idle: IdleSource,
     gate: Arc<Mutex<()>>,
+    backfill: Option<Arc<dyn BackfillControl>>,
     mut stop: watch::Receiver<bool>,
 ) {
-    let mut was_idle = false;
+    let mut keep_warm = false;
     loop {
-        if wait_or_stop(&mut stop, IDLE_POLL).await {
+        // Poll faster while draining so the worker pool is never starved between batches.
+        let poll = if keep_warm { DRAIN_POLL } else { IDLE_POLL };
+        if wait_or_stop(&mut stop, poll).await {
             break;
         }
         let s = settings::load_settings(store.as_ref()).await;
         if !s.enrich_vision_idle_enabled {
-            was_idle = false;
+            set_keep_warm(&backfill, &mut keep_warm, false);
             continue;
         }
         let threshold_ms = (s.enrich_vision_idle_secs as u64).saturating_mul(1000);
         let now_idle = idle().is_some_and(|idle_ms| idle_ms >= threshold_ms);
-        if now_idle && !was_idle {
-            enqueue_untagged(&store, &gate, "idle", s.enrich_vision_batch_size).await;
+        if !now_idle {
+            // User is back: stop holding the model warm; let the idle-TTL reclaim VRAM.
+            set_keep_warm(&backfill, &mut keep_warm, false);
+            continue;
         }
-        was_idle = now_idle;
+        // Idle. Throttle on in-flight vision work so we top the queue up rather than pile
+        // batch on batch; while work is draining, keep the model warm.
+        let pending = store.pending_vision_job_count().await.unwrap_or(0);
+        let watermark = u64::from(s.enrich_vision_batch_size / 4).max(1);
+        if pending >= watermark {
+            set_keep_warm(&backfill, &mut keep_warm, true);
+            continue;
+        }
+        // Queue is low: enqueue the next batch if any backlog remains.
+        let found = enqueue_untagged(&store, &gate, "idle", s.enrich_vision_batch_size).await;
+        // Backlog remains → keep warm; drained → release so the TTL frees VRAM.
+        set_keep_warm(&backfill, &mut keep_warm, found > 0);
+    }
+    // On shutdown, never leave the sidecar pinned warm.
+    set_keep_warm(&backfill, &mut keep_warm, false);
+}
+
+/// Flips the sidecar keep-warm hint, but only on a real change (the supervisor stores an
+/// atomic, so this just avoids redundant churn / log noise).
+fn set_keep_warm(backfill: &Option<Arc<dyn BackfillControl>>, keep_warm: &mut bool, active: bool) {
+    if *keep_warm == active {
+        return;
+    }
+    *keep_warm = active;
+    if let Some(b) = backfill {
+        b.set_backfill_active(active);
     }
 }
 
 /// Enqueues up to `batch` still-untagged frames (oldest first, excluding any with an
 /// in-flight `vision_tag` job) as `vision_tag` jobs. Holds `gate` across the read and the
 /// enqueue so a concurrent producer (the other of the timer/idle pair) can't read the same
-/// frames before these jobs are committed.
-async fn enqueue_untagged(store: &Arc<dyn Store>, gate: &Mutex<()>, trigger: &str, batch: u32) {
+/// frames before these jobs are committed. Returns how many candidate frames the read
+/// found — the idle backfill uses a non-zero result as "backlog remains" to decide whether
+/// to keep the model warm.
+async fn enqueue_untagged(
+    store: &Arc<dyn Store>,
+    gate: &Mutex<()>,
+    trigger: &str,
+    batch: u32,
+) -> usize {
     let _guard = gate.lock().await;
     let ids = match store.untagged_frame_ids(batch, None).await {
         Ok(ids) => ids,
         Err(e) => {
             tracing::warn!(trigger, error = %e, "vision scheduler: list untagged failed");
-            return;
+            return 0;
         }
     };
+    let found = ids.len();
     let mut count = 0u64;
     for frame_id in ids {
         let job = NewJob {
@@ -157,6 +208,7 @@ async fn enqueue_untagged(store: &Arc<dyn Store>, gate: &Mutex<()>, trigger: &st
     if count > 0 {
         tracing::info!(trigger, count, "vision scheduler enqueued vision_tag jobs");
     }
+    found
 }
 
 /// Sleeps `dur`, returning early with `true` if a stop was signalled (so the caller

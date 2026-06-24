@@ -156,6 +156,13 @@ pub trait Store: Send + Sync {
     async fn complete_job(&self, id: i64) -> Result<()>;
     async fn fail_job(&self, id: i64, err: &str, retry_at: Option<i64>) -> Result<()>;
     async fn job_stats(&self) -> Result<JobStats>;
+    /// Count of `vision_tag` jobs currently `pending` or `running`. The idle backfill
+    /// uses it as a low-watermark — it refills the queue only when in-flight vision work
+    /// has drained below a threshold, rather than piling batches on top of each other.
+    /// Default returns 0 for stores that don't track jobs.
+    async fn pending_vision_job_count(&self) -> Result<u64> {
+        Ok(0)
+    }
     /// Requeues jobs stuck in `running` whose `updated_at` is older than
     /// `older_than_ms` before now (a worker died mid-job; there is no lease). Resets
     /// them to `pending` so they can be reclaimed; returns how many were requeued
@@ -185,4 +192,16 @@ pub trait Store: Send + Sync {
     /// arm of [`Self::hybrid_search`]. Set once the model has finished loading off
     /// the launch thread (`03 §5`). Default is a no-op for stores that never embed.
     fn set_embedder(&self, _embedder: Arc<dyn EmbeddingProvider>) {}
+}
+
+/// Lets the kernel's idle vision backfill tell the inference sidecar to keep the model
+/// loaded while it is actively draining the untagged-frame backlog, so the sidecar is not
+/// idle-TTL-evicted between batches (`03 §5/§6`). The kernel sets it `true` when a backlog
+/// remains and the user is idle, and `false` once the backlog is empty or the user
+/// resumes — after which normal idle eviction frees the VRAM. Implemented by the inference
+/// supervisor; the kernel holds it as `dyn BackfillControl` so it keeps depending only on
+/// traits, never on `inference` (`03 §2`).
+pub trait BackfillControl: Send + Sync {
+    /// `true` suppresses idle-TTL eviction (keep warm); `false` resumes it.
+    fn set_backfill_active(&self, active: bool);
 }

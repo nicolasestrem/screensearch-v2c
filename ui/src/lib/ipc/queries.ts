@@ -7,6 +7,7 @@ import { queryKeys } from "./queryKeys";
 import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { TimeRange } from "../../bindings/TimeRange";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
+import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -48,6 +49,20 @@ export function useSidecarStatus() {
   return useQuery<SidecarStatus | null>({
     queryKey: queryKeys.sidecarStatus,
     queryFn: () => qc.getQueryData<SidecarStatus | null>(queryKeys.sidecarStatus) ?? null,
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Latest model-download progress (event-sourced, like {@link useSidecarStatus}). Populated
+ * by the `model_download` event; `null` until a download starts. The queryFn preserves
+ * whatever the event last wrote so a refetch never clobbers it.
+ */
+export function useModelDownload() {
+  const qc = useQueryClient();
+  return useQuery<ModelDownloadStatus | null>({
+    queryKey: queryKeys.modelDownload,
+    queryFn: () => qc.getQueryData<ModelDownloadStatus | null>(queryKeys.modelDownload) ?? null,
     staleTime: Infinity,
   });
 }

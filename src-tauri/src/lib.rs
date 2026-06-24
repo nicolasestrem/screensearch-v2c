@@ -345,6 +345,47 @@ async fn set_model_tier(request: SetModelTier, state: State<'_, AppState>) -> Re
     Ok(())
 }
 
+/// Eagerly load a lane's model into the sidecar (the "Load model" control). Spawns or
+/// switches the sidecar so the next request on that lane is instant; surfaces any
+/// download/spawn error so the panel can show it.
+#[tauri::command]
+async fn load_model(lane: ModelLane, state: State<'_, AppState>) -> Result<(), String> {
+    match lane {
+        ModelLane::Vision => {
+            let v = state
+                .vision
+                .lock()
+                .expect("vision slot")
+                .clone()
+                .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+            v.preload().await.map_err(|e| e.to_string())
+        }
+        ModelLane::Answer => {
+            let a = state
+                .answer
+                .lock()
+                .expect("answer slot")
+                .clone()
+                .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+            a.preload().await.map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Unload the resident sidecar model now, freeing its VRAM/RAM (the "Unload" control).
+/// No-op if nothing is loaded; the next request lazily respawns the model.
+#[tauri::command]
+async fn unload_model(state: State<'_, AppState>) -> Result<(), String> {
+    let supervisor = state
+        .supervisor
+        .lock()
+        .expect("supervisor slot")
+        .clone()
+        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+    supervisor.unload().await;
+    Ok(())
+}
+
 /// Frame-count density buckets over `[start, end)` for the Scanline Timeline
 /// (`get_timeline`, `03 §7`). `bucket_count` is presentation-driven (the UI passes a
 /// count derived from the ribbon width); the store returns sparse, occupied buckets.
@@ -658,6 +699,8 @@ pub fn run() {
             ask,
             cancel_ask,
             set_model_tier,
+            load_model,
+            unload_model,
             get_timeline,
             get_frames,
             get_nearest_frame,
@@ -805,14 +848,19 @@ async fn init_inference(
     };
 
     let sidecar_params = traits::SidecarParams::from(&settings);
+    // One downloader, shared by both lanes: it serializes per-lane fetches (no concurrent
+    // races) and broadcasts progress for the UI.
+    let downloader = inference::ModelDownloader::new(models_root.clone());
     let vision = Arc::new(VisionSidecar::new(
         supervisor.clone(),
+        downloader.clone(),
         models_root.clone(),
         settings.models_vision_tier,
         sidecar_params.clone(),
     ));
     let answer = Arc::new(AnswerSidecar::new(
         supervisor.clone(),
+        downloader.clone(),
         models_root,
         settings.models_answer_tier,
         sidecar_params,
@@ -827,19 +875,47 @@ async fn init_inference(
         let kernel = kernel.clone();
         let mut rx = supervisor.subscribe();
         tauri::async_runtime::spawn(async move {
-            while let Ok(status) = rx.recv().await {
-                kernel.emit_sidecar_status(status);
+            // A `Lagged` (receiver fell behind a burst) must NOT end the bridge — that
+            // would silently freeze the StatusRail for the rest of the session. Skip the
+            // missed events and keep going; only stop when the sender is gone (`Closed`).
+            loop {
+                match rx.recv().await {
+                    Ok(status) => kernel.emit_sidecar_status(status),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    // Bridge model-download progress into the kernel (re-broadcast as `model_download`).
+    {
+        let kernel = kernel.clone();
+        let mut rx = downloader.subscribe();
+        tauri::async_runtime::spawn(async move {
+            // Same as above: a lagging receiver must keep bridging progress, not die and
+            // leave the download chip frozen for the rest of the run.
+            loop {
+                match rx.recv().await {
+                    Ok(status) => kernel.emit_model_download(status),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }
 
     // Idle source for idle-triggered tagging (the kernel forbids `unsafe`).
     let idle: IdleSource = Arc::new(capture::user_idle_ms);
+    // The supervisor is the keep-warm authority: while idle backfill drains the backlog it
+    // suppresses idle-TTL eviction so the model stays loaded for the whole drain (`03 §5`).
+    let backfill = supervisor.clone() as Arc<dyn traits::BackfillControl>;
     kernel
         .attach_inference(
             vision as Arc<dyn traits::VisionProvider>,
             answer as Arc<dyn traits::AnswerProvider>,
             Some(idle),
+            Some(backfill),
         )
         .await;
     kernel.set_sidecar_readiness(
@@ -869,6 +945,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             }
             Ok(KernelEvent::SidecarStatus(status)) => {
                 let _ = app.emit("sidecar_status", status);
+            }
+            Ok(KernelEvent::ModelDownload(status)) => {
+                let _ = app.emit("model_download", status);
             }
             Ok(KernelEvent::Toast(toast)) => {
                 let _ = app.emit("toast", toast);

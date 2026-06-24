@@ -161,6 +161,45 @@ pub struct SidecarClient {
     timeouts: ClientTimeouts,
 }
 
+/// Cap on a captured error body — enough to carry llama-server's diagnostic (e.g. an
+/// `n_ctx` overflow message) while keeping a huge HTML error page out of the logs/UI.
+const ERROR_BODY_CAP: usize = 2048;
+
+/// Formats a sidecar HTTP error with its status and (truncated) response body, so the
+/// real cause survives instead of being collapsed into a generic "error status". Pure
+/// (no I/O) so it can be unit-tested.
+fn format_http_error(status: reqwest::StatusCode, body: &str, ctx: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return format!("{ctx}: sidecar returned HTTP {status}");
+    }
+    if body.len() <= ERROR_BODY_CAP {
+        return format!("{ctx}: sidecar returned HTTP {status}: {body}");
+    }
+    // Truncate on a UTF-8 char boundary at or below the cap.
+    let mut end = ERROR_BODY_CAP;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{ctx}: sidecar returned HTTP {status}: {}… [truncated]",
+        &body[..end]
+    )
+}
+
+/// Returns `resp` unchanged on a success status; otherwise reads the response body and
+/// fails with a message carrying both the status code and the (truncated) body. Replaces
+/// `reqwest`'s `error_for_status`, which discards the body that explains *why* the
+/// sidecar rejected the request.
+async fn ensure_success(resp: reqwest::Response, ctx: &str) -> Result<reqwest::Response> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let body = resp.text().await.unwrap_or_default();
+    Err(anyhow::anyhow!(format_http_error(status, &body, ctx)))
+}
+
 impl SidecarClient {
     /// Builds a client for `base` (scheme + host + port, no trailing slash).
     pub fn new(base: impl Into<String>) -> Self {
@@ -232,9 +271,8 @@ impl SidecarClient {
                 .json(&req)
                 .send()
                 .await
-                .context("sidecar chat request failed")?
-                .error_for_status()
-                .context("sidecar returned an error status")?;
+                .context("sidecar chat request failed")?;
+            let resp = ensure_success(resp, "sidecar chat request").await?;
             let body: ChatResponse = resp.json().await.context("decode chat response")?;
             let content = body
                 .choices
@@ -265,14 +303,14 @@ impl SidecarClient {
         };
         let url = format!("{}/v1/chat/completions", self.base);
         let resp = timeout(self.timeouts.stream_connect, async {
-            self.http
+            let resp = self
+                .http
                 .post(url)
                 .json(&req)
                 .send()
                 .await
-                .context("sidecar stream request failed")?
-                .error_for_status()
-                .context("sidecar returned an error status")
+                .context("sidecar stream request failed")?;
+            ensure_success(resp, "sidecar stream request").await
         })
         .await
         .context("sidecar stream timed out")??;
@@ -372,5 +410,35 @@ mod tests {
             json.contains("json_object"),
             "schema not serialized: {json}"
         );
+    }
+
+    #[test]
+    fn http_error_includes_status_and_body() {
+        let msg = format_http_error(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "  the request exceeds the available context size  ",
+            "sidecar chat request",
+        );
+        assert!(msg.contains("500"), "status missing: {msg}");
+        assert!(
+            msg.contains("exceeds the available context size"),
+            "body missing (trimmed): {msg}"
+        );
+    }
+
+    #[test]
+    fn http_error_handles_empty_body() {
+        // A blank body must collapse to just the status — no dangling "HTTP 502: " tail.
+        let msg = format_http_error(reqwest::StatusCode::BAD_GATEWAY, "   ", "ctx");
+        assert_eq!(msg, "ctx: sidecar returned HTTP 502 Bad Gateway");
+    }
+
+    #[test]
+    fn http_error_truncates_long_body_on_char_boundary() {
+        // A multi-byte char straddling the cap must not panic and must mark truncation.
+        let body = "é".repeat(ERROR_BODY_CAP); // 2 bytes each → well over the cap
+        let msg = format_http_error(reqwest::StatusCode::BAD_REQUEST, &body, "ctx");
+        assert!(msg.contains("400"), "status missing");
+        assert!(msg.contains("[truncated]"), "truncation marker missing");
     }
 }

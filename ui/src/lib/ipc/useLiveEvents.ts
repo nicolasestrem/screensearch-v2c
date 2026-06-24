@@ -78,6 +78,18 @@ export function useLiveEvents() {
       }),
     );
 
+    track(
+      listenTo("model_download", (status) => {
+        qc.setQueryData(queryKeys.modelDownload, status);
+        const model = status.model ?? `${status.lane} model`;
+        if (status.phase === "done") {
+          toastStore.success(`Downloaded ${model}`);
+        } else if (status.phase === "failed") {
+          toastStore.error(`Download failed: ${status.error ?? model}`);
+        }
+      }),
+    );
+
     let tickTimer: ReturnType<typeof setTimeout> | undefined;
     track(
       listenTo("capture_tick", () => {

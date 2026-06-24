@@ -2,6 +2,7 @@
 // Single source so the StatusRail and ReadinessBanner agree on color/wording.
 import type { ComponentStatus } from "../bindings/ComponentStatus";
 import type { Readiness } from "../bindings/Readiness";
+import type { SidecarState } from "../bindings/SidecarState";
 import type { ChipTone } from "../components/primitives";
 
 export function statusTone(status: ComponentStatus): ChipTone {
@@ -33,6 +34,39 @@ export function statusLabel(status: ComponentStatus): string {
       return "Off";
     case "unknown":
       return "Unknown";
+  }
+}
+
+/** Truthful label for the raw sidecar lifecycle state — distinguishes a model actually
+ *  resident in VRAM ("Loaded") from one idle-unloaded that respawns on demand, so the UI
+ *  never claims "Ready" for a dead process (the ComponentStatus mapping collapses the
+ *  latter to a neutral "Off"). */
+export function sidecarStateLabel(state: SidecarState): string {
+  switch (state) {
+    case "ready":
+      return "Loaded";
+    case "starting":
+      return "Loading…";
+    case "evicted":
+      return "Idle — unloaded";
+    case "crashed":
+      return "Error";
+    case "stopped":
+      return "Off";
+  }
+}
+
+export function sidecarStateTone(state: SidecarState): ChipTone {
+  switch (state) {
+    case "ready":
+      return "ok";
+    case "starting":
+      return "warn";
+    case "crashed":
+      return "danger";
+    case "evicted":
+    case "stopped":
+      return "neutral";
   }
 }
 

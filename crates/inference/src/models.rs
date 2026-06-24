@@ -148,6 +148,17 @@ pub fn find_mmproj(dir: &Path) -> Option<PathBuf> {
     candidates.into_iter().next()
 }
 
+/// Whether the `(lane, tier)` model's required files are already on disk (weights, plus a
+/// projector for vision) — a cheap filesystem check the downloader uses as a fast path to
+/// skip the network round-trip when nothing needs fetching.
+pub fn model_files_present(models_root: &Path, lane: ModelLane, tier: ModelTier) -> bool {
+    let dir = local_dir(models_root, lane, tier);
+    if find_gguf(&dir).is_none() {
+        return false;
+    }
+    !repo_for(lane, tier).needs_mmproj || find_mmproj(&dir).is_some()
+}
+
 /// Resolves a launchable [`ModelSpec`] from already-downloaded files, or `None` if the
 /// tier's directory is missing required files (the caller then triggers a download).
 /// For vision, both weights and a same-repo projector must be present.

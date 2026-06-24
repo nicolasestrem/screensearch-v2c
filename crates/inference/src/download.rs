@@ -12,12 +12,48 @@
 //! smoke (they are not exercised by `cargo test`).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
-use hf_hub::api::tokio::{ApiBuilder, ApiRepo};
+use anyhow::{anyhow, Context, Result};
+use hf_hub::api::tokio::{ApiBuilder, ApiRepo, Progress};
+use hf_hub::{Cache, Repo, RepoType};
 use serde::Deserialize;
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
+use traits::{ModelDownloadPhase, ModelDownloadStatus};
 
 use crate::models::{self, ModelLane, ModelTier};
+
+/// How often the downloader samples real downloaded-byte progress (for the UI) and
+/// re-checks for a stall while a fetch runs.
+const PROGRESS_POLL: Duration = Duration::from_millis(750);
+
+/// If no new bytes land for this long the download is treated as stalled and aborted.
+/// hf-hub 0.4.3 builds its own `reqwest` client with **no** socket timeout and we run it
+/// with no retries, so a dead CDN connection would otherwise block `bytes_stream().next()`
+/// forever (the exact "download hanging" the partial 8B fetch hit). The partial is left on
+/// disk, so the next attempt resumes where this one stopped. The local clean-layout copy of a
+/// multi-GB blob (during which no new bytes are streamed) is *not* counted against this
+/// window — the watchdog pauses while the `copying` flag is set (see `run_download`).
+const STALL_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Timeout for small JSON API probes (the HF tree-API size lookup, the GitHub releases
+/// query). These run *before* any stall watchdog, so without a per-request timeout a hung
+/// or slow endpoint would block the whole flow from starting (the watchdog can't rescue
+/// it yet). Short and bounded — the responses are tiny and the work proceeds either way.
+const HTTP_API_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Connect timeout for the (large) binary download. A total timeout would wrongly abort a
+/// legitimately slow multi-MB transfer, so we only guard the *connect* phase — enough to
+/// fail fast on a dead host without capping a download that is actually making progress.
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Per-read-chunk timeout for the binary download body. Unlike a wall-clock `timeout`, this
+/// fails a connection that goes *silent* mid-transfer (CDN accepts the socket then stalls)
+/// without aborting a slow-but-progressing download — the binary path has no separate stall
+/// watchdog, so `resp.bytes().await` would otherwise hang `init_inference` forever.
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
@@ -243,27 +279,23 @@ pub async fn ensure_model(models_root: &Path, lane: ModelLane, tier: ModelTier) 
     Ok(())
 }
 
-/// Downloads one repo file (via the HF cache) and copies it into our clean layout so
-/// [`crate::models::resolve_spec`] can find it by scanning `dir`. Skips if present.
-async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()> {
-    let base = Path::new(filename)
+/// The base filename (no directory) a repo file takes in our clean layout.
+fn clean_base(filename: &str) -> &str {
+    Path::new(filename)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(filename);
+        .unwrap_or(filename)
+}
+
+/// Copies a cached blob into our clean `<models_root>/<lane>/<tier>` layout so
+/// [`crate::models::resolve_spec`] can find it by scanning the dir. Atomic: write to a temp
+/// file in the same dir, then rename. An interrupted copy must never leave a partial file at
+/// `dest` — a later `dest.exists()` skip would otherwise treat a corrupt GGUF as complete
+/// and crash the sidecar.
+fn place_in_clean_layout(cached: &Path, dir: &Path, base: &str) -> Result<()> {
     let dest = dir.join(base);
-    if dest.exists() {
-        return Ok(());
-    }
-    let cached = repo
-        .get(filename)
-        .await
-        .with_context(|| format!("download {filename}"))?;
-    // Copy atomically: write to a temp file in the same dir, then rename. An
-    // interrupted copy must never leave a partial file at `dest` — the `dest.exists()`
-    // skip above would otherwise treat a corrupt GGUF as complete and crash the sidecar.
     let tmp = dir.join(format!("{base}.partial"));
-    std::fs::copy(&cached, &tmp)
-        .with_context(|| format!("copy {filename} into {}", dir.display()))?;
+    std::fs::copy(cached, &tmp).with_context(|| format!("copy {base} into {}", dir.display()))?;
     if let Err(e) = std::fs::rename(&tmp, &dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("finalize {}", dest.display()));
@@ -271,8 +303,36 @@ async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()>
     Ok(())
 }
 
+/// [`place_in_clean_layout`] off the async runtime — copying a multi-GB blob would otherwise
+/// block a worker thread for seconds (starving the event bridge and other requests).
+async fn place_in_clean_layout_async(cached: PathBuf, dir: &Path, base: &str) -> Result<()> {
+    let dir = dir.to_path_buf();
+    let base = base.to_string();
+    tokio::task::spawn_blocking(move || place_in_clean_layout(&cached, &dir, &base))
+        .await
+        .context("clean-layout copy task failed")?
+}
+
+/// Downloads one repo file (via the HF cache) and copies it into our clean layout so
+/// [`crate::models::resolve_spec`] can find it by scanning `dir`. Skips if present. No
+/// progress reporting — used by the gated smoke tests; the app path uses [`ModelDownloader`].
+async fn download_into(repo: &ApiRepo, filename: &str, dir: &Path) -> Result<()> {
+    let base = clean_base(filename);
+    if dir.join(base).exists() {
+        return Ok(());
+    }
+    let cached = repo
+        .get(filename)
+        .await
+        .with_context(|| format!("download {filename}"))?;
+    place_in_clean_layout(&cached, dir, base)
+}
+
 async fn resolve_binary_url() -> Result<(String, String)> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_API_TIMEOUT)
+        .build()
+        .context("build releases http client")?;
     let resp = client
         .get(GITHUB_RELEASES)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -319,7 +379,11 @@ async fn cleanup_partial_install(partial: PathBuf) {
 }
 
 async fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(HTTP_CONNECT_TIMEOUT)
+        .read_timeout(HTTP_READ_TIMEOUT)
+        .build()
+        .context("build download http client")?;
     let resp = client
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
@@ -389,6 +453,407 @@ fn collect_files_named(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+/// Coordinates model downloads: serializes them per lane (so concurrent enrichment
+/// workers never race the same multi-GB fetch — the race that dead-lettered the quality
+/// vision jobs) and broadcasts [`ModelDownloadStatus`] so the UI can show progress and
+/// surface errors instead of opaque network activity (`03 §6/§7`). Construct one at the
+/// composition root; share it with both lane providers and bridge [`Self::subscribe`].
+pub struct ModelDownloader {
+    models_root: PathBuf,
+    events: broadcast::Sender<ModelDownloadStatus>,
+    /// Per-lane download mutex. Index by lane: Vision = 0, Answer = 1.
+    locks: [AsyncMutex<()>; 2],
+}
+
+impl ModelDownloader {
+    pub fn new(models_root: PathBuf) -> Arc<Self> {
+        let (events, _rx) = broadcast::channel(64);
+        Arc::new(Self {
+            models_root,
+            events,
+            locks: [AsyncMutex::new(()), AsyncMutex::new(())],
+        })
+    }
+
+    /// Subscribe to download progress (bridged to the `model_download` UI event).
+    pub fn subscribe(&self) -> broadcast::Receiver<ModelDownloadStatus> {
+        self.events.subscribe()
+    }
+
+    fn lock_for(&self, lane: ModelLane) -> &AsyncMutex<()> {
+        match lane {
+            ModelLane::Vision => &self.locks[0],
+            ModelLane::Answer => &self.locks[1],
+        }
+    }
+
+    /// Ensures the `(lane, tier)` model files are on disk, downloading them with progress
+    /// events if needed. Idempotent and serialized per lane: a second caller for the same
+    /// lane waits for the first to finish, then sees the files present (no double fetch).
+    pub async fn ensure(&self, lane: ModelLane, tier: ModelTier) -> Result<()> {
+        if models::model_files_present(&self.models_root, lane, tier) {
+            return Ok(());
+        }
+        let _guard = self.lock_for(lane).lock().await;
+        // Re-check under the lock: another task may have just completed the download.
+        if models::model_files_present(&self.models_root, lane, tier) {
+            return Ok(());
+        }
+        self.run_download(lane, tier).await
+    }
+
+    /// Downloads the `(lane, tier)` files, reporting **real** downloaded-byte progress and
+    /// aborting a stalled fetch instead of hanging forever.
+    ///
+    /// Progress is driven by hf-hub's [`Progress`] callbacks (true streamed bytes, resume
+    /// aware), not the on-disk file size: hf-hub pre-allocates the `.sync.part` to the full
+    /// length up front (`set_len`), so a size poll jumps to ~100% immediately and masks both
+    /// real progress *and* a stall. A watchdog reads the live byte counter; if it stops
+    /// advancing for [`STALL_TIMEOUT`] the download task is aborted and a retryable error is
+    /// surfaced — the partial stays on disk, so the next `ensure` resumes from there.
+    async fn run_download(&self, lane: ModelLane, tier: ModelTier) -> Result<()> {
+        let repo = models::repo_for(lane, tier);
+        let model_label = repo
+            .repo_id
+            .rsplit('/')
+            .next()
+            .unwrap_or(repo.repo_id)
+            .to_string();
+        let dir = models::local_dir(&self.models_root, lane, tier);
+        std::fs::create_dir_all(&dir).context("create model dir")?;
+        let cache_dir = self.models_root.join(".hf-cache");
+        let total = total_download_bytes(repo.repo_id, repo.needs_mmproj).await;
+
+        tracing::info!(repo = repo.repo_id, ?total, "model download started");
+        self.emit(
+            lane,
+            &model_label,
+            ModelDownloadPhase::Downloading,
+            0,
+            total,
+            None,
+        );
+
+        // Fetch on a child task so the watchdog can abort it on a stall. `copying` flags the
+        // local clean-layout copy phases (publishing a cached/just-downloaded blob), which are
+        // disk I/O — not network — and can exceed the stall timeout on a slow disk for a
+        // multi-GB file. The watchdog pauses its stall counter while it is set.
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let task = {
+            let cache_dir = cache_dir.clone();
+            let dir = dir.clone();
+            let repo_id = repo.repo_id.to_string();
+            let needs_mmproj = repo.needs_mmproj;
+            let downloaded = downloaded.clone();
+            let copying = copying.clone();
+            tokio::spawn(async move {
+                download_repo_files(
+                    &cache_dir,
+                    &repo_id,
+                    needs_mmproj,
+                    &dir,
+                    downloaded,
+                    copying,
+                )
+                .await
+            })
+        };
+
+        let limit = stall_limit(STALL_TIMEOUT, PROGRESS_POLL);
+        let mut last_seen = 0u64;
+        let mut stale = 0u32;
+        loop {
+            tokio::time::sleep(PROGRESS_POLL).await;
+            let d = downloaded.load(Ordering::Relaxed);
+            if task.is_finished() {
+                let joined = task.await;
+                return self.finish_download(lane, &model_label, total, d, joined);
+            }
+            self.emit(
+                lane,
+                &model_label,
+                ModelDownloadPhase::Downloading,
+                d,
+                total,
+                None,
+            );
+            if copying.load(Ordering::Relaxed) {
+                // A local clean-layout copy is in progress — disk I/O, not a network
+                // transfer. Don't let the network stall watchdog fire on it (a multi-GB copy
+                // on a slow disk can outlast the timeout). Hold the counter steady.
+                last_seen = d;
+                stale = 0;
+                continue;
+            }
+            (last_seen, stale) = stall_step(d, last_seen, stale);
+            if stale >= limit {
+                task.abort();
+                let msg = "download stalled — no data received; click Load to resume".to_string();
+                tracing::warn!(
+                    repo = repo.repo_id,
+                    downloaded = d,
+                    "model download stalled; aborting"
+                );
+                self.emit(
+                    lane,
+                    &model_label,
+                    ModelDownloadPhase::Failed,
+                    d,
+                    total,
+                    Some(msg.clone()),
+                );
+                return Err(anyhow!(msg));
+            }
+        }
+    }
+
+    /// Emits the terminal download status (Done / Failed) and maps the join result to a
+    /// `Result`. `d` is the last real byte count the watchdog observed.
+    fn finish_download(
+        &self,
+        lane: ModelLane,
+        model_label: &str,
+        total: Option<u64>,
+        d: u64,
+        joined: Result<Result<()>, tokio::task::JoinError>,
+    ) -> Result<()> {
+        match joined {
+            Ok(Ok(())) => {
+                tracing::info!(model = model_label, "model download finished");
+                self.emit(
+                    lane,
+                    model_label,
+                    ModelDownloadPhase::Done,
+                    total.unwrap_or(d),
+                    total,
+                    None,
+                );
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(model = model_label, error = %e, "model download failed");
+                self.emit(
+                    lane,
+                    model_label,
+                    ModelDownloadPhase::Failed,
+                    d,
+                    total,
+                    Some(e.to_string()),
+                );
+                Err(e)
+            }
+            Err(join_err) => {
+                let e = anyhow!("download task failed: {join_err}");
+                tracing::warn!(model = model_label, error = %e, "model download task error");
+                self.emit(
+                    lane,
+                    model_label,
+                    ModelDownloadPhase::Failed,
+                    d,
+                    total,
+                    Some(e.to_string()),
+                );
+                Err(e)
+            }
+        }
+    }
+
+    fn emit(
+        &self,
+        lane: ModelLane,
+        model: &str,
+        phase: ModelDownloadPhase,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+        error: Option<String>,
+    ) {
+        let _ = self.events.send(ModelDownloadStatus {
+            lane,
+            model: Some(model.to_string()),
+            phase,
+            downloaded_bytes,
+            total_bytes,
+            error,
+        });
+    }
+}
+
+/// hf-hub [`Progress`] sink that accumulates real streamed bytes into a shared counter the
+/// download watchdog reads. On resume hf-hub reports the already-present prefix via one
+/// `update(start)` call, so the count is correct across restarts.
+#[derive(Clone)]
+struct ByteCounter {
+    downloaded: Arc<AtomicU64>,
+}
+
+impl Progress for ByteCounter {
+    async fn init(&mut self, _size: usize, _filename: &str) {}
+    async fn update(&mut self, size: usize) {
+        self.downloaded.fetch_add(size as u64, Ordering::Relaxed);
+    }
+    async fn finish(&mut self) {}
+}
+
+/// Resolves the repo's GGUF (+ same-repo mmproj for vision) and fetches each into the clean
+/// layout, accumulating real downloaded bytes into `downloaded` for the progress watchdog.
+async fn download_repo_files(
+    cache_dir: &Path,
+    repo_id: &str,
+    needs_mmproj: bool,
+    dir: &Path,
+    downloaded: Arc<AtomicU64>,
+    copying: Arc<AtomicBool>,
+) -> Result<()> {
+    let api = ApiBuilder::new()
+        .with_progress(false)
+        .with_cache_dir(cache_dir.to_path_buf())
+        .build()
+        .context("build hf-hub api")?;
+    let repo_api = api.model(repo_id.to_string());
+
+    let info = repo_api
+        .info()
+        .await
+        .with_context(|| format!("list files in {repo_id}"))?;
+    let names: Vec<String> = info.siblings.into_iter().map(|s| s.rfilename).collect();
+    let (gguf, mmproj) = pick_gguf_files(&names, needs_mmproj);
+
+    let gguf = gguf.with_context(|| format!("no GGUF weights found in {repo_id}"))?;
+    fetch_one(
+        &repo_api,
+        cache_dir,
+        repo_id,
+        &gguf,
+        dir,
+        &downloaded,
+        &copying,
+    )
+    .await?;
+
+    if needs_mmproj {
+        let mmproj = mmproj.with_context(|| format!("no mmproj projector found in {repo_id}"))?;
+        fetch_one(
+            &repo_api,
+            cache_dir,
+            repo_id,
+            &mmproj,
+            dir,
+            &downloaded,
+            &copying,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Fetches one repo file into the clean layout with real-byte progress. Checks in order:
+/// already in the clean layout → already a finalized blob in the HF cache (no network) →
+/// download (resuming any `.sync.part`). `download_with_progress` advances `downloaded` via
+/// hf-hub's [`Progress`] callbacks; the skip paths add the on-disk size manually so the bar
+/// reflects bytes that were already present.
+async fn fetch_one(
+    repo_api: &ApiRepo,
+    cache_dir: &Path,
+    repo_id: &str,
+    filename: &str,
+    dir: &Path,
+    downloaded: &Arc<AtomicU64>,
+    copying: &Arc<AtomicBool>,
+) -> Result<()> {
+    let base = clean_base(filename);
+    let dest = dir.join(base);
+    if dest.exists() {
+        if let Ok(meta) = std::fs::metadata(&dest) {
+            downloaded.fetch_add(meta.len(), Ordering::Relaxed);
+        }
+        return Ok(());
+    }
+
+    // A finalized blob already in the cache (a prior run downloaded it but never copied it
+    // into the clean layout): copy it — no network round-trip, no re-download. The copy is
+    // disk I/O, so flag it so the network stall watchdog doesn't fire on a slow multi-GB copy.
+    let cache = Cache::new(cache_dir.to_path_buf());
+    if let Some(cached) = cache
+        .repo(Repo::new(repo_id.to_string(), RepoType::Model))
+        .get(filename)
+    {
+        let size = std::fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
+        copying.store(true, Ordering::Relaxed);
+        let placed = place_in_clean_layout_async(cached, dir, base).await;
+        copying.store(false, Ordering::Relaxed);
+        placed?;
+        downloaded.fetch_add(size, Ordering::Relaxed);
+        return Ok(());
+    }
+
+    let progress = ByteCounter {
+        downloaded: downloaded.clone(),
+    };
+    let cached = repo_api
+        .download_with_progress(filename, progress)
+        .await
+        .with_context(|| format!("download {filename}"))?;
+    // The streamed bytes are already counted; the publish copy is local I/O, so flag it to
+    // pause the stall watchdog rather than re-counting (which would push the bar past 100%).
+    copying.store(true, Ordering::Relaxed);
+    let placed = place_in_clean_layout_async(cached, dir, base).await;
+    copying.store(false, Ordering::Relaxed);
+    placed
+}
+
+/// Number of `poll`-interval watchdog ticks with no new bytes that constitutes a stall
+/// (`timeout / poll`, never zero).
+fn stall_limit(timeout: Duration, poll: Duration) -> u32 {
+    let poll_ms = poll.as_millis().max(1);
+    (timeout.as_millis() / poll_ms).max(1) as u32
+}
+
+/// Advances the stall counter for one watchdog tick: resets to 0 (and raises the high-water
+/// mark) when bytes grew, otherwise increments. Returns the new `(last_seen, stale)` pair.
+fn stall_step(downloaded: u64, last_seen: u64, stale: u32) -> (u64, u32) {
+    if downloaded > last_seen {
+        (downloaded, 0)
+    } else {
+        (last_seen, stale.saturating_add(1))
+    }
+}
+
+/// Best-effort total download size for a repo's selected files, via the HF tree API. Used
+/// only to render a percentage — `None` (size unknown) just falls back to a byte counter.
+async fn total_download_bytes(repo_id: &str, needs_mmproj: bool) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct TreeEntry {
+        path: String,
+        #[serde(default)]
+        size: u64,
+    }
+    let url = format!("https://huggingface.co/api/models/{repo_id}/tree/main");
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_API_TIMEOUT)
+        .build()
+        .ok()?;
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let entries: Vec<TreeEntry> = resp.json().await.ok()?;
+    let names: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+    let (gguf, mmproj) = pick_gguf_files(&names, needs_mmproj);
+    let size_of = |name: &Option<String>| -> u64 {
+        name.as_ref()
+            .and_then(|n| entries.iter().find(|e| &e.path == n))
+            .map(|e| e.size)
+            .unwrap_or(0)
+    };
+    let total = size_of(&gguf) + if needs_mmproj { size_of(&mmproj) } else { 0 };
+    (total > 0).then_some(total)
 }
 
 #[cfg(test)]
@@ -594,6 +1059,47 @@ mod tests {
             "candidate scan must stay inside owned install roots"
         );
         let _ = std::fs::remove_dir_all(sidecar_dir);
+    }
+
+    #[tokio::test]
+    async fn byte_counter_accumulates_streamed_bytes() {
+        // The Progress sink sums every `update` (incl. the resume-prefix `update(start)`).
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let mut p = ByteCounter {
+            downloaded: downloaded.clone(),
+        };
+        p.init(100, "weights.gguf").await;
+        p.update(40).await; // e.g. resumed prefix
+        p.update(60).await; // streamed tail
+        p.finish().await;
+        assert_eq!(downloaded.load(Ordering::Relaxed), 100);
+    }
+
+    #[test]
+    fn stall_limit_is_timeout_over_poll_and_never_zero() {
+        assert_eq!(
+            stall_limit(Duration::from_secs(180), Duration::from_millis(750)),
+            240
+        );
+        // Degenerate inputs still yield a usable (>=1) limit rather than an instant abort.
+        assert_eq!(
+            stall_limit(Duration::from_millis(0), Duration::from_millis(750)),
+            1
+        );
+        assert_eq!(
+            stall_limit(Duration::from_secs(5), Duration::from_millis(0)),
+            5000
+        );
+    }
+
+    #[test]
+    fn stall_step_resets_on_progress_and_counts_otherwise() {
+        // Progress: reset the stale counter, raise the high-water mark.
+        assert_eq!(stall_step(50, 10, 3), (50, 0));
+        // No progress at the mark: increment, mark unchanged.
+        assert_eq!(stall_step(50, 50, 3), (50, 4));
+        // A stale read below the mark (shouldn't happen, but must not regress the mark).
+        assert_eq!(stall_step(40, 50, 0), (50, 1));
     }
 
     #[test]

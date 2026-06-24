@@ -9,6 +9,7 @@ import type { CaptureControl } from "../../bindings/CaptureControl";
 import type { VisionTarget } from "../../bindings/VisionTarget";
 import type { Settings } from "../../bindings/Settings";
 import type { SetModelTier } from "../../bindings/SetModelTier";
+import type { ModelLane } from "../../bindings/ModelLane";
 
 /** Start/stop capture; readiness refetches so the StatusRail flips immediately. */
 export function useCaptureControl() {
@@ -62,6 +63,31 @@ export function useSetModelTier() {
     mutationFn: (request: SetModelTier) => cmd.setModelTier(request),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+  });
+}
+
+/** Eagerly load a lane's model. Status events drive the panel, but invalidate readiness
+ *  + sidecar status so the label flips promptly even if an event is missed. */
+export function useLoadModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (lane: ModelLane) => cmd.loadModel(lane),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.readiness });
+      qc.invalidateQueries({ queryKey: queryKeys.sidecarStatus });
+    },
+  });
+}
+
+/** Unload the resident model now (frees VRAM). Same cache reconciliation as load. */
+export function useUnloadModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => cmd.unloadModel(),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.readiness });
+      qc.invalidateQueries({ queryKey: queryKeys.sidecarStatus });
     },
   });
 }

@@ -18,7 +18,6 @@ use tokio::sync::mpsc::{self, Sender};
 use traits::{AnswerDelta, AnswerOpts, AnswerProvider, ModelTier, RetrievedChunk, SidecarParams};
 
 use crate::client::{ChatMessage, StreamPiece};
-use crate::download;
 use crate::models::{self, ModelLane, ModelSpec};
 use crate::supervisor::ModelSupervisor;
 
@@ -31,6 +30,7 @@ plainly rather than guessing.";
 /// lazily downloads the model on first use.
 pub struct AnswerSidecar {
     supervisor: Arc<ModelSupervisor>,
+    downloader: Arc<crate::download::ModelDownloader>,
     models_root: PathBuf,
     tier: RwLock<ModelTier>,
     launch: RwLock<SidecarParams>,
@@ -39,12 +39,14 @@ pub struct AnswerSidecar {
 impl AnswerSidecar {
     pub fn new(
         supervisor: Arc<ModelSupervisor>,
+        downloader: Arc<crate::download::ModelDownloader>,
         models_root: PathBuf,
         tier: ModelTier,
         params: SidecarParams,
     ) -> Self {
         Self {
             supervisor,
+            downloader,
             models_root,
             tier: RwLock::new(tier),
             launch: RwLock::new(params),
@@ -71,11 +73,20 @@ impl AnswerSidecar {
         {
             return Ok(spec);
         }
-        download::ensure_model(&self.models_root, ModelLane::Answer, tier)
+        self.downloader
+            .ensure(ModelLane::Answer, tier)
             .await
             .context("download answer model")?;
         models::resolve_spec(&self.models_root, ModelLane::Answer, tier, params)
             .context("answer model files missing after download")
+    }
+
+    /// Eagerly loads the current answer model into the sidecar (the manual "Load" control)
+    /// so the next Ask is instant. Downloads on first use, then keeps it resident until the
+    /// idle-TTL or a manual unload reclaims it.
+    pub async fn preload(&self) -> Result<()> {
+        let spec = self.ensure_spec().await?;
+        self.supervisor.preload(spec).await
     }
 
     /// Runs the request to completion, sending a terminal delta either way. Setup
@@ -89,13 +100,17 @@ impl AnswerSidecar {
         tx: &Sender<AnswerDelta>,
     ) -> Result<()> {
         let spec = self.ensure_spec().await?;
+        let ctx_size = spec.ctx_size;
         let lease = self.supervisor.acquire(spec).await?;
-        let messages = build_messages(query, context);
+        // Cap the reply budget so a large requested `max_tokens` can't consume the whole
+        // context window and leave nothing for grounding snippets when `ctx_size` is small
+        // (the UI sends a fixed 2048, but Settings allows ctx down to 512). (Codex review.)
+        let max_tokens = effective_reply_budget(opts.max_tokens, ctx_size);
+        let (messages, cited) = build_messages(query, context, ctx_size, max_tokens);
 
         // Bridge the client's low-level SSE pieces onto the typed AnswerDelta stream.
         let (ptx, mut prx) = mpsc::channel::<StreamPiece>(64);
         let client = lease.client().clone();
-        let max_tokens = opts.max_tokens;
         let stream_task =
             tokio::spawn(async move { client.stream(messages, max_tokens, &ptx).await });
 
@@ -132,17 +147,15 @@ impl AnswerSidecar {
             return Ok(());
         }
 
-        // Grounding citations: one per unique context frame (reliable, not parsed).
-        let mut seen = Vec::new();
-        for chunk in context {
-            if !seen.contains(&chunk.frame_id) {
-                seen.push(chunk.frame_id);
-                let _ = tx
-                    .send(AnswerDelta::Citation {
-                        frame_id: chunk.frame_id,
-                    })
-                    .await;
-            }
+        // Grounding citations: one per included context frame (already deduped, in order).
+        // Only frames that fit the context budget are cited, so a citation always
+        // corresponds to text the model actually saw.
+        for frame_id in &cited {
+            let _ = tx
+                .send(AnswerDelta::Citation {
+                    frame_id: *frame_id,
+                })
+                .await;
         }
         let _ = tx.send(AnswerDelta::Done).await;
         Ok(())
@@ -191,26 +204,111 @@ async fn emit_segment(
     let _ = tx.send(delta).await;
 }
 
-/// Builds the chat messages: a grounding system prompt + a user message that lists the
-/// context snippets (tagged with their frame ids) and the question.
-fn build_messages(query: &str, context: &[RetrievedChunk]) -> Vec<ChatMessage> {
+/// Chat-template + role-tag overhead reserved on top of the system prompt and question,
+/// so the assembled prompt leaves headroom for llama.cpp's own template tokens.
+const TEMPLATE_OVERHEAD_TOKENS: usize = 96;
+/// Per-snippet framing cost (`[frame <id>] ` + newline), in estimated tokens.
+const ID_FRAMING_TOKENS: usize = 6;
+
+/// Conservative UTF-8 **bytes**-per-token lower bound used to estimate prompt length
+/// without a real tokenizer. A *chars*-based ratio under-counts dense scripts (a CJK
+/// character is ~3 bytes yet ~1 token for well-merging tokenizers, and up to ~1.5 tokens
+/// for Mistral-family ones like the default Ministral answer model) and would re-trigger
+/// the `exceed_context_size_error` this budgeting prevents. At 2 bytes/token the estimate
+/// stays an *upper* bound on tokens for both scripts — English (~4 bytes/token) is
+/// over-reserved (safe, with ample context still admitted) and worst-case CJK is covered.
+/// (Gemini/Claude/Codex review, PR #26.)
+const BYTES_PER_TOKEN: usize = 2;
+
+/// The reply token budget actually used. Caps a large requested `max_tokens` to half the
+/// context window so it can never reserve the *entire* window and force `build_messages` to
+/// drop all grounding snippets (the symptom: every Ask answers "(no relevant snippets
+/// found)"). For the normal 4K/8K windows the UI's 2048 is well under half and passes
+/// through unchanged; only a small `ctx_size` (Settings allows down to 512) shrinks it.
+fn effective_reply_budget(requested: u32, ctx_size: u32) -> u32 {
+    requested.min((ctx_size / 2).max(1))
+}
+
+/// Rough token estimate. Deliberately over-counts (see [`BYTES_PER_TOKEN`]) so the
+/// assembled prompt stays under the model's context window.
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / BYTES_PER_TOKEN + 1
+}
+
+/// Truncates `text` to roughly `budget_tokens` worth of UTF-8 bytes, snapped down to a
+/// char boundary (so multibyte characters are never split). Mirrors [`estimate_tokens`].
+fn truncate_to_tokens(text: &str, budget_tokens: usize) -> String {
+    let mut max_bytes = budget_tokens
+        .saturating_mul(BYTES_PER_TOKEN)
+        .min(text.len());
+    while max_bytes > 0 && !text.is_char_boundary(max_bytes) {
+        max_bytes -= 1;
+    }
+    text[..max_bytes].to_string()
+}
+
+/// Builds the chat messages: a grounding system prompt + a user message listing the
+/// context snippets (tagged with their frame ids) and the question — **bounded** to the
+/// model's context window. The retrieved chunks are concatenated best-first only until the
+/// estimated token budget (`ctx_size` minus the reply `max_tokens`, the system prompt, the
+/// question, and template overhead) is spent; the rest are dropped, and an over-large top
+/// chunk is truncated. Without this the prompt could exceed `n_ctx` and llama-server
+/// returns a 400 `exceed_context_size_error` (verified). Returns the messages plus the
+/// frame ids actually included, so citations only cover context the model really saw.
+fn build_messages(
+    query: &str,
+    context: &[RetrievedChunk],
+    ctx_size: u32,
+    max_tokens: u32,
+) -> (Vec<ChatMessage>, Vec<i64>) {
+    let reserve = max_tokens as usize
+        + estimate_tokens(SYSTEM_PROMPT)
+        + estimate_tokens(query)
+        + TEMPLATE_OVERHEAD_TOKENS;
+    let mut budget = (ctx_size as usize).saturating_sub(reserve);
+
     let mut user = String::from("Context snippets from my screen history:\n");
-    if context.is_empty() {
-        user.push_str("(no relevant snippets found)\n");
-    } else {
-        for chunk in context {
-            user.push_str(&format!(
-                "[frame {}] {}\n",
-                chunk.frame_id,
-                chunk.text.trim()
-            ));
+    let mut included: Vec<i64> = Vec::new();
+    for chunk in context {
+        if budget == 0 {
+            break;
+        }
+        let text = chunk.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let cost = estimate_tokens(text) + ID_FRAMING_TOKENS;
+        let snippet = if cost <= budget {
+            budget -= cost;
+            text.to_string()
+        } else if included.is_empty() {
+            // The most relevant chunk alone exceeds the budget: ground on a truncated head
+            // rather than dropping all context, then stop.
+            let s = truncate_to_tokens(text, budget.saturating_sub(ID_FRAMING_TOKENS));
+            budget = 0;
+            s
+        } else {
+            break;
+        };
+        if snippet.is_empty() {
+            break;
+        }
+        user.push_str(&format!("[frame {}] {}\n", chunk.frame_id, snippet));
+        if !included.contains(&chunk.frame_id) {
+            included.push(chunk.frame_id);
         }
     }
+    if included.is_empty() {
+        user.push_str("(no relevant snippets found)\n");
+    }
     user.push_str(&format!("\nQuestion: {query}"));
-    vec![
-        ChatMessage::text("system", SYSTEM_PROMPT),
-        ChatMessage::text("user", user),
-    ]
+    (
+        vec![
+            ChatMessage::text("system", SYSTEM_PROMPT),
+            ChatMessage::text("user", user),
+        ],
+        included,
+    )
 }
 
 /// Splits a streamed content sequence into thinking vs. answer segments by tracking
@@ -327,28 +425,100 @@ mod tests {
         );
     }
 
+    fn chunk(frame_id: i64, text: &str) -> RetrievedChunk {
+        RetrievedChunk {
+            frame_id,
+            text: text.to_string(),
+            score: 1.0,
+            captured_at: 0,
+        }
+    }
+
     #[test]
     fn builds_grounded_prompt_with_frame_tags() {
-        let ctx = vec![
-            RetrievedChunk {
-                frame_id: 7,
-                text: "login page".to_string(),
-                score: 1.0,
-                captured_at: 0,
-            },
-            RetrievedChunk {
-                frame_id: 9,
-                text: "dashboard".to_string(),
-                score: 0.5,
-                captured_at: 0,
-            },
-        ];
-        let msgs = build_messages("what did I see?", &ctx);
+        let ctx = vec![chunk(7, "login page"), chunk(9, "dashboard")];
+        let (msgs, cited) = build_messages("what did I see?", &ctx, 8192, 512);
         assert_eq!(msgs.len(), 2);
         // The user message must reference both frames for grounding.
         let user = serde_json::to_string(&msgs[1]).unwrap();
         assert!(user.contains("[frame 7]"));
         assert!(user.contains("[frame 9]"));
         assert!(user.contains("what did I see?"));
+        assert_eq!(cited, vec![7, 9], "both frames fit the budget → both cited");
+    }
+
+    #[test]
+    fn drops_chunks_that_exceed_the_context_budget() {
+        // Many large chunks into a tiny ctx: only a prefix fits, and only those are cited —
+        // this is the fix for the verified 400 `exceed_context_size_error`.
+        let big = "lorem ipsum dolor sit amet ".repeat(50); // ~1350 chars ≈ 450 tokens
+        let ctx: Vec<RetrievedChunk> = (0..20).map(|i| chunk(i, &big)).collect();
+        let (msgs, cited) = build_messages("q", &ctx, 1024, 256);
+        assert_eq!(msgs.len(), 2);
+        assert!(!cited.is_empty(), "at least the top chunk is grounded");
+        assert!(
+            cited.len() < ctx.len(),
+            "the budget must drop the chunks that don't fit (cited {})",
+            cited.len()
+        );
+        // The included frames are exactly the leading ones (best-first order preserved).
+        assert_eq!(cited, (0..cited.len() as i64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn truncates_an_oversized_top_chunk_instead_of_dropping_everything() {
+        let huge = "x".repeat(100_000);
+        let (msgs, cited) = build_messages("q", &[chunk(3, &huge)], 2048, 256);
+        assert_eq!(
+            cited,
+            vec![3],
+            "the sole chunk is still grounded (truncated)"
+        );
+        let user = serde_json::to_string(&msgs[1]).unwrap();
+        assert!(
+            user.len() < huge.len(),
+            "the oversized chunk must be truncated"
+        );
+    }
+
+    #[test]
+    fn reply_budget_leaves_room_for_grounding_in_a_small_context() {
+        // Ample window: the UI's 2048 is under half, so it passes through unchanged.
+        assert_eq!(effective_reply_budget(2048, 8192), 2048);
+        // Small window: capped to half so the prompt/context still has room.
+        assert_eq!(effective_reply_budget(2048, 2048), 1024);
+        assert!(effective_reply_budget(2048, 512) <= 256);
+        // With the cap, a small ctx still grounds instead of dropping every chunk.
+        let budget = effective_reply_budget(2048, 2048);
+        let (_, cited) = build_messages("q", &[chunk(1, "hello world")], 2048, budget);
+        assert_eq!(cited, vec![1], "grounding survives a small context window");
+    }
+
+    #[test]
+    fn estimate_tokens_does_not_undercount_cjk() {
+        // 40 CJK chars = 120 UTF-8 bytes, tokenizing ~1 token/char. A chars/3 ratio would
+        // estimate ~14 and overflow the context; the byte ratio must stay >= the char count.
+        let cjk = "你好世界".repeat(10);
+        assert_eq!(cjk.chars().count(), 40);
+        assert!(
+            estimate_tokens(&cjk) >= cjk.chars().count(),
+            "CJK estimate {} must not undercount {} chars",
+            estimate_tokens(&cjk),
+            cjk.chars().count()
+        );
+    }
+
+    #[test]
+    fn truncate_to_tokens_never_splits_a_multibyte_char() {
+        // 3-byte chars; a byte budget that lands mid-character must snap back to a boundary
+        // (a naive byte slice would panic).
+        let cjk = "世".repeat(100);
+        let out = truncate_to_tokens(&cjk, 10);
+        assert!(cjk.starts_with(&out));
+        assert!(!out.is_empty() && out.len() <= 10 * BYTES_PER_TOKEN);
+        assert!(
+            out.chars().all(|c| c == '世'),
+            "no split / replacement chars"
+        );
     }
 }

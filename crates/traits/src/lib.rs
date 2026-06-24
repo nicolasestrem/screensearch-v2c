@@ -18,7 +18,8 @@ pub mod ipc;
 pub mod jobs;
 
 pub use contracts::{
-    AnswerProvider, CaptureSource, EmbeddingProvider, OcrProvider, Store, VisionProvider,
+    AnswerProvider, BackfillControl, CaptureSource, EmbeddingProvider, OcrProvider, Store,
+    VisionProvider,
 };
 pub use domain::*;
 pub use ipc::*;

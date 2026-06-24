@@ -11,6 +11,149 @@
 
 ---
 
+## 2026-06-24 — Ask answer truncated to nothing + download not visible globally (`fix/idle-backfill-sidecar-status`, round 4)
+- **Change:**
+  1. *Ask reply budget.* `ui/src/routes/Recall.tsx`: `ASK_MAX_TOKENS` 512 → 2048.
+  2. *Global download indicator.* `ui/src/components/shell/StatusRail.tsx` now reads
+     `useModelDownload()` and renders an accent "↓ <pct>%" chip (model + size tooltip) while a fetch
+     is in `downloading` phase; new `IconDownload` in `ui/src/components/icons.tsx`.
+- **Why:** User report (2026-06-24, round 4, two screenshots):
+  - *Answer "always displayed as thinking … answer cut off probably because of the small context."*
+    The default answer models (Ministral-3-3B-Reasoning, Qwen3-4B-Thinking) emit a `<think>` trace
+    first; the visible trace in the screenshot ended mid-list ("4. "), i.e. generation hit the 512
+    `n_predict` cap during reasoning and never reached the answer. `AnswerStream` renders thinking in
+    the `<details>` box and the (empty) answer in the markdown body → "always thinking." The fix is
+    purely the token budget — `answer.rs::build_messages` already reserves `max_tokens` from the ctx
+    budget, and with the default 8K answer ctx, 2048 leaves ~6K for snippets.
+  - *"I'd like some visual when a model is downloading"* — previously the progress bar lived only in
+    Settings → Inference engine; the rail (visible on every screen) had no download cue.
+  - (Positive: the round-2 thinking-box auto-scroll was confirmed "very good now.")
+  - No Rust change, no schema/IPC change (no binding drift).
+- **Verification:**
+  - **Automated gates (all green):** `npm run lint` (`LINT_EXIT=0`); `npm run build`
+    (`BUILD_EXIT=0`). Rust workspace untouched this round, so round-3's `cargo fmt/clippy/build/test`
+    (inference lib 67 tests) still hold; binding guard shows no round-4 drift.
+  - **Pending live (GUI) verification:** ask a question that triggers a long reasoning trace and
+    confirm a non-empty answer renders after the Thinking box; start a model download and confirm the
+    rail shows the "↓ %" chip from any screen.
+
+## 2026-06-24 — Download hang on incomplete/resumed fetch + untruthful progress bar (`fix/idle-backfill-sidecar-status`, round 3)
+- **Change:** Reworked `ModelDownloader`'s fetch path in `crates/inference/src/download.rs`:
+  1. *Truthful, resume-aware progress.* Progress is now driven by hf-hub's `Progress` trait
+     (a new `ByteCounter` sink accumulating real streamed bytes into a shared `AtomicU64`) via
+     `ApiRepo::download_with_progress`, replacing the old `dir_size(blobs/)` poller. New
+     `download_repo_files` / `fetch_one` orchestrate per-file fetch with a `hf_hub::Cache` pre-check
+     (reuse a finalized-but-not-copied blob instead of re-downloading) and an off-runtime
+     `spawn_blocking` clean-layout copy. Removed the now-dead `dir_size` / `hf_cache_repo_dir`.
+  2. *Stall watchdog.* `run_download` fetches on a child task and a watchdog (`stall_step` /
+     `stall_limit`, both pure + unit-tested) aborts it if the byte counter doesn't advance for
+     `STALL_TIMEOUT = 180 s`, emitting a `Failed` `ModelDownloadStatus` with a retryable message;
+     `finish_download` maps Done/Failed/JoinError. The partial `.sync.part` is left on disk so the
+     next `ensure` resumes.
+  3. *UI.* `ModelPanel` renders a failed-download banner (reason + "resumes from where it stopped")
+     using only valid Command Deck tokens (`border-danger`, `bg-overlay`, `rounded-panel`).
+- **Why:** User report (2026-06-24, round 3, with screenshot): "Inference engine download hanging
+  probably because last attempt was incomplete — this is a use case to address." Investigation proved
+  two defects in hf-hub 0.4.3's downloader: (a) it `set_len`s the `.sync.part` to the file's full
+  length up front, so the old size-poll bar read ~81% (≈5 GB allocated of 6.2 GB) while only the
+  committed-counter's **1.68 GB / 5.03 GB (33%)** was truly downloaded, then froze; (b) its `reqwest`
+  client has **no socket timeout** and we ran it with no retries, so a dead CDN connection blocks
+  `bytes_stream().next()` forever. No schema change; no new IPC types (no binding drift this round).
+- **Verification:**
+  - **Root cause confirmed from the live cache:** the 8B blob sat as a `*.sync.part` of
+    `5,027,784,808` bytes = HF size `5,027,784,800` + hf-hub's 8-byte trailer; reading that trailer
+    (the committed counter) showed `1,680,000,000` (33.4%) really downloaded; no finalized blob /
+    `refs/main` for the repo; the app process was not running (an abandoned, resumable partial).
+  - **Automated gates (all green):** `cargo fmt --all -- --check`; `cargo clippy --workspace
+    --all-targets -- -D warnings`; `cargo build --workspace`; `cargo test --workspace` (inference lib
+    67 tests incl. 3 new: `byte_counter_accumulates_streamed_bytes`,
+    `stall_limit_is_timeout_over_poll_and_never_zero`, `stall_step_resets_on_progress_and_counts_otherwise`);
+    `npm run lint`; `npm run build`; binding guard shows no round-3 drift.
+  - **Pending live (GUI) verification:** with the existing 33% partial on disk, Load the quality
+    vision model → bar should start near 33% and climb on real bytes; on a network drop it should
+    fail with the stall message after ~180 s (not hang) and resume on the next Load.
+
+## 2026-06-24 — Model-download progress + reliability, load-pinning, thinking auto-scroll (`fix/idle-backfill-sidecar-status`, round 2)
+- **Change:** Follow-up fixes from a second user test.
+  1. *Download progress + reliability.* New `inference::ModelDownloader` (shared by both lane
+     providers) serializes downloads per lane via a `[Mutex; 2]` (no concurrent races) and
+     broadcasts `ModelDownloadStatus` progress (polling the cache `blobs/` size against a total from
+     the HF `tree/main` API). Bridged composition-root → `kernel.emit_model_download` →
+     `model_download` Tauri event → `ModelPanel` progress bar + toasts. Providers' `ensure_spec` now
+     calls `downloader.ensure(lane, tier)` instead of the bare `download::ensure_model`.
+     New `models::model_files_present` fast-path. New IPC types `ModelDownloadStatus` /
+     `ModelDownloadPhase` (u64 byte fields tagged `#[ts(type="number")]`).
+  2. *Load-pinning (B).* `ModelSupervisor` gained a `pinned: AtomicBool`; `preload` sets it,
+     `unload` and a model switch clear it, and `should_evict` honors it (idle-TTL won't evict a
+     manually loaded model).
+  3. *Thinking auto-scroll (C).* `AnswerStream` bounds the trace (`max-h-64 overflow-auto`) and
+     auto-follows the latest line while streaming (only when already near the bottom).
+- **Why:** User report (2026-06-24, round 2): clicking Load/Download gave no progress or error
+  feedback ("if something takes >5s, communicate progress or error"); quality vision tagging
+  "doesn't work" — the DB showed `vision_tag` jobs `dead` with "download vision model" (the 6 GB
+  Qwen3-VL-8B fetch raced across workers and never completed); a manually loaded model was evicted
+  right after downloading; and the streaming Thinking box was cut off. No schema change.
+- **Verification:**
+  - **Root cause confirmed from the live DB:** `jobs` had 3 `vision_tag` rows in state `dead`,
+    `last_error = "vision analyze frame …: download vision model"`, and `models/vision/quality/` was
+    empty. The HF tree API returns real sizes (Q4_K_M 5.03 GB + mmproj-F16 1.16 GB ≈ 6.2 GB), so the
+    progress bar shows a true percentage.
+  - **Automated gates (all green):** `npm run lint`; `npm run build`; `cargo fmt --all -- --check`;
+    `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`; binding guard
+    clean (regenerated `SidecarStatus.ts` + new `ModelDownloadStatus.ts` / `ModelDownloadPhase.ts`).
+  - **Pending live (GUI) verification:** Load a quality model and watch the % bar + completion toast;
+    confirm vision tagging works once downloaded; confirm a loaded model isn't idle-evicted; confirm
+    the Thinking box follows the stream.
+
+---
+
+## 2026-06-24 — Idle backfill keep-warm + truthful sidecar status + Ask context budget (`fix/idle-backfill-sidecar-status`)
+- **Change:** Four linked fixes from user testing of PR #25.
+  1. *Idle full-drain, keep-warm.* `vision_scheduler::idle_loop` was rewritten from "enqueue one
+     batch on the idle transition" to a continuous drain: while idle and a backlog remains, it tops
+     the queue up to a batch whenever `Store::pending_vision_job_count` (new) falls below a
+     `batch/4` watermark, polling at `DRAIN_POLL` (5s) instead of 30s. It sets a keep-warm flag while
+     draining and clears it when the backlog is empty or the user resumes. The flag is the new
+     `traits::BackfillControl` trait, implemented by `ModelSupervisor`, threaded
+     kernel→`attach_inference`→`start_vision_scheduler`→`spawn` and wired at the composition root.
+  2. *TTL vs idle.* `ModelSupervisor` gained a `backfill_active: AtomicBool`; `maybe_evict` now uses a
+     pure, unit-tested `should_evict(in_flight, elapsed, ttl, backfill_active)` that holds the model
+     warm during a backfill drain.
+  3. *Truthful status + panel.* `sidecar_component` maps `Evicted → Disabled` (was `Ready`);
+     `SidecarStatus` gained `lane: Option<ModelLane>` (supervisor `emit` now takes the spec); the
+     StatusRail chip and a new **Inference engine** panel (`ModelPanel.tsx`) label from the raw
+     `SidecarState` (`sidecarStateLabel`/`sidecarStateTone`). New `load_model`/`unload_model` commands
+     back `ModelSupervisor::{preload, unload}` for manual control.
+  4. *Ask context overflow.* `client.rs` now surfaces the real HTTP status+body (was
+     `error_for_status().context("…error status")`); `answer.rs::build_messages` budgets included
+     context to `ctx_size` (reserve = reply tokens + system prompt + question + template overhead),
+     dropping/truncating chunks that don't fit and citing only included frames.
+  5. *Kill verification.* All teardown paths route through `kill_and_confirm` (logs `killed`/
+     `still_alive` after a bounded exit wait).
+- **Why:** User report (2026-06-24): idle tagging did one batch then stopped (wanted "process as
+  many as possible while idle", `03 §5`); the sidecar idle-TTL evicted the model and the UI showed
+  "Ready" for a dead process (`03 §6/§7`); "Ask" failed with an opaque "sidecar returned an error
+  status". No schema change.
+- **Verification:**
+  - **Root cause of the Ask failure, reproduced directly against the bundled `llama-server`** (answer
+    model, `--ctx-size 8192`): a normal request returned `HTTP 200`; an oversized-context request
+    returned the swallowed error:
+    ```text
+    [overflow] HTTP 400 ERROR; body={"error":{"code":400,"message":"request (29418 tokens) exceeds
+    the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error",
+    "n_prompt_tokens":29418,"n_ctx":8192}}
+    ```
+  - **Automated gates (all green):** `npm run lint`; `npm run build`; `cargo fmt --all -- --check`;
+    `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace` (incl. new
+    `client::http_error_*`, `supervisor::evict_predicate_*`, `answer::{drops_chunks_…,
+    truncates_an_oversized_top_chunk_…,builds_grounded_prompt_…}`); binding guard clean (only the
+    regenerated `SidecarStatus.ts`).
+  - **Pending live (GUI) verification:** in-app Ask now succeeds on large contexts; idle backfill
+    drains a real backlog while keeping the model warm; the panel's Load/Unload + truthful labels;
+    `killed=true,still_alive=false` after eviction. (Requires the running desktop app.)
+
+---
+
 ## 2026-06-24 — Sidecar memory tuning + user settings (`feat/sidecar-memory-tuning`)
 - **Change:** The llama.cpp sidecar now pins a small context window and quantizes the KV cache, and
   three new settings expose the knobs. `build_args` (`crates/inference/src/supervisor.rs`) emits
