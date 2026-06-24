@@ -26,6 +26,8 @@ base64.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 wiremock.workspace = true
+# `examples/repro_8b.rs` only — surfaces the downloader's lock-contention backoff logs.
+tracing-subscriber.workspace = true
 
 # Windows-only by design (04 guardrails). The Job-Object lifecycle (03 §6) is the
 # core fault-isolation guarantee: a spawned llama-server is bound to a Job Object

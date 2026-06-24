@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-24
+
+### Packaging — First public release: standalone unsigned Windows installer
+- **First tagged release (`v0.1.0`).** Ships a standalone **NSIS installer** (`.exe`) produced by
+  `tauri build`. `bundle.targets` is pinned to `["nsis"]` (was `"all"`) so the build emits a single
+  installer and does not require the MSI/WiX toolchain.
+- **Version bumped `0.0.0` → `0.1.0`** across the workspace `Cargo.toml`, `src-tauri/tauri.conf.json`,
+  and both `package.json` files (root + `ui/`).
+- **The installer carries only the ~11 MB app binary.** The llama.cpp sidecar and all GGUF / embedding
+  models download into the per-user app-data folder (`%APPDATA%\app.screensearchv2c.desktop\`) on first
+  run — nothing heavy is bundled. ONNX
+  Runtime is **statically linked** into the binary via `ort`'s `download-binaries` (not `load-dynamic`),
+  so no separate `onnxruntime.dll` is shipped.
+- **Unsigned by design.** Windows SmartScreen warns on first launch (*More info → Run anyway*); a
+  code-signing certificate remains a follow-up (see `specs/07_KNOWN_GAPS.md` #26). First run requires
+  internet and downloads ~8–10 GB of models; a Vulkan-capable GPU is recommended (CPU fallback exists).
+- Everything below (P0–P5: capture, data spine, OCR/embeddings, vision + sidecar inference, the
+  Command-Deck UI) is part of this first release.
+
+### Fixed — Quality (8B) vision download stuck in a retry storm (2026-06-24)
+- **Selecting the Quality vision tier could leave the model perpetually "downloading" / failing.**
+  Root cause (reproduced deterministically): nothing prevented a *second* app instance from running
+  against the **same** app-data dir — and users relaunch/spam when nothing seems to be happening — so
+  two processes raced hf-hub's per-model cache lock. The loser failed with `LockAcquisition` after
+  ~5 s and the vision scheduler retried instantly (a download "storm"); the largest model (8B) was the
+  most exposed because it holds the lock longest. Two complementary fixes:
+  - **Single-instance enforcement** (`tauri-plugin-single-instance`, registered first): a second
+    launch focuses the running window and exits, so only one ScreenSearch ever touches the SQLite DB
+    and the model cache (also prevents DB corruption / double-capture). (`src-tauri/src/lib.rs`.)
+  - **Resilient downloader**: a `LockAcquisition` during any residual contention now **backs off and
+    retries** (linear, bounded) instead of hard-failing into a storm. A lock left by a force-killed
+    process is released by the OS, so this only ever waits on a genuinely live holder.
+    (`crates/inference/src/download.rs`.)
+
+### Fixed — Settings opened a flashing console window (2026-06-24)
+- **Opening Settings briefly flashed a terminal window.** Enumerating GPU devices for the inference
+  panel ran `llama-server --list-devices` as a console process without Windows' `CREATE_NO_WINDOW`
+  flag, so a console flashed each time Settings opened (alarming, looks malware-ish). Now suppressed,
+  matching the sidecar/`probe_caps` spawns. (`src-tauri/src/lib.rs::list_devices_from_binary`.)
+
+### Known limitation — first-run model download speed (tracked for 0.1.1)
+- Models download **single-stream** via hf-hub (~20 MB/s; HuggingFace's CDN throttles single
+  connections), so the ~5 GB Quality vision model takes a few minutes. A parallel/chunked downloader
+  to saturate bandwidth is a tracked follow-up — see `specs/07_KNOWN_GAPS.md`.
+
 ### Added — Model-tier tooltips (2026-06-24)
 - **The Default / Quality / Beta tier buttons now show which model they map to** on hover and
   keyboard focus (e.g. Answer → Quality → "Qwen3-4B-Thinking"), so the tier names aren't opaque.
