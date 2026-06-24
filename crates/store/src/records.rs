@@ -117,12 +117,16 @@ impl SqliteStore {
         .await
     }
 
-    /// Frame ids with no `vision_analysis` row yet **and** no in-flight (`pending`/
-    /// `running`) `vision_tag` job, oldest first, capped at `limit`, optionally within
-    /// `[start, end)` capture time. Feeds the timer/idle vision batch and the
-    /// `enqueue_vision` range target (`03 §5`). Excluding already-queued frames stops a
+    /// Frame ids with no `vision_analysis` row yet **and** no `vision_tag` job in a
+    /// `pending`/`running`/`dead` state, oldest first, capped at `limit`, optionally
+    /// within `[start, end)` capture time. Feeds the timer/idle vision batch and the
+    /// `enqueue_vision` range target (`03 §5`). Excluding `pending`/`running` stops a
     /// slow batch from being re-enqueued on the next tick and the timer/idle lanes from
-    /// double-queuing the same frames.
+    /// double-queuing the same frames; excluding `dead` stops a poisoned frame (its job
+    /// exhausted retries without ever writing a `vision_analysis` row) from being
+    /// re-enqueued every tick forever. A `done` job does **not** exclude a frame (a job
+    /// that finished without persisting analysis is eligible to retry); on-demand
+    /// single-frame re-tagging bypasses this query, so a dead frame can still be forced.
     pub async fn untagged_frame_ids(
         &self,
         limit: u32,
@@ -140,7 +144,7 @@ impl SqliteStore {
                        SELECT 1 FROM jobs j
                        WHERE j.frame_id = f.id
                          AND j.kind = 'vision_tag'
-                         AND j.state IN ('pending', 'running')
+                         AND j.state IN ('pending', 'running', 'dead')
                    )",
             );
             let mut args: Vec<i64> = Vec::new();

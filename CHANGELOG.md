@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jobs(kind='vision_tag', state IN ('pending','running'))` so a trigger enqueues only genuinely
   eligible frames; a finished (`done`) job or a job of another kind still leaves an untagged frame
   eligible. Resolves the "batch size N" and "no pending-job dedup" threads of gap #19.
+- **Review hardening (PR #23):**
+  - **No infinite retry of poisoned frames.** The dedup now also excludes frames whose `vision_tag`
+    job `dead`-lettered (exhausted retries without writing a `vision_analysis` row); previously such a
+    frame was re-enqueued every tick forever. On-demand single-frame re-tagging still bypasses the
+    query, so a dead frame can be force-retagged.
+  - **Indexed the dedup lookup.** Forward migration `schema_version` → **2** adds
+    `idx_jobs_frame_kind_state` on `jobs(frame_id, kind, state)` so the correlated `NOT EXISTS` doesn't
+    scan the whole `jobs` table per candidate frame.
+  - **Atomic scheduled enqueue.** The timer and idle producers now share an async mutex across their
+    read-then-enqueue, so a simultaneous wake can't both read the same frames before either inserts —
+    closing the residual timer/idle double-queue race.
 
 ### Docs — README refresh + visual showcase (2026-06-24)
 - **Added a Screenshots section** to `README.md` showing five live Command-Deck screens (Deck,

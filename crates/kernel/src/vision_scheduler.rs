@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use traits::{JobKind, NewJob, Store};
 
@@ -56,9 +56,21 @@ impl Drop for SchedulerHandle {
 /// effect without a restart.
 pub(crate) fn spawn(store: Arc<dyn Store>, idle: Option<IdleSource>) -> SchedulerHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
-    let mut joins = vec![tokio::spawn(timer_loop(store.clone(), stop_rx.clone()))];
+    // Serializes the timer and idle producers' read-then-enqueue. `untagged_frame_ids`
+    // only excludes jobs already committed at query time, so without this a simultaneous
+    // wake of both loops could each read the same eligible frames before either inserts
+    // its jobs, double-queuing them (the exact timer+idle overlap this scheduler fixes).
+    // Holding the gate across the whole read+enqueue makes the two producers mutually
+    // atomic; the rare on-demand-vs-scheduler overlap stays bounded by `insert_vision`'s
+    // idempotent upsert.
+    let gate = Arc::new(Mutex::new(()));
+    let mut joins = vec![tokio::spawn(timer_loop(
+        store.clone(),
+        gate.clone(),
+        stop_rx.clone(),
+    ))];
     if let Some(idle) = idle {
-        joins.push(tokio::spawn(idle_loop(store, idle, stop_rx)));
+        joins.push(tokio::spawn(idle_loop(store, idle, gate, stop_rx)));
     }
     SchedulerHandle {
         stop: stop_tx,
@@ -68,7 +80,7 @@ pub(crate) fn spawn(store: Arc<dyn Store>, idle: Option<IdleSource>) -> Schedule
 
 /// Enqueues up to `enrich.vision_batch_size` untagged frames every
 /// `enrich.vision_timer_interval_ms`, while the timer trigger is enabled.
-async fn timer_loop(store: Arc<dyn Store>, mut stop: watch::Receiver<bool>) {
+async fn timer_loop(store: Arc<dyn Store>, gate: Arc<Mutex<()>>, mut stop: watch::Receiver<bool>) {
     loop {
         let s = settings::load_settings(store.as_ref()).await;
         let wait = if s.enrich_vision_timer_enabled {
@@ -82,7 +94,7 @@ async fn timer_loop(store: Arc<dyn Store>, mut stop: watch::Receiver<bool>) {
         // Re-read in case the toggle (or batch size) changed during the wait.
         let s = settings::load_settings(store.as_ref()).await;
         if s.enrich_vision_timer_enabled {
-            enqueue_untagged(&store, "timer", s.enrich_vision_batch_size).await;
+            enqueue_untagged(&store, &gate, "timer", s.enrich_vision_batch_size).await;
         }
     }
 }
@@ -90,7 +102,12 @@ async fn timer_loop(store: Arc<dyn Store>, mut stop: watch::Receiver<bool>) {
 /// Enqueues a batch when the user transitions *into* idle (idle ≥ threshold), while the
 /// idle trigger is enabled. Only on the transition, so a long idle period doesn't
 /// re-enqueue every poll.
-async fn idle_loop(store: Arc<dyn Store>, idle: IdleSource, mut stop: watch::Receiver<bool>) {
+async fn idle_loop(
+    store: Arc<dyn Store>,
+    idle: IdleSource,
+    gate: Arc<Mutex<()>>,
+    mut stop: watch::Receiver<bool>,
+) {
     let mut was_idle = false;
     loop {
         if wait_or_stop(&mut stop, IDLE_POLL).await {
@@ -104,15 +121,18 @@ async fn idle_loop(store: Arc<dyn Store>, idle: IdleSource, mut stop: watch::Rec
         let threshold_ms = (s.enrich_vision_idle_secs as u64).saturating_mul(1000);
         let now_idle = idle().is_some_and(|idle_ms| idle_ms >= threshold_ms);
         if now_idle && !was_idle {
-            enqueue_untagged(&store, "idle", s.enrich_vision_batch_size).await;
+            enqueue_untagged(&store, &gate, "idle", s.enrich_vision_batch_size).await;
         }
         was_idle = now_idle;
     }
 }
 
 /// Enqueues up to `batch` still-untagged frames (oldest first, excluding any with an
-/// in-flight `vision_tag` job) as `vision_tag` jobs.
-async fn enqueue_untagged(store: &Arc<dyn Store>, trigger: &str, batch: u32) {
+/// in-flight `vision_tag` job) as `vision_tag` jobs. Holds `gate` across the read and the
+/// enqueue so a concurrent producer (the other of the timer/idle pair) can't read the same
+/// frames before these jobs are committed.
+async fn enqueue_untagged(store: &Arc<dyn Store>, gate: &Mutex<()>, trigger: &str, batch: u32) {
+    let _guard = gate.lock().await;
     let ids = match store.untagged_frame_ids(batch, None).await {
         Ok(ids) => ids,
         Err(e) => {

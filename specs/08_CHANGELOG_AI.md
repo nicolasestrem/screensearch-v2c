@@ -941,3 +941,34 @@
   --workspace` (ok); `cargo test --workspace` (all crates 0 failed, incl. store integration **45
   passed**, kernel settings **5 passed**); `git diff --exit-code -- ui/src/bindings` clean after the
   regenerated `Settings.ts` is committed.
+
+## 2026-06-24 — PR #23 review follow-up (`fix/vision-batch-size-dedup`)
+- **Context:** PR #23 drew three actionable review threads (Gemini, Codex; Claude approved). All three
+  were valid and addressed.
+- **Change (Gemini, high — infinite retry of poisoned frames):** a `vision_tag` job that exhausted
+  retries goes `dead` without writing a `vision_analysis` row, so the prior `NOT EXISTS` (which only
+  excluded `pending`/`running`) re-selected that frame every tick → enqueue → fail → dead → repeat
+  forever. `untagged_frame_ids` now also excludes `state = 'dead'`. A `done` job still does **not**
+  exclude (a frame whose job finished without persisting analysis remains eligible); on-demand
+  single-frame re-tag bypasses the query, so a dead frame can be force-retagged.
+- **Change (Gemini/Claude — perf):** the correlated `NOT EXISTS` scanned `jobs` per candidate frame.
+  Added forward migration v2 (`schema_version` 1→2): `CREATE INDEX idx_jobs_frame_kind_state ON
+  jobs(frame_id, kind, state)`. Index-only, no data change; existing DBs migrate on next open.
+- **Change (Codex, P2 — atomic scheduled enqueue):** the read (`untagged_frame_ids`) and the
+  per-frame `enqueue_job` calls are separate store ops, so a simultaneous timer+idle wake could both
+  read the same frames before either inserts, defeating the guard in exactly the overlap scenario this
+  PR targets. The timer and idle loops now share a `tokio::sync::Mutex` held across the whole
+  read-then-enqueue, making the two producers mutually atomic. The rarer on-demand-vs-scheduler
+  overlap stays bounded by `insert_vision`'s idempotent upsert (a scheduler-scoped guard, not a global
+  DB constraint — chosen to avoid changing `enqueue_job` semantics for the embed lanes).
+- **Change (Codex, P1 — docs):** added `enrich.vision_batch_size` (20, clamp 1–500) to
+  `specs/03_MASTER_PRODUCTION_SPEC.md` §8, per AGENTS.md's "every setting recorded in §8" rule.
+- **Tests:** extended `untagged_frame_ids_excludes_in_flight_vision_jobs` with a dead-lettered frame
+  (claim → `fail_job(.., None)`) asserted excluded; the existing `open_in_memory_migrates_to_latest_
+  schema_version` now exercises the v1→v2 path.
+- **Interface review:** schema gains an index via a versioned forward migration (no drift). No
+  trait-signature, IPC, command, or `ts-rs` changes in this round.
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets --
+  -D warnings` (exit 0); `cargo test -p store` (store integration **44 passed**, 0 failed, incl. the
+  migration + dead-job tests); `cargo test -p kernel` (settings **5 passed**, enrichment **10
+  passed**); `cargo test --workspace` (all crates 0 failed).

@@ -925,10 +925,11 @@ async fn untagged_frame_ids_excludes_tagged_and_honors_range() {
     );
 }
 
-/// `untagged_frame_ids` also excludes frames with an in-flight (`pending`/`running`)
-/// `vision_tag` job, so a slow batch isn't re-enqueued on the next tick and the
-/// timer/idle lanes don't double-queue the same frames. A finished (`done`) vision_tag
-/// job, or a pending job of another kind, leaves a still-untagged frame eligible.
+/// `untagged_frame_ids` also excludes frames with a `vision_tag` job in a
+/// `pending`/`running`/`dead` state, so a slow batch isn't re-enqueued on the next tick,
+/// the timer/idle lanes don't double-queue the same frames, and a poisoned (dead-lettered)
+/// frame isn't re-enqueued forever. A finished (`done`) vision_tag job, or a pending job
+/// of another kind, leaves a still-untagged frame eligible.
 #[tokio::test]
 async fn untagged_frame_ids_excludes_in_flight_vision_jobs() {
     let store = SqliteStore::open_in_memory().unwrap();
@@ -937,6 +938,7 @@ async fn untagged_frame_ids_excludes_in_flight_vision_jobs() {
     let f3 = store.insert_frame(frame_at(300)).await.unwrap();
     let f4 = store.insert_frame(frame_at(400)).await.unwrap();
     let f5 = store.insert_frame(frame_at(500)).await.unwrap();
+    let f6 = store.insert_frame(frame_at(600)).await.unwrap();
 
     let frame_job = |kind, frame_id| NewJob {
         kind,
@@ -959,6 +961,20 @@ async fn untagged_frame_ids_excludes_in_flight_vision_jobs() {
         .unwrap();
     assert_eq!(done.len(), 1);
     store.complete_job(done[0].id).await.unwrap();
+
+    // f6: a vision_tag job that exhausted retries and dead-lettered — excluded, so a
+    // poisoned frame isn't re-enqueued every tick. (Claim then fail with no retry.)
+    store
+        .enqueue_job(frame_job(JobKind::VisionTag, f6))
+        .await
+        .unwrap();
+    let dead = store
+        .claim_jobs(&[JobKind::VisionTag], 10, 100)
+        .await
+        .unwrap();
+    assert_eq!(dead.len(), 1);
+    assert_eq!(dead[0].frame_id, Some(f6));
+    store.fail_job(dead[0].id, "poisoned", None).await.unwrap();
 
     // f2: a vision_tag job left running (claimed, not completed) — excluded.
     store
@@ -987,6 +1003,7 @@ async fn untagged_frame_ids_excludes_in_flight_vision_jobs() {
     // f5: no job at all.
 
     // Eligible, oldest first: f3 (done), f4 (other kind), f5 (no job).
+    // Excluded: f1 (pending), f2 (running), f6 (dead).
     assert_eq!(
         store.untagged_frame_ids(10, None).await.unwrap(),
         vec![f3, f4, f5]

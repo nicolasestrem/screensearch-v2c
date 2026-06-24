@@ -290,6 +290,7 @@ optional human-readable explanation.
 `enrich.embed_text` (true) · `enrich.image_embeddings` (false) ·
 `enrich.vision_timer_enabled` (false) · `enrich.vision_timer_interval_ms` (3600000) ·
 `enrich.vision_idle_enabled` (false) · `enrich.vision_idle_secs` (300) ·
+`enrich.vision_batch_size` (20, clamped 1–500 — max still-untagged frames a timer/idle tick enqueues) ·
 `enrich.worker_concurrency` (2) ·
 `models.vision_tier` (`default`) · `models.answer_tier` (`default`) ·
 `answer.thinking` (true) · `sidecar.idle_ttl_secs` (180) · `sidecar.ngl` (99) ·
