@@ -76,6 +76,7 @@ function sanitizeSettings(s: Settings): Settings {
     enrich_worker_concurrency: clampInt(s.enrich_worker_concurrency, 1, 16),
     enrich_vision_timer_interval_ms: clampInt(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000),
     enrich_vision_idle_secs: clampInt(s.enrich_vision_idle_secs, 60, 86_400),
+    enrich_vision_batch_size: clampInt(s.enrich_vision_batch_size, 1, 500),
     sidecar_idle_ttl_secs: clampInt(s.sidecar_idle_ttl_secs, 0, 86_400),
     sidecar_ngl: clampInt(s.sidecar_ngl, 0, 999),
     sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
@@ -394,6 +395,7 @@ export function Component() {
             timerIntervalMs={draft.enrich_vision_timer_interval_ms}
             idleEnabled={draft.enrich_vision_idle_enabled}
             idleSecs={draft.enrich_vision_idle_secs}
+            batchSize={draft.enrich_vision_batch_size}
             onChange={patch}
           />
         </div>

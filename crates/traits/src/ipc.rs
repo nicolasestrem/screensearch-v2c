@@ -253,6 +253,9 @@ pub struct Settings {
     /// Opt-in: tag while the user has been idle for at least `vision_idle_secs`.
     pub enrich_vision_idle_enabled: bool,
     pub enrich_vision_idle_secs: u32,
+    /// Max still-untagged frames a timer/idle tick enqueues per run (the scheduler
+    /// batch size). Already-queued frames are skipped, so this caps fresh work per run.
+    pub enrich_vision_batch_size: u32,
     pub enrich_worker_concurrency: u32,
     pub models_vision_tier: ModelTier,
     pub models_answer_tier: ModelTier,
@@ -282,6 +285,7 @@ impl Default for Settings {
             enrich_vision_timer_interval_ms: 3_600_000, // 60 min
             enrich_vision_idle_enabled: false,
             enrich_vision_idle_secs: 300, // 5 min
+            enrich_vision_batch_size: 20, // frames per scheduled tick
             enrich_worker_concurrency: 2,
             models_vision_tier: ModelTier::Default,
             models_answer_tier: ModelTier::Default,

@@ -102,9 +102,11 @@ pub trait Store: Send + Sync {
     /// text), or `None` if the frame no longer exists (`03 §5`).
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>>;
 
-    /// Frame ids that have **no** vision analysis yet (oldest first, capped at
-    /// `limit`), optionally restricted to a `[start, end)` capture window. The source
-    /// for the timer/idle vision batch and the `enqueue_vision` range target (`03 §5`).
+    /// Frame ids that have **no** vision analysis yet **and** no in-flight
+    /// (`pending`/`running`) `vision_tag` job (oldest first, capped at `limit`),
+    /// optionally restricted to a `[start, end)` capture window. The source for the
+    /// timer/idle vision batch and the `enqueue_vision` range target (`03 §5`); the
+    /// in-flight exclusion keeps a trigger from re-enqueuing already-queued frames.
     /// Default returns empty for stores that don't track vision.
     async fn untagged_frame_ids(
         &self,

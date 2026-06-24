@@ -925,6 +925,74 @@ async fn untagged_frame_ids_excludes_tagged_and_honors_range() {
     );
 }
 
+/// `untagged_frame_ids` also excludes frames with an in-flight (`pending`/`running`)
+/// `vision_tag` job, so a slow batch isn't re-enqueued on the next tick and the
+/// timer/idle lanes don't double-queue the same frames. A finished (`done`) vision_tag
+/// job, or a pending job of another kind, leaves a still-untagged frame eligible.
+#[tokio::test]
+async fn untagged_frame_ids_excludes_in_flight_vision_jobs() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let f1 = store.insert_frame(frame_at(100)).await.unwrap();
+    let f2 = store.insert_frame(frame_at(200)).await.unwrap();
+    let f3 = store.insert_frame(frame_at(300)).await.unwrap();
+    let f4 = store.insert_frame(frame_at(400)).await.unwrap();
+    let f5 = store.insert_frame(frame_at(500)).await.unwrap();
+
+    let frame_job = |kind, frame_id| NewJob {
+        kind,
+        frame_id: Some(frame_id),
+        priority: 0,
+        max_attempts: 3,
+        not_before: 0,
+    };
+
+    // f3: a vision_tag job that ran to completion — it still has no vision_analysis
+    // row, so the frame stays eligible. (Claim then complete; it's the only pending
+    // vision_tag job at this point.)
+    store
+        .enqueue_job(frame_job(JobKind::VisionTag, f3))
+        .await
+        .unwrap();
+    let done = store
+        .claim_jobs(&[JobKind::VisionTag], 10, 100)
+        .await
+        .unwrap();
+    assert_eq!(done.len(), 1);
+    store.complete_job(done[0].id).await.unwrap();
+
+    // f2: a vision_tag job left running (claimed, not completed) — excluded.
+    store
+        .enqueue_job(frame_job(JobKind::VisionTag, f2))
+        .await
+        .unwrap();
+    let running = store
+        .claim_jobs(&[JobKind::VisionTag], 10, 100)
+        .await
+        .unwrap();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].frame_id, Some(f2));
+
+    // f1: a vision_tag job left pending — excluded.
+    store
+        .enqueue_job(frame_job(JobKind::VisionTag, f1))
+        .await
+        .unwrap();
+
+    // f4: a pending job of a *different* kind — does not exclude the frame.
+    store
+        .enqueue_job(frame_job(JobKind::EmbedText, f4))
+        .await
+        .unwrap();
+
+    // f5: no job at all.
+
+    // Eligible, oldest first: f3 (done), f4 (other kind), f5 (no job).
+    assert_eq!(
+        store.untagged_frame_ids(10, None).await.unwrap(),
+        vec![f3, f4, f5]
+    );
+}
+
 /// `ocr_texts` bulk-fetches non-empty OCR text for many frames in one query (the `ask`
 /// grounding hydrate). Frames without text — or with empty text — are omitted.
 #[tokio::test]

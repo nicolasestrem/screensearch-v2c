@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Vision scheduler: configurable batch size + pending-job dedup (2026-06-24)
+- **The timer/idle vision batch size is now a setting.** It was a hardcoded `const BATCH = 20`, so
+  the scheduler logs showed a fixed `count=20` every tick with no way to drain a backlog faster.
+  Added `enrich.vision_batch_size` (`Settings.enrich_vision_batch_size`, default **20**, clamped
+  **1–500**) wired through `load`/`save`/`sanitize`, surfaced as a "Frames per run" field in the
+  Settings → Enrichment schedule control, and read fresh each run so it applies on the next
+  scheduled tick.
+- **The scheduler no longer re-enqueues frames that already have an in-flight `vision_tag` job.**
+  `untagged_frame_ids` only filtered on "no `vision_analysis` row", so every tick re-queued the same
+  oldest-untagged frames while their jobs were still `pending`/`running`, and the timer + idle lanes
+  double-queued the same frames when they fired together. Added a `NOT EXISTS` guard on
+  `jobs(kind='vision_tag', state IN ('pending','running'))` so a trigger enqueues only genuinely
+  eligible frames; a finished (`done`) job or a job of another kind still leaves an untagged frame
+  eligible. Resolves the "batch size N" and "no pending-job dedup" threads of gap #19.
+
 ### Docs — README refresh + visual showcase (2026-06-24)
 - **Added a Screenshots section** to `README.md` showing five live Command-Deck screens (Deck,
   Recall/Ask, Insights, Moment, Timeline). Renamed the committed `screenshots/screensearch_*.png`

@@ -907,3 +907,37 @@
   `reap_stray_any` before `ensure_binary`, then reuses that candidate list for `SupervisorConfig`.
 - **Interface review:** no schema, IPC, `ts-rs`, or public command changes. The optional multi-GB GPU
   smokes remain ignored.
+
+## 2026-06-24 — Vision scheduler: configurable batch size + pending-job dedup (`fix/vision-batch-size-dedup`)
+- **Context:** a user observed the vision scheduler logging a fixed `count=20` every tick for both
+  the `timer` and `idle` triggers, with no setting to change it. Root cause was the two remaining
+  sub-threads of `07` #19: the batch size was a hardcoded `const BATCH: u32 = 20` in
+  `kernel::vision_scheduler`, and `Store::untagged_frame_ids` filtered only on "no `vision_analysis`
+  row" — it ignored whether a `vision_tag` job was already in flight, so every tick re-queued the
+  same oldest-untagged frames and the timer/idle lanes double-queued the same frames when they fired
+  together.
+- **Change (config):** added `Settings.enrich_vision_batch_size: u32` (default 20, sanitized to
+  1–500) persisted as `enrich.vision_batch_size`. The scheduler reads it from the settings it already
+  loads each loop and passes it into `enqueue_untagged`, so a change applies on the next scheduled
+  run. Surfaced in the UI as a "Frames per run" field in `ScheduleControl`, shown when either lane is
+  enabled, with a save-time clamp mirroring the backend.
+- **Change (dedup):** `untagged_frame_ids` now also excludes frames with an in-flight
+  (`pending`/`running`) `vision_tag` job via a `NOT EXISTS` subquery on `jobs`. A finished (`done`)
+  job or a job of another kind still leaves an untagged frame eligible. This also benefits the
+  on-demand `enqueue_vision` range path (shared query); single-frame on-demand re-tagging is
+  unaffected (it bypasses the query). `insert_vision`'s idempotent upsert remains the backstop for a
+  stray re-analyze after a job leaves the queue.
+- **Why:** fixes the user-reported "count stuck at 20 / no setting" and the timer+idle double-enqueue;
+  resolves the batch-size and pending-job-dedup threads of `07` gap #19 (the prior "re-enqueue is
+  harmless" stance is reversed now that it can churn the queue at larger batch sizes).
+- **Tests:** new store integration test `untagged_frame_ids_excludes_in_flight_vision_jobs`
+  (pending/running excluded; done / other-kind / no-job eligible); extended the kernel settings
+  round-trip and numeric-sanitize tests for the new field.
+- **Interface review:** `Settings` gains one field → `ts-rs` regenerated `ui/src/bindings/Settings.ts`
+  (committed). No trait-signature, command, or schema changes; the `jobs`/`frames`/`vision_analysis`
+  tables are unchanged (the dedup is a query-only `NOT EXISTS`, no new index or migration).
+- **Verification:** UI `npm ci && npm run lint && npm run build` clean; `cargo fmt --all -- --check`
+  (exit 0); `cargo clippy --workspace --all-targets -- -D warnings` (exit 0); `cargo build
+  --workspace` (ok); `cargo test --workspace` (all crates 0 failed, incl. store integration **45
+  passed**, kernel settings **5 passed**); `git diff --exit-code -- ui/src/bindings` clean after the
+  regenerated `Settings.ts` is committed.

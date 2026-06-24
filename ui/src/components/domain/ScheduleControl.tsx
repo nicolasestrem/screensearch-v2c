@@ -11,12 +11,14 @@ export interface ScheduleControlProps {
   timerIntervalMs: number;
   idleEnabled: boolean;
   idleSecs: number;
+  batchSize: number;
   onChange: (
     patch: Partial<{
       enrich_vision_timer_enabled: boolean;
       enrich_vision_timer_interval_ms: number;
       enrich_vision_idle_enabled: boolean;
       enrich_vision_idle_secs: number;
+      enrich_vision_batch_size: number;
     }>,
   ) => void;
 }
@@ -26,6 +28,7 @@ export function ScheduleControl({
   timerIntervalMs,
   idleEnabled,
   idleSecs,
+  batchSize,
   onChange,
 }: ScheduleControlProps) {
   // Shown in minutes; a cleared field shows 0 (a transient value to type over) rather
@@ -85,6 +88,25 @@ export function ScheduleControl({
             }
           }}
           hint="Applies on restart."
+        />
+      )}
+
+      {(timerEnabled || idleEnabled) && (
+        <Field
+          label="Frames per run"
+          type="number"
+          min={1}
+          max={500}
+          value={batchSize}
+          onChange={(e) => {
+            const n = e.currentTarget.valueAsNumber;
+            if (Number.isFinite(n) && n >= 1) {
+              onChange({ enrich_vision_batch_size: Math.round(n) });
+            } else if (e.currentTarget.value === "") {
+              onChange({ enrich_vision_batch_size: 0 });
+            }
+          }}
+          hint="Most untagged frames a scheduled run queues. Already-queued frames are skipped. Applies on the next run."
         />
       )}
     </div>

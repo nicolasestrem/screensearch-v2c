@@ -4,10 +4,12 @@
 //! (`06_PATCH_PLAN`, `07` gap #1). On-demand tagging goes through
 //! [`crate::Kernel::enqueue_vision`] instead.
 //!
-//! Each enabled trigger enqueues up to [`BATCH`] still-untagged frames per tick. There
-//! is no pending-job dedup, so a frame enqueued but not yet processed could be enqueued
-//! again on the next timer tick; `insert_vision` is an idempotent upsert, so the only
-//! cost is a redundant analyze — acceptable at the configured cadences (a logged gap).
+//! Each enabled trigger enqueues up to `enrich.vision_batch_size` still-untagged frames
+//! per tick. A frame that already has an in-flight (`pending`/`running`) `vision_tag`
+//! job is skipped — [`Store::untagged_frame_ids`] excludes it — so a slow batch is not
+//! re-enqueued on the next tick and the timer/idle lanes don't double-queue the same
+//! frames. (`insert_vision` is still an idempotent upsert, so a stray re-analyze after a
+//! job leaves the queue can't corrupt data.)
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,8 +21,6 @@ use traits::{JobKind, NewJob, Store};
 use crate::settings;
 use crate::IdleSource;
 
-/// Untagged frames enqueued per timer/idle tick (`07` gap: batch size N).
-const BATCH: u32 = 20;
 /// How often the timer loop re-checks settings while the timer trigger is disabled.
 const DISABLED_RECHECK: Duration = Duration::from_secs(30);
 /// How often the idle loop samples the platform idle time.
@@ -66,8 +66,8 @@ pub(crate) fn spawn(store: Arc<dyn Store>, idle: Option<IdleSource>) -> Schedule
     }
 }
 
-/// Enqueues up to `BATCH` untagged frames every `enrich.vision_timer_interval_ms`,
-/// while the timer trigger is enabled.
+/// Enqueues up to `enrich.vision_batch_size` untagged frames every
+/// `enrich.vision_timer_interval_ms`, while the timer trigger is enabled.
 async fn timer_loop(store: Arc<dyn Store>, mut stop: watch::Receiver<bool>) {
     loop {
         let s = settings::load_settings(store.as_ref()).await;
@@ -79,12 +79,10 @@ async fn timer_loop(store: Arc<dyn Store>, mut stop: watch::Receiver<bool>) {
         if wait_or_stop(&mut stop, wait).await {
             break;
         }
-        // Re-read in case the toggle changed during the wait.
-        if settings::load_settings(store.as_ref())
-            .await
-            .enrich_vision_timer_enabled
-        {
-            enqueue_untagged(&store, "timer").await;
+        // Re-read in case the toggle (or batch size) changed during the wait.
+        let s = settings::load_settings(store.as_ref()).await;
+        if s.enrich_vision_timer_enabled {
+            enqueue_untagged(&store, "timer", s.enrich_vision_batch_size).await;
         }
     }
 }
@@ -106,15 +104,16 @@ async fn idle_loop(store: Arc<dyn Store>, idle: IdleSource, mut stop: watch::Rec
         let threshold_ms = (s.enrich_vision_idle_secs as u64).saturating_mul(1000);
         let now_idle = idle().is_some_and(|idle_ms| idle_ms >= threshold_ms);
         if now_idle && !was_idle {
-            enqueue_untagged(&store, "idle").await;
+            enqueue_untagged(&store, "idle", s.enrich_vision_batch_size).await;
         }
         was_idle = now_idle;
     }
 }
 
-/// Enqueues up to `BATCH` still-untagged frames (oldest first) as `vision_tag` jobs.
-async fn enqueue_untagged(store: &Arc<dyn Store>, trigger: &str) {
-    let ids = match store.untagged_frame_ids(BATCH, None).await {
+/// Enqueues up to `batch` still-untagged frames (oldest first, excluding any with an
+/// in-flight `vision_tag` job) as `vision_tag` jobs.
+async fn enqueue_untagged(store: &Arc<dyn Store>, trigger: &str, batch: u32) {
+    let ids = match store.untagged_frame_ids(batch, None).await {
         Ok(ids) => ids,
         Err(e) => {
             tracing::warn!(trigger, error = %e, "vision scheduler: list untagged failed");

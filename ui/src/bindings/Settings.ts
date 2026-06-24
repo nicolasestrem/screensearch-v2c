@@ -29,4 +29,9 @@ enrich_vision_timer_enabled: boolean, enrich_vision_timer_interval_ms: number,
 /**
  * Opt-in: tag while the user has been idle for at least `vision_idle_secs`.
  */
-enrich_vision_idle_enabled: boolean, enrich_vision_idle_secs: number, enrich_worker_concurrency: number, models_vision_tier: ModelTier, models_answer_tier: ModelTier, answer_thinking: boolean, sidecar_idle_ttl_secs: number, sidecar_ngl: number, sidecar_device: string | null, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, };
+enrich_vision_idle_enabled: boolean, enrich_vision_idle_secs: number, 
+/**
+ * Max still-untagged frames a timer/idle tick enqueues per run (the scheduler
+ * batch size). Already-queued frames are skipped, so this caps fresh work per run.
+ */
+enrich_vision_batch_size: number, enrich_worker_concurrency: number, models_vision_tier: ModelTier, models_answer_tier: ModelTier, answer_thinking: boolean, sidecar_idle_ttl_secs: number, sidecar_ngl: number, sidecar_device: string | null, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, };
