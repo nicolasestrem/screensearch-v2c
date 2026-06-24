@@ -11,6 +11,28 @@
 
 ---
 
+## 2026-06-24 — Release v0.1.0: standalone unsigned NSIS installer (`release/v0.1.0`)
+- **Change:**
+  1. Version `0.0.0` → `0.1.0` across workspace `Cargo.toml`, `src-tauri/tauri.conf.json`, and root +
+     `ui/package.json` (`Cargo.lock` regenerated to match).
+  2. `bundle.targets` `"all"` → `["nsis"]` — ship a single unsigned NSIS installer; no MSI/WiX.
+  3. `CHANGELOG.md` cut `[Unreleased]` → `[0.1.0]`; gap #26 marked **partial** (installer shipped,
+     code signing still open); the `onnxruntime.dll` bundling item closed (static-linked).
+- **Why:** First public release (specs `02 §5` / `03 §13.9`, gap #26). User decisions: **NSIS-only**,
+  **local build + manual upload**, **GitHub pre-release**. ONNX Runtime is static-linked via `ort`'s
+  `download-binaries` (no `load-dynamic`/`libloading` in `ort-sys`), so there is no DLL to bundle — the
+  installer needs only the ~11 MB exe; sidecar + models download to the app-data dir on first run.
+- **Verification:**
+  - **UI:** `npm run lint` clean; `vite build` ok (`screensearch-ui@0.1.0`).
+  - **Rust:** `cargo fmt --all -- --check` → `FMT_OK`; `cargo clippy --workspace --all-targets -- -D
+    warnings` clean (all crates `v0.1.0`); `cargo test --workspace` → **124 passed, 0 failed**.
+  - **Bundle:** `npm run build` → `Finished \`release\` profile [optimized] target(s) in 3m 03s`;
+    `Finished 1 bundle at: target/release/bundle/nsis/ScreenSearch_0.1.0_x64-setup.exe` (**11 MB**). No
+    `.dll` and no `onnxruntime*` beside `target/release/screensearch.exe` → static link confirmed.
+  - **Live (user-verified, 2026-06-24):** installer installs to `%LOCALAPPDATA%\ScreenSearch`; app
+    launches and works; **uninstall works** (Roaming app-data at `%APPDATA%\app.screensearchv2c.desktop`
+    preserved); **fresh install after removing the data dir also works** (clean first-run path).
+
 ## 2026-06-24 — Ask answer truncated to nothing + download not visible globally (`fix/idle-backfill-sidecar-status`, round 4)
 - **Change:**
   1. *Ask reply budget.* `ui/src/routes/Recall.tsx`: `ASK_MAX_TOKENS` 512 → 2048.

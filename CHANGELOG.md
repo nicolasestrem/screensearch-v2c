@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-24
+
+### Packaging — First public release: standalone unsigned Windows installer
+- **First tagged release (`v0.1.0`).** Ships a standalone **NSIS installer** (`.exe`) produced by
+  `tauri build`. `bundle.targets` is pinned to `["nsis"]` (was `"all"`) so the build emits a single
+  installer and does not require the MSI/WiX toolchain.
+- **Version bumped `0.0.0` → `0.1.0`** across the workspace `Cargo.toml`, `src-tauri/tauri.conf.json`,
+  and both `package.json` files (root + `ui/`).
+- **The installer carries only the ~11 MB app binary.** The llama.cpp sidecar and all GGUF / embedding
+  models download into the per-user app-data folder (`%APPDATA%\app.screensearchv2c.desktop\`) on first
+  run — nothing heavy is bundled. ONNX
+  Runtime is **statically linked** into the binary via `ort`'s `download-binaries` (not `load-dynamic`),
+  so no separate `onnxruntime.dll` is shipped.
+- **Unsigned by design.** Windows SmartScreen warns on first launch (*More info → Run anyway*); a
+  code-signing certificate remains a follow-up (see `specs/07_KNOWN_GAPS.md` #26). First run requires
+  internet and downloads ~8–10 GB of models; a Vulkan-capable GPU is recommended (CPU fallback exists).
+- Everything below (P0–P5: capture, data spine, OCR/embeddings, vision + sidecar inference, the
+  Command-Deck UI) is part of this first release.
+
 ### Added — Model-tier tooltips (2026-06-24)
 - **The Default / Quality / Beta tier buttons now show which model they map to** on hover and
   keyboard focus (e.g. Answer → Quality → "Qwen3-4B-Thinking"), so the tier names aren't opaque.

@@ -1,6 +1,6 @@
 {
   "name": "screensearch-v2c",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "ScreenSearch V2c — Tauri 2 desktop shell orchestration (CLI + scripts). The React UI lives in ./ui.",
   "scripts": {
