@@ -4,15 +4,40 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status: feature-complete, pre-packaging.** Capture → OCR → deferred enrichment → **hybrid
+> **Status: feature-complete; P5 UI verification and packaging pending.** Capture → OCR → deferred enrichment → **hybrid
 > search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the
 > full **Command-Deck UI** (Deck, Recall, Timeline, Moment, Insights, Settings) are implemented and
-> tested, including the P5 review hardening for bounded IPC, request-scoped ask streams, storage
-> telemetry, retention enforcement, monitor/device selection, adaptive charts, and live enrichment
-> reconfiguration. Phases **P0–P5 are complete**; only **packaging** (installer + portable ZIP, code
-> signing — DoD §13.9) remains. The design lives in [`specs/`](./specs); the as-built architecture is in
+> exercised on the live app, including the P5 review hardening for bounded IPC, request-scoped ask
+> streams, storage telemetry, retention enforcement, monitor/device selection, adaptive charts, and
+> live enrichment reconfiguration. Phases **P0–P4 are complete and verified**; the **P5 Command-Deck
+> UI is feature-complete**, with its full keyboard / state / a11y matrix still being verified. A
+> 2026-06-23 evidence-driven audit exercised the **live app on real hardware** — GPU `llama-server`
+> runtime, real vision tagging, grounded `ask`, and ~33 ms p95 search on 10 000 frames — and tracks
+> the open UI gaps (the keyboard/state/a11y matrix, and a no-evidence answer still rendering
+> cited-frame tiles) in [`docs/AUDIT_V2C_2026-06-23.md`](./docs/AUDIT_V2C_2026-06-23.md). **Packaging**
+> (installer + portable ZIP, code signing — DoD §13.9) remains beyond that. The design lives in
+> [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project (not linked to,
 > and importing no data from, any prior version).
+
+## Screenshots
+
+The **Command Deck** — six on-device screens over your screen history. Nothing here touches the
+network: every frame, query, and answer stays on the machine.
+
+![ScreenSearch Deck — capture toggle, today's activity, live enrichment queue, and recent frames](screenshots/deck.png)
+
+> **Deck** — start/stop capture, today's capture count with a per-app breakdown, the live enrichment
+> queue, and a "jump back in" strip of recent frames.
+
+| Recall — grounded **Ask** | Insights — activity analytics | Moment — frame detail |
+|:--:|:--:|:--:|
+| [![Recall screen — natural-language Ask with cited frames](screenshots/recall-ask.png)](screenshots/recall-ask.png) | [![Insights screen — captures over time, top apps, activities](screenshots/insights.png)](screenshots/insights.png) | [![Moment screen — recognized text and vision tagging](screenshots/moment.png)](screenshots/moment.png) |
+| Ask in plain language; answers **cite the exact frames** they came from. | Captures over time, top apps, and inferred activities from vision tags. | One moment's recognized text and context, with on-demand **vision tagging**. |
+
+![Timeline — scrub the day's captures on a scanline](screenshots/timeline.png)
+
+> **Timeline** — scrub a day / week / month of captures on a scanline; `Enter` opens the Moment.
 
 ## Build progress
 
@@ -23,8 +48,13 @@ on-device, no cloud.
 | **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, minimal live timeline | ✅ Complete |
 | **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
 | **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
-| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | ✅ Complete |
+| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; UI verification in progress |
 | **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
+
+> **P5 verification** (per the [2026-06-23 audit](./docs/AUDIT_V2C_2026-06-23.md)): all six screens
+> are built and the P5 review hardening landed, but the full keyboard/state/a11y matrix is not yet
+> verified and a no-evidence answer can still render cited-frame tiles. P0–P4 verified clean (with a
+> minor P2 OCR caveat noted in the audit).
 
 ### Working today
 Start capture → each changed frame is OCR'd, stored, and JPEG-archived → an `embed_text` job is
@@ -78,12 +108,15 @@ Embedding models auto-download on first use into `<app-data>/models/fastembed`.
 ## Repository layout
 
 ```
-CLAUDE.md          agent entry point — mandatory reading order + hard rules
+CLAUDE.md          agent entry point (Claude Code) — mandatory reading order + hard rules
+AGENTS.md          agent entry point (Codex) — same contract, Codex-flavored
 README.md          this file
 CHANGELOG.md       human-facing changelog (Keep a Changelog)
 Cargo.toml         Cargo workspace (centralized dependency versions)
 docs/
-  ARCHITECTURE.md  as-built system design + data flow
+  ARCHITECTURE.md          as-built system design + data flow
+  AUDIT_V2C_2026-06-23.md  live-runtime verification pass (evidence + known gaps)
+screenshots/       Command-Deck UI screenshots (used by this README)
 crates/
   traits/          module contracts + shared domain/IPC/job types (no impls)
   kernel/          orchestrator: event bus, capture loop, worker pool, settings
@@ -107,14 +140,19 @@ npm, and WebView2 (preinstalled on current Windows). First run downloads the emb
 (~hundreds of MB) and an ONNX Runtime build at compile time.
 
 ```powershell
-# Rust workspace
+# 1. UI first — src-tauri's `generate_context!` embeds `ui/dist` (git-ignored), so the
+#    Rust build fails if the UI hasn't been built yet. `npm run lint` is the Rules-of-Hooks gate.
+cd ui; npm ci; npm run lint; npm run build; cd ..
+
+# 2. Rust workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build
+cargo build --workspace
 cargo test --workspace            # GPU/WinRT/model/perf tests are #[ignore]d
 
-# UI
-cd ui; npm ci; npm run build
+# 3. Binding guard — `cargo test` regenerates the ts-rs IPC bindings; they must stay clean
+#    (commit the regenerated files, or CI fails).
+git diff --exit-code -- ui/src/bindings
 
 # Run the app (debug) — the Tauri CLI ships as the npm dev-dependency `@tauri-apps/cli`,
 # so launch via the root npm script (use `cargo tauri dev` only if you `cargo install tauri-cli`).

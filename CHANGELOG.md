@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — README refresh + visual showcase (2026-06-24)
+- **Added a Screenshots section** to `README.md` showing five live Command-Deck screens (Deck,
+  Recall/Ask, Insights, Moment, Timeline). Renamed the committed `screenshots/screensearch_*.png`
+  captures to descriptive names (`deck.png`, `recall-ask.png`, `insights.png`, `moment.png`,
+  `timeline.png`).
+- **Fixed the Build & run order.** The Rust build was listed before the UI build, but
+  `src-tauri`'s `generate_context!` embeds the git-ignored `ui/dist`, so cargo fails unless the UI
+  is built first. Reordered to UI → Rust, switched `cargo build` to `cargo build --workspace`, added
+  the `npm run lint` Rules-of-Hooks gate and the `git diff --exit-code -- ui/src/bindings` binding
+  guard — matching CI.
+- **Linked the live-verification audit** (`docs/AUDIT_V2C_2026-06-23.md`) from the status blockquote
+  and added `AGENTS.md`, `screenshots/`, and the audit doc to the repository-layout map.
+- **Aligned the status with the audit.** Reworded "P0–P5 complete" to "P0–P4 complete and verified;
+  P5 UI feature-complete with keyboard/state/a11y verification in progress," marked the P5 row
+  `🚧 Feature-complete; UI verification in progress`, and named the open UI gaps (the keyboard/state/
+  a11y matrix and a no-evidence answer still rendering cited-frame tiles).
+
 ### Docs — Added V2c audit artifact (2026-06-23)
 - Added `docs/AUDIT_V2C_2026-06-23.md`, recording the non-packaging audit pass, including CI
   gates, hardware/model smokes, GPU runtime evidence, and the later live GUI follow-up for
