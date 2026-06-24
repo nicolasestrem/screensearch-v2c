@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 
 import type { ModelLane } from "../../bindings/ModelLane";
 import type { ModelTier } from "../../bindings/ModelTier";
+import { Tooltip } from "../primitives";
 import { cn } from "../../lib/cn";
 
 const TIERS: { value: ModelTier; label: string }[] = [
@@ -18,6 +19,23 @@ const TIERS: { value: ModelTier; label: string }[] = [
 const LANE_LABEL: Record<ModelLane, string> = {
   vision: "Vision model",
   answer: "Answer model",
+};
+
+// The actual model behind each (lane, tier), so a hover/focus tooltip tells the user what
+// "Default / Quality / Beta" resolve to. Mirrors the source of truth in
+// `crates/inference/src/models.rs::repo_for` (and `specs/MODEL_REGISTRY.md`) — display
+// names only (repo org + `-GGUF` suffix dropped); keep in sync if the registry changes.
+const MODEL_NAMES: Record<ModelLane, Record<ModelTier, string>> = {
+  vision: {
+    default: "Qwen3-VL-4B-Instruct",
+    quality: "Qwen3-VL-8B-Instruct",
+    beta: "Qwen3.5-9B-VLM",
+  },
+  answer: {
+    default: "Ministral-3-3B-Reasoning",
+    quality: "Qwen3-4B-Thinking",
+    beta: "NVIDIA-Nemotron-3-Nano-4B",
+  },
 };
 
 export interface ModelTierPickerProps {
@@ -36,22 +54,24 @@ export function ModelTierPicker({ lane, value, onChange, hint, disabled = false 
       <span className="text-caption text-ink-muted font-body">{label}</span>
       <div role="group" aria-label={`${label} tier`} className="flex gap-1">
         {TIERS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            aria-pressed={value === t.value}
-            disabled={disabled}
-            onClick={() => onChange(t.value)}
-            className={cn(
-              "inline-flex items-center rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
-              "transition-colors duration-fast ease-ui disabled:opacity-50 disabled:pointer-events-none",
-              value === t.value
-                ? "bg-accent-wash text-accent"
-                : "text-ink-muted hover:text-ink hover:bg-overlay",
-            )}
-          >
-            {t.label}
-          </button>
+          <Tooltip key={t.value} label={MODEL_NAMES[lane][t.value]} side="bottom">
+            <button
+              type="button"
+              aria-pressed={value === t.value}
+              aria-label={`${t.label} — ${MODEL_NAMES[lane][t.value]}`}
+              disabled={disabled}
+              onClick={() => onChange(t.value)}
+              className={cn(
+                "inline-flex items-center rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
+                "transition-colors duration-fast ease-ui disabled:opacity-50 disabled:pointer-events-none",
+                value === t.value
+                  ? "bg-accent-wash text-accent"
+                  : "text-ink-muted hover:text-ink hover:bg-overlay",
+              )}
+            >
+              {t.label}
+            </button>
+          </Tooltip>
         ))}
       </div>
       {hint && <span className="text-caption text-ink-faint">{hint}</span>}

@@ -9,11 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Model-tier tooltips (2026-06-24)
+- **The Default / Quality / Beta tier buttons now show which model they map to** on hover and
+  keyboard focus (e.g. Answer → Quality → "Qwen3-4B-Thinking"), so the tier names aren't opaque.
+  The names mirror `crates/inference/src/models.rs::repo_for`. (`ui/src/components/domain/ModelTierPicker.tsx`.)
+
 ### Fixed — Review hardening (PR #26): size-probe timeout, broadcast lag, orphan pidfile (2026-06-24)
 - **The HF tree-API size probe can no longer hang the download.** `total_download_bytes`
   built a `reqwest::Client` with no timeout, and it runs *before* the stall watchdog is
   spawned — so a hung API would block the download from ever starting. It now uses a 15 s
-  timeout (`SIZE_FETCH_TIMEOUT`); the size is best-effort anyway and the download proceeds
+  timeout (`HTTP_API_TIMEOUT`); the size is best-effort anyway and the download proceeds
   regardless. (`crates/inference/src/download.rs`.)
 - **The status/download event bridges survive a lagging receiver.** Both
   `while let Ok(_) = rx.recv().await` broadcast loops terminated on *any* error, including
@@ -25,10 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reap_stray_any` then had no record to clean it up. The pidfile is now kept when the
   process is still alive (and only removed once it has exited). (`crates/inference/src/supervisor.rs`.)
 - **The Ask context budget no longer undercounts non-Latin text.** The token estimate used a
-  `chars/3` ratio, which *under*-counts dense scripts (a CJK character is ~3 bytes yet ≈1 token),
-  so CJK OCR snippets could admit ~3× too much context and re-trigger the very
-  `exceed_context_size_error` the budgeting prevents. It now estimates from UTF-8 *bytes*
-  (conservative for both Latin and CJK) and truncates on char boundaries. (`crates/inference/src/answer.rs`.)
+  `chars/3` ratio, which *under*-counts dense scripts (a CJK character is ~3 bytes yet ≈1–1.5
+  tokens), so CJK OCR snippets could admit several× too much context and re-trigger the very
+  `exceed_context_size_error` the budgeting prevents. It now estimates from UTF-8 *bytes* at a
+  conservative **2 bytes/token** upper bound (`BYTES_PER_TOKEN`) — safe for both Latin and the
+  worst-case Mistral-family CJK tokenizer of the default answer model — and truncates on char
+  boundaries. (`crates/inference/src/answer.rs`.)
+- **Idle keep-warm can no longer lose a race with the evictor.** `maybe_evict` sampled the
+  `backfill_active` / `pinned` keep-warm flags *before* taking the state lock but only re-checked
+  `in_flight` *after* — so a keep-warm set in that window still evicted the model, reintroducing
+  cold-start churn mid-drain. All three keep-warm signals are now re-checked under the lock.
+  (`crates/inference/src/supervisor.rs`.)
 - **The binary-download network calls can't hang either.** `resolve_binary_url` (GitHub releases
   JSON) gained the same 15 s request timeout, and `http_get_bytes` (the multi-MB llama.cpp zip)
   gained a 15 s **connect** timeout — fail-fast on a dead host without capping a slow-but-progressing

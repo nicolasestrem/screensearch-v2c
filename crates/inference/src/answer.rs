@@ -207,20 +207,28 @@ const TEMPLATE_OVERHEAD_TOKENS: usize = 96;
 /// Per-snippet framing cost (`[frame <id>] ` + newline), in estimated tokens.
 const ID_FRAMING_TOKENS: usize = 6;
 
-/// Rough token estimate. llama.cpp exposes no tokenizer here, so we use a conservative
-/// **bytes**→tokens ratio (≈3 UTF-8 bytes/token). A *chars*/token ratio over-counts Latin
-/// text (good) but badly *under*-counts dense scripts: a CJK character is ~3 bytes yet
-/// often ~1 token, so `chars/3` would admit ~3× too much context and re-trigger the
-/// `exceed_context_size_error` this budgeting exists to prevent (Codex review, PR #26).
-/// The byte ratio stays conservative for both: ASCII ≈ chars/3, CJK ≈ chars.
+/// Conservative UTF-8 **bytes**-per-token lower bound used to estimate prompt length
+/// without a real tokenizer. A *chars*-based ratio under-counts dense scripts (a CJK
+/// character is ~3 bytes yet ~1 token for well-merging tokenizers, and up to ~1.5 tokens
+/// for Mistral-family ones like the default Ministral answer model) and would re-trigger
+/// the `exceed_context_size_error` this budgeting prevents. At 2 bytes/token the estimate
+/// stays an *upper* bound on tokens for both scripts — English (~4 bytes/token) is
+/// over-reserved (safe, with ample context still admitted) and worst-case CJK is covered.
+/// (Gemini/Claude/Codex review, PR #26.)
+const BYTES_PER_TOKEN: usize = 2;
+
+/// Rough token estimate. Deliberately over-counts (see [`BYTES_PER_TOKEN`]) so the
+/// assembled prompt stays under the model's context window.
 fn estimate_tokens(text: &str) -> usize {
-    text.len() / 3 + 1
+    text.len() / BYTES_PER_TOKEN + 1
 }
 
 /// Truncates `text` to roughly `budget_tokens` worth of UTF-8 bytes, snapped down to a
-/// char boundary (so multibyte characters are never split).
+/// char boundary (so multibyte characters are never split). Mirrors [`estimate_tokens`].
 fn truncate_to_tokens(text: &str, budget_tokens: usize) -> String {
-    let mut max_bytes = budget_tokens.saturating_mul(3).min(text.len());
+    let mut max_bytes = budget_tokens
+        .saturating_mul(BYTES_PER_TOKEN)
+        .min(text.len());
     while max_bytes > 0 && !text.is_char_boundary(max_bytes) {
         max_bytes -= 1;
     }
@@ -478,11 +486,11 @@ mod tests {
     #[test]
     fn truncate_to_tokens_never_splits_a_multibyte_char() {
         // 3-byte chars; a byte budget that lands mid-character must snap back to a boundary
-        // (a naive byte slice would panic). 10 tokens → 30 bytes → exactly 10 chars here.
+        // (a naive byte slice would panic).
         let cjk = "世".repeat(100);
         let out = truncate_to_tokens(&cjk, 10);
         assert!(cjk.starts_with(&out));
-        assert!(out.len() <= 30 && !out.is_empty());
+        assert!(!out.is_empty() && out.len() <= 10 * BYTES_PER_TOKEN);
         assert!(
             out.chars().all(|c| c == '世'),
             "no split / replacement chars"

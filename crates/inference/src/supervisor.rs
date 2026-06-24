@@ -513,9 +513,14 @@ impl ModelSupervisor {
             return;
         }
         let mut guard = self.state.lock().await;
-        // Re-check in-flight under the lock — a request may have arrived between checks.
-        // (Backfill is a coarse keep-warm hint, so it's only checked above, not re-locked.)
-        if self.in_flight.load(Ordering::SeqCst) > 0 {
+        // Re-check *all* keep-warm signals under the lock: a request, an idle-backfill
+        // keep-warm, or a manual pin may have arrived between the unlocked `should_evict`
+        // check and here. Without re-checking `backfill_active`/`pinned`, a keep-warm set in
+        // that window would still be evicted — reintroducing cold-start churn mid-drain.
+        if self.in_flight.load(Ordering::SeqCst) > 0
+            || self.backfill_active.load(Ordering::SeqCst)
+            || self.pinned.load(Ordering::SeqCst)
+        {
             return;
         }
         if let Some(p) = guard.take() {
