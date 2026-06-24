@@ -49,6 +49,12 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         .await,
         enrich_vision_idle_secs: num(store, "enrich.vision_idle_secs", d.enrich_vision_idle_secs)
             .await,
+        enrich_vision_batch_size: num(
+            store,
+            "enrich.vision_batch_size",
+            d.enrich_vision_batch_size,
+        )
+        .await,
         enrich_worker_concurrency: num(
             store,
             "enrich.worker_concurrency",
@@ -132,6 +138,10 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.enrich_vision_idle_secs.to_string(),
         ),
         (
+            "enrich.vision_batch_size".into(),
+            s.enrich_vision_batch_size.to_string(),
+        ),
+        (
             "enrich.worker_concurrency".into(),
             s.enrich_worker_concurrency.to_string(),
         ),
@@ -178,6 +188,7 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.enrich_vision_timer_interval_ms =
         clamp_u32(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000);
     s.enrich_vision_idle_secs = clamp_u32(s.enrich_vision_idle_secs, 60, 86_400);
+    s.enrich_vision_batch_size = clamp_u32(s.enrich_vision_batch_size, 1, 500);
     s.sidecar_idle_ttl_secs = clamp_u32(s.sidecar_idle_ttl_secs, 0, 86_400);
     s.sidecar_ngl = clamp_u32(s.sidecar_ngl, 0, 999);
     s.sidecar_device = s

@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 1;
+pub const LATEST_SCHEMA_VERSION: i32 = 2;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -15,7 +15,7 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// Ordered, forward-only migrations. Each is applied in its own transaction when
 /// the DB's tracked version is below it.
-pub const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1)];
+pub const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2)];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
 /// vector-sync triggers the spec describes in prose).
@@ -123,4 +123,13 @@ CREATE TABLE frame_tags (frame_id INTEGER REFERENCES frames(id) ON DELETE CASCAD
                          tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
                          PRIMARY KEY(frame_id, tag_id));
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"#;
+
+/// v2 — index supporting the vision scheduler's pending-job dedup. The
+/// `untagged_frame_ids` query runs a correlated `NOT EXISTS` over `jobs` keyed by
+/// `frame_id` (+ `kind`/`state`) for every candidate frame; without this the subquery
+/// scans the whole `jobs` table per candidate, which degrades as completed/dead rows
+/// accumulate (no purge yet). Index-only, no data change.
+const MIGRATION_V2: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_jobs_frame_kind_state ON jobs(frame_id, kind, state);
 "#;

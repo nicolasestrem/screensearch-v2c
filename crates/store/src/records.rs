@@ -117,9 +117,16 @@ impl SqliteStore {
         .await
     }
 
-    /// Frame ids with no `vision_analysis` row yet, oldest first, capped at `limit`,
-    /// optionally within `[start, end)` capture time. Feeds the timer/idle vision
-    /// batch and the `enqueue_vision` range target (`03 §5`).
+    /// Frame ids with no `vision_analysis` row yet **and** no `vision_tag` job in a
+    /// `pending`/`running`/`dead` state, oldest first, capped at `limit`, optionally
+    /// within `[start, end)` capture time. Feeds the timer/idle vision batch and the
+    /// `enqueue_vision` range target (`03 §5`). Excluding `pending`/`running` stops a
+    /// slow batch from being re-enqueued on the next tick and the timer/idle lanes from
+    /// double-queuing the same frames; excluding `dead` stops a poisoned frame (its job
+    /// exhausted retries without ever writing a `vision_analysis` row) from being
+    /// re-enqueued every tick forever. A `done` job does **not** exclude a frame (a job
+    /// that finished without persisting analysis is eligible to retry); on-demand
+    /// single-frame re-tagging bypasses this query, so a dead frame can still be forced.
     pub async fn untagged_frame_ids(
         &self,
         limit: u32,
@@ -127,11 +134,18 @@ impl SqliteStore {
     ) -> Result<Vec<i64>> {
         self.with_conn(move |conn| {
             // Build the query once, appending the optional time-window predicate and
-            // binding every value as an anonymous positional `?` (in push order).
+            // binding every value as an anonymous positional `?` (in push order). The
+            // NOT EXISTS guard skips frames whose `vision_tag` job is still in flight.
             let mut sql = String::from(
                 "SELECT f.id FROM frames f
                  LEFT JOIN vision_analysis v ON v.frame_id = f.id
-                 WHERE v.frame_id IS NULL",
+                 WHERE v.frame_id IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM jobs j
+                       WHERE j.frame_id = f.id
+                         AND j.kind = 'vision_tag'
+                         AND j.state IN ('pending', 'running', 'dead')
+                   )",
             );
             let mut args: Vec<i64> = Vec::new();
             if let Some((start, end)) = range {

@@ -40,6 +40,7 @@ async fn round_trips_non_default_values() {
         enrich_vision_timer_interval_ms: 1_800_000,
         enrich_vision_idle_enabled: true,
         enrich_vision_idle_secs: 120,
+        enrich_vision_batch_size: 50,
         enrich_worker_concurrency: 4,
         models_vision_tier: ModelTier::Quality,
         models_answer_tier: ModelTier::Beta,
@@ -90,6 +91,10 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
         .await
         .unwrap();
     store
+        .set_setting("enrich.vision_batch_size", "9999")
+        .await
+        .unwrap();
+    store
         .set_setting("sidecar.idle_ttl_secs", "999999")
         .await
         .unwrap();
@@ -104,6 +109,7 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
     assert_eq!(loaded.enrich_worker_concurrency, 1);
     assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
     assert_eq!(loaded.enrich_vision_idle_secs, 60);
+    assert_eq!(loaded.enrich_vision_batch_size, 500);
     assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
     assert_eq!(loaded.sidecar_ngl, 999);
 }
@@ -120,6 +126,7 @@ async fn save_settings_persists_sanitized_numeric_values() {
         enrich_worker_concurrency: 0,
         enrich_vision_timer_interval_ms: 1,
         enrich_vision_idle_secs: 1,
+        enrich_vision_batch_size: 9_999,
         sidecar_idle_ttl_secs: 999_999,
         sidecar_ngl: 10_000,
         ..Settings::default()
@@ -137,6 +144,7 @@ async fn save_settings_persists_sanitized_numeric_values() {
     assert_eq!(loaded.enrich_worker_concurrency, 1);
     assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
     assert_eq!(loaded.enrich_vision_idle_secs, 60);
+    assert_eq!(loaded.enrich_vision_batch_size, 500);
     assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
     assert_eq!(loaded.sidecar_ngl, 999);
 

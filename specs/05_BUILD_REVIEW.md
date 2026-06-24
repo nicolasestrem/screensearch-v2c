@@ -1578,3 +1578,98 @@ $ npm --prefix ui run lint
 ```
 $ git diff --exit-code -- ui/src/bindings
 ```
+
+## Pass — 2026-06-24 — Vision scheduler: configurable batch size + pending-job dedup (`fix/vision-batch-size-dedup` branch)
+- **Implemented:** Made the timer/idle vision batch size a user setting and stopped the scheduler
+  re-enqueuing frames whose `vision_tag` job is already in flight (resolving the user-reported "count
+  stuck at 20 for both timer and idle, no setting" and the timer+idle double-enqueue). New setting
+  `Settings.enrich_vision_batch_size` (default 20, clamp 1–500) wired through load/save/sanitize and
+  read fresh by the scheduler each run; new `NOT EXISTS` guard on `jobs(kind='vision_tag', state IN
+  ('pending','running'))` in `Store::untagged_frame_ids`; "Frames per run" UI field in
+  `ScheduleControl`. (Resolves the batch-size and pending-job-dedup threads of `07` #19; logged as
+  `06` patch #4.)
+
+  ```
+  $ cargo fmt --all -- --check
+  FMT_OK
+  ```
+
+  ```
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.79s
+  ```
+
+  ```
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.42s
+  ```
+
+  ```
+  $ cargo test -p store --test store
+  running 44 tests
+  test untagged_frame_ids_excludes_tagged_and_honors_range ... ok
+  test untagged_frame_ids_excludes_in_flight_vision_jobs ... ok
+  test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+  ```
+
+  ```
+  $ cargo test -p kernel --test settings
+  running 5 tests
+  test round_trips_non_default_values ... ok
+  test save_settings_persists_sanitized_numeric_values ... ok
+  test load_settings_sanitizes_persisted_numeric_values ... ok
+  test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  ```
+
+  ```
+  $ cd ui && npm ci && npm run lint && npm run build
+  > eslint .
+  > tsc --noEmit && vite build
+  ✓ built in 1.67s
+  ```
+
+  ```
+  $ git diff --exit-code -- ui/src/bindings   # clean once the regenerated Settings.ts is committed
+  ```
+- **Skipped / deferred:** The 60s timer cadence is user-configured (`enrich_vision_timer_interval_ms`),
+  not a bug — left untouched. Completed jobs accumulating in the `jobs` table (no purge) is a
+  separate pre-existing concern — not addressed here.
+- **Hallucinated / corrected:** None. The timer+idle firing ~1ms apart in the user's logs was a
+  benign coincidence (an idle transition landing on a timer tick), not a coupling bug; the real
+  defect it exposed was the missing pending-job dedup, now fixed.
+- **Broke / regressed:** None. Adding the `Settings` field required updating the full-struct test
+  literal in `crates/kernel/tests/settings.rs`; bindings regenerated via `cargo test`.
+
+## Pass — 2026-06-24 — PR #23 review follow-up (`fix/vision-batch-size-dedup` branch)
+- **Implemented:** Addressed all three actionable review threads (Gemini, Codex; Claude approved):
+  (1) exclude `dead` `vision_tag` jobs from `untagged_frame_ids` so a poisoned/dead-lettered frame
+  isn't re-enqueued forever (Gemini, high); (2) forward migration v2 adds
+  `idx_jobs_frame_kind_state` on `jobs(frame_id, kind, state)` so the dedup `NOT EXISTS` is
+  index-backed (Gemini/Claude); (3) the timer/idle producers share a `tokio::sync::Mutex` across
+  read-then-enqueue, making their select-and-insert atomic and closing the simultaneous-wake
+  double-queue race (Codex, P2); (4) documented `enrich.vision_batch_size` in `03` §8 (Codex, P1).
+
+  ```
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.97s
+  ```
+
+  ```
+  $ cargo test -p store
+  running 44 tests
+  test open_in_memory_migrates_to_latest_schema_version ... ok
+  test untagged_frame_ids_excludes_in_flight_vision_jobs ... ok
+  test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+  ```
+
+  ```
+  $ cargo test --workspace        # every crate: 0 failed
+  ```
+- **Skipped / deferred:** Did not add a DB-level UNIQUE constraint + conflict-ignored `enqueue_job`
+  for cross-producer (on-demand-vs-scheduler) atomicity — it would change `enqueue_job` semantics for
+  the embed lanes; the scheduler-scoped mutex covers the reported timer+idle scenario and the residual
+  overlap stays bounded by `insert_vision`'s idempotent upsert. Jobs-table purge remains out of scope.
+- **Hallucinated / corrected:** None. Verified each finding against the code before acting — the
+  dead-job loop, the missing index, and the read-then-insert race were all real.
+- **Broke / regressed:** None. The v2 migration is forward-only (`schema_version` 1→2); existing DBs
+  add the index on next open.
