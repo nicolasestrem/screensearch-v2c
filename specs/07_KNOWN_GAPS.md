@@ -153,4 +153,15 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
   requests → one pre-allocated file) wired into the existing progress/resume/stall/clean-layout path
   in `crates/inference/src/download.rs`, to saturate the user's bandwidth. Deferred from v0.1.0 (works,
   just slow); needs its own focused tests (resume, stall, partial integrity).
+- **TODO (0.1.1) — PR #27 review follow-ups (deferred from v0.1.0; user chose to ship as-is):**
+  - *Codex P2 — re-check cache before retrying a locked download.* `download_with_lock_retry`
+    (`crates/inference/src/download.rs`) re-calls `download_with_progress` after a `LockAcquisition`
+    backoff **without** re-running `fetch_one`'s clean-layout/cache fast paths, so if the lock holder
+    finishes during the sleep the loser can miss the now-present GGUF and re-download (or collide on
+    publish); the bounded ~20 s backoff can also give up before a real ~4 min 8B download finishes.
+    Re-check the destination/finalized blob after each backoff and short-circuit. (Single-instance
+    already prevents the main contention, so this is hardening, not a live bug.)
+  - *Gemini — single-instance focus.* In the `tauri-plugin-single-instance` callback
+    (`src-tauri/src/lib.rs`), call `window.show()` before `unminimize()`/`set_focus()` so a hidden /
+    tray-minimized window is restored on a second launch.
 - ~~esbuild `allow-scripts` postinstall~~ — **resolved** locally via `npm approve-scripts --all`.
