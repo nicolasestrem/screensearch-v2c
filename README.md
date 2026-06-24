@@ -22,8 +22,8 @@ on-device, no cloud.
 
 ## Screenshots
 
-The **Command Deck** — six on-device screens over your screen history. Nothing here touches the
-network: every frame, query, and answer stays on the machine.
+The **Command Deck** — six on-device screens over your screen history (five shown below; Settings
+omitted). Nothing here touches the network: every frame, query, and answer stays on the machine.
 
 ![ScreenSearch Deck — capture toggle, today's activity, live enrichment queue, and recent frames](screenshots/deck.png)
 
@@ -142,7 +142,7 @@ npm, and WebView2 (preinstalled on current Windows). First run downloads the emb
 ```powershell
 # 1. UI first — src-tauri's `generate_context!` embeds `ui/dist` (git-ignored), so the
 #    Rust build fails if the UI hasn't been built yet. `npm run lint` is the Rules-of-Hooks gate.
-cd ui; npm ci; npm run lint; npm run build; cd ..
+cd ui && npm ci && npm run lint && npm run build && cd ..
 
 # 2. Rust workspace
 cargo fmt --all -- --check
