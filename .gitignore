@@ -42,3 +42,4 @@ desktop.ini
 .idea/
 .vscode/*
 !.vscode/extensions.json
+/.codex

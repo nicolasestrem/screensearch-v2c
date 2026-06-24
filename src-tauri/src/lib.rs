@@ -875,8 +875,15 @@ async fn init_inference(
         let kernel = kernel.clone();
         let mut rx = supervisor.subscribe();
         tauri::async_runtime::spawn(async move {
-            while let Ok(status) = rx.recv().await {
-                kernel.emit_sidecar_status(status);
+            // A `Lagged` (receiver fell behind a burst) must NOT end the bridge — that
+            // would silently freeze the StatusRail for the rest of the session. Skip the
+            // missed events and keep going; only stop when the sender is gone (`Closed`).
+            loop {
+                match rx.recv().await {
+                    Ok(status) => kernel.emit_sidecar_status(status),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }
@@ -886,8 +893,14 @@ async fn init_inference(
         let kernel = kernel.clone();
         let mut rx = downloader.subscribe();
         tauri::async_runtime::spawn(async move {
-            while let Ok(status) = rx.recv().await {
-                kernel.emit_model_download(status);
+            // Same as above: a lagging receiver must keep bridging progress, not die and
+            // leave the download chip frozen for the rest of the run.
+            loop {
+                match rx.recv().await {
+                    Ok(status) => kernel.emit_model_download(status),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }

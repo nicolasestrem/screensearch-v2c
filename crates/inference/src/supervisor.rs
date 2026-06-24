@@ -357,8 +357,10 @@ impl ModelSupervisor {
             tokio::time::sleep(HEALTH_POLL).await;
         }
         let still_alive = process::pid_alive(pid);
-        let _ = std::fs::remove_file(&self.config.pidfile);
         if still_alive {
+            // Keep the pidfile: the process outlived the kill, so leave the record on disk
+            // for the next launch's `reap_stray_any` to find and terminate. Deleting it here
+            // would strand the orphan (and its VRAM) with nothing pointing the reaper at it.
             tracing::warn!(
                 reason,
                 pid,
@@ -367,6 +369,7 @@ impl ModelSupervisor {
                  still be held"
             );
         } else {
+            let _ = std::fs::remove_file(&self.config.pidfile);
             tracing::debug!(reason, pid, killed, "sidecar process terminated");
         }
     }

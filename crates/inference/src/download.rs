@@ -38,6 +38,12 @@ const PROGRESS_POLL: Duration = Duration::from_millis(750);
 /// new bytes are streamed).
 const STALL_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Timeout for the best-effort HF tree-API size probe. This request runs *before* the
+/// stall watchdog is spawned, so without its own timeout a hung/slow API would block the
+/// whole download from starting (the watchdog can't rescue it yet). Bounded and short:
+/// the size is only used to render a percentage, and the download proceeds either way.
+const SIZE_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
 /// publishes a release with an incomplete asset set (no `win-vulkan-x64` zip), and a
@@ -757,7 +763,10 @@ async fn total_download_bytes(repo_id: &str, needs_mmproj: bool) -> Option<u64> 
         size: u64,
     }
     let url = format!("https://huggingface.co/api/models/{repo_id}/tree/main");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(SIZE_FETCH_TIMEOUT)
+        .build()
+        .ok()?;
     let resp = client
         .get(&url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)

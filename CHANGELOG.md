@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Review hardening (PR #26): size-probe timeout, broadcast lag, orphan pidfile (2026-06-24)
+- **The HF tree-API size probe can no longer hang the download.** `total_download_bytes`
+  built a `reqwest::Client` with no timeout, and it runs *before* the stall watchdog is
+  spawned — so a hung API would block the download from ever starting. It now uses a 15 s
+  timeout (`SIZE_FETCH_TIMEOUT`); the size is best-effort anyway and the download proceeds
+  regardless. (`crates/inference/src/download.rs`.)
+- **The status/download event bridges survive a lagging receiver.** Both
+  `while let Ok(_) = rx.recv().await` broadcast loops terminated on *any* error, including
+  `Lagged` — a burst of events would silently kill the bridge and freeze the StatusRail /
+  download chip for the rest of the session. They now skip on `Lagged` and stop only on
+  `Closed`. (`src-tauri/src/lib.rs`.)
+- **A surviving sidecar is no longer stranded as an orphan.** `kill_and_confirm` removed the
+  pidfile unconditionally; if the process outlived the kill, the next launch's
+  `reap_stray_any` then had no record to clean it up. The pidfile is now kept when the
+  process is still alive (and only removed once it has exited). (`crates/inference/src/supervisor.rs`.)
+
 ### Fixed — "Ask" answer truncated to nothing; download now visible from anywhere (2026-06-24)
 - **The Ask answer is no longer cut off / "always thinking."** The default answer models are
   *reasoning* models that stream a `<think>…</think>` trace before the answer; the reply budget was
