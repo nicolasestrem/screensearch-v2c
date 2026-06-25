@@ -6,15 +6,12 @@
 // is imported only here, so it ships in the /recall route chunk (§8). The idle phase
 // renders nothing — the Recall screen owns the empty "ask a question" invitation.
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import type { AskPhase } from "../../lib/ipc/useAsk";
-import { useFrame } from "../../lib/ipc/queries";
-import { FrameImage } from "./FrameImage";
+import { CitationTile } from "./CitationTile";
 import { ErrorState } from "../primitives";
-import { absoluteTime, clockTime } from "../../lib/time";
 
 export interface AnswerStreamProps {
   phase: AskPhase;
@@ -24,28 +21,6 @@ export interface AnswerStreamProps {
   error: string | null;
   /** Re-run the last question (shown on error). */
   onRetry?: () => void;
-}
-
-/** A citation rendered as a thumbnail tile → the source moment. Resolves the
- *  frame's thumbnail/time from cache (the same query the Moment screen uses). */
-function CitationTile({ frameId }: { frameId: number }) {
-  const { data } = useFrame(frameId);
-  return (
-    <Link
-      to={`/timeline/${frameId}`}
-      title={data ? absoluteTime(data.captured_at) : `Frame #${frameId}`}
-      className="flex w-32 shrink-0 flex-col gap-1 rounded-chip border border-line bg-surface p-1 transition-colors duration-fast ease-ui hover:border-accent"
-    >
-      <FrameImage
-        imagePath={data?.image_path ?? null}
-        alt=""
-        className="aspect-video w-full rounded-chip object-cover bg-overlay"
-      />
-      <span className="px-1 font-mono text-data text-ink-muted">
-        {data ? clockTime(data.captured_at) : `#${frameId}`}
-      </span>
-    </Link>
-  );
 }
 
 export function AnswerStream({ phase, thinking, answer, citations, error, onRetry }: AnswerStreamProps) {

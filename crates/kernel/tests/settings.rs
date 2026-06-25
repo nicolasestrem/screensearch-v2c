@@ -57,6 +57,10 @@ async fn round_trips_non_default_values() {
         text_chrome_suppress_min_seen: 20,
         text_chrome_protect_min_chars: 64,
         text_chrome_region_buckets: 12,
+        retrieval_default_top_k: 16,
+        reports_daily_top_k: 60,
+        reports_weekly_top_k: 300,
+        reports_map_reduce_min_frames: 30,
     };
 
     save_settings(dyn_store, &original)

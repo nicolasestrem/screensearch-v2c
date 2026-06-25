@@ -74,4 +74,24 @@ text_chrome_protect_min_chars: number,
  * Grid resolution for a span's `region_bucket` in the chrome signature
  * (`03 §8` `text.chrome_region_buckets`); an N×N grid over the normalized frame.
  */
-text_chrome_region_buckets: number, };
+text_chrome_region_buckets: number, 
+/**
+ * Default Ask retrieval depth (`03 §8` `retrieval.default_top_k`), replacing the
+ * former hardcoded `ASK_TOP_K`. The per-request `AskRequest.top_k` overrides it.
+ */
+retrieval_default_top_k: number, 
+/**
+ * Recall-report target sampled frames **per active period** (`03 §8`
+ * `reports.daily_top_k`). Report depth scales as this × active periods (`§8b`).
+ */
+reports_daily_top_k: number, 
+/**
+ * Recall-report **global** cap on frames summarized across all periods
+ * (`03 §8` `reports.weekly_top_k`); bounds the sidecar pass count on weak HW.
+ */
+reports_weekly_top_k: number, 
+/**
+ * Frame count at/below which a report uses a single pass; above it, map-reduce
+ * (`03 §8` `reports.map_reduce_min_frames`, `§8b`).
+ */
+reports_map_reduce_min_frames: number, };

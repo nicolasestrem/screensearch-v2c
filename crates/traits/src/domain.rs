@@ -337,3 +337,66 @@ pub struct AnswerOpts {
     pub thinking: bool,
     pub max_tokens: u32,
 }
+
+/// Which calendar range a recall report covers (`03 §8b`). Carried for honest
+/// framing (the range label + prose); the concrete `[start, end)` is resolved by
+/// the command (in local time) before the orchestrator runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportRange {
+    Daily,
+    Weekly,
+    Custom,
+}
+
+/// How a report was generated — drives the honest footer and is observable in
+/// tests without a live sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportMode {
+    /// Zero non-empty content text in range: honest no-evidence output, no sidecar
+    /// call was made.
+    Empty,
+    /// One summarize pass over the packed content text (small range / fast path).
+    SinglePass,
+    /// Per-period map then (possibly hierarchical) reduce (`03 §8b`).
+    MapReduce,
+}
+
+/// Tunable report knobs assembled from [`crate::ipc::Settings`] by the command and
+/// passed to the kernel orchestrator (`03 §8`/`§8b`), so the orchestrator carries no
+/// settings-loading dependency. Structural safety bounds (fan-out, max periods/
+/// passes) live as constants in the orchestrator, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportConfig {
+    /// `reports.daily_top_k` — target sampled frames per active period.
+    pub daily_top_k: u32,
+    /// `reports.weekly_top_k` — global cap on frames summarized across all periods.
+    pub weekly_top_k: u32,
+    /// `reports.map_reduce_min_frames` — at/below ⇒ single pass; above ⇒ map-reduce.
+    pub map_reduce_min_frames: u32,
+    /// Reply token budget (`n_predict`) for each summarize pass.
+    pub reply_budget: u32,
+}
+
+/// The result of a report generation (`generate_report`, `03 §8b`). Carries the
+/// markdown body, the frames cited, and auditable coverage/cost metadata so the UI
+/// footer states honestly what was read ("retrieve up to N, summarize what fits").
+#[derive(Debug, Clone)]
+pub struct ReportOutput {
+    pub markdown: String,
+    /// Frames the model actually read (deduped, in inclusion order).
+    pub cited_frame_ids: Vec<i64>,
+    /// How the report was produced.
+    pub mode: ReportMode,
+    /// Periods in range (active + empty).
+    pub periods_total: u32,
+    /// Active periods that were summarized.
+    pub periods_covered: u32,
+    /// Frames sampled into the map step.
+    pub frames_sampled: u32,
+    /// Frames actually summarized (== `cited_frame_ids.len()`).
+    pub frames_summarized: u32,
+    /// Total sidecar passes (map + reduce + final); `0` for a no-evidence report.
+    pub passes: u32,
+    /// A structural bound forced coarser sampling than requested (honest framing).
+    pub truncated: bool,
+}

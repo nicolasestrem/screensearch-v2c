@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
@@ -19,8 +19,9 @@ use tauri::{Emitter, Manager, State};
 use traits::{
     AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
     CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
-    JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit,
-    SearchQuery, SetModelTier, Settings, StorageStats, Store, TimeRange, TimelineBucket,
+    JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
+    ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
+    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, TimeRange, TimelineBucket,
     ToastLevel, VisionTarget,
 };
 
@@ -33,8 +34,10 @@ use tokio::task::JoinHandle;
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
 /// on first run / large quants).
 const SIDECAR_HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
-/// Top-K retrieved chunks used as grounding context for an `ask` (`07` decision).
-const ASK_TOP_K: u32 = 8;
+/// Reply budget (`n_predict`) for each report summarization pass. Mirrors the Ask UI's
+/// 2048: reasoning answer models need room to finish a `<think>` trace and the reply,
+/// and `build_summary_messages` reserves this from the pinned 8192 answer context.
+const REPORT_REPLY_BUDGET: u32 = 2048;
 const MAX_FRAME_LIST_LIMIT: u32 = 500;
 const MAX_FRAME_CONTEXT_LIMIT_EACH: u32 = 50;
 const MIN_TIMELINE_BUCKETS: u32 = 120;
@@ -70,6 +73,10 @@ fn clamp_frame_context_limit(limit_each: u32) -> u32 {
 /// handlers (the sidecar supervisor + the concrete tiered providers).
 type SharedSlot<T> = Arc<StdMutex<Option<T>>>;
 type AskTasks = Arc<tokio::sync::Mutex<HashMap<String, JoinHandle<()>>>>;
+/// In-flight report cancel flags keyed by request id; `cancel_report` sets one to stop
+/// the orchestrator at its next pass boundary (cooperative, no task abort needed since
+/// `generate_report` is awaited).
+type ReportTasks = Arc<tokio::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
 /// App-wide state owned by the composition root and shared with command handlers.
 struct AppState {
@@ -91,6 +98,8 @@ struct AppState {
     sidecar_binary: SharedSlot<PathBuf>,
     /// In-flight answer providers keyed by client request id; `cancel_ask` aborts them.
     ask_tasks: AskTasks,
+    /// In-flight report cancel flags keyed by request id; `cancel_report` sets them.
+    report_tasks: ReportTasks,
     /// Whether the currently attached FastEmbed provider loaded the optional image lane.
     embedder_with_image: Arc<StdMutex<bool>>,
     embed_models_dir: PathBuf,
@@ -256,11 +265,15 @@ async fn ask(
         .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
 
     // Retrieve grounding context: top-K hybrid hits, each with its full OCR text
-    // (falling back to the search snippet if the text isn't available).
+    // (falling back to the search snippet if the text isn't available). Depth is the
+    // configured `retrieval.default_top_k` (`03 §8`, replacing the former hardcoded
+    // ASK_TOP_K), overridable per request via `AskRequest.top_k`.
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    let top_k = request.top_k.unwrap_or(settings.retrieval_default_top_k);
     let hits = store
         .hybrid_search(&SearchQuery {
             text: request.query.clone(),
-            limit: ASK_TOP_K,
+            limit: top_k,
             time_range: None,
             // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
             include_chrome: false,
@@ -324,6 +337,120 @@ async fn ask(
 async fn cancel_ask(request_id: String, state: State<'_, AppState>) -> Result<(), String> {
     if let Some(task) = state.ask_tasks.lock().await.remove(&request_id) {
         task.abort();
+    }
+    Ok(())
+}
+
+/// Generate a recall report over a time range (`generate_report`, `03 §8b`). Summarizes
+/// `content_text` (never raw text) with temporal coverage that scales with the range —
+/// one bounded pass per active day, combined by a hierarchical reduce — citing the
+/// frames it read. Progress streams via request-scoped `report_progress` events; the
+/// final value returns from the awaited call. Cancellable via `cancel_report`.
+#[tauri::command]
+async fn generate_report(
+    request: ReportRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ReportResponse, String> {
+    let request_id = request
+        .request_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| format!("report-{}", next_ask_id()));
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable".to_string())?;
+    let answer = kernel
+        .answer_provider()
+        .await
+        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    let cfg = ReportConfig {
+        daily_top_k: settings.reports_daily_top_k,
+        weekly_top_k: settings.reports_weekly_top_k,
+        map_reduce_min_frames: settings.reports_map_reduce_min_frames,
+        reply_budget: REPORT_REPLY_BUDGET,
+    };
+    let range = match request.kind {
+        ReportKind::Daily => ReportRange::Daily,
+        ReportKind::Weekly => ReportRange::Weekly,
+        ReportKind::Custom => ReportRange::Custom,
+    };
+    let range_label = match request.kind {
+        ReportKind::Daily => "today".to_string(),
+        ReportKind::Weekly => "the last 7 days".to_string(),
+        ReportKind::Custom => "the selected range".to_string(),
+    };
+
+    // Register a cancel flag so `cancel_report` can stop the orchestrator between passes.
+    let cancel = Arc::new(AtomicBool::new(false));
+    state
+        .report_tasks
+        .lock()
+        .await
+        .insert(request_id.clone(), cancel.clone());
+
+    // Stream progress as request-scoped `report_progress` events.
+    let emitter = app.clone();
+    let progress_id = request_id.clone();
+    let progress = move |stage: &str, done: u32, total: u32| {
+        let _ = emitter.emit(
+            "report_progress",
+            ReportProgress {
+                request_id: progress_id.clone(),
+                stage: stage.to_string(),
+                done,
+                total,
+            },
+        );
+    };
+
+    let result = kernel::reports::generate_report(
+        store.as_ref(),
+        answer.as_ref(),
+        range,
+        request.time_range.start,
+        request.time_range.end,
+        request.prompt.as_deref(),
+        cfg,
+        Some(&progress),
+        &cancel,
+    )
+    .await;
+
+    state.report_tasks.lock().await.remove(&request_id);
+    let out = result.map_err(|e| e.to_string())?;
+    // The footer's model provenance — only when a model actually ran.
+    let model = if out.mode == ReportMode::Empty {
+        None
+    } else {
+        answer.answer_model_label().await
+    };
+    Ok(ReportResponse {
+        markdown: out.markdown,
+        cited_frame_ids: out.cited_frame_ids,
+        range_label,
+        periods_total: out.periods_total,
+        periods_covered: out.periods_covered,
+        frames_sampled: out.frames_sampled,
+        frames_summarized: out.frames_summarized,
+        passes: out.passes,
+        truncated: out.truncated,
+        model,
+    })
+}
+
+/// Cancel an in-flight `generate_report` (cooperative: stops at the next pass boundary).
+#[tauri::command]
+async fn cancel_report(request_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(flag) = state.report_tasks.lock().await.get(&request_id) {
+        flag.store(true, Ordering::Relaxed);
     }
     Ok(())
 }
@@ -722,6 +849,7 @@ pub fn run() {
                 answer: answer_slot,
                 sidecar_binary: sidecar_binary_slot,
                 ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                report_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 embedder_with_image,
                 embed_models_dir,
                 db_path,
@@ -742,6 +870,8 @@ pub fn run() {
             enqueue_vision,
             ask,
             cancel_ask,
+            generate_report,
+            cancel_report,
             set_model_tier,
             load_model,
             unload_model,

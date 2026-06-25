@@ -97,6 +97,16 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.text_chrome_region_buckets,
         )
         .await,
+        retrieval_default_top_k: num(store, "retrieval.default_top_k", d.retrieval_default_top_k)
+            .await,
+        reports_daily_top_k: num(store, "reports.daily_top_k", d.reports_daily_top_k).await,
+        reports_weekly_top_k: num(store, "reports.weekly_top_k", d.reports_weekly_top_k).await,
+        reports_map_reduce_min_frames: num(
+            store,
+            "reports.map_reduce_min_frames",
+            d.reports_map_reduce_min_frames,
+        )
+        .await,
     })
 }
 
@@ -223,6 +233,22 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "text.chrome_region_buckets".into(),
             s.text_chrome_region_buckets.to_string(),
         ),
+        (
+            "retrieval.default_top_k".into(),
+            s.retrieval_default_top_k.to_string(),
+        ),
+        (
+            "reports.daily_top_k".into(),
+            s.reports_daily_top_k.to_string(),
+        ),
+        (
+            "reports.weekly_top_k".into(),
+            s.reports_weekly_top_k.to_string(),
+        ),
+        (
+            "reports.map_reduce_min_frames".into(),
+            s.reports_map_reduce_min_frames.to_string(),
+        ),
     ];
     store.set_settings_batch(&kvs).await
 }
@@ -259,6 +285,12 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.text_chrome_suppress_min_seen = clamp_u32(s.text_chrome_suppress_min_seen, 2, 100_000);
     s.text_chrome_protect_min_chars = clamp_u32(s.text_chrome_protect_min_chars, 1, 4_096);
     s.text_chrome_region_buckets = clamp_u32(s.text_chrome_region_buckets, 1, 32);
+    // 0.2.x retrieval + recall reports (03 §8). At least 1 of everything; generous
+    // ceilings guard hand-edited extremes (the weekly cap also bounds report passes).
+    s.retrieval_default_top_k = clamp_u32(s.retrieval_default_top_k, 1, 100);
+    s.reports_daily_top_k = clamp_u32(s.reports_daily_top_k, 1, 1_000);
+    s.reports_weekly_top_k = clamp_u32(s.reports_weekly_top_k, 1, 2_000);
+    s.reports_map_reduce_min_frames = clamp_u32(s.reports_map_reduce_min_frames, 1, 1_000);
     s
 }
 

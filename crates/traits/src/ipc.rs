@@ -81,6 +81,78 @@ pub struct AskRequest {
     pub query: String,
     pub thinking: bool,
     pub max_tokens: u32,
+    /// Per-request retrieval-depth override (`03 §8` `retrieval.default_top_k`).
+    /// `None` → the configured default. `#[serde(default)]` so existing callers
+    /// that omit it keep working.
+    #[serde(default)]
+    pub top_k: Option<u32>,
+}
+
+/// Which range a recall report covers (`03 §8b`). The UI resolves the concrete
+/// local `[start, end)` for every kind and sends it as `ReportRequest.time_range`;
+/// `kind` selects the retrieval depth and the human range label, and gates the
+/// coverage-vs-relevance retrieval path (`Custom` + a `prompt` → semantic).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum ReportKind {
+    Daily,
+    Weekly,
+    Custom,
+}
+
+/// Input to the `generate_report` command (`03 §7`/`§8b`). Progress streams via
+/// `report_progress` events scoped by `request_id`; the final value returns from
+/// the awaited command. `prompt` (Custom only) steers the summary via semantic
+/// retrieval; Daily/Weekly/Custom-without-prompt use temporal-coverage sampling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ReportRequest {
+    pub kind: ReportKind,
+    pub time_range: TimeRange,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+/// Output of `generate_report` (`03 §8b`). Markdown body + the frames cited, plus
+/// auditable coverage/cost metadata so the UI footer states honestly what was read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ReportResponse {
+    pub markdown: String,
+    /// Frames the model actually read (deduped, in inclusion order).
+    #[ts(type = "Array<number>")]
+    pub cited_frame_ids: Vec<i64>,
+    /// Human label for the covered range ("today", "the last 7 days", …).
+    pub range_label: String,
+    /// Periods in range (active + empty).
+    pub periods_total: u32,
+    /// Active periods that were summarized.
+    pub periods_covered: u32,
+    /// Frames sampled into the map step.
+    pub frames_sampled: u32,
+    /// Frames actually summarized (== `cited_frame_ids.len()`).
+    pub frames_summarized: u32,
+    /// Total sidecar passes (map + reduce + final); `0` for a no-evidence report.
+    pub passes: u32,
+    /// A structural bound forced coarser sampling than requested (honest framing).
+    pub truncated: bool,
+    /// Resolved model identifier (GGUF filename) for the footer; `None` if empty.
+    pub model: Option<String>,
+}
+
+/// Progress of an in-flight `generate_report` (`report_progress` event), scoped by
+/// `request_id`. `stage` is a short human label ("Summarizing day 3 of 7",
+/// "Combining summaries"); `done`/`total` drive a determinate progress bar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ReportProgress {
+    pub request_id: String,
+    pub stage: String,
+    pub done: u32,
+    pub total: u32,
 }
 
 /// Request-scoped streamed answer event (`answer_delta` payload).
@@ -398,6 +470,18 @@ pub struct Settings {
     /// Grid resolution for a span's `region_bucket` in the chrome signature
     /// (`03 §8` `text.chrome_region_buckets`); an N×N grid over the normalized frame.
     pub text_chrome_region_buckets: u32,
+    /// Default Ask retrieval depth (`03 §8` `retrieval.default_top_k`), replacing the
+    /// former hardcoded `ASK_TOP_K`. The per-request `AskRequest.top_k` overrides it.
+    pub retrieval_default_top_k: u32,
+    /// Recall-report target sampled frames **per active period** (`03 §8`
+    /// `reports.daily_top_k`). Report depth scales as this × active periods (`§8b`).
+    pub reports_daily_top_k: u32,
+    /// Recall-report **global** cap on frames summarized across all periods
+    /// (`03 §8` `reports.weekly_top_k`); bounds the sidecar pass count on weak HW.
+    pub reports_weekly_top_k: u32,
+    /// Frame count at/below which a report uses a single pass; above it, map-reduce
+    /// (`03 §8` `reports.map_reduce_min_frames`, `§8b`).
+    pub reports_map_reduce_min_frames: u32,
 }
 
 impl Default for Settings {
@@ -447,6 +531,13 @@ impl Default for Settings {
             text_chrome_suppress_min_seen: 12,
             text_chrome_protect_min_chars: 48,
             text_chrome_region_buckets: 8,
+            // 0.2.x retrieval + recall reports (03 §8). default_top_k replaces the
+            // hardcoded ASK_TOP_K; daily/weekly_top_k are the per-period budget and
+            // the global cap for temporal-coverage reports (03 §8b).
+            retrieval_default_top_k: 8,
+            reports_daily_top_k: 40,
+            reports_weekly_top_k: 200,
+            reports_map_reduce_min_frames: 20,
         }
     }
 }
@@ -669,6 +760,8 @@ mod ts_number_guard {
             ("AnswerDelta", AnswerDelta::inline()),
             ("JobCompleted", JobCompleted::inline()),
             ("JobStats", JobStats::inline()),
+            ("ReportRequest", ReportRequest::inline()),
+            ("ReportResponse", ReportResponse::inline()),
         ];
         for (name, decl) in decls {
             assert!(

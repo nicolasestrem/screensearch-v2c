@@ -11,6 +11,53 @@
 
 ---
 
+## 2026-06-25 — 0.2.0 PR6 — Recall reports + Ask shortcuts (CGCMR) (`feat/0.2.0-pr6-recall-reports`)
+- **Change:** Added the third Recall capability — `generate_report(ReportRequest) -> ReportResponse`
+  over the attention-first `content_text` — plus the removal of the hardcoded `ASK_TOP_K`, a Reports
+  UI mode, and premade Ask cards.
+  - **`crates/kernel/src/reports.rs` (new):** the **Calendar-Grid Coverage Map-Reduce (CGCMR)**
+    orchestrator over `dyn Store` + `dyn AnswerProvider`. Range → per-calendar-day grid → one
+    `timeline_buckets` density probe → adaptive `plan_depth` (per-active-period budget, floored at
+    `MIN_FRAMES_PER_PERIOD`, capped at the period count, floor-wins over the global cap) → per-period
+    even ASC sample → MAP (one summarize pass per active day) → bounded hierarchical REDUCE
+    (`REDUCE_FANOUT`=6, time order preserved) → FINAL pass. Custom-with-prompt swaps the coverage
+    sample for `hybrid_search(prompt, time_range)`. Single-pass fast path for small ranges;
+    honest-empty with zero sidecar calls; cooperative `AtomicBool` cancel + progress callback.
+  - **`crates/store` `sample_frames_in_range`** (Store trait + `SqliteStore`): even ASC stride across
+    a window (`frames_in_range` is newest-first capped, so a new primitive was required).
+  - **`crates/inference` `summarize`** (AnswerProvider trait + `AnswerSidecar`): non-streaming
+    collected pass reusing a `pack_context` helper extracted from `build_messages` (Ask byte-identical);
+    three report prompts; `answer_model_label`/`report_model_label` for the footer.
+  - **IPC/commands:** `ReportKind`/`ReportRequest`/`ReportResponse`/`ReportProgress` (ts-rs, i64
+    annotated, in the `no_bigint_in_ipc_types` guard); `generate_report` + `cancel_report`;
+    `AskRequest.top_k` override; `ask` now reads `retrieval.default_top_k`.
+  - **Settings:** the four §8 keys (`retrieval.default_top_k`, `reports.daily_top_k`,
+    `reports.weekly_top_k`, `reports.map_reduce_min_frames`) with Default + load/save + clamps + UI.
+  - **UI:** Reports mode (`ReportBuilder` computing a local `TimeRange`, `ReportView` with markdown +
+    capped citation chips + Copy + `.md` download + honest footer), shared `CitationTile`,
+    `PromptCardGrid` (5 premade Ask cards), `useReport` hook.
+- **Why:** `03 §7` (`generate_report`), `§8` (the four settings keys, remove `ASK_TOP_K`), `§8b`
+  (reports as map-reduce over `content_text`, cite frames), `docs/0.2.0.md` PR6. **The user's explicit
+  directive (2026-06-25) — report context must scale with the time range and ensure temporal
+  coverage, not just relevance** — drove the CGCMR design: a flat 8192 window for a week was rejected;
+  instead `n_ctx` stays flat (VRAM-flat, `§8b`-compliant) and the *number* of 8192-bounded passes
+  grows with the range, structurally guaranteeing per-active-day coverage. Deviations from the literal
+  `§8b` text (per-day grid vs token-budget batches; strided coverage vs best-first relevance; recursive
+  reduce; `daily/weekly_top_k` reinterpreted as per-period budget / global cap; additive
+  `report_progress`/`cancel_report`; flat `n_ctx`) are logged in `06` patch #5, and three accepted
+  limitations (DST grid skew, structural bounds as constants, estimated-token footer) in `07` #59–#61.
+- **Verification:** UI `npm run lint` (exit 0) · `npm run build` → `✓ 407 modules transformed · ✓
+  built in 1.44s` (exit 0); `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace
+  --all-targets -- -D warnings` (exit 0, 0 warnings); `cargo build --workspace` (`Finished` 9.43s);
+  `cargo test --workspace` (**0 failed across all crates**) incl. the 10 new `reports::` orchestrator
+  tests (real `SqliteStore` + `FakeAnswer`: every active period ≥ floor, dense day capped, floor-wins
+  on long ranges, weekly cites first+last day, reduce-overflow preserves all days, honest-empty = 0
+  sidecar calls, cancel → Err), 4 store sampler tests, 3 inference summarize tests, and the extended
+  kernel settings round-trip. `git diff --exit-code -- ui/src/bindings` is clean once the regenerated
+  `AskRequest.ts`/`Settings.ts` + the 4 new `Report*.ts` are committed with the PR.
+
+---
+
 ## 2026-06-25 — 0.2.0 PR3 review fixes (PR #32)
 - **Change:** Addressed the two substantive bot findings on PR #32.
   1. **N+1 catalog query** (`crates/store/src/records.rs`) — replaced `SqlCatalog::seen_count` (one

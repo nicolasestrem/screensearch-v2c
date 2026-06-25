@@ -13,6 +13,8 @@ import type { SearchHit } from "../../bindings/SearchHit";
 import type { CaptureControl } from "../../bindings/CaptureControl";
 import type { VisionTarget } from "../../bindings/VisionTarget";
 import type { AskRequest } from "../../bindings/AskRequest";
+import type { ReportRequest } from "../../bindings/ReportRequest";
+import type { ReportResponse } from "../../bindings/ReportResponse";
 import type { SetModelTier } from "../../bindings/SetModelTier";
 import type { ModelLane } from "../../bindings/ModelLane";
 import type { TimeRange } from "../../bindings/TimeRange";
@@ -65,6 +67,15 @@ export const ask = (request: AskRequest): Promise<void> => invoke<void>("ask", {
 /** Cancel a streaming grounded answer by request id. */
 export const cancelAsk = (requestId: string): Promise<void> =>
   invoke<void>("cancel_ask", { requestId });
+
+/** Generate a recall report over a time range (`03 §8b`); progress streams via
+ *  `report_progress` events, the report returns when complete. */
+export const generateReport = (request: ReportRequest): Promise<ReportResponse> =>
+  invoke<ReportResponse>("generate_report", { request });
+
+/** Cancel an in-flight report by request id (stops at the next pass boundary). */
+export const cancelReport = (requestId: string): Promise<void> =>
+  invoke<void>("cancel_report", { requestId });
 
 /** Change the active model tier for a lane (hot-applies on the next request). */
 export const setModelTier = (request: SetModelTier): Promise<void> =>

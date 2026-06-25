@@ -52,6 +52,49 @@ impl SqliteStore {
         .await
     }
 
+    /// Up to `limit` frames sampled **evenly across** `[start, end)` by `captured_at`
+    /// ascending (chronological) — for temporal-coverage report sampling (`03 §8b`).
+    /// Unlike [`frames_in_range`]'s newest-first cap, this strides over the in-range
+    /// frames (keeping every `ceil(total/limit)`-th) so the sample spreads across the
+    /// whole window — a report covers the period, not just its tail. When the window
+    /// holds `<= limit` frames the stride is 1 and all are returned. An empty/invalid
+    /// window (`end <= start`) or `limit == 0` yields no rows. The caller passes one
+    /// period's bounds at a time, so the stride is per-period (coverage within each
+    /// period), never a single global stride across the whole range.
+    pub async fn sample_frames_in_range(
+        &self,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> Result<Vec<FrameMeta>> {
+        if end <= start || limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let n = i64::from(limit);
+            // Number the in-range frames 0..total by time; keep every `stride`-th
+            // (stride = ceil(total/limit)), so selection is spread evenly rather than
+            // clustered at one end. `LIMIT` guards a stride-remainder off-by-one.
+            let mut stmt = conn.prepare(
+                "SELECT id, captured_at, image_path, app_hint FROM (
+                     SELECT id, captured_at, image_path, app_hint,
+                            row_number() OVER (ORDER BY captured_at ASC, id ASC) - 1 AS rn,
+                            count(*) OVER () AS total
+                     FROM frames
+                     WHERE captured_at >= ?1 AND captured_at < ?2
+                 )
+                 WHERE rn % max(1, (total + ?3 - 1) / ?3) = 0
+                 ORDER BY captured_at ASC, id ASC
+                 LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(params![start, end, n], row_to_meta)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
     /// The single frame whose `captured_at` is closest to `at` (unix ms), or `None`
     /// if the DB has no frames at all. Resolves the Timeline scan-head's continuous
     /// position to a concrete frame id — "Enter opens the moment under the head" —
@@ -219,5 +262,92 @@ fn nearer(at: i64, before: Option<FrameMeta>, after: Option<FrameMeta>) -> Optio
                 Some(b)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::SqliteStore;
+    use traits::NewFrame;
+
+    fn frame(at: i64) -> NewFrame {
+        NewFrame {
+            captured_at: at,
+            monitor_index: 0,
+            width: 1920,
+            height: 1080,
+            image_path: format!("frames/{at}.jpg"),
+            content_hash: format!("h{at}"),
+            app_hint: None,
+            window_title: None,
+            browser_url: None,
+        }
+    }
+
+    async fn seed(store: &SqliteStore, count: i64, step: i64) {
+        for i in 0..count {
+            store.insert_frame(frame(i * step)).await.unwrap();
+        }
+    }
+
+    /// Sampling spreads evenly across the window (covers the EARLY end, not just the
+    /// newest tail) — the property `frames_in_range`'s DESC-LIMIT cannot give.
+    #[tokio::test]
+    async fn sample_spreads_evenly_and_includes_the_earliest_frame() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed(&store, 12, 10).await; // captured_at = 0,10,…,110
+        let got = store.sample_frames_in_range(0, 120, 4).await.unwrap();
+        // stride = ceil(12/4) = 3 → rows at rn 0,3,6,9 → times 0,30,60,90.
+        let times: Vec<i64> = got.iter().map(|f| f.captured_at).collect();
+        assert_eq!(times, vec![0, 30, 60, 90]);
+        // Earliest frame present (not a newest-first tail) and ascending order.
+        assert_eq!(got.first().unwrap().captured_at, 0);
+        assert!(times.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    /// When the window holds `<= limit` frames the stride is 1 → all are returned,
+    /// ascending, with none dropped.
+    #[tokio::test]
+    async fn sample_returns_all_when_count_under_limit() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed(&store, 3, 100).await; // 0,100,200
+        let got = store.sample_frames_in_range(0, 1_000, 10).await.unwrap();
+        let times: Vec<i64> = got.iter().map(|f| f.captured_at).collect();
+        assert_eq!(times, vec![0, 100, 200]);
+    }
+
+    /// The sample never exceeds `limit` and stays within the half-open window.
+    #[tokio::test]
+    async fn sample_caps_at_limit_within_window() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed(&store, 100, 10).await; // 0,10,…,990
+        let got = store.sample_frames_in_range(0, 500, 7).await.unwrap();
+        assert!(got.len() <= 7, "got {} > limit", got.len());
+        assert!(got
+            .iter()
+            .all(|f| f.captured_at >= 0 && f.captured_at < 500));
+        assert!(!got.is_empty());
+    }
+
+    /// Degenerate inputs yield no rows (mirrors `frames_in_range`).
+    #[tokio::test]
+    async fn sample_degenerate_windows_are_empty() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed(&store, 5, 10).await;
+        assert!(store
+            .sample_frames_in_range(50, 50, 4)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .sample_frames_in_range(100, 50, 4)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .sample_frames_in_range(0, 100, 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

@@ -182,6 +182,39 @@ impl AnswerProvider for AnswerSidecar {
         }
         Ok(())
     }
+
+    /// One report summarization pass (`03 §8b`): resolves + acquires the answer model
+    /// like [`Self::run`], builds bounded report messages with the caller's
+    /// `system_prompt`, and collects the streamed reply (thinking dropped). Returns the
+    /// summary text + the frame ids actually read. Setup/stream errors propagate as
+    /// `Err` (the orchestrator/command decides how to surface them), unlike `answer`'s
+    /// terminal-delta swallow.
+    async fn summarize(
+        &self,
+        system_prompt: &str,
+        instruction: &str,
+        context: &[RetrievedChunk],
+        opts: AnswerOpts,
+    ) -> Result<(String, Vec<i64>)> {
+        let spec = self.ensure_spec().await?;
+        let ctx_size = spec.ctx_size;
+        let lease = self.supervisor.acquire(spec).await?;
+        let max_tokens = effective_reply_budget(opts.max_tokens, ctx_size);
+        let (messages, cited) =
+            build_summary_messages(system_prompt, instruction, context, ctx_size, max_tokens);
+        let client = lease.client().clone();
+        let text = collect_stream(&client, messages, max_tokens).await?;
+        Ok((text, cited))
+    }
+
+    /// The active answer model's GGUF filename for the report footer — resolved
+    /// without downloading (`None` if the files aren't present yet).
+    async fn answer_model_label(&self) -> Option<String> {
+        let tier = *self.tier.read().expect("answer tier lock");
+        let params = self.launch.read().expect("answer launch lock").clone();
+        models::resolve_spec(&self.models_root, ModelLane::Answer, tier, params)
+            .map(|s| report_model_label(&s.gguf_path))
+    }
 }
 
 async fn emit_segment(
@@ -247,27 +280,21 @@ fn truncate_to_tokens(text: &str, budget_tokens: usize) -> String {
     text[..max_bytes].to_string()
 }
 
-/// Builds the chat messages: a grounding system prompt + a user message listing the
-/// context snippets (tagged with their frame ids) and the question — **bounded** to the
-/// model's context window. The retrieved chunks are concatenated best-first only until the
-/// estimated token budget (`ctx_size` minus the reply `max_tokens`, the system prompt, the
-/// question, and template overhead) is spent; the rest are dropped, and an over-large top
-/// chunk is truncated. Without this the prompt could exceed `n_ctx` and llama-server
-/// returns a 400 `exceed_context_size_error` (verified). Returns the messages plus the
-/// frame ids actually included, so citations only cover context the model really saw.
-fn build_messages(
-    query: &str,
-    context: &[RetrievedChunk],
-    ctx_size: u32,
-    max_tokens: u32,
-) -> (Vec<ChatMessage>, Vec<i64>) {
-    let reserve = max_tokens as usize
-        + estimate_tokens(SYSTEM_PROMPT)
-        + estimate_tokens(query)
-        + TEMPLATE_OVERHEAD_TOKENS;
-    let mut budget = (ctx_size as usize).saturating_sub(reserve);
-
-    let mut user = String::from("Context snippets from my screen history:\n");
+/// Packs context chunks best-first into `intro`, spending at most `budget_tokens`. Each
+/// chunk costs its estimated tokens plus [`ID_FRAMING_TOKENS`]; chunks are appended as
+/// `[frame <id>] <text>` until the budget is spent, the rest dropped. If the most relevant
+/// chunk alone exceeds the budget it is truncated (grounding on a head beats dropping
+/// everything). When nothing fit, a `(no relevant snippets found)` line is appended.
+/// Returns the assembled user text and the frame ids actually included — the shared core
+/// of [`build_messages`] (Ask) and [`build_summary_messages`] (reports), so citations
+/// always cover context the model really saw and the budgeting is bounded once.
+fn pack_context(
+    intro: &str,
+    context: &[&RetrievedChunk],
+    budget_tokens: usize,
+) -> (String, Vec<i64>) {
+    let mut budget = budget_tokens;
+    let mut user = String::from(intro);
     let mut included: Vec<i64> = Vec::new();
     for chunk in context {
         if budget == 0 {
@@ -301,6 +328,30 @@ fn build_messages(
     if included.is_empty() {
         user.push_str("(no relevant snippets found)\n");
     }
+    (user, included)
+}
+
+/// Builds the chat messages: a grounding system prompt + a user message listing the
+/// context snippets (tagged with their frame ids) and the question — **bounded** to the
+/// model's context window via [`pack_context`] (the reserve is `ctx_size` minus the reply
+/// `max_tokens`, the system prompt, the question, and template overhead). Without this the
+/// prompt could exceed `n_ctx` and llama-server returns a 400 `exceed_context_size_error`
+/// (verified). Returns the messages plus the frame ids actually included, so citations only
+/// cover context the model really saw.
+fn build_messages(
+    query: &str,
+    context: &[RetrievedChunk],
+    ctx_size: u32,
+    max_tokens: u32,
+) -> (Vec<ChatMessage>, Vec<i64>) {
+    let reserve = max_tokens as usize
+        + estimate_tokens(SYSTEM_PROMPT)
+        + estimate_tokens(query)
+        + TEMPLATE_OVERHEAD_TOKENS;
+    let budget = (ctx_size as usize).saturating_sub(reserve);
+    let refs: Vec<&RetrievedChunk> = context.iter().collect();
+    let (mut user, included) =
+        pack_context("Context snippets from my screen history:\n", &refs, budget);
     user.push_str(&format!("\nQuestion: {query}"));
     (
         vec![
@@ -309,6 +360,85 @@ fn build_messages(
         ],
         included,
     )
+}
+
+/// Builds the chat messages for one report summarization pass (`03 §8b`): the
+/// caller-supplied `system_prompt` (map / reduce / final) + a user message of the
+/// content snippets (bounded via [`pack_context`]) followed by the `instruction` (e.g.
+/// the period label or the user's steering prompt). Returns the frame ids actually
+/// included so the orchestrator can carry citations through the map → reduce tree.
+fn build_summary_messages(
+    system_prompt: &str,
+    instruction: &str,
+    context: &[RetrievedChunk],
+    ctx_size: u32,
+    max_tokens: u32,
+) -> (Vec<ChatMessage>, Vec<i64>) {
+    let reserve = max_tokens as usize
+        + estimate_tokens(system_prompt)
+        + estimate_tokens(instruction)
+        + TEMPLATE_OVERHEAD_TOKENS;
+    let budget = (ctx_size as usize).saturating_sub(reserve);
+    let refs: Vec<&RetrievedChunk> = context.iter().collect();
+    let (mut user, included) = pack_context("Content from my screen history:\n", &refs, budget);
+    if !instruction.trim().is_empty() {
+        user.push_str(&format!("\n{instruction}"));
+    }
+    (
+        vec![
+            ChatMessage::text("system", system_prompt),
+            ChatMessage::text("user", user),
+        ],
+        included,
+    )
+}
+
+/// Collects a streamed completion into a single `String`, dropping the model's
+/// `<think>` reasoning (reports have no streaming UI to show it). Mirrors
+/// [`AnswerSidecar::run`]'s stream plumbing minus the [`AnswerDelta`] bridge: the
+/// per-chunk idle timeout in [`SidecarClient::stream`] keeps a slow-but-progressing
+/// map-reduce pass from spuriously timing out.
+async fn collect_stream(
+    client: &crate::client::SidecarClient,
+    messages: Vec<ChatMessage>,
+    max_tokens: u32,
+) -> Result<String> {
+    let (ptx, mut prx) = mpsc::channel::<StreamPiece>(64);
+    let c = client.clone();
+    let task = tokio::spawn(async move { c.stream(messages, max_tokens, &ptx).await });
+    let mut splitter = ThinkSplitter::default();
+    let mut out = String::new();
+    while let Some(piece) = prx.recv().await {
+        match piece {
+            StreamPiece::Reasoning(_) => {}
+            StreamPiece::Content(text) => {
+                for (is_thinking, chunk) in splitter.push(&text) {
+                    if !is_thinking {
+                        out.push_str(&chunk);
+                    }
+                }
+            }
+            StreamPiece::Done => break,
+        }
+    }
+    if let Some((is_thinking, rest)) = splitter.flush() {
+        if !is_thinking {
+            out.push_str(&rest);
+        }
+    }
+    task.await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("report stream task panicked: {e}")))?;
+    Ok(out)
+}
+
+/// The report footer's model provenance: the answer-lane GGUF filename
+/// (`ModelSpec` has no display-name field). Falls back to `"answer-model"`.
+fn report_model_label(gguf_path: &std::path::Path) -> String {
+    gguf_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("answer-model")
+        .to_string()
 }
 
 /// Splits a streamed content sequence into thinking vs. answer segments by tracking
@@ -506,6 +636,54 @@ mod tests {
             estimate_tokens(&cjk),
             cjk.chars().count()
         );
+    }
+
+    #[test]
+    fn report_summary_messages_use_the_given_system_prompt_and_tag_frames() {
+        let ctx = vec![
+            chunk(11, "edited the report draft"),
+            chunk(13, "ran the build"),
+        ];
+        let (msgs, cited) = build_summary_messages(
+            "SUMMARIZE PROMPT",
+            "Summarize Tuesday (Jun 24).",
+            &ctx,
+            8192,
+            512,
+        );
+        assert_eq!(msgs.len(), 2);
+        let system = serde_json::to_string(&msgs[0]).unwrap();
+        assert!(
+            system.contains("SUMMARIZE PROMPT"),
+            "report system prompt, not Ask's"
+        );
+        let user = serde_json::to_string(&msgs[1]).unwrap();
+        assert!(user.contains("[frame 11]") && user.contains("[frame 13]"));
+        assert!(
+            user.contains("Summarize Tuesday (Jun 24)."),
+            "instruction appended"
+        );
+        assert_eq!(cited, vec![11, 13], "both frames fit → both cited");
+    }
+
+    #[test]
+    fn report_summary_drops_overflow_and_cites_only_what_fit() {
+        // A tiny ctx: only a prefix of frames fits, and only those are cited.
+        let big = "lorem ipsum dolor sit amet ".repeat(40);
+        let ctx: Vec<RetrievedChunk> = (0..20).map(|i| chunk(i, &big)).collect();
+        let (_msgs, cited) = build_summary_messages("S", "label", &ctx, 1024, 256);
+        assert!(!cited.is_empty() && cited.len() < ctx.len());
+        assert_eq!(cited, (0..cited.len() as i64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn report_model_label_extracts_the_gguf_filename() {
+        use std::path::Path;
+        assert_eq!(
+            report_model_label(Path::new("/models/answer/Ministral-3-3B-Q4_K_M.gguf")),
+            "Ministral-3-3B-Q4_K_M.gguf"
+        );
+        assert_eq!(report_model_label(Path::new("")), "answer-model");
     }
 
     #[test]

@@ -11,6 +11,7 @@ import type { JobCompleted } from "../../bindings/JobCompleted";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
 import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { AnswerEvent } from "../../bindings/AnswerEvent";
+import type { ReportProgress } from "../../bindings/ReportProgress";
 import type { Toast } from "../../bindings/Toast";
 
 /** Map of backend event name → payload type. */
@@ -22,6 +23,7 @@ export interface AppEvents {
   sidecar_status: SidecarStatus;
   model_download: ModelDownloadStatus;
   answer_delta: AnswerEvent;
+  report_progress: ReportProgress;
   toast: Toast;
 }
 

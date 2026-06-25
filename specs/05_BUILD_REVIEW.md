@@ -2032,3 +2032,139 @@ $ git diff --exit-code -- ui/src/bindings   # clean once the regenerated Setting
 - **Verify:** `cargo fmt --all -- --check` clean · `cargo clippy --workspace --all-targets -D
   warnings` 0 warnings · `cargo test --workspace` 0 failures (textfilter 7, store 1+47) · bindings
   guard clean (no traits/IPC change).
+
+---
+
+## 0.2.0 PR6 — 2026-06-25 — Recall reports + Ask shortcuts (CGCMR) (`feat/0.2.0-pr6-recall-reports`)
+
+**Branch:** `feat/0.2.0-pr6-recall-reports`. Sixth PR of the 0.2.x arc (`docs/0.2.0.md` PR6,
+`03 §7`/`§8`/`§8b`). Adds `generate_report` over the attention-first `content_text`, removes the
+hardcoded `ASK_TOP_K`, and ships a Reports UI mode + premade Ask cards. **Core user directive
+(2026-06-25): report context must scale with the time range and guarantee temporal coverage, not
+just relevance** — a weekly report must cover the *whole* week (every active day), not a flat
+single window biased to the most-recent/most-relevant frames. Design = **Calendar-Grid Coverage
+Map-Reduce (CGCMR)** (chosen via a multi-agent design panel + adversarial verification); deviations
+from the literal `§8b` recorded in `06` patch #5.
+
+### Implemented (coverage by construction; VRAM-flat)
+- **New `crates/kernel/src/reports.rs`** — pure planner + I/O orchestrator over `dyn Store` +
+  `dyn AnswerProvider` (GPU-free, unit-testable). `n_ctx` stays **flat 8192**; the *number* of
+  8192-bounded passes scales with the range, not the window (KV-cache VRAM is unchanged; no sidecar
+  relaunch). Flow: **(coverage path)** range → per-calendar-day grid → one `timeline_buckets` density
+  probe → adaptive `plan_depth` (per-active-period budget, floored at `MIN_FRAMES_PER_PERIOD`, capped
+  at the period count, floor-wins over the global cap) → per-period even ASC sample → MAP (one
+  summarize pass per active day) → bounded hierarchical REDUCE (consecutive `REDUCE_FANOUT`=6 groups,
+  time order preserved) → FINAL report pass. **(relevance path)** Custom-with-prompt →
+  `hybrid_search(prompt, time_range)` → token-budget batches → same map-reduce. **Fast path:** a
+  single group ≤ `map_reduce_min_frames` skips straight to one final pass (Daily common case = 1
+  call). **Honest-empty:** zero frames in range → no-evidence report with **zero** sidecar calls.
+  Cooperative `AtomicBool` cancel checked between passes; progress callback emits `summarizing day
+  k/A` / `reducing`. Structural bounds are named constants (`07` #60).
+- **ASC temporal sampler** (`store::sample_frames_in_range`, added to the `Store` trait) — even
+  selection across `[start,end)` by `captured_at ASC` via windowed `row_number()`/`count()` (keep
+  rows where `(rn-1) % max(1, total/limit) == 0`), all rows when `count ≤ limit`. `frames_in_range`
+  is newest-first capped (unusable for even coverage), so this is a new primitive.
+- **Summarize pass primitive** (`inference::answer`, added to `AnswerProvider`) —
+  `summarize(system_prompt, instruction, context, opts) -> (String, Vec<i64>)`, non-streaming
+  (collected, thinking dropped via `ThinkSplitter`). Reuses a `pack_context` helper **extracted** from
+  `build_messages` so Ask output is byte-identical (its 8 tests pass unchanged). Three report prompts
+  (map / reduce / final), each with the anti-fabrication + honest-empty clause. Default trait impl
+  drives the existing `answer()` and drains the channel concurrently (`tokio::join!`) so the kernel
+  fake + non-sidecar providers work. `answer_model_label()` fills the footer.
+- **IPC + commands** — `ReportKind`/`ReportRequest`/`ReportResponse`/`ReportProgress` (ts-rs, i64
+  fields annotated, added to the `no_bigint_in_ipc_types` guard). `generate_report` resolves the local
+  range + label from the kind, builds `ReportConfig` from settings, registers an `AtomicBool` in
+  `report_tasks`, emits `report_progress` events, and maps `ReportOutput → ReportResponse` (incl.
+  `model`). `cancel_report(request_id)` flips the flag. `AskRequest` gains `top_k: Option<u32>`; `ask`
+  reads `retrieval.default_top_k` (`ASK_TOP_K` const removed).
+- **Settings (the four §8 keys, no surface bloat)** — `retrieval.default_top_k` (8),
+  `reports.daily_top_k` (40, **per-active-period budget**), `reports.weekly_top_k` (200, **global
+  cap**), `reports.map_reduce_min_frames` (20); struct + `Default` + load/save + `sanitize_settings`
+  clamps (1–100 / 1–1000 / 1–2000 / 1–1000), mirrored in the Settings UI sanitizer.
+- **UI** — `routes/Recall.tsx` gains a third **Reports** mode (search/ask/reports). `ReportBuilder`
+  (Daily/Weekly/Custom; computes the concrete **local** `TimeRange` in JS so the backend never does
+  TZ math; Custom = date inputs + optional prompt). `ReportView` (markdown via existing
+  `react-markdown`+`remark-gfm`+`prose-deck`; capped citation chips + "+N more"; Copy; `.md` download;
+  honest footer: model · ≈est tokens · passes · covered/total periods · summarized/sampled frames ·
+  truncated notice). `CitationTile` extracted from `AnswerStream` into a shared component (reused by
+  both). `PromptCardGrid` (5 premade Ask cards: Day Recap, Standup Update, Time Breakdown, Top of
+  Mind, AI Habits) in the Ask idle state. `useReport` hook mirrors `useAsk` (idle/generating/done/
+  error + live progress + cancel). Settings gains a "Reports & retrieval" panel. Bindings regenerated.
+
+### Decisions (user-confirmed before implementation)
+- **Weekly / large ranges use representative temporal coverage** (per-period grid + even intra-period
+  stride), not most-recent-N.
+- **Custom report *with* a prompt drives semantic retrieval** (`hybrid_search`); Daily / Weekly /
+  Custom-*without*-prompt use grid coverage.
+- **`n_ctx` stays flat 8192** — the ctx-boost alternative was considered and rejected (zero coverage
+  benefit, forces a relaunch, no iGPU VRAM probe). The pass *count* scales instead.
+
+### Skipped / deferred (intentional)
+- **Scheduled / saved reports** — out of 0.2.0 scope (`07` #50); on-demand only, no saved-report
+  table.
+- **Real sidecar token usage in the footer** — the streaming `answer()` path doesn't surface
+  prompt/eval token counts to the kernel, so the footer shows an `est_tokens` estimate plus the
+  *exact* structural counts that matter for trust (`07` #61). `build_messages` remains the hard
+  per-pass 8192 safety net regardless of the estimate.
+- **True civil-calendar day slicing** — the internal grid uses fixed `DAY_MS`; the UI range is
+  wall-clock-correct, so DST only shifts an internal boundary ±1 h on ≤2 days/yr (cosmetic, `07` #59).
+
+### Broke / regressed
+- Nothing. `ASK_TOP_K` removal is covered by `retrieval.default_top_k` + the per-request `top_k`
+  override; Ask output is byte-identical (the extracted `pack_context` keeps the existing 8 Ask tests
+  green). No schema change (the sampler is a query; the report types are additive IPC).
+
+### Still risky / to watch
+- **Token estimate vs reality** — `est_tokens` (`chars/4`) gates the reduce single-pass decision; if a
+  real corpus packs denser than the heuristic, `build_messages` truncates an oversized chunk (citations
+  reflect what fit) rather than overflowing — but a markedly low estimate could trigger one extra
+  reduce level than strictly needed. Conservative-by-design; watch on live data.
+- **Live GPU end-to-end is not in CI** — the orchestrator is fully unit-tested with a fake Store +
+  fake `AnswerProvider`, but a real weekly report over a seeded multi-day DB at ctx 8192 (markdown
+  mentions each active day; citations resolve; no relaunch) is a manual `npm run tauri dev` acceptance
+  item, like the rest of the sidecar path.
+
+### Verification (verbatim)
+```
+$ cd ui && npm run lint
+> eslint .
+   (exit 0, no output)
+$ cd ui && npm run build
+> tsc --noEmit && vite build
+✓ 407 modules transformed.
+✓ built in 1.44s          (exit 0)
+```
+```
+$ cargo fmt --all -- --check          # exit 0
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s   # exit 0, 0 warnings
+$ cargo build --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.43s   # exit 0
+$ cargo test --workspace          # 0 failed across all crates (exit 0)
+```
+New/affected tests (all pass):
+- **`crates/kernel` reports (10)** — `plan_depth_gives_every_active_period_its_budget`,
+  `plan_depth_floor_wins_over_global_cap_on_long_ranges`,
+  `grid_size_is_one_per_day_capped_at_max`, `split_chunks_batches_every_chunk_without_dropping`,
+  `fits_single_pass_detects_overflow`, `daily_small_range_uses_single_pass`,
+  `weekly_covers_every_active_day_and_cites_first_and_last`,
+  `reduce_overflow_preserves_all_days_via_hierarchical_reduce`,
+  `empty_range_is_honest_with_no_sidecar_call`, `cancellation_between_passes_returns_err` (real
+  `SqliteStore` + `FakeAnswer`). **`crates/kernel` settings round-trip** extended with the four keys.
+- **`crates/store` sampler (4)** — `sample_spreads_evenly_and_includes_the_earliest_frame`,
+  `sample_returns_all_when_count_under_limit`, `sample_caps_at_limit_within_window`,
+  `sample_degenerate_windows_are_empty`.
+- **`crates/inference` (3 new)** — `report_summary_messages_use_the_given_system_prompt_and_tag_frames`,
+  `report_summary_drops_overflow_and_cites_only_what_fit`,
+  `report_model_label_extracts_the_gguf_filename` (Ask's 8 `pack_context`/`build_messages` tests
+  unchanged & green).
+```
+$ git status --short -- ui/src/bindings
+ M ui/src/bindings/AskRequest.ts
+ M ui/src/bindings/Settings.ts
+?? ui/src/bindings/ReportKind.ts
+?? ui/src/bindings/ReportProgress.ts
+?? ui/src/bindings/ReportRequest.ts
+?? ui/src/bindings/ReportResponse.ts
+# regenerated by cargo test; committed with the PR so the CI binding guard stays clean.
+```
