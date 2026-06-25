@@ -170,13 +170,16 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
   reputation) → **Certum Open Source Code Signing** (cheap annual cloud cert for OSS devs). Note:
   since 2023 all OV certs require a hardware token or cloud HSM, so a plain file-based cert is no
   longer available; budget for that. Decide owner before P5.
-- **TODO (0.1.1) — parallel model download.** The GGUF/mmproj fetch goes through `hf-hub` 0.4.3,
-  which downloads **single-stream**; HuggingFace's CDN throttles a single connection to ~20 MB/s, so
-  the ~5 GB Quality (8B) vision model takes a few minutes (slower than `hf` CLI / browsers that open
-  many parallel connections). Plan: a multi-connection **chunked downloader** (N parallel HTTP Range
-  requests → one pre-allocated file) wired into the existing progress/resume/stall/clean-layout path
-  in `crates/inference/src/download.rs`, to saturate the user's bandwidth. Deferred from v0.1.0 (works,
-  just slow); needs its own focused tests (resume, stall, partial integrity).
+- **Scheduled (0.2.0 PR8) — parallel model download.** The GGUF/mmproj fetch goes through `hf-hub`
+  0.4.3, which downloads **single-stream**; HuggingFace's CDN throttles a single connection to
+  ~20 MB/s, so the ~5 GB Quality (8B) vision model takes a few minutes (slower than `hf` CLI /
+  browsers that open many parallel connections). Plan: a multi-connection **chunked downloader** (N
+  parallel HTTP Range requests → one pre-allocated file) wired into the existing
+  progress/resume/stall/clean-layout path in `crates/inference/src/download.rs`, to saturate the
+  user's bandwidth. **Promoted from a deferred TODO to `0.2.0 PR8`** (`docs/0.2.0.md`); works today,
+  just slow. Needs its own focused tests (resume, stall, partial integrity). (The code marker at
+  `crates/inference/src/download.rs` still reads `TODO(0.1.1, perf)` — bump it to `0.2.0 PR8` when
+  the PR lands.)
 - **TODO (0.1.1) — PR #27 review follow-ups (deferred from v0.1.0; user chose to ship as-is):**
   - *Codex P2 — re-check cache before retrying a locked download.* `download_with_lock_retry`
     (`crates/inference/src/download.rs`) re-calls `download_with_progress` after a `LockAcquisition`

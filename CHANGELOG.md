@@ -93,6 +93,13 @@ The schema, types, and OCR geometry the attention-first retrieval pipeline needs
   `specs/04_CLAUDE_CODE_BUILD_PROMPT.md` as its operating prompt.
 - **Planning doc only — no runtime or code changes.** Also un-ignored `docs/0.2.0.md` in
   `.gitignore` so the roadmap is version-controlled.
+- **Added PR8 (parallel model download) to the 0.2.0 line.** Promotes the previously-deferred
+  single-stream download-speed limitation to a scheduled, individually-gated PR: a multi-connection
+  chunked downloader (N parallel HTTP `Range` requests → one pre-allocated file) that reuses the
+  existing progress / resume / stall / clean-layout machinery in `crates/inference/src/download.rs`.
+  Independent of the retrieval chain, sequenced last. Planning only — no runtime or code changes
+  (`docs/0.2.0.md` PR8; the `specs/07_KNOWN_GAPS.md` item is relabeled from a deferred 0.1.1 TODO to
+  scheduled 0.2.0 PR8).
 
 ### Docs — 0.2.0 PR1: specs contract for attention-first content text + Recall reports
 - **Wrote the 0.2.0 contract into `/specs/` (specs-only; no runtime or code changes).** The roadmap
