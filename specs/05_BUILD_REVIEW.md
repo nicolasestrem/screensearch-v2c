@@ -2262,3 +2262,26 @@ test `dense_single_period_splits_into_passes_without_truncating` (40 large-text 
 --all-targets -- -D warnings` exit 0, 0 warnings · `cargo build --workspace` exit 0 · `cargo test
 --workspace` **0 failed** · `git diff --exit-code -- ui/src/bindings` clean (kernel-internal change,
 no IPC type touched).
+
+### PR7 integration audit (2026-06-25)
+Executed the PR7 audit plan on `codex/0.2.0-pr7-integration-audit` with the user's populated
+`%APPDATA%\app.screensearchv2c.desktop` store and `npm run tauri dev` driving the real debug
+executable (`target/debug/screensearch.exe`). Evidence screenshots are local-only under
+`.playwright-mcp/pr7-2026-06-25/` and are not tracked in Git.
+
+- **Search:** content terms such as `Calendar-Grid` and `cargo test` returned useful project/terminal
+  evidence, and `include app chrome + raw text` recovered raw labels. Default content search still
+  returned static/app-chrome-heavy rows for `Firefox`, `Steam`, and `Deck` in the populated corpus.
+  A fresh capture tick also showed some ScreenSearch labels inside `content_text`, even with many
+  background spans suppressed. Recorded as known gap #62; no DB reset/backfill was performed.
+- **Ask:** a Calendar-Grid question grounded on content text and showed cited frames. A unique-token
+  no-evidence question refused honestly, but still rendered retrieved context under `CITED FRAMES`;
+  recorded as known gap #63.
+- **Reports:** Daily and Weekly both generated through the UI with source frames and footer metadata.
+  Both observed runs used map/reduce-style bounded passes (`6 passes`, `39/40 frames summarized`,
+  range-trim notice). The generating helper text incorrectly said "Weekly reports..." while Daily was
+  selected; fixed in `ui/src/routes/Recall.tsx` with range-neutral bounded-pass copy.
+- **Capture:** start/stop worked. The live step advanced from 432 to 433 captures today, added a
+  visible `20:26` frame, and advanced the queue from `done 1192` to `done 1194`.
+
+Audit artifact: `docs/AUDIT_0.2.0_PR7_2026-06-25.md`.

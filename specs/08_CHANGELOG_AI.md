@@ -11,6 +11,23 @@
 
 ---
 
+## 2026-06-25 — 0.2.0 PR7 integration audit (`codex/0.2.0-pr7-integration-audit`)
+- **Change:** Ran the PR7 audit through the live dev app (`npm run tauri dev`, real
+  `target/debug/screensearch.exe`) against the user's populated app-data DB. Captured local-only
+  screenshots under `.playwright-mcp/pr7-2026-06-25/`, added
+  `docs/AUDIT_0.2.0_PR7_2026-06-25.md`, updated architecture/testing docs, updated the human
+  changelog, and recorded the PR7 findings in `05`/`06`/`07`.
+- **Code change:** fixed one UI copy bug found during the audit: Daily report generation displayed a
+  Weekly-only helper line. `ui/src/routes/Recall.tsx` now uses range-neutral bounded-pass copy.
+- **Why:** `docs/0.2.0.md` PR7 requires a real integration audit over default content search,
+  opt-in raw/app-chrome search, Ask, Reports, and a bounded live capture tick. The audit found two
+  open acceptance/product-semantics gaps: strict static/app-chrome suppression is not fully closed
+  on the populated corpus or fresh ScreenSearch UI captures (#62), and no-evidence Ask refusals
+  still render retrieved context under `CITED FRAMES` (#63).
+- **Verification:** final PR7 verification command output is recorded in the session response.
+
+---
+
 ## 2026-06-25 — 0.2.0 PR6 — Recall reports + Ask shortcuts (CGCMR) (`feat/0.2.0-pr6-recall-reports`)
 - **Change:** Added the third Recall capability — `generate_report(ReportRequest) -> ReportResponse`
   over the attention-first `content_text` — plus the removal of the hardcoded `ASK_TOP_K`, a Reports

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.0 PR7 — Integration audit
+Ran the PR7 end-to-end audit against the existing populated app-data DB using `npm run tauri dev`
+and the real debug executable (`target/debug/screensearch.exe`). Evidence screenshots were captured
+locally under ignored `.playwright-mcp/pr7-2026-06-25/` storage and are not tracked.
+
+- **Search audit:** content searches for real work terms (`Calendar-Grid`, `cargo test`, etc.) worked
+  and the `include app chrome + raw text` toggle recovered raw/static labels. Default content search
+  still surfaced static/app-chrome-heavy results for terms like `Firefox`, `Steam`, and especially
+  `Deck` in the populated corpus, so PR7's strict static-chrome acceptance is documented as not fully
+  closed rather than hidden by a DB rewrite.
+- **Ask audit:** a Calendar-Grid Coverage Map-Reduce question grounded on content text and showed
+  cited frames. A unique-token no-evidence question refused honestly, but still displayed retrieved
+  context frames under `CITED FRAMES`, leaving citation semantics for refusals as an open audit
+  finding.
+- **Reports audit:** Daily and Weekly reports generated through the UI, cited source frames, and
+  reported honest pass/frame footer metadata. Fixed one small UI copy bug where the progress helper
+  said "Weekly reports..." even while generating Daily; it now uses range-neutral bounded-pass copy.
+- **Capture audit:** started capture briefly, observed a fresh `20:26` frame/tick and queue advance,
+  then stopped capture. No destructive DB operation was performed.
+
 ### 0.2.0 PR6 — Recall reports + Ask shortcuts
 Adds a third Recall capability on top of the attention-first `content_text`: **Reports** —
 on-device Daily / Weekly / Custom summaries that **cite the frames they used** — plus per-request Ask
