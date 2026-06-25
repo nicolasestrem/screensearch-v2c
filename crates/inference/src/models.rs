@@ -36,7 +36,7 @@ pub struct ModelSpec {
 /// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. Vision
 /// sends one image + a short (≤512-token) JSON reply; the answer lane carries ~8 RAG
 /// chunks + a streamed reply, so it gets a larger window.
-fn default_ctx_for(lane: ModelLane) -> u32 {
+pub(crate) fn default_ctx_for(lane: ModelLane) -> u32 {
     match lane {
         ModelLane::Vision => 4096,
         ModelLane::Answer => 8192,

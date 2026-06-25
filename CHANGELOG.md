@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.0 PR6 — Recall reports + Ask shortcuts
+Adds a third Recall capability on top of the attention-first `content_text`: **Reports** —
+on-device Daily / Weekly / Custom summaries that **cite the frames they used** — plus per-request Ask
+depth and premade Ask prompt cards (`03 §7`/`§8`/`§8b`, `docs/0.2.0.md` PR6). The defining
+requirement (user directive): **report context scales with the time range and guarantees temporal
+coverage, not just relevance** — a weekly report genuinely covers the whole week (every active day),
+never a flat window biased to the most-recent or most-relevant frames.
+
+- **Coverage-first report engine (Calendar-Grid Coverage Map-Reduce).** Instead of growing the model
+  window for longer ranges (which scales KV-cache VRAM and forces a sidecar relaunch), the model
+  context stays **pinned flat at 8192** and the *number* of bounded passes grows with the range. A
+  range is split into a per-calendar-day grid; a single density probe finds the active days; each
+  active day gets its own frame budget (floored so a quiet Saturday is never starved by a busy
+  Monday, capped so a dense day can't dominate) sampled **evenly across the day** in chronological
+  order; one summary pass runs per active day, then a bounded, time-ordered hierarchical reduce folds
+  them into the final report. This makes per-day coverage a structural guarantee at the same VRAM as
+  a single Ask. A **Custom report with a prompt** instead drives semantic retrieval
+  (`hybrid_search`) for relevance.
+- **Honest by construction.** An empty range returns a no-evidence report with **zero** model calls.
+  Every report footer shows what actually happened — model, passes, covered/total active periods,
+  summarized/sampled frame counts, an estimated token figure, and a truncation notice if a
+  pathological range hit the safety ceiling — and the body **cites the exact source frames** (chips
+  that open the Moment).
+- **Reports UI mode.** Recall gains a third mode beside Search and Ask: pick Daily / Weekly / Custom
+  (Custom = date range + optional prompt), Generate with live progress ("summarizing day k of N…")
+  and Cancel, then read the rendered markdown with clickable source-frame chips, **Copy**, and **.md
+  download**. All view states (empty / generating / error / populated / honest no-evidence) are
+  defined.
+- **Premade Ask cards.** The Ask idle state now offers five one-tap prompts — Day Recap, Standup
+  Update, Time Breakdown, Top of Mind, AI Habits — that fill and submit a grounded, cited answer.
+- **Ask depth is now a setting, not a constant.** Removed the hardcoded `ASK_TOP_K`; Ask reads
+  `retrieval.default_top_k` (with an optional per-request override). A new **"Reports & retrieval"**
+  Settings panel exposes the four tuning keys (`retrieval.default_top_k` 8, `reports.daily_top_k` 40 =
+  per-active-day budget, `reports.weekly_top_k` 200 = global frame cap, `reports.map_reduce_min_frames`
+  20 = single-pass threshold), all clamped.
+- **No schema change.** The temporal sampler is a query; the report types are additive IPC
+  (`ts-rs` bindings regenerated). Ask output is unchanged (the shared context-packer is byte-identical
+  to before). Deviations from the literal spec and three accepted limitations (DST grid skew,
+  structural bounds as constants, estimated-token footer) are recorded in `specs/06`/`07`.
+- **Review fixes (PR #33).** (1) Removed an N+1 over the report's day grid — the coverage path now
+  bulk-fetches every active day's text in one query (Gemini). (2) A trailing single summary in the
+  hierarchical reduce passes through instead of spending a model call to "combine" one node (Gemini).
+  (3) Prompted (Custom-with-prompt) reports no longer cap relevance retrieval at the search-UI's 100
+  frames — the backend ceiling was raised so `reports.weekly_top_k` (up to 2000) is honored (Codex).
+  (4) The report planner budgets passes against the provider's **actual** answer-lane context window
+  (via the new `AnswerProvider::answer_context_budget`) so a user-lowered `sidecar.ctx_size` can't make
+  it pack summaries the sidecar then truncates (Codex). (5) Doc-comment clarified that the default
+  `summarize` does not forward the system prompt (Claude).
+- **Review fixes (PR #33, round 2).** (1) The temporal sampler returned ~half the requested frames
+  whenever a period had just over the limit (a `ceil(total/limit)` stride doubling at `total > limit`,
+  e.g. 41 frames → 21); replaced with even-rank bucketing that returns the full `min(total, limit)`
+  quota (Codex). (2) Prompted reports no longer show the "range trimmed to fit" notice spuriously —
+  the relevance path now flags `truncated` only when the search cap is actually hit, not when
+  empty-text hits are filtered (Claude). (3) Empty/no-evidence reports no longer require the answer
+  sidecar, so they work on first launch while the model is still downloading (Codex). (4) Daily/Weekly/
+  Custom ranges are computed from local calendar days instead of fixed 86.4M-ms spans, so DST
+  transition days no longer include/drop an hour (Codex). (5) The `frames_summarized` doc-comment no
+  longer claims equality with `cited_frame_ids.len()` (it can exceed it when the citation cap fires)
+  (Claude).
+- **Coverage fix — dense single periods no longer truncate (PR #33).** A single calendar period
+  (always the case for a Daily report, and for short Custom ranges) was one map group, and map-reduce
+  only fanned out *across* groups — so a dense day's frames were crammed into one 8192-token pass and
+  silently trimmed ("more was captured than summarized"). Each over-large period is now split into
+  pass-sized sub-batches before the map step, so a dense day fans out into several passes and the
+  reduce folds them back: within-period coverage is complete, not just per-period. The collapse-to-one-
+  pass fast path now fires only when the whole report genuinely fits one window. New kernel regression
+  test.
+
 ### 0.2.0 PR3 — Attention-first text filtering
 Replaces PR2's `content_text` passthrough with a real span-aware filter so search, Ask, and
 embeddings stop ranking on chrome (toolbars, taskbar, desktop icons, background windows). Searching

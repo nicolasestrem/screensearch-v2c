@@ -561,11 +561,15 @@ async fn hybrid_search_clamps_excessive_limit() {
         seed(&store, 10_000 + i, "common keyword here", None).await;
     }
 
+    // An absurd limit is clamped to the backend ceiling (2000, raised so prompted reports
+    // can honor `reports.weekly_top_k`) without panicking; with 150 matches seeded — below
+    // the ceiling — all 150 come back rather than being capped at the old UI max of 100.
+    // (The clamp itself is unit-tested in `search.rs::normalized_limit_clamps_*`.)
     let hits = store
         .hybrid_search(&query("keyword", u32::MAX))
         .await
         .unwrap();
-    assert_eq!(hits.len(), 100);
+    assert_eq!(hits.len(), 150);
 }
 
 #[tokio::test]

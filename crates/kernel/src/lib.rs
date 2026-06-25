@@ -25,6 +25,7 @@ use traits::{
 
 mod capture_loop;
 mod events;
+pub mod reports;
 pub mod settings;
 mod vision_scheduler;
 mod worker_pool;

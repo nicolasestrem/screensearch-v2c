@@ -93,6 +93,11 @@ function sanitizeSettings(s: Settings): Settings {
     text_chrome_suppress_min_seen: clampInt(s.text_chrome_suppress_min_seen, 2, 100_000),
     text_chrome_protect_min_chars: clampInt(s.text_chrome_protect_min_chars, 1, 4_096),
     text_chrome_region_buckets: clampInt(s.text_chrome_region_buckets, 1, 32),
+    // PR6 retrieval + recall reports — mirror the backend clamps (03 §8).
+    retrieval_default_top_k: clampInt(s.retrieval_default_top_k, 1, 100),
+    reports_daily_top_k: clampInt(s.reports_daily_top_k, 1, 1_000),
+    reports_weekly_top_k: clampInt(s.reports_weekly_top_k, 1, 2_000),
+    reports_map_reduce_min_frames: clampInt(s.reports_map_reduce_min_frames, 1, 1_000),
   };
 }
 
@@ -504,6 +509,47 @@ export function Component() {
             <span className="eyebrow">Per-app suppression</span>
             <SuppressionReadout />
           </div>
+        </div>
+      </Panel>
+
+      <Panel title="Reports & retrieval">
+        <div className="flex flex-col gap-4">
+          <Field
+            label="Ask retrieval depth"
+            type="number"
+            min={1}
+            max={100}
+            value={draft.retrieval_default_top_k}
+            onChange={intHandler("retrieval_default_top_k")}
+            hint={`How many frames an Ask retrieves for grounding. ${APPLY_ASK}`}
+          />
+          <Field
+            label="Report frames per day"
+            type="number"
+            min={1}
+            max={1000}
+            value={draft.reports_daily_top_k}
+            onChange={intHandler("reports_daily_top_k")}
+            hint="Target frames sampled per active day in a report. Report depth scales with the range. Applies to your next report."
+          />
+          <Field
+            label="Report frame cap"
+            type="number"
+            min={1}
+            max={2000}
+            value={draft.reports_weekly_top_k}
+            onChange={intHandler("reports_weekly_top_k")}
+            hint="Most frames a single report will summarize across the whole range (bounds work on weak hardware). Applies to your next report."
+          />
+          <Field
+            label="Map-reduce threshold (frames)"
+            type="number"
+            min={1}
+            max={1000}
+            value={draft.reports_map_reduce_min_frames}
+            onChange={intHandler("reports_map_reduce_min_frames")}
+            hint="Above this many sampled frames a report summarizes day-by-day then combines, instead of in one pass. Applies to your next report."
+          />
         </div>
       </Panel>
 

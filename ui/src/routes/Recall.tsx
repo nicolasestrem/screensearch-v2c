@@ -1,23 +1,32 @@
-// Recall (/recall) — hybrid search + grounded Ask (UI_REFERENCE §3/§4). One input,
-// two modes. Search lists hybrid hits (virtualized — no full-list DOM, §8); Ask
-// streams a grounded answer with collapsible thinking and citation tiles. Every
-// state is explicit: search → invite / loading / no-match / error / results;
-// ask → invite / streaming / done / error. A banner flags degraded modes (semantic
-// search not yet indexed; answer model not loaded). Never a zero-result dead end.
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+// Recall (/recall) — hybrid search + grounded Ask + recall Reports (UI_REFERENCE §3/§4).
+// One screen, three modes. Search lists hybrid hits (virtualized — no full-list DOM, §8);
+// Ask streams a grounded answer with collapsible thinking, premade prompt cards, and
+// citation tiles; Reports builds a daily/weekly/custom summary over content text with
+// live progress, source-frame chips, copy + .md download. Every state is explicit:
+// search → invite / loading / no-match / error / results; ask → invite(+cards) /
+// streaming / done / error; reports → invite / generating / done / error. A banner
+// flags degraded modes. Never a zero-result dead end.
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 
 import { Button, Chip, EmptyState, ErrorState, Skeleton } from "../components/primitives";
-import { SearchResult, AnswerStream } from "../components/domain";
-import { IconRecall, IconSparkle } from "../components/icons";
+import {
+  SearchResult,
+  AnswerStream,
+  PromptCardGrid,
+  ReportBuilder,
+  ReportView,
+} from "../components/domain";
+import { IconRecall, IconSparkle, IconInsights } from "../components/icons";
 import { useReadiness, useSearch, useSettings } from "../lib/ipc/queries";
 import { useAsk } from "../lib/ipc/useAsk";
+import { useReport } from "../lib/ipc/useReport";
 import { useUiStore } from "../state/uiStore";
 import { cn } from "../lib/cn";
 import type { SearchQuery } from "../bindings/SearchQuery";
 import type { SearchHit } from "../bindings/SearchHit";
 
-type Mode = "search" | "ask";
+type Mode = "search" | "ask" | "reports";
 
 const SEARCH_LIMIT = 100;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -29,6 +38,12 @@ const SEARCH_DEBOUNCE_MS = 250;
 const ASK_MAX_TOKENS = 2048;
 const ROW_ESTIMATE = 104;
 
+const MODES: { value: Mode; label: string; icon: ReactNode }[] = [
+  { value: "search", label: "Search", icon: <IconRecall size={16} /> },
+  { value: "ask", label: "Ask", icon: <IconSparkle size={16} /> },
+  { value: "reports", label: "Reports", icon: <IconInsights size={16} /> },
+];
+
 export function Component() {
   const [mode, setMode] = useState<Mode>("search");
   const [text, setText] = useState("");
@@ -38,6 +53,7 @@ export function Component() {
   const readiness = useReadiness();
   const settings = useSettings();
   const ask = useAsk();
+  const report = useReport();
 
   // Content-text (default) vs raw/app-chrome search (03 §3b). `null` follows the
   // user's configured default (`text.include_chrome_default`) until they toggle it.
@@ -72,16 +88,23 @@ export function Component() {
     overscan: 8,
   });
 
+  // Fill + submit an Ask question (shared by the form and the premade cards). The
+  // per-request `top_k` is left null → the configured `retrieval.default_top_k`.
+  const askQuery = (q: string) => {
+    const question = q.trim();
+    if (!question) return;
+    ask.ask({
+      query: question,
+      thinking: settings.data?.answer_thinking ?? true,
+      max_tokens: ASK_MAX_TOKENS,
+      top_k: null,
+    });
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (mode === "ask") {
-      const q = text.trim();
-      if (!q) return;
-      ask.ask({
-        query: q,
-        thinking: settings.data?.answer_thinking ?? true,
-        max_tokens: ASK_MAX_TOKENS,
-      });
+      askQuery(text);
     } else {
       setDebounced(text); // commit immediately on Enter
     }
@@ -100,42 +123,57 @@ export function Component() {
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-4 p-6">
       {/* Mode toggle. */}
       <div className="flex gap-1" role="tablist" aria-label="Recall mode">
-        {(["search", "ask"] as const).map((m) => (
+        {MODES.map((m) => (
           <button
-            key={m}
+            key={m.value}
             type="button"
             role="tab"
-            aria-selected={mode === m}
-            onClick={() => switchMode(m)}
+            aria-selected={mode === m.value}
+            onClick={() => switchMode(m.value)}
             className={cn(
               "inline-flex items-center gap-2 rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
               "transition-colors duration-fast ease-ui",
-              mode === m ? "bg-accent-wash text-accent" : "text-ink-muted hover:text-ink hover:bg-overlay",
+              mode === m.value
+                ? "bg-accent-wash text-accent"
+                : "text-ink-muted hover:text-ink hover:bg-overlay",
             )}
           >
-            {m === "search" ? <IconRecall size={16} /> : <IconSparkle size={16} />}
-            {m === "search" ? "Search" : "Ask"}
+            {m.icon}
+            {m.label}
           </button>
         ))}
       </div>
 
-      {/* Query input. */}
-      <form onSubmit={submit} className="flex gap-2">
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          autoFocus
-          placeholder={
-            mode === "search" ? "Search your screen history…" : "Ask a question about what you've seen…"
-          }
-          aria-label={mode === "search" ? "Search query" : "Question"}
-          className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
+      {/* Query input (search + ask). Reports has its own range builder instead. */}
+      {mode !== "reports" && (
+        <form onSubmit={submit} className="flex gap-2">
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            autoFocus
+            placeholder={
+              mode === "search"
+                ? "Search your screen history…"
+                : "Ask a question about what you've seen…"
+            }
+            aria-label={mode === "search" ? "Search query" : "Question"}
+            className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
+          />
+          <Button type="submit" variant="primary" disabled={mode === "ask" && ask.phase === "streaming"}>
+            {mode === "search" ? "Search" : ask.phase === "streaming" ? "Asking…" : "Ask"}
+          </Button>
+        </form>
+      )}
+
+      {/* Reports range builder. */}
+      {mode === "reports" && (
+        <ReportBuilder
+          busy={report.phase === "generating"}
+          onCancel={report.cancel}
+          onGenerate={report.generate}
         />
-        <Button type="submit" variant="primary" disabled={mode === "ask" && ask.phase === "streaming"}>
-          {mode === "search" ? "Search" : ask.phase === "streaming" ? "Asking…" : "Ask"}
-        </Button>
-      </form>
+      )}
 
       {/* Content vs raw/app-chrome retrieval (search mode only, 03 §3b). */}
       {mode === "search" && (
@@ -167,7 +205,7 @@ export function Component() {
       {mode === "search" && readiness.data && !embedReady && (
         <Chip tone="warn">Searching text only — semantic search lights up once the embedding model loads</Chip>
       )}
-      {mode === "ask" && sidecarDown && (
+      {mode !== "search" && sidecarDown && (
         <Chip tone="warn">
           Answer model not loaded{readiness.data?.sidecar.detail ? ` — ${readiness.data.sidecar.detail}` : ""}
         </Chip>
@@ -185,31 +223,80 @@ export function Component() {
             hits={hits}
             virtualizer={virtualizer}
           />
-        ) : ask.phase === "idle" ? (
-          <EmptyState
-            icon={<IconSparkle size={28} />}
-            title="Ask about what you've seen"
-            description="Questions are answered from your captured screens, with the source frames cited. Try “what was that error message earlier?” or “which doc was I reading about pricing?”."
-          />
+        ) : mode === "ask" ? (
+          ask.phase === "idle" ? (
+            <div className="flex flex-col gap-6">
+              <EmptyState
+                icon={<IconSparkle size={28} />}
+                title="Ask about what you've seen"
+                description="Questions are answered from your captured screens, with the source frames cited. Try a card below, or ask your own."
+              />
+              <PromptCardGrid onPick={(p) => { setText(p); askQuery(p); }} />
+            </div>
+          ) : (
+            <AnswerStream
+              phase={ask.phase}
+              thinking={ask.thinking}
+              answer={ask.answer}
+              citations={ask.citations}
+              error={ask.error}
+              onRetry={() => askQuery(text)}
+            />
+          )
         ) : (
-          <AnswerStream
-            phase={ask.phase}
-            thinking={ask.thinking}
-            answer={ask.answer}
-            citations={ask.citations}
-            error={ask.error}
-            onRetry={() =>
-              ask.ask({
-                query: text.trim(),
-                thinking: settings.data?.answer_thinking ?? true,
-                max_tokens: ASK_MAX_TOKENS,
-              })
-            }
+          <ReportBody
+            phase={report.phase}
+            progress={report.progress}
+            result={report.result}
+            error={report.error}
           />
         )}
       </div>
     </div>
   );
+}
+
+interface ReportBodyProps {
+  phase: ReturnType<typeof useReport>["phase"];
+  progress: ReturnType<typeof useReport>["progress"];
+  result: ReturnType<typeof useReport>["result"];
+  error: string | null;
+}
+
+function ReportBody({ phase, progress, result, error }: ReportBodyProps) {
+  if (phase === "idle") {
+    return (
+      <EmptyState
+        icon={<IconInsights size={28} />}
+        title="Build a recall report"
+        description="Pick a range above and Generate. Reports summarize your captured content — not toolbars or app chrome — and cite the frames behind every point."
+      />
+    );
+  }
+  if (phase === "error") {
+    return (
+      <ErrorState
+        title="Couldn't build that report"
+        message={error ?? "The answer model is unavailable. Make sure the inference sidecar is loaded, then try again."}
+      />
+    );
+  }
+  if (phase === "generating") {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-body text-ink-muted font-body">
+          <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-accent" aria-hidden />
+          {progress ? progress.stage : "Starting…"}
+          {progress && progress.total > 0 ? ` (${progress.done}/${progress.total})` : ""}
+        </div>
+        <span className="text-caption text-ink-faint">
+          Weekly reports summarize each active day in turn, so they take a little longer.
+        </span>
+      </div>
+    );
+  }
+  // done
+  return result ? <ReportView report={result} /> : null;
 }
 
 interface SearchBodyProps {

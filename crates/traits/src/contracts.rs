@@ -15,7 +15,7 @@ use crate::domain::{
     RetrievedChunk, TextFilterContext, VisionAnalysis,
 };
 use crate::ipc::{
-    AnswerDelta, AppSuppression, InsightsSummary, SearchHit, SearchQuery, TimelineBucket,
+    AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, SearchHit, SearchQuery, TimelineBucket,
 };
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::{MonitorInfo, Result};
@@ -70,6 +70,75 @@ pub trait AnswerProvider: Send + Sync {
         opts: AnswerOpts,
         tx: Sender<AnswerDelta>,
     ) -> Result<()>;
+
+    /// One non-streaming summarization pass for recall reports (`03 §8b`): grounds
+    /// on the `content_text` chunks and returns the collected summary text plus the
+    /// frame ids the model actually read (its citations). The kernel report
+    /// orchestrator uses it for both the map step (per-period) and the reduce step.
+    ///
+    /// The default reuses [`Self::answer`] (passing `instruction` as the query) and
+    /// collects its deltas — draining concurrently so the bounded delta channel can't
+    /// deadlock — so a provider that only implements [`Self::answer`] still compiles and
+    /// runs. **The default does NOT forward `system_prompt`**: it falls back to
+    /// `answer`'s own grounding prompt, so a provider whose report quality depends on the
+    /// map/reduce/final prompts must override this. `AnswerSidecar` does, honoring
+    /// `system_prompt` directly.
+    async fn summarize(
+        &self,
+        system_prompt: &str,
+        instruction: &str,
+        context: &[RetrievedChunk],
+        opts: AnswerOpts,
+    ) -> Result<(String, Vec<i64>)> {
+        let query = if instruction.is_empty() {
+            system_prompt
+        } else {
+            instruction
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AnswerDelta>(64);
+        let drain = async {
+            let mut text = String::new();
+            let mut cited: Vec<i64> = Vec::new();
+            let mut err: Option<String> = None;
+            while let Some(delta) = rx.recv().await {
+                match delta {
+                    AnswerDelta::Token { text: t } => text.push_str(&t),
+                    AnswerDelta::Citation { frame_id } => {
+                        if !cited.contains(&frame_id) {
+                            cited.push(frame_id);
+                        }
+                    }
+                    AnswerDelta::Error { message } => err = Some(message),
+                    AnswerDelta::Thinking { .. } | AnswerDelta::Done => {}
+                }
+            }
+            (text, cited, err)
+        };
+        let (answered, (text, cited, err)) =
+            tokio::join!(self.answer(query, context, opts, tx), drain);
+        answered?;
+        if let Some(message) = err {
+            return Err(anyhow::anyhow!(message));
+        }
+        Ok((text, cited))
+    }
+
+    /// A cheap, human-facing label for the active answer model (the report footer's
+    /// provenance — e.g. the resolved GGUF filename). Resolves without downloading;
+    /// `None` if no model is available. Default `None` for providers that don't track
+    /// a model.
+    async fn answer_model_label(&self) -> Option<String> {
+        None
+    }
+
+    /// The effective answer-lane context window (`n_ctx`, in tokens) this provider runs
+    /// with, if known. The report planner budgets its map/reduce passes against this so a
+    /// user-lowered `sidecar.ctx_size` can't make it pack summaries the provider then
+    /// silently truncates. `None` = unknown → the caller falls back to its own default.
+    /// (The provider's own per-pass prompt bound remains the hard safety net regardless.)
+    fn answer_context_budget(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// The durable data spine: frames, OCR, embeddings, retrieval, job queue, settings
@@ -142,6 +211,22 @@ pub trait Store: Send + Sync {
         _frame_ids: &[i64],
     ) -> Result<std::collections::HashMap<i64, String>> {
         Ok(std::collections::HashMap::new())
+    }
+
+    /// Up to `limit` frames sampled **evenly across** `[start, end)` by
+    /// `captured_at` ascending (chronological), for temporal-coverage report
+    /// sampling (`03 §8b`). Unlike a newest-first capped list, this spreads the
+    /// sample across the whole window so a report covers the period, not just its
+    /// tail. Returns all rows when the window holds `<= limit` frames; an
+    /// empty/invalid window (`end <= start`) or `limit == 0` yields no rows. Default
+    /// returns empty for stores without frame browsing.
+    async fn sample_frames_in_range(
+        &self,
+        _start: i64,
+        _end: i64,
+        _limit: u32,
+    ) -> Result<Vec<FrameMeta>> {
+        Ok(Vec::new())
     }
 
     /// Frame-count density buckets across the half-open window `[start, end)`, split

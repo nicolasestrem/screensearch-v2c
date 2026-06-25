@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use traits::{
-    AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput,
+    AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, FrameMeta,
     InsightsSummary, Job, JobKind, JobStats, NewFrame, NewJob, OcrResult, Result, SearchHit,
     SearchQuery, TextFilterContext, TimelineBucket, VisionAnalysis,
 };
@@ -278,6 +278,14 @@ impl Store for SqliteStore {
     }
     async fn ocr_texts(&self, frame_ids: &[i64]) -> Result<std::collections::HashMap<i64, String>> {
         SqliteStore::ocr_texts(self, frame_ids).await
+    }
+    async fn sample_frames_in_range(
+        &self,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> Result<Vec<FrameMeta>> {
+        SqliteStore::sample_frames_in_range(self, start, end, limit).await
     }
     async fn enqueue_job(&self, job: NewJob) -> Result<i64> {
         SqliteStore::enqueue_job(self, job).await

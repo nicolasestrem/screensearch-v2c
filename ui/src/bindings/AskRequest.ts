@@ -3,4 +3,10 @@
 /**
  * Input to the `ask` command. The answer streams back via request-scoped `answer_delta` events.
  */
-export type AskRequest = { request_id: string | null, query: string, thinking: boolean, max_tokens: number, };
+export type AskRequest = { request_id: string | null, query: string, thinking: boolean, max_tokens: number, 
+/**
+ * Per-request retrieval-depth override (`03 §8` `retrieval.default_top_k`).
+ * `None` → the configured default. `#[serde(default)]` so existing callers
+ * that omit it keep working.
+ */
+top_k: number | null, };
