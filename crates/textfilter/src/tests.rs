@@ -192,8 +192,9 @@ fn window_title_echoed_as_body_is_excluded() {
 
 #[test]
 fn no_target_rect_never_classifies_background_or_system() {
-    // Foreground window on another monitor / unresolved: nothing is suppressed
-    // positionally; everything kept (as unknown) and only the catalog can demote.
+    // Foreground window on another monitor / unresolved: with no geometry nothing is
+    // suppressed at all — positionally (background/system) *or* by repetition. Every
+    // line is kept (as unknown), so an unknown rect can only under-suppress.
     let (spans, _rect) = fixture();
     let catalog: HashMap<String, u32> = HashMap::new();
     let out = classify(&input(&spans, None, None), &catalog, &cfg());
@@ -204,6 +205,30 @@ fn no_target_rect_never_classifies_background_or_system() {
     // The clock and background text are conservatively kept (recoverable, not lost).
     assert!(out.content_text.contains("3:47"));
     assert!(out.content_text.contains("Inbox"));
+    assert_eq!(out.suppressed_count, 0);
+    // No rect ⇒ nothing is catalogued either (we can't place a candidate).
+    assert!(out.observed.is_empty());
+}
+
+#[test]
+fn no_target_rect_never_suppresses_even_a_saturated_signature() {
+    // Regression (PR3 review, Codex P2): without a rect we can't tell a short toolbar
+    // label from short body text, so even a signature already well past the suppression
+    // threshold in the catalog must NOT drop the line — repetition alone never loses
+    // content we can't place. The signature is rect-independent (centroid grid + app),
+    // so harvest it from a with-rect run, then replay it rect-less and saturated.
+    let (spans, rect) = fixture();
+    let empty: HashMap<String, u32> = HashMap::new();
+    let with_rect = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    let toolbar_sig = observed_sig_for(&with_rect, "file edit view help");
+
+    let mut saturated: HashMap<String, u32> = HashMap::new();
+    saturated.insert(toolbar_sig, 999);
+    let out = classify(&input(&spans, None, None), &saturated, &cfg());
+
+    // The toolbar line is kept (unknown), not demoted to chrome.
+    assert!(roles_of(&out, 0).iter().all(|r| *r == TextRole::Unknown));
+    assert!(out.content_text.contains("File Edit View Help"));
     assert_eq!(out.suppressed_count, 0);
 }
 

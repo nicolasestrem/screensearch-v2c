@@ -32,11 +32,12 @@
 //! ## Top risk: false suppression
 //! Wrongly dropping real content is silent data loss, so the classifier is
 //! conservative: long, information-rich lines (`>= chrome_protect_min_chars`) are
-//! never suppressed for repeating; `background`/`system` only fire when the target
-//! rect is **known** (with `None` the classifier suppresses nothing positionally);
-//! and anything dropped is still recoverable via `include_chrome` + the preserved
-//! `raw_text`. The caller exposes a per-app suppression-rate metric so over-
-//! suppression is observable.
+//! never suppressed for repeating; **all** suppression — `background`/`system`
+//! (positional) *and* static-chrome (repetition) — only fires when the target rect is
+//! **known**, so with `None` the classifier suppresses nothing and an unknown/wrong
+//! rect can only ever *under*-suppress, never silently lose content; and anything
+//! dropped is still recoverable via `include_chrome` + the preserved `raw_text`. The
+//! caller exposes a per-app suppression-rate metric so over-suppression is observable.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -201,31 +202,36 @@ pub fn classify(
             }
         }
 
-        // 4. static-chrome candidate: short, and not in the interior content zone of a
-        //    known target rect (edges = toolbars/sidebars/status bars). Long lines and
-        //    interior body text are never catalogued or suppressed for repeating.
-        let interior = input
-            .target_rect
-            .map(|r| centroid_interior(r, cx, cy))
-            .unwrap_or(false);
-        if short && !interior {
-            let region = region_bucket(cx, cy, buckets);
-            let sig = signature(input.target_app_hint, &region, &line.normalized);
-            if seen_sigs.insert(sig.clone()) {
-                observed.push(ObservedSignature {
-                    signature: sig.clone(),
-                    app_hint: input.target_app_hint.map(|s| s.to_string()),
-                    region_bucket: region,
-                    normalized_text: line.normalized.clone(),
-                });
-            }
-            // Suppress once this appearance reaches the threshold.
-            if catalog.seen_count(&sig).saturating_add(1) >= min_seen {
-                decisions.insert(
-                    line.index,
-                    (TextRole::Chrome, Some(SuppressReason::StaticChrome)),
-                );
-                continue;
+        // 4. static-chrome candidate: short, inside a **known** target rect but not in
+        //    its interior content zone (edges = toolbars/sidebars/status bars). Long
+        //    lines and interior body text are never catalogued or suppressed for
+        //    repeating. Requires a known rect: with no geometry we can't tell a short
+        //    toolbar label from short body text, so a rect-less frame never catalogs or
+        //    suppresses (the line falls through to `unknown`, kept) — repetition alone
+        //    must never drop content we can't place. This keeps the invariant that an
+        //    unknown rect can only ever *under*-suppress, never silently lose content.
+        if short {
+            if let Some(rect) = input.target_rect {
+                if !centroid_interior(rect, cx, cy) {
+                    let region = region_bucket(cx, cy, buckets);
+                    let sig = signature(input.target_app_hint, &region, &line.normalized);
+                    if seen_sigs.insert(sig.clone()) {
+                        observed.push(ObservedSignature {
+                            signature: sig.clone(),
+                            app_hint: input.target_app_hint.map(|s| s.to_string()),
+                            region_bucket: region,
+                            normalized_text: line.normalized.clone(),
+                        });
+                    }
+                    // Suppress once this appearance reaches the threshold.
+                    if catalog.seen_count(&sig).saturating_add(1) >= min_seen {
+                        decisions.insert(
+                            line.index,
+                            (TextRole::Chrome, Some(SuppressReason::StaticChrome)),
+                        );
+                        continue;
+                    }
+                }
             }
         }
 

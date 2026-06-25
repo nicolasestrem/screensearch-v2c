@@ -11,6 +11,32 @@
 
 ---
 
+## 2026-06-25 — 0.2.0 PR3 review fixes (PR #32)
+- **Change:** Addressed the two substantive bot findings on PR #32.
+  1. **N+1 catalog query** (`crates/store/src/records.rs`) — replaced `SqlCatalog::seen_count` (one
+     `SELECT` per candidate line, 10–30 per OCR frame on the hot path) with `load_chrome_catalog`,
+     which pre-fetches the foreground app's catalog rows in a single
+     `SELECT signature, seen_count … WHERE app_hint IS ?1` into a `HashMap<String, u32>` (already a
+     `ChromeCatalog`). One bulk read replaces N point-lookups.
+  2. **Unknown-rect over-suppression** (`crates/textfilter/src/lib.rs`) — static-chrome
+     cataloguing/suppression now requires a known `target_rect`. Previously `target_rect = None`
+     made `interior` false, so every short line became a chrome candidate and a repeated real body
+     line could be dropped. Rect-less short lines now fall through to `unknown` (kept).
+- **Why:** (1) hot-path DB efficiency (Claude P1 / Gemini high); (2) restores the documented
+  invariant that a missing/wrong rect can only *under*-suppress, never silently lose content
+  (Codex P2) — the project's top risk is false suppression (`03 §3b`).
+- **Verification:**
+  ```
+  $ cargo fmt --all -- --check          # clean
+  $ cargo clippy --workspace --all-targets -- -D warnings   # 0 warnings
+  $ cargo test --workspace              # 0 failures; textfilter 7 (was 6), store 1+47
+  $ git diff --exit-code -- ui/src/bindings   # clean (no traits/IPC change)
+  ```
+  New regression test `no_target_rect_never_suppresses_even_a_saturated_signature` asserts a
+  catalog-saturated signature survives a rect-less frame.
+
+---
+
 ## 2026-06-25 — 0.2.0 PR3: attention-first text filtering (`feat/0.2.0-pr3-text-filter`)
 - **Change:** Implemented `03 §3b/§4/§8` (PR3 of `docs/0.2.0.md`) verbatim — replaced PR2's
   `content_text` passthrough with a real span-aware filter:

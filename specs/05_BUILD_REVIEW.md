@@ -2015,3 +2015,20 @@ $ git diff --exit-code -- ui/src/bindings   # clean once the regenerated Setting
   per-monitor-v2 DPI-aware so `GetWindowRect`, `rcMonitor`, and the WGC texture agree in physical
   pixels. A wrong rect can only *under*-suppress (recoverable via `raw_text`/`include_chrome`), never
   silently lose content — but the per-app suppression-rate readout is the alarm to watch on live data.
+
+### Review fixes (PR #32, 2026-06-25)
+- **N+1 catalog lookup removed (Claude P1 + Gemini high).** `SqlCatalog::seen_count` issued one
+  `SELECT … WHERE signature = ?` per candidate line (10–30 round-trips per OCR frame on the hot
+  path). Replaced with `load_chrome_catalog(conn, app_hint)` — a single
+  `SELECT signature, seen_count … WHERE app_hint IS ?1` into a `HashMap<String, u32>` (which already
+  implements `ChromeCatalog`), passed to `classify`. Scoped to the foreground app because every
+  signature a frame can query is built with that `app_hint` prefix; `IS ?1` matches the NULL app.
+- **Unknown rect no longer suppresses by repetition (Codex P2).** With `target_rect = None`,
+  `centroid_interior` was `unwrap_or(false)`, so *every* short line became a chrome candidate and a
+  repeated real body line could be dropped — contradicting the "unknown rect can only under-suppress"
+  invariant. Static-chrome cataloguing/suppression now requires a known rect; rect-less short lines
+  fall through to `unknown` (kept). New regression test
+  `no_target_rect_never_suppresses_even_a_saturated_signature` (textfilter now 7 golden tests).
+- **Verify:** `cargo fmt --all -- --check` clean · `cargo clippy --workspace --all-targets -D
+  warnings` 0 warnings · `cargo test --workspace` 0 failures (textfilter 7, store 1+47) · bindings
+  guard clean (no traits/IPC change).

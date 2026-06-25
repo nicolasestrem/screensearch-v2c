@@ -26,9 +26,12 @@ loss)**, so the filter is conservative and fully recoverable.
   OCR fixture.
 - **Static-chrome suppression with a guardrail.** A line's signature
   (`app_hint ⏐ normalized_text ⏐ region_bucket`) is marked chrome only after it has been seen
-  `text.chrome_suppress_min_seen` times **and** is shorter than `text.chrome_protect_min_chars`.
-  All thresholds are **settings, never hardcoded** (`chrome_suppress_min_seen` 12,
-  `chrome_protect_min_chars` 48, `chrome_region_buckets` 8).
+  `text.chrome_suppress_min_seen` times **and** is shorter than `text.chrome_protect_min_chars`
+  **and** the foreground-window rect is known (an unknown rect can't tell a short toolbar label
+  from short body text, so it never catalogs or suppresses — keeping the invariant that a missing/
+  wrong rect can only *under*-suppress, never silently lose content). All thresholds are
+  **settings, never hardcoded** (`chrome_suppress_min_seen` 12, `chrome_protect_min_chars` 48,
+  `chrome_region_buckets` 8).
 - **Filtered write in one transaction.** New `insert_ocr_filtered` classifies, writes the filtered
   `content_text` directly (so the content FTS index is written **once** — no transient unfiltered
   window a concurrent search could match), stores the classified spans, and bumps the chrome
@@ -45,6 +48,12 @@ loss)**, so the filter is conservative and fully recoverable.
   groups lines exactly (robust on multi-column layouts). `filter_version` is now `1`; bumping it
   wipes the chrome catalog so suppression re-learns. No backfill of old frames (clean-DB
   assumption). ts-rs bindings regenerated.
+- **Review fixes (PR #32).** (1) Removed the N+1 catalog lookup on the OCR hot path — `seen_count`
+  was one `SELECT` per candidate line; `insert_ocr_filtered` now pre-fetches the foreground app's
+  catalog rows in a single bulk query into a `HashMap` (Claude/Gemini). (2) An unknown `target_rect`
+  no longer lets repetition suppress short body text — static-chrome cataloguing/suppression now
+  requires a known rect, with a regression test asserting a catalog-saturated signature survives a
+  rect-less frame (Codex P2).
 
 ### 0.2.0 PR2 — Text-signal data model + OCR spans
 The schema, types, and OCR geometry the attention-first retrieval pipeline needs (`03 §3/§3b/§4`,

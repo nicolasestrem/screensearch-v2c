@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
-use textfilter::{classify, ChromeCatalog, ClassifyInput, FilterConfig};
+use textfilter::{classify, ClassifyInput, FilterConfig};
 use traits::{
     AppSuppression, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason,
     TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
@@ -19,28 +19,30 @@ use crate::SqliteStore;
 /// user-facing [`traits::Settings`] field.
 const CATALOG_FILTER_VERSION_KEY: &str = "text.catalog_filter_version";
 
-/// Reads the chrome catalog's prior `seen_count` for a signature over the live
-/// connection, backing the pure classifier's [`ChromeCatalog`]. Reads see committed
-/// state (the per-frame bump happens after classify); a missing row or read error → 0
-/// (treat as unseen — never over-suppress on a transient failure, the top risk).
-struct SqlCatalog<'a> {
-    conn: &'a rusqlite::Connection,
-}
-
-impl ChromeCatalog for SqlCatalog<'_> {
-    fn seen_count(&self, signature: &str) -> u32 {
-        self.conn
-            .query_row(
-                "SELECT seen_count FROM chrome_text_catalog WHERE signature = ?1",
-                params![signature],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-            .map(|c| c.max(0) as u32)
-            .unwrap_or(0)
+/// Loads the chrome catalog's prior `seen_count`s for the foreground `app_hint` in a
+/// single query, returning the `signature -> seen_count` map the pure classifier reads
+/// via [`textfilter::ChromeCatalog`] (`HashMap` already implements it). One bulk read
+/// instead of one point-lookup per candidate line on the OCR hot path. Scoped to the
+/// current app because every signature this frame can query is built with this
+/// `app_hint` as its prefix (`app_hint IS ?1` matches the NULL app correctly, unlike
+/// `=`). Reads see committed state (the per-frame bump happens after classify); a read
+/// error → empty map (treat as all-unseen — never over-suppress on a transient
+/// failure, the top risk).
+fn load_chrome_catalog(
+    conn: &rusqlite::Connection,
+    app_hint: Option<&str>,
+) -> rusqlite::Result<HashMap<String, u32>> {
+    let mut catalog = HashMap::new();
+    let mut stmt =
+        conn.prepare("SELECT signature, seen_count FROM chrome_text_catalog WHERE app_hint IS ?1")?;
+    let mut rows = stmt.query(params![app_hint])?;
+    while let Some(row) = rows.next()? {
+        catalog.insert(
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?.max(0) as u32,
+        );
     }
+    Ok(catalog)
 }
 
 /// Foreground-window context already on the `frames` row (`07` #12): `(app_hint,
@@ -201,7 +203,7 @@ impl SqliteStore {
                 chrome_protect_min_chars: ctx.chrome_protect_min_chars,
                 chrome_region_buckets: ctx.chrome_region_buckets,
             };
-            let catalog = SqlCatalog { conn };
+            let catalog = load_chrome_catalog(conn, app_hint.as_deref())?;
             let input = ClassifyInput {
                 spans: &ocr.spans,
                 target_rect: ctx.target_rect,
