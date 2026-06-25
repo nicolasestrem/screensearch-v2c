@@ -228,6 +228,6 @@ CREATE TABLE chrome_text_catalog (
   seen_count      INTEGER NOT NULL,
   first_seen_at   INTEGER NOT NULL,
   last_seen_at    INTEGER NOT NULL,
-  suppressed      INTEGER NOT NULL DEFAULT 0     -- 0/1; marked chrome after a configurable threshold (§8)
+  suppressed      INTEGER NOT NULL DEFAULT 0 CHECK (suppressed IN (0,1))  -- 0/1; marked chrome after a configurable threshold (§8)
 );
 "#;

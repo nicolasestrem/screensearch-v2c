@@ -1902,3 +1902,13 @@ Four actionable threads, all addressed in the contract (still specs-only):
 - **Live (gated):** `winrt_ocr_recognizes_blank_image ... ok` (bbox ∈ [0,1] asserted) and
   `capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs ... ok` (3.42s, real WGC+WinRT →
   `frame_text` → `get_frame` → embed jobs).
+
+### Review follow-ups (PR #31, Gemini Code Assist)
+Codex and Claude (CI) found no issues; Gemini raised two medium-priority items, both applied:
+- **`chrome_text_catalog.suppressed` now `CHECK (suppressed IN (0,1))`** — enforces the documented
+  0/1 boolean semantic, matching the `is_searchable` convention in `text_spans` (same v3 migration).
+  v3 is unreleased (introduced in this PR), so tightening its DDL is not schema drift; `03 §4`'s
+  canonical DDL updated in lockstep to keep spec ↔ code in sync.
+- **`normalize_text` allocation** — rewritten to build the collapsed string in one capacity-hinted
+  allocation (was: intermediate `Vec` + `join`), keeping the final `to_lowercase()` so casing
+  semantics (incl. Greek final sigma) are byte-for-byte unchanged. Hot path: one call per OCR word.

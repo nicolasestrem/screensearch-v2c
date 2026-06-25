@@ -177,10 +177,19 @@ pub struct TextSpan {
 /// lowercased, internal whitespace collapsed to single spaces, ends trimmed. Shared
 /// so the OCR producer and PR3's classifier derive identical signatures.
 pub fn normalize_text(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    // Single output allocation (capacity-hinted): collapse internal whitespace by
+    // joining words with single spaces, then lowercase. Hot path — one span per OCR
+    // word — so avoid the intermediate Vec + join allocations.
+    let mut result = String::with_capacity(s.len());
+    let mut words = s.split_whitespace();
+    if let Some(first) = words.next() {
+        result.push_str(first);
+        for word in words {
+            result.push(' ');
+            result.push_str(word);
+        }
+    }
+    result.to_lowercase()
 }
 
 /// Result of running OCR over a [`CapturedFrame`]. `spans` carry per-word geometry
