@@ -5,13 +5,99 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
+use textfilter::{classify, ChromeCatalog, ClassifyInput, FilterConfig};
 use traits::{
-    FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason, TextRole,
-    TextSource, TextSpan, VisionAnalysis,
+    AppSuppression, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason,
+    TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
 };
 
-use crate::schema::UNFILTERED_FILTER_VERSION;
+use crate::schema::{FILTER_VERSION, UNFILTERED_FILTER_VERSION};
 use crate::SqliteStore;
+
+/// The `settings` key holding the active attention `filter_version` watermark, used by
+/// [`SqliteStore::reconcile_filter_version`]. Internal bookkeeping — deliberately not a
+/// user-facing [`traits::Settings`] field.
+const CATALOG_FILTER_VERSION_KEY: &str = "text.catalog_filter_version";
+
+/// Reads the chrome catalog's prior `seen_count` for a signature over the live
+/// connection, backing the pure classifier's [`ChromeCatalog`]. Reads see committed
+/// state (the per-frame bump happens after classify); a missing row or read error → 0
+/// (treat as unseen — never over-suppress on a transient failure, the top risk).
+struct SqlCatalog<'a> {
+    conn: &'a rusqlite::Connection,
+}
+
+impl ChromeCatalog for SqlCatalog<'_> {
+    fn seen_count(&self, signature: &str) -> u32 {
+        self.conn
+            .query_row(
+                "SELECT seen_count FROM chrome_text_catalog WHERE signature = ?1",
+                params![signature],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .map(|c| c.max(0) as u32)
+            .unwrap_or(0)
+    }
+}
+
+/// Foreground-window context already on the `frames` row (`07` #12): `(app_hint,
+/// window_title)`, both `None` if the row is missing.
+fn frame_target_context(
+    conn: &rusqlite::Connection,
+    frame_id: i64,
+) -> rusqlite::Result<(Option<String>, Option<String>)> {
+    Ok(conn
+        .query_row(
+            "SELECT app_hint, window_title FROM frames WHERE id = ?1",
+            params![frame_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .unwrap_or((None, None)))
+}
+
+/// Replaces a frame's `text_spans` wholesale (idempotent re-OCR / re-filter). Shared by
+/// [`SqliteStore::insert_ocr`] (passthrough, roles `unknown`) and
+/// [`SqliteStore::insert_ocr_filtered`] (classified roles). Carries `line_index` so PR3
+/// can reconstruct lines exactly (`03 §3b`).
+fn replace_text_spans(
+    tx: &rusqlite::Transaction<'_>,
+    frame_id: i64,
+    spans: &[TextSpan],
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "DELETE FROM text_spans WHERE frame_id = ?1",
+        params![frame_id],
+    )?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO text_spans
+           (frame_id, span_index, text, normalized_text, source, role,
+            x, y, w, h, line_index, is_searchable, suppress_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+    )?;
+    for (i, span) in spans.iter().enumerate() {
+        stmt.execute(params![
+            frame_id,
+            i as i64,
+            span.text,
+            span.normalized_text,
+            span.source.as_db_str(),
+            span.role.as_db_str(),
+            // Bind as f64 (the REAL column type); f32→f64→f32 is lossless.
+            span.x as f64,
+            span.y as f64,
+            span.w as f64,
+            span.h as f64,
+            span.line_index as i64,
+            span.is_searchable as i32,
+            span.suppress_reason.map(|r| r.as_db_str()),
+        ])?;
+    }
+    Ok(())
+}
 
 impl SqliteStore {
     /// Inserts a captured frame, returning its new id (`03 §3`).
@@ -56,14 +142,7 @@ impl SqliteStore {
 
             // Foreground-window metadata (gap #12); the frame row was inserted just
             // before this call (`03 §5`). A missing row leaves both NULL.
-            let (target_app_hint, target_window_title): (Option<String>, Option<String>) = tx
-                .query_row(
-                    "SELECT app_hint, window_title FROM frames WHERE id = ?1",
-                    params![frame_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?
-                .unwrap_or((None, None));
+            let (target_app_hint, target_window_title) = frame_target_context(conn, frame_id)?;
 
             // `?2` (raw_text) is bound once and reused for content_text (passthrough).
             tx.execute(
@@ -89,41 +168,180 @@ impl SqliteStore {
                 ],
             )?;
 
-            // Replace spans wholesale (idempotent re-OCR). Enum→DB token via the
-            // shared `as_db_str` helpers; the CHECK constraints catch any drift.
+            // Replace spans wholesale (idempotent re-OCR); PR2 roles stay `unknown`.
+            replace_text_spans(&tx, frame_id, &ocr.spans)?;
+
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Inserts OCR **and** applies PR3's attention filter in one transaction
+    /// (`03 §3b`, `docs/0.2.0.md` PR3). Classifies spans into roles via the pure
+    /// [`textfilter`] crate, writes the **filtered** `content_text` directly (so the
+    /// content FTS index is written once — no transient unfiltered window a concurrent
+    /// search could match), stores the classified `text_spans`, and bumps the
+    /// `chrome_text_catalog` for the signatures observed this frame. `raw_text` is
+    /// always preserved; the foreground title/app come from the `frames` row (the rect
+    /// and thresholds come from `ctx`). Because the embed worker reads `content_text`
+    /// and is enqueued only after this commits, embeddings run over filtered text.
+    pub async fn insert_ocr_filtered(
+        &self,
+        frame_id: i64,
+        ocr: OcrResult,
+        ctx: TextFilterContext,
+    ) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let (app_hint, window_title) = frame_target_context(conn, frame_id)?;
+
+            let config = FilterConfig {
+                chrome_suppress_min_seen: ctx.chrome_suppress_min_seen,
+                chrome_protect_min_chars: ctx.chrome_protect_min_chars,
+                chrome_region_buckets: ctx.chrome_region_buckets,
+            };
+            let catalog = SqlCatalog { conn };
+            let input = ClassifyInput {
+                spans: &ocr.spans,
+                target_rect: ctx.target_rect,
+                target_window_title: window_title.as_deref(),
+                target_app_hint: app_hint.as_deref(),
+            };
+            let out = classify(&input, &catalog, &config);
+
+            // Single filtered write — content FTS mirror is written exactly once.
             tx.execute(
-                "DELETE FROM text_spans WHERE frame_id = ?1",
-                params![frame_id],
+                "INSERT INTO frame_text
+                   (frame_id, raw_text, content_text, primary_source, filter_version,
+                    suppressed_count, target_window_title, target_app_hint)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(frame_id) DO UPDATE SET
+                   raw_text = excluded.raw_text,
+                   content_text = excluded.content_text,
+                   primary_source = excluded.primary_source,
+                   filter_version = excluded.filter_version,
+                   suppressed_count = excluded.suppressed_count,
+                   target_window_title = excluded.target_window_title,
+                   target_app_hint = excluded.target_app_hint",
+                params![
+                    frame_id,
+                    ocr.text,
+                    out.content_text,
+                    TextSource::Ocr.as_db_str(),
+                    FILTER_VERSION,
+                    out.suppressed_count as i64,
+                    window_title,
+                    app_hint,
+                ],
             )?;
+
+            replace_text_spans(&tx, frame_id, &out.spans)?;
+
+            // Bump the catalog for each candidate signature observed this frame. The
+            // current appearance reaches `seen_count`, and `suppressed` is recomputed
+            // against the configured threshold for observability / stats.
             {
+                let min_seen = ctx.chrome_suppress_min_seen.max(1) as i64;
                 let mut stmt = tx.prepare(
-                    "INSERT INTO text_spans
-                       (frame_id, span_index, text, normalized_text, source, role,
-                        x, y, w, h, is_searchable, suppress_reason)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    "INSERT INTO chrome_text_catalog
+                       (signature, app_hint, region_bucket, normalized_text,
+                        seen_count, first_seen_at, last_seen_at, suppressed)
+                     VALUES (?1, ?2, ?3, ?4, 1, unixepoch()*1000, unixepoch()*1000,
+                             CASE WHEN 1 >= ?5 THEN 1 ELSE 0 END)
+                     ON CONFLICT(signature) DO UPDATE SET
+                       seen_count   = seen_count + 1,
+                       last_seen_at = unixepoch()*1000,
+                       suppressed   = CASE WHEN seen_count + 1 >= ?5 THEN 1 ELSE 0 END",
                 )?;
-                for (i, span) in ocr.spans.iter().enumerate() {
+                for obs in &out.observed {
                     stmt.execute(params![
-                        frame_id,
-                        i as i64,
-                        span.text,
-                        span.normalized_text,
-                        span.source.as_db_str(),
-                        span.role.as_db_str(),
-                        // Bind as f64 (the REAL column type) — portable across
-                        // rusqlite versions; f32→f64→f32 is lossless.
-                        span.x as f64,
-                        span.y as f64,
-                        span.w as f64,
-                        span.h as f64,
-                        span.is_searchable as i32,
-                        span.suppress_reason.map(|r| r.as_db_str()),
+                        obs.signature,
+                        obs.app_hint,
+                        obs.region_bucket,
+                        obs.normalized_text,
+                        min_seen,
                     ])?;
                 }
             }
 
             tx.commit()?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Per-app text-filter suppression metric over frames classified by
+    /// `filter_version` (`03 §3b`). `rate = suppressed_spans / total_spans` grouped by
+    /// the **target** (foreground) app. Filtering on `filter_version` excludes interim
+    /// passthrough frames so they can't dilute the rate to a misleading 0%.
+    pub async fn text_filter_stats(&self, filter_version: i32) -> Result<Vec<AppSuppression>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT ft.target_app_hint,
+                        COUNT(*) AS total,
+                        SUM(CASE WHEN ts.role IN ('chrome','system','background')
+                                 THEN 1 ELSE 0 END) AS suppressed
+                 FROM text_spans ts
+                 JOIN frame_text ft ON ft.frame_id = ts.frame_id
+                 WHERE ft.filter_version = ?1
+                 GROUP BY ft.target_app_hint
+                 ORDER BY suppressed DESC, total DESC",
+            )?;
+            let rows = stmt.query_map(params![filter_version], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (app, total_spans, suppressed_spans) = row?;
+                let rate = if total_spans > 0 {
+                    suppressed_spans as f32 / total_spans as f32
+                } else {
+                    0.0
+                };
+                out.push(AppSuppression {
+                    app,
+                    total_spans,
+                    suppressed_spans,
+                    rate,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Reconciles the active attention `filter_version` (`03 §3b`). If `current`
+    /// differs from the stored watermark, wipes `chrome_text_catalog` (signatures
+    /// rebuild from new captures; old frames are **not** re-filtered — clean-DB,
+    /// `07` #51/#52) and records the new watermark, in one transaction. Returns whether
+    /// the catalog was wiped. Run once at startup.
+    pub async fn reconcile_filter_version(&self, current: i32) -> Result<bool> {
+        self.with_conn(move |conn| {
+            let stored: Option<i32> = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = ?1",
+                    params![CATALOG_FILTER_VERSION_KEY],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+                .and_then(|v| v.parse().ok());
+            if stored == Some(current) {
+                return Ok(false);
+            }
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM chrome_text_catalog", [])?;
+            tx.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![CATALOG_FILTER_VERSION_KEY, current.to_string()],
+            )?;
+            tx.commit()?;
+            Ok(true)
         })
         .await
     }
@@ -372,14 +590,14 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT text, normalized_text, source, role, x, y, w, h,
-                        is_searchable, suppress_reason
+                        line_index, is_searchable, suppress_reason
                  FROM text_spans WHERE frame_id = ?1 ORDER BY span_index",
             )?;
             let spans = stmt
                 .query_map(params![frame_id], |r| {
                     let source: String = r.get(2)?;
                     let role: String = r.get(3)?;
-                    let suppress: Option<String> = r.get(9)?;
+                    let suppress: Option<String> = r.get(10)?;
                     Ok(TextSpan {
                         text: r.get(0)?,
                         normalized_text: r.get(1)?,
@@ -389,7 +607,8 @@ impl SqliteStore {
                         y: r.get::<_, f64>(5)? as f32,
                         w: r.get::<_, f64>(6)? as f32,
                         h: r.get::<_, f64>(7)? as f32,
-                        is_searchable: r.get::<_, i64>(8)? != 0,
+                        line_index: r.get::<_, i64>(8)? as u32,
+                        is_searchable: r.get::<_, i64>(9)? != 0,
                         suppress_reason: suppress.as_deref().and_then(SuppressReason::from_db_str),
                     })
                 })?

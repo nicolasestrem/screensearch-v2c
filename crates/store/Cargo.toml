@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 traits.workspace = true
+textfilter.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 tokio.workspace = true

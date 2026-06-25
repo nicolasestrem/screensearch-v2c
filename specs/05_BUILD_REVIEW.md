@@ -1912,3 +1912,106 @@ Codex and Claude (CI) found no issues; Gemini raised two medium-priority items, 
 - **`normalize_text` allocation** — rewritten to build the collapsed string in one capacity-hinted
   allocation (was: intermediate `Vec` + `join`), keeping the final `to_lowercase()` so casing
   semantics (incl. Greek final sigma) are byte-for-byte unchanged. Hot path: one call per OCR word.
+
+---
+
+## 0.2.0 PR3 — 2026-06-25 — Attention-first text filtering (`feat/0.2.0-pr3-text-filter`)
+
+**Branch:** `feat/0.2.0-pr3-text-filter`. Third PR of the 0.2.x arc (`docs/0.2.0.md` PR3,
+`03 §3b/§4/§8`). Replaces PR2's `content_text` passthrough with a real span-aware filter so search,
+Ask, and embeddings stop ranking on chrome. The embed worker and search already read `content_text`,
+so filtering it changes retrieval with **no** embed-worker or search change.
+
+### Implemented (geometry before repetition; conservative by design)
+- **New `crates/textfilter`** (depends on `traits` only — honors the module rule): a pure,
+  deterministic `classify(input, catalog, config)`. Groups spans by `line_index` → lines (union bbox
+  + centroid), assigns roles in priority order — `system` (short, bottom band `y > 0.95`, rect known
+  & outside), `background` (rect known & outside), `chrome` (== normalized `target_window_title`),
+  static-chrome candidate (short + not interior, `seen_count+1 ≥ min_seen`), else `content`/`unknown`.
+  `content_text` built from kept spans (not string-subtraction); the title is metadata, never
+  appended. Never-suppress guardrails: long lines (≥ `chrome_protect_min_chars`) are never catalogued
+  or suppressed for repeating; short interior content is never catalogued. Signature =
+  `app_hint ⏐ normalized_text ⏐ region_bucket` (sep `U+001F`, empty-string sentinel for null app);
+  `region_bucket` = line centroid in an N×N grid.
+- **Single-transaction filtered write** (`store::insert_ocr_filtered`): catalog read →
+  `textfilter::classify` → filtered `frame_text` insert (`filter_version = 1`, real
+  `suppressed_count`) → `replace_text_spans` (classified roles + `line_index`) → catalog upsert, all
+  in **one** transaction so the content FTS is written once (no transient unfiltered window a
+  concurrent search could match). `insert_ocr` passthrough kept for fakes/fallback.
+- **Schema `schema_version` 3 → 4** (forward-only): `MIGRATION_V4` adds
+  `text_spans.line_index INTEGER NOT NULL DEFAULT 0`. `reconcile_filter_version` (run once on store
+  open) wipes `chrome_text_catalog` + rewrites the `text.catalog_filter_version` watermark when
+  `FILTER_VERSION` changes; `text_filter_stats` groups by `target_app_hint` filtered on the current
+  version. No backfill of old frames (clean-DB, `07` #51/#55).
+- **Capture target rect** (`crates/capture`): per-frame normalized `target_rect` from the foreground
+  window's visual bounds (`DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`, `IsIconic` guard)
+  mapped into the captured monitor's `rcMonitor` by the pure `normalize_window_rect` (center-point
+  containment; `None` on another monitor / minimized / unresolved — the safe fallback).
+- **Settings + UI:** 4 `text.*` settings (defaults: `include_chrome_default` false,
+  `chrome_suppress_min_seen` 12, `chrome_protect_min_chars` 48, `chrome_region_buckets` 8) with
+  load/save/sanitize clamps; Settings "Text filtering" panel + per-app suppression-rate readout (all
+  states); Recall search `include_chrome` toggle; `get_text_filter_stats` command. Decisions logged
+  as `07` gaps #52–57.
+
+### Verification (verbatim)
+```
+$ cargo fmt --all -- --check
+FMT CLEAN
+```
+```
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.04s
+```
+(fixed one `clippy::doc_lazy_continuation` — a doc line wrapped to a `+`-led continuation markdown
+read as a bullet.)
+```
+$ cargo build --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.36s
+```
+```
+$ cargo test -p textfilter
+running 6 tests
+test tests::default_frame_drops_system_and_background_keeps_content ... ok
+test tests::empty_spans_produce_empty_output ... ok
+test tests::no_target_rect_never_classifies_background_or_system ... ok
+test tests::short_interior_body_is_never_catalogued ... ok
+test tests::window_title_echoed_as_body_is_excluded ... ok
+test tests::toolbar_becomes_chrome_at_the_seen_threshold ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+```
+$ cargo test -p store --test store -- insert_ocr_filtered reconcile_filter
+running 2 tests
+test reconcile_filter_version_wipes_catalog_on_change ... ok
+test insert_ocr_filtered_suppresses_repeated_chrome_after_threshold ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.01s
+```
+```
+$ cargo test --workspace   # 0 failed across all crates
+store (lib 1, integration 47) · traits 43 · textfilter 6 · capture 13 · kernel (lib 2, pipeline 5,
+settings 6) · ocr 1 · screensearch_lib 6 · inference (no_orphan 1, reap 3, sidecar 8) · embeddings 1
+```
+```
+$ cd ui && npm run lint && npm run build
+> eslint .
+> tsc --noEmit && vite build
+✓ built
+```
+```
+$ git diff --exit-code -- ui/src/bindings   # clean once the regenerated Settings.ts + AppSuppression.ts are committed
+```
+
+### Skipped / deferred (intentional)
+- **`CaptureTrigger` not threaded into the filter** — 0.2.0 capture is timer/idle-only, so it would
+  be dead single-variant plumbing; the filter is trigger-agnostic. Arrives with event-driven capture
+  (`07` #57 / #47, 0.2.1).
+- **No backfill** of PR2-era frames — they keep their unfiltered `content_text`/`filter_version`
+  (clean-DB assumption, `07` #51/#55).
+- **Manual multi-DPI / secondary-monitor `target_rect` check** is the one acceptance item CI cannot
+  cover (`07` #54) — to confirm in a live `npm run tauri dev` session.
+
+### Still risky / to watch
+- **`target_rect` DPI assumption (highest technical risk).** Correct mapping assumes the process is
+  per-monitor-v2 DPI-aware so `GetWindowRect`, `rcMonitor`, and the WGC texture agree in physical
+  pixels. A wrong rect can only *under*-suppress (recoverable via `raw_text`/`include_chrome`), never
+  silently lose content — but the per-app suppression-rate readout is the alarm to watch on live data.

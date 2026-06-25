@@ -10,10 +10,42 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
-/// A connected monitor and the `HMONITOR` to capture it from.
+/// A connected monitor and the `HMONITOR` to capture it from. `left`/`top` are the
+/// monitor's screen-space origin (`rcMonitor`, physical pixels / virtual-desktop
+/// coords) — the size lives in `info.width`/`info.height`.
 pub struct EnumeratedMonitor {
     pub info: MonitorInfo,
     pub hmonitor: HMONITOR,
+    pub left: i32,
+    pub top: i32,
+}
+
+/// Screen-space bounds of a monitor (physical pixels, virtual-desktop coords), keyed by
+/// the same index as `frames.monitor_index`. Used to map the foreground-window rect into
+/// a captured monitor's frame for PR3's `target_rect` (`03 §3b`). Plain `i32`s (Send) so
+/// it can be cached on the capture source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorBounds {
+    pub index: u32,
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// Per-monitor screen bounds in the same order/index as [`enumerate`] (and therefore as
+/// `frames.monitor_index`). Cheap; called once when the capture source starts.
+pub fn monitor_bounds() -> Vec<MonitorBounds> {
+    enumerate()
+        .into_iter()
+        .map(|m| MonitorBounds {
+            index: m.info.index,
+            left: m.left,
+            top: m.top,
+            width: m.info.width as i32,
+            height: m.info.height as i32,
+        })
+        .collect()
 }
 
 /// Enumerates all connected monitors in OS order, assigning `info.index` by that
@@ -61,6 +93,8 @@ unsafe extern "system" fn proc(
                 is_primary: mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
             },
             hmonitor,
+            left: rc.left,
+            top: rc.top,
         });
     }
     BOOL(1) // keep enumerating

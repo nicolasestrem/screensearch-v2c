@@ -59,11 +59,33 @@ struct FakeOcr;
 #[async_trait]
 impl OcrProvider for FakeOcr {
     async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult> {
+        // Emit one line of word spans (as the real WinRT engine does) so the attention
+        // filter has geometry to classify and rebuild `content_text` from.
+        let text = format!("ocr text for frame at {}", frame.captured_at);
+        let mut spans = Vec::new();
+        let mut x = 0.1_f32;
+        for word in text.split_whitespace() {
+            let w = 0.02 * word.chars().count() as f32;
+            spans.push(traits::TextSpan {
+                normalized_text: traits::normalize_text(word),
+                text: word.to_string(),
+                source: traits::TextSource::Ocr,
+                role: traits::TextRole::Unknown,
+                x,
+                y: 0.45,
+                w,
+                h: 0.03,
+                line_index: 0,
+                is_searchable: true,
+                suppress_reason: None,
+            });
+            x += w + 0.01;
+        }
         Ok(OcrResult {
-            text: format!("ocr text for frame at {}", frame.captured_at),
+            text,
             mean_confidence: 0.9,
             engine: "fake".to_string(),
-            spans: Vec::new(),
+            spans,
         })
     }
 }
@@ -89,6 +111,7 @@ fn frame(captured_at: i64) -> CapturedFrame {
         content_hash: format!("hash-{captured_at}"),
         app_hint: Some("Firefox".to_string()),
         window_title: Some("Inbox".to_string()),
+        target_rect: None,
     }
 }
 
@@ -115,6 +138,9 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
         enrich_image_embeddings: false,
         jpeg_quality: 80,
         max_width: 1280,
+        chrome_suppress_min_seen: 12,
+        chrome_protect_min_chars: 48,
+        chrome_region_buckets: 8,
     };
 
     run_capture_loop(
@@ -189,6 +215,9 @@ async fn capture_loop_skips_embed_jobs_when_disabled() {
         enrich_image_embeddings: false,
         jpeg_quality: 80,
         max_width: 1280,
+        chrome_suppress_min_seen: 12,
+        chrome_protect_min_chars: 48,
+        chrome_region_buckets: 8,
     };
 
     run_capture_loop(

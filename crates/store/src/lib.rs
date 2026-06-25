@@ -23,9 +23,9 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use traits::{
-    ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, InsightsSummary, Job, JobKind,
-    JobStats, NewFrame, NewJob, OcrResult, Result, SearchHit, SearchQuery, TimelineBucket,
-    VisionAnalysis,
+    AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput,
+    InsightsSummary, Job, JobKind, JobStats, NewFrame, NewJob, OcrResult, Result, SearchHit,
+    SearchQuery, TextFilterContext, TimelineBucket, VisionAnalysis,
 };
 
 mod embeddings;
@@ -38,7 +38,7 @@ mod search;
 mod settings;
 mod timeline;
 
-pub use schema::{EMBEDDING_DIM, LATEST_SCHEMA_VERSION};
+pub use schema::{EMBEDDING_DIM, FILTER_VERSION, LATEST_SCHEMA_VERSION};
 /// Re-export of the contract this crate implements (`03 §3`).
 pub use traits::Store;
 
@@ -212,6 +212,14 @@ impl Store for SqliteStore {
     async fn insert_ocr(&self, frame_id: i64, ocr: OcrResult) -> Result<()> {
         SqliteStore::insert_ocr(self, frame_id, ocr).await
     }
+    async fn insert_ocr_filtered(
+        &self,
+        frame_id: i64,
+        ocr: OcrResult,
+        ctx: TextFilterContext,
+    ) -> Result<()> {
+        SqliteStore::insert_ocr_filtered(self, frame_id, ocr, ctx).await
+    }
     async fn insert_vision(&self, frame_id: i64, v: VisionAnalysis) -> Result<()> {
         SqliteStore::insert_vision(self, frame_id, v).await
     }
@@ -291,6 +299,12 @@ impl Store for SqliteStore {
     }
     async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
         SqliteStore::reset_stale_running_jobs(self, older_than_ms).await
+    }
+    async fn text_filter_stats(&self, filter_version: i32) -> Result<Vec<AppSuppression>> {
+        SqliteStore::text_filter_stats(self, filter_version).await
+    }
+    async fn reconcile_filter_version(&self, current: i32) -> Result<bool> {
+        SqliteStore::reconcile_filter_version(self, current).await
     }
     async fn get_setting(&self, key: &str) -> Result<Option<String>> {
         SqliteStore::get_setting(self, key).await

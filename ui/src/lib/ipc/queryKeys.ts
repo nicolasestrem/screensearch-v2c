@@ -13,6 +13,7 @@ export const queryKeys = {
   sidecarStatus: ["sidecarStatus"] as const,
   modelDownload: ["modelDownload"] as const,
   settings: ["settings"] as const,
+  textFilterStats: ["textFilterStats"] as const,
   // `*Prefix` keys match every variant of a family for bulk invalidation (e.g.
   // a `capture_tick` invalidates all timeline ranges/bucket-counts at once; a
   // completed enrichment job invalidates all frame/search/insights variants).

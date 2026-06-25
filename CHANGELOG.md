@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.0 PR3 — Attention-first text filtering
+Replaces PR2's `content_text` passthrough with a real span-aware filter so search, Ask, and
+embeddings stop ranking on chrome (toolbars, taskbar, desktop icons, background windows). Searching
+"Firefox" / "Steam" no longer surfaces frames purely because those static labels were on screen
+(`03 §3b/§4/§8`, `docs/0.2.0.md` PR3). Top risk by design is **false suppression (silent data
+loss)**, so the filter is conservative and fully recoverable.
+
+- **New `textfilter` crate — a pure, deterministic classifier.** Groups OCR words by `line_index`
+  and assigns each line one of five roles (`system` / `background` / `chrome` / `content` /
+  `unknown`) by **geometry before repetition**: a line is `background`/`system` only with a
+  confident foreground-window rect; the window title is treated as metadata (never repeated body
+  text); long, information-rich lines are **never** catalogued or suppressed for merely repeating.
+  Default `content_text` = `content` + `unknown` inside the target window, built from classified
+  spans (not string-subtraction). No I/O, no Windows APIs — unit-tested with an anonymized synthetic
+  OCR fixture.
+- **Static-chrome suppression with a guardrail.** A line's signature
+  (`app_hint ⏐ normalized_text ⏐ region_bucket`) is marked chrome only after it has been seen
+  `text.chrome_suppress_min_seen` times **and** is shorter than `text.chrome_protect_min_chars`.
+  All thresholds are **settings, never hardcoded** (`chrome_suppress_min_seen` 12,
+  `chrome_protect_min_chars` 48, `chrome_region_buckets` 8).
+- **Filtered write in one transaction.** New `insert_ocr_filtered` classifies, writes the filtered
+  `content_text` directly (so the content FTS index is written **once** — no transient unfiltered
+  window a concurrent search could match), stores the classified spans, and bumps the chrome
+  catalog. Embeddings run over the filtered text because the embed job is enqueued only after this
+  commits. `raw_text` is always preserved; `include_chrome` recovers suppressed terms.
+- **Capture learns the foreground window.** Each frame carries a normalized `target_rect` mapped
+  from the foreground window's visual bounds (`DwmGetWindowAttribute` extended-frame bounds) against
+  the captured monitor's `rcMonitor`; `None` (other monitor / minimized / unresolved) is the safe
+  fallback that disables positional suppression.
+- **Per-app suppression-rate readout.** New `get_text_filter_stats` command + a read-only per-app
+  list in Settings (all view states) surface the silent-data-loss alarm; the Recall search gains an
+  `include_chrome` toggle.
+- **Schema `schema_version` 3 → 4 (forward-only).** Adds `text_spans.line_index` so the classifier
+  groups lines exactly (robust on multi-column layouts). `filter_version` is now `1`; bumping it
+  wipes the chrome catalog so suppression re-learns. No backfill of old frames (clean-DB
+  assumption). ts-rs bindings regenerated.
+
 ### 0.2.0 PR2 — Text-signal data model + OCR spans
 The schema, types, and OCR geometry the attention-first retrieval pipeline needs (`03 §3/§3b/§4`,
 `docs/0.2.0.md` PR2). No behaviour change for users yet — `content_text` is a passthrough copy of

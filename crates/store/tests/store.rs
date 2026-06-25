@@ -6,11 +6,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use store::{SqliteStore, EMBEDDING_DIM};
+use store::{SqliteStore, EMBEDDING_DIM, FILTER_VERSION};
 use traits::{
     ChunkSource, Embedding, EmbeddingProvider, FrameMeta, JobKind, JobState, NewFrame, NewJob,
-    OcrResult, SearchQuery, TextRole, TextSource, TextSpan, TimeRange, TimelineBucket,
-    VisionAnalysis,
+    OcrResult, SearchQuery, TextFilterContext, TextRole, TextSource, TextSpan, TimeRange,
+    TimelineBucket, VisionAnalysis,
 };
 
 /// One unsuppressed OCR span at the given normalized bbox — the shape PR2's OCR
@@ -25,6 +25,7 @@ fn span(text: &str, x: f32, y: f32, w: f32, h: f32) -> TextSpan {
         y,
         w,
         h,
+        line_index: 0,
         is_searchable: true,
         suppress_reason: None,
     }
@@ -1485,4 +1486,177 @@ async fn insights_summary_uses_requested_bucket_count() {
 
     let four = store.insights_summary(0, 200, 4).await.unwrap();
     assert_eq!(four.captures.len(), 4);
+}
+
+// --- PR3 attention filter (insert_ocr_filtered / stats / reconcile) ---------------
+
+/// A frame whose foreground app is the editor (the target app the catalog scopes to).
+fn editor_frame(captured_at: i64) -> NewFrame {
+    NewFrame {
+        captured_at,
+        monitor_index: 0,
+        width: 1920,
+        height: 1080,
+        image_path: format!("frames/{captured_at}.jpg"),
+        content_hash: format!("h-{captured_at}"),
+        app_hint: Some("editor".to_string()),
+        window_title: Some("Doc".to_string()),
+        browser_url: None,
+    }
+}
+
+/// One OCR line laid left-to-right at `y` on `line_index`.
+fn ocr_line(text: &str, line_index: u32, y: f32) -> Vec<TextSpan> {
+    let mut spans = Vec::new();
+    let mut x = 0.05;
+    for w in text.split_whitespace() {
+        let width = 0.01 * w.chars().count() as f32;
+        let mut s = span(w, x, y, width, 0.02);
+        s.line_index = line_index;
+        spans.push(s);
+        x += width + 0.005;
+    }
+    spans
+}
+
+/// The synthetic editor frame: a fixed top toolbar (short, repeating) + a long body
+/// line (interior, protected content). `ZTOOLBARZ` is a unique chrome token.
+fn editor_ocr(body: &str) -> OcrResult {
+    let mut spans = Vec::new();
+    spans.extend(ocr_line("ZTOOLBARZ Home Share View", 0, 0.01));
+    spans.extend(ocr_line(body, 1, 0.50));
+    OcrResult {
+        text: format!("ZTOOLBARZ Home Share View\n{body}"),
+        mean_confidence: -1.0,
+        engine: "test".to_string(),
+        spans,
+    }
+}
+
+/// Filter context with a low `min_seen` so the threshold flips inside a short test.
+/// Full-screen target rect → the toolbar is in-window (not background) but not interior.
+fn filter_ctx(min_seen: u32) -> TextFilterContext {
+    TextFilterContext {
+        target_rect: Some([0.0, 0.0, 1.0, 1.0]),
+        chrome_suppress_min_seen: min_seen,
+        chrome_protect_min_chars: 48,
+        chrome_region_buckets: 8,
+    }
+}
+
+fn search(text: &str, include_chrome: bool) -> SearchQuery {
+    SearchQuery {
+        text: text.to_string(),
+        limit: 20,
+        time_range: None,
+        include_chrome,
+    }
+}
+
+#[tokio::test]
+async fn insert_ocr_filtered_suppresses_repeated_chrome_after_threshold() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let bodies = [
+        "the quarterly revenue summary shows strong growth across every region",
+        "meeting notes capture the decisions and the owners for next sprint here",
+        "the migration checklist enumerates each table and its forward only change",
+    ];
+    let mut ids = Vec::new();
+    for (i, body) in bodies.iter().enumerate() {
+        let id = store
+            .insert_frame(editor_frame(1000 + i as i64))
+            .await
+            .unwrap();
+        store
+            .insert_ocr_filtered(id, editor_ocr(body), filter_ctx(2))
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+
+    // First appearance is kept (below threshold); later appearances are suppressed.
+    let f1 = store.get_frame(ids[0]).await.unwrap().unwrap();
+    let f3 = store.get_frame(ids[2]).await.unwrap().unwrap();
+    assert!(f1.content_text.as_deref().unwrap().contains("ZTOOLBARZ"));
+    assert!(!f3.content_text.as_deref().unwrap().contains("ZTOOLBARZ"));
+    // Raw text always preserves it (recoverable).
+    assert!(f3.raw_text.as_deref().unwrap().contains("ZTOOLBARZ"));
+    // The long body line is never suppressed for repeating.
+    assert!(f3
+        .content_text
+        .as_deref()
+        .unwrap()
+        .contains("migration checklist"));
+    assert!(f3.suppressed_text_count >= 1);
+
+    // The toolbar word on the suppressed frame is classified chrome + non-searchable.
+    let spans = store.frame_spans(ids[2]).await.unwrap();
+    let toolbar = spans.iter().find(|s| s.text == "ZTOOLBARZ").unwrap();
+    assert_eq!(toolbar.role, TextRole::Chrome);
+    assert!(!toolbar.is_searchable);
+
+    // Default search no longer surfaces the suppressed frame by the chrome term;
+    // include_chrome still finds it via the raw arm (03 §3b acceptance).
+    let default = store
+        .hybrid_search(&search("ZTOOLBARZ", false))
+        .await
+        .unwrap();
+    let def_ids: HashSet<i64> = default.iter().map(|h| h.frame_id).collect();
+    assert!(
+        def_ids.contains(&ids[0]),
+        "first (kept) frame still matches content"
+    );
+    assert!(
+        !def_ids.contains(&ids[2]),
+        "suppressed frame must not match content"
+    );
+    let chrome = store
+        .hybrid_search(&search("ZTOOLBARZ", true))
+        .await
+        .unwrap();
+    let ch_ids: HashSet<i64> = chrome.iter().map(|h| h.frame_id).collect();
+    assert!(
+        ch_ids.contains(&ids[2]),
+        "include_chrome recovers it via raw text"
+    );
+
+    // Per-app suppression metric reflects the dropped chrome spans.
+    let stats = store.text_filter_stats(FILTER_VERSION).await.unwrap();
+    let editor = stats
+        .iter()
+        .find(|s| s.app.as_deref() == Some("editor"))
+        .expect("editor app present in stats");
+    assert!(editor.suppressed_spans > 0);
+    assert!(editor.total_spans >= editor.suppressed_spans);
+    assert!(editor.rate > 0.0 && editor.rate <= 1.0);
+}
+
+#[tokio::test]
+async fn reconcile_filter_version_wipes_catalog_on_change() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let id = store.insert_frame(editor_frame(1000)).await.unwrap();
+    store
+        .insert_ocr_filtered(
+            id,
+            editor_ocr("a sufficiently long body line of real content to keep around"),
+            filter_ctx(2),
+        )
+        .await
+        .unwrap();
+
+    // No watermark yet → first reconcile wipes + records it.
+    assert!(store
+        .reconcile_filter_version(FILTER_VERSION)
+        .await
+        .unwrap());
+    // Same version again → no-op.
+    assert!(!store
+        .reconcile_filter_version(FILTER_VERSION)
+        .await
+        .unwrap());
+    // A bumped version → wipes again (recompute the catalog).
+    assert!(store
+        .reconcile_filter_version(FILTER_VERSION + 1)
+        .await
+        .unwrap());
 }

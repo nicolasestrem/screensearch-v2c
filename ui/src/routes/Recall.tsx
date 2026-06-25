@@ -39,6 +39,11 @@ export function Component() {
   const settings = useSettings();
   const ask = useAsk();
 
+  // Content-text (default) vs raw/app-chrome search (03 §3b). `null` follows the
+  // user's configured default (`text.include_chrome_default`) until they toggle it.
+  const [chromeOverride, setChromeOverride] = useState<boolean | null>(null);
+  const includeChrome = chromeOverride ?? (settings.data?.text_include_chrome_default ?? false);
+
   // Debounce keystrokes into the committed search term (live search, bounded).
   useEffect(() => {
     const t = setTimeout(() => setDebounced(text), SEARCH_DEBOUNCE_MS);
@@ -46,10 +51,15 @@ export function Component() {
   }, [text]);
 
   const query: SearchQuery = useMemo(
-    // Default retrieval is content text only; the include-chrome/raw toggle lands in
-    // PR3 (03 §3b). Until then search stays over content_text.
-    () => ({ text: debounced, limit: SEARCH_LIMIT, time_range: selectedRange, include_chrome: false }),
-    [debounced, selectedRange],
+    // Default retrieval is cleaned content text; `include_chrome` also searches raw /
+    // app-chrome text so suppressed static terms are still findable (03 §3b).
+    () => ({
+      text: debounced,
+      limit: SEARCH_LIMIT,
+      time_range: selectedRange,
+      include_chrome: includeChrome,
+    }),
+    [debounced, selectedRange, includeChrome],
   );
   const search = useSearch(query, mode === "search");
 
@@ -126,6 +136,32 @@ export function Component() {
           {mode === "search" ? "Search" : ask.phase === "streaming" ? "Asking…" : "Ask"}
         </Button>
       </form>
+
+      {/* Content vs raw/app-chrome retrieval (search mode only, 03 §3b). */}
+      {mode === "search" && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={includeChrome}
+            onClick={() => setChromeOverride(!includeChrome)}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-chip border px-3 min-h-hit-min text-caption font-display uppercase tracking-eyebrow",
+              "transition-colors duration-fast ease-ui",
+              includeChrome
+                ? "border-accent text-accent bg-accent-wash"
+                : "border-line text-ink-muted hover:text-ink",
+            )}
+          >
+            {includeChrome ? "Including app chrome + raw text" : "Content text only"}
+          </button>
+          <span className="text-caption text-ink-faint">
+            {includeChrome
+              ? "Searching everything on screen, including toolbars and labels."
+              : "Ignoring static toolbars, taskbars, and repeated labels."}
+          </span>
+        </div>
+      )}
 
       {/* Degraded-mode banners (truthful, not blocking). */}
       {mode === "search" && readiness.data && !embedReady && (

@@ -14,6 +14,7 @@ members = [
     "crates/ocr",
     "crates/embeddings",
     "crates/inference",
+    "crates/textfilter",
     "crates/doctor",
 ]
 
@@ -101,6 +102,7 @@ capture = { path = "crates/capture" }
 ocr = { path = "crates/ocr" }
 embeddings = { path = "crates/embeddings" }
 inference = { path = "crates/inference" }
+textfilter = { path = "crates/textfilter" }
 
 [profile.release]
 strip = true
