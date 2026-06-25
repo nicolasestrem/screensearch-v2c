@@ -1825,3 +1825,17 @@ follow-up verified round 1 and surfaced two more diagnostic gaps. `gemini-code-a
 ### Still risky
 - The provisional settings defaults and the FTS-for-`include_chrome` choice (raw FTS vs role-filtered
   `text_spans` FTS) are explicitly left for PR2 to finalize; PR2 must document the decision.
+
+### Review round 1 (PR #30, 2026-06-25) — Codex + Gemini auto-review
+Four actionable threads, all addressed in the contract (still specs-only):
+- **Gemini (`03 §3b`):** `suppress_reason` → `Option<SuppressReason>`, dropped the redundant in-enum
+  `None` variant (maps directly to the nullable `text_spans.suppress_reason` column).
+- **Gemini (`03 §4`):** added `CHECK` constraints to the `frame_text` / `text_spans` enum columns
+  (`primary_source`, `source`, `role`, `is_searchable`, `suppress_reason`) so PR2's DDL enforces
+  valid values at the DB layer.
+- **Gemini (`03 §8`/`§8b`):** lowered `reports.map_reduce_min_frames` default 40→20 — at ~400 tok/frame
+  the worst-case single-pass fit is ~20 frames, so 40 risked dropping frames (20–39) before map-reduce
+  triggered; `§8b` now references the threshold instead of restating a contradictory range.
+- **Codex (`04 §1`):** `04` now makes `docs/0.2.0.md` mandatory reading, but the roadmap's Status said
+  "no implementation started / PR1 not done" — a future PR2 agent under stop-at-ambiguity would have
+  hit a contradiction. Updated `docs/0.2.0.md` Status to record PR1 complete, PR2 next.

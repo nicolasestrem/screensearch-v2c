@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `raw_text` until PR3's filter lands, with no backfill (clean-DB assumption).
   - `specs/04` — `docs/0.2.0.md` added to the reading order; the PR1→PR2→PR3→PR6→PR7 build order
     appended alongside P0–P5.
+  - Review-round hardening (PR #30): `suppress_reason` is now `Option<SuppressReason>` (no redundant
+    in-enum `None`, mapping the nullable column); `frame_text` / `text_spans` DDL gained `CHECK`
+    constraints on the enum columns; `reports.map_reduce_min_frames` default lowered 40→20 (worst-case
+    single-pass fit, so frames batch rather than drop before the 8192 answer context overflows); and
+    `docs/0.2.0.md`'s status now records PR1 as complete (PR2 next), resolving the roadmap/contract
+    contradiction now that `04` makes the roadmap mandatory reading.
 
 ## [0.1.0] — 2026-06-24
 

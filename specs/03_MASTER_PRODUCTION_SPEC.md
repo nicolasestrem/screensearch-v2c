@@ -161,14 +161,16 @@ and dropped from `content_text`. Constraints:
 ```rust
 pub enum TextSource { Ocr, Uia }                 // primary_source / span source
 pub enum TextRole { Content, Chrome, Background, System, Unknown }
-pub enum SuppressReason { None, StaticChrome, SystemUi, BackgroundWindow }
+pub enum SuppressReason { StaticChrome, SystemUi, BackgroundWindow }
 
 // One OCR/UIA span with normalized [0,1] geometry; carried on OcrResult.spans (§3).
 // WinRT exposes no per-word confidence, so OcrResult keeps the CONFIDENCE_UNKNOWN sentinel.
+// suppress_reason is Option — None maps to the nullable `text_spans.suppress_reason` column
+// (a searchable, non-suppressed span); no redundant in-enum None variant (§4 DDL).
 pub struct TextSpan { pub text: String, pub normalized_text: String,
                       pub source: TextSource, pub role: TextRole,
                       pub x: f32, pub y: f32, pub w: f32, pub h: f32,   // normalized [0,1]
-                      pub is_searchable: bool, pub suppress_reason: SuppressReason }
+                      pub is_searchable: bool, pub suppress_reason: Option<SuppressReason> }
 
 // FrameDetail (returned by `get_frame`, §7) gains: raw_text, content_text,
 //   text_source: TextSource, suppressed_text_count: u32.
@@ -217,7 +219,7 @@ CREATE TABLE frame_text (
   frame_id            INTEGER PRIMARY KEY REFERENCES frames(id) ON DELETE CASCADE,
   raw_text            TEXT    NOT NULL,          -- full unfiltered OCR/UIA text (preserved)
   content_text        TEXT    NOT NULL,          -- filtered text (NOT vision); default retrieval input
-  primary_source      TEXT    NOT NULL,          -- 'ocr' | 'uia'
+  primary_source      TEXT    NOT NULL CHECK (primary_source IN ('ocr','uia')),
   filter_version      INTEGER NOT NULL,          -- bump to recompute the chrome catalog
   suppressed_count    INTEGER NOT NULL,          -- spans dropped from content_text (suppression-rate metric)
   target_window_title TEXT,                      -- foreground window title (metadata, nullable)
@@ -238,11 +240,12 @@ CREATE TABLE text_spans (
   span_index      INTEGER NOT NULL,
   text            TEXT    NOT NULL,
   normalized_text TEXT    NOT NULL,
-  source          TEXT    NOT NULL,              -- 'ocr' | 'uia'
-  role            TEXT    NOT NULL,              -- 'content'|'chrome'|'background'|'system'|'unknown'
+  source          TEXT    NOT NULL CHECK (source IN ('ocr','uia')),
+  role            TEXT    NOT NULL CHECK (role IN ('content','chrome','background','system','unknown')),
   x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,  -- normalized [0,1] bbox
-  is_searchable   INTEGER NOT NULL,             -- 0/1
-  suppress_reason TEXT,                          -- null|'static_chrome'|'system_ui'|'background_window'
+  is_searchable   INTEGER NOT NULL CHECK (is_searchable IN (0,1)),
+  suppress_reason TEXT CHECK (suppress_reason IS NULL
+                              OR suppress_reason IN ('static_chrome','system_ui','background_window')),
   PRIMARY KEY (frame_id, span_index)
 );
 
@@ -422,7 +425,9 @@ settings, never hardcoded, per `§3b` and the guardrail in `04 §4`):
 `text.chrome_region_buckets` (8 — grid resolution for `region_bucket`) ·
 `retrieval.default_top_k` (8 — replaces the hardcoded `ASK_TOP_K`; per-request override allowed) ·
 `reports.daily_top_k` (40) · `reports.weekly_top_k` (200) ·
-`reports.map_reduce_min_frames` (40 — frame count above which a range uses map-reduce, `§8b`).
+`reports.map_reduce_min_frames` (20 — frame count above which a range uses map-reduce, `§8b`; set
+at the worst-case single-pass fit so frames are batched, not dropped, before the 8192 answer context
+overflows: ~400 tok/frame × 20 ≈ 8192).
 
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.
@@ -437,9 +442,11 @@ There is **no saved-report table** — scheduled/saved reports are deferred (`07
   optional user prompt.
 - **Context strategy (tiered, weak-hardware-safe, no `ctx_size` bump):**
   - *Daily / small range* → **single pass** over content text (filtered text is ~150–400 tok/frame,
-    so ~20–40 frames fit the pinned 8192 answer context).
+    so only ~20 frames fit the pinned 8192 answer context in the worst case — hence the
+    `reports.map_reduce_min_frames` default, `§8`).
   - *Weekly / large range* → **map-reduce**: batch-summarize frames to fit 8192, then summarize the
-    summaries (threshold `reports.map_reduce_min_frames`, `§8`). VRAM-flat; costs more sidecar calls.
+    summaries (triggered above `reports.map_reduce_min_frames`, `§8`, so frames are batched rather
+    than dropped). VRAM-flat; costs more sidecar calls.
   - Retrieval depth and reply budget are **per-request** (`ReportRequest` + settings `§8`), removing
     the hardcoded `ASK_TOP_K`. The existing answer budgeter (`crates/inference`) already packs frames
     best-first, drops overflow, and cites only what the model actually read.
