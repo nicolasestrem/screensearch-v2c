@@ -15,7 +15,7 @@ That runs every test. **0 failed = pass.** (GPU/model tests are skipped automati
 Run these. All must be clean:
 
 ```sh
-cd ui && npm ci && npm run lint && npm run build
+(cd ui && npm ci && npm run lint && npm run build)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
