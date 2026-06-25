@@ -2203,3 +2203,41 @@ All five actionable findings were bot-raised (Gemini ×2, Claude ×1, Codex ×2)
   warnings` exit 0, 0 warnings · `cargo build --workspace` exit 0 · `cargo test --workspace` **0
   failed across all crates** · `git diff --exit-code -- ui/src/bindings` clean (no IPC type changed
   this round — the new `answer_context_budget` is a Rust trait method, not a wire type).
+
+### Review fixes — round 2 (PR #33, 2026-06-25)
+A second bot pass (Codex ×3, Claude ×2) re-reviewed the round-1 fix commit; round-1 findings were not
+re-raised (confirmed resolved). The five new findings, each addressed:
+- **Sampler returned ~half the quota just over the limit (Codex, P2 — `crates/store/src/frames.rs`).**
+  `sample_frames_in_range` used a `ceil(total/limit)` integer stride, which doubles to 2 the moment
+  `total > limit` — 41 frames at `limit = 40` yielded 21 rows, so reports summarized far fewer frames
+  than the depth settings allow. Replaced with **even-rank bucketing** (`rn = 0 OR rn*limit/total <>
+  (rn-1)*limit/total`): the first row of each of `limit` even buckets, returning exactly
+  `min(total, limit)` rows still spread across the window. Existing tests unchanged (the 12→4 case is
+  identical); new regression `sample_returns_full_quota_when_just_over_limit` (41 → 40, not 21).
+- **`truncated` false-positive on the relevance path (Claude — `crates/kernel/src/reports.rs`).** For a
+  prompted Custom report `total_in_range` is the **pre-hydration** hit count; `hydrate_hits` drops
+  empty-text hits (no evidence), so `frames_sampled < total_in_range` fired — and the footer showed
+  "range trimmed to fit" — even when nothing useful was lost. The prompt path now flags `truncated`
+  only when the search cap was actually hit (`total_in_range >= weekly_top_k`, i.e. more relevant
+  frames likely existed); the coverage path keeps its real-frame-count comparison.
+- **Empty reports required the sidecar (Codex, P2 — `src-tauri/src/lib.rs`).** The command resolved an
+  `AnswerProvider` before the empty-range check, so on first launch (while `llama-server` is still
+  resolving/downloading) an honest no-evidence report failed with "inference sidecar not ready yet".
+  It now probes `frames_in_range(.., 1)` first and returns a hand-built empty `ReportResponse` (new
+  `empty_report_response`, body identical to the kernel's `empty_output`, `passes == 0`) **without**
+  acquiring the provider; a probe error still falls through to surface the real error.
+- **`frames_summarized` doc-comment inaccurate when the citation cap fires (Claude —
+  `crates/traits/src/ipc.rs`).** `frames_summarized` is the full MAP-union size, which can exceed
+  `cited_frame_ids.len()` once the union passes `MAX_REPORT_CITATIONS` (e.g. a long range where the
+  per-period floor pushes it over). Doc now says "may exceed `cited_frame_ids.len()` when the citation
+  list is capped" instead of claiming equality.
+- **DST-incorrect local-day bounds (Codex, P2 — `ui/.../ReportBuilder.tsx`).** Daily/Weekly/Custom
+  ranges added a fixed `DAY_MS`, so on a 23 h/25 h transition day the range could include or drop an
+  hour. Bounds are now built from local calendar components (`localMidnight(now, ±n)` /
+  `localDateMidnight(value, +1)`); the JS `Date` constructor normalizes day overflow, landing on the
+  true next local midnight. Narrows gap #59 to the kernel's internal per-period split only.
+- **Verify:** UI `npm run lint` + `npm run build` clean · `cargo fmt --all -- --check` exit 0 ·
+  `cargo clippy --workspace --all-targets -- -D warnings` exit 0, 0 warnings · `cargo build --workspace`
+  exit 0 · `cargo test --workspace` **0 failed** (new `frames` regression test) · `git diff
+  --exit-code -- ui/src/bindings` (the `frames_summarized` doc-comment regenerated its binding if ts-rs
+  emits doc comments — committed).

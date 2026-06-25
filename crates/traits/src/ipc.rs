@@ -133,7 +133,9 @@ pub struct ReportResponse {
     pub periods_covered: u32,
     /// Frames sampled into the map step.
     pub frames_sampled: u32,
-    /// Frames actually summarized (== `cited_frame_ids.len()`).
+    /// Unique frames the model actually read across all map passes. May exceed
+    /// `cited_frame_ids.len()` when the citation list is capped at `MAX_REPORT_CITATIONS`
+    /// (e.g. a long range where the per-period floor pushes the union past the cap).
     pub frames_summarized: u32,
     /// Total sidecar passes (map + reduce + final); `0` for a no-evidence report.
     pub passes: u32,

@@ -365,10 +365,6 @@ async fn generate_report(
         .kernel
         .clone()
         .ok_or_else(|| "kernel unavailable".to_string())?;
-    let answer = kernel
-        .answer_provider()
-        .await
-        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
 
     let settings = kernel::settings::load_settings(store.as_ref()).await;
     let cfg = ReportConfig {
@@ -387,6 +383,25 @@ async fn generate_report(
         ReportKind::Weekly => "the last 7 days".to_string(),
         ReportKind::Custom => "the selected range".to_string(),
     };
+
+    // An honest no-evidence report must not depend on the answer sidecar (which may still
+    // be downloading/resolving right after first launch): a range with no captured frames
+    // never calls the model, so short-circuit it here without acquiring the provider. A
+    // probe error falls through to the normal path so the real error still surfaces.
+    // (Codex review, PR #33.)
+    let has_frames = store
+        .frames_in_range(request.time_range.start, request.time_range.end, 1)
+        .await
+        .map(|f| !f.is_empty())
+        .unwrap_or(true);
+    if !has_frames {
+        return Ok(empty_report_response(range_label));
+    }
+
+    let answer = kernel
+        .answer_provider()
+        .await
+        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
 
     // Register a cancel flag so `cancel_report` can stop the orchestrator between passes.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -444,6 +459,26 @@ async fn generate_report(
         truncated: out.truncated,
         model,
     })
+}
+
+/// The honest no-evidence [`ReportResponse`] — no model ran. Mirrors the kernel's
+/// `empty_output` body so a range with no captures returns identical output whether the
+/// command short-circuits it (before the sidecar is ready) or the orchestrator does.
+/// `passes == 0` tells the UI to render the message alone (no chips/footer).
+fn empty_report_response(range_label: String) -> ReportResponse {
+    ReportResponse {
+        markdown: "No screen activity was captured for this range — there is nothing to summarize."
+            .to_string(),
+        cited_frame_ids: Vec::new(),
+        range_label,
+        periods_total: 0,
+        periods_covered: 0,
+        frames_sampled: 0,
+        frames_summarized: 0,
+        passes: 0,
+        truncated: false,
+        model: None,
+    }
 }
 
 /// Cancel an in-flight `generate_report` (cooperative: stops at the next pass boundary).

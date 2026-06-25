@@ -54,13 +54,15 @@ impl SqliteStore {
 
     /// Up to `limit` frames sampled **evenly across** `[start, end)` by `captured_at`
     /// ascending (chronological) — for temporal-coverage report sampling (`03 §8b`).
-    /// Unlike [`frames_in_range`]'s newest-first cap, this strides over the in-range
-    /// frames (keeping every `ceil(total/limit)`-th) so the sample spreads across the
-    /// whole window — a report covers the period, not just its tail. When the window
-    /// holds `<= limit` frames the stride is 1 and all are returned. An empty/invalid
-    /// window (`end <= start`) or `limit == 0` yields no rows. The caller passes one
-    /// period's bounds at a time, so the stride is per-period (coverage within each
-    /// period), never a single global stride across the whole range.
+    /// Unlike [`frames_in_range`]'s newest-first cap, this partitions the in-range frames
+    /// into `limit` equally-sized rank buckets and keeps the first frame of each, so it
+    /// returns the **full** requested quota spread across the whole window — a report
+    /// covers the period, not just its tail. (A plain `ceil(total/limit)` stride collapses
+    /// to ~half the quota the moment `total` just exceeds `limit`: 41 frames with
+    /// `limit = 40` would yield 21, not 40.) When the window holds `<= limit` frames every
+    /// frame is returned. An empty/invalid window (`end <= start`) or `limit == 0` yields
+    /// no rows. The caller passes one period's bounds at a time, so the selection is
+    /// per-period (coverage within each period), never a single global stride.
     pub async fn sample_frames_in_range(
         &self,
         start: i64,
@@ -72,9 +74,11 @@ impl SqliteStore {
         }
         self.with_conn(move |conn| {
             let n = i64::from(limit);
-            // Number the in-range frames 0..total by time; keep every `stride`-th
-            // (stride = ceil(total/limit)), so selection is spread evenly rather than
-            // clustered at one end. `LIMIT` guards a stride-remainder off-by-one.
+            // Number the in-range frames 0..total by time, then assign each to one of
+            // `limit` even buckets (`rn * limit / total`) and keep the first row of each
+            // bucket. This yields exactly `min(total, limit)` rows evenly spread across the
+            // window, rather than an integer stride that halves the sample once `total`
+            // edges past `limit`. `LIMIT` is a defensive cap. (Codex review, PR #33.)
             let mut stmt = conn.prepare(
                 "SELECT id, captured_at, image_path, app_hint FROM (
                      SELECT id, captured_at, image_path, app_hint,
@@ -83,7 +87,7 @@ impl SqliteStore {
                      FROM frames
                      WHERE captured_at >= ?1 AND captured_at < ?2
                  )
-                 WHERE rn % max(1, (total + ?3 - 1) / ?3) = 0
+                 WHERE rn = 0 OR (rn * ?3) / total <> ((rn - 1) * ?3) / total
                  ORDER BY captured_at ASC, id ASC
                  LIMIT ?3",
             )?;
@@ -297,7 +301,7 @@ mod tests {
         let store = SqliteStore::open_in_memory().unwrap();
         seed(&store, 12, 10).await; // captured_at = 0,10,…,110
         let got = store.sample_frames_in_range(0, 120, 4).await.unwrap();
-        // stride = ceil(12/4) = 3 → rows at rn 0,3,6,9 → times 0,30,60,90.
+        // 12 frames into 4 even buckets (first of each) → rn 0,3,6,9 → times 0,30,60,90.
         let times: Vec<i64> = got.iter().map(|f| f.captured_at).collect();
         assert_eq!(times, vec![0, 30, 60, 90]);
         // Earliest frame present (not a newest-first tail) and ascending order.
@@ -314,6 +318,25 @@ mod tests {
         let got = store.sample_frames_in_range(0, 1_000, 10).await.unwrap();
         let times: Vec<i64> = got.iter().map(|f| f.captured_at).collect();
         assert_eq!(times, vec![0, 100, 200]);
+    }
+
+    /// Just over the quota must still return the FULL quota, not collapse to ~half — the
+    /// regression for the `ceil(total/limit)` stride that doubled at `total > limit`
+    /// (41 frames, limit 40 → 21 rows). (Codex review, PR #33.)
+    #[tokio::test]
+    async fn sample_returns_full_quota_when_just_over_limit() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed(&store, 41, 10).await; // 41 frames at 0,10,…,400
+        let got = store.sample_frames_in_range(0, 410, 40).await.unwrap();
+        assert_eq!(
+            got.len(),
+            40,
+            "must return the full requested quota, not ~half"
+        );
+        // Still evenly spread & chronological: earliest frame kept, strictly ascending.
+        let times: Vec<i64> = got.iter().map(|f| f.captured_at).collect();
+        assert_eq!(times.first(), Some(&0));
+        assert!(times.windows(2).all(|w| w[0] < w[1]));
     }
 
     /// The sample never exceeds `limit` and stays within the half-open window.

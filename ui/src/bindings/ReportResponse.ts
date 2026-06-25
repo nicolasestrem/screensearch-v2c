@@ -26,7 +26,9 @@ periods_covered: number,
  */
 frames_sampled: number, 
 /**
- * Frames actually summarized (== `cited_frame_ids.len()`).
+ * Unique frames the model actually read across all map passes. May exceed
+ * `cited_frame_ids.len()` when the citation list is capped at `MAX_REPORT_CITATIONS`
+ * (e.g. a long range where the per-period floor pushes the union past the cap).
  */
 frames_summarized: number, 
 /**

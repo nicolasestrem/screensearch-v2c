@@ -11,18 +11,25 @@ import type { ReportKind } from "../../bindings/ReportKind";
 import type { ReportRequest } from "../../bindings/ReportRequest";
 import type { TimeRange } from "../../bindings/TimeRange";
 
-const DAY_MS = 86_400_000;
-
-/** Local midnight (00:00 in the user's timezone) for the given Date. */
-function localMidnight(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+/**
+ * Local midnight (00:00 in the user's timezone) `offsetDays` from the given Date's
+ * calendar day. Built from calendar components so it lands on the true local midnight
+ * even across DST transitions — a local day is not always 86,400,000 ms (23h or 25h on
+ * the switch days), so adding a fixed `DAY_MS` would over/undershoot the next midnight.
+ */
+function localMidnight(d: Date, offsetDays = 0): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offsetDays).getTime();
 }
 
-/** Parse a `<input type="date">` value ("YYYY-MM-DD") as LOCAL midnight (not UTC). */
-function parseLocalDate(value: string): number | null {
+/**
+ * Local midnight `offsetDays` from a `<input type="date">` value ("YYYY-MM-DD"), or null
+ * if unparseable. DST-safe (see [`localMidnight`]); the JS Date constructor normalizes
+ * month/day overflow, so `offsetDays = 1` correctly rolls to the next calendar day.
+ */
+function localDateMidnight(value: string, offsetDays = 0): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + offsetDays).getTime();
 }
 
 /** Today's date as a `YYYY-MM-DD` string in local time (for the date inputs). */
@@ -55,22 +62,21 @@ export function ReportBuilder({ onGenerate, onCancel, busy }: ReportBuilderProps
   const [prompt, setPrompt] = useState("");
   const [rangeError, setRangeError] = useState<string | null>(null);
 
-  // Resolve the concrete local [start, end) for the selected kind. Daily = today;
+  // Resolve the concrete local [start, end) for the selected kind. All bounds are built
+  // from local calendar days (DST-safe), never fixed 86.4M-ms spans. Daily = today;
   // Weekly = the trailing 7 local days (incl. today); Custom = [from 00:00, to+1 00:00).
   function resolveRange(): TimeRange | null {
     const now = new Date();
     if (kind === "daily") {
-      const start = localMidnight(now);
-      return { start, end: start + DAY_MS };
+      return { start: localMidnight(now), end: localMidnight(now, 1) }; // [today, tomorrow)
     }
     if (kind === "weekly") {
-      const end = localMidnight(now) + DAY_MS; // end of today
-      return { start: end - 7 * DAY_MS, end };
+      // [today-6 00:00, tomorrow 00:00) spans 7 local calendar days including today.
+      return { start: localMidnight(now, -6), end: localMidnight(now, 1) };
     }
-    const start = parseLocalDate(from);
-    const toMidnight = parseLocalDate(to);
-    if (start === null || toMidnight === null) return null;
-    const end = toMidnight + DAY_MS; // inclusive of the `to` day → exclusive upper bound
+    const start = localDateMidnight(from);
+    const end = localDateMidnight(to, 1); // day after `to` at local 00:00 → inclusive of `to`
+    if (start === null || end === null) return null;
     if (end <= start) return null;
     return { start, end };
   }

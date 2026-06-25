@@ -197,7 +197,18 @@ pub async fn generate_report(
     if frames_sampled == 0 {
         return Ok(empty_output(periods_total));
     }
-    let mut truncated = (frames_sampled as u64) < total_in_range;
+    // "Trimmed to fit" means evidence was left unsummarized, not merely filtered.
+    // - Coverage path: `total_in_range` is the real in-range frame count, so a sample
+    //   below it genuinely dropped frames.
+    // - Relevance path: `total_in_range` is the *pre-hydration* hit count; `hydrate_hits`
+    //   drops empty-text hits (no evidence), so `frames_sampled < total_in_range` fires
+    //   even when nothing useful was lost. The honest signal there is "did we hit the
+    //   search cap?" — i.e. more relevant frames likely existed beyond what we asked for.
+    let mut truncated = if prompt.is_some() {
+        total_in_range >= cfg.weekly_top_k as u64
+    } else {
+        (frames_sampled as u64) < total_in_range
+    };
     let periods_covered = groups.len() as u32;
 
     // --- Single-pass fast path (Daily common case / small ranges) ---

@@ -57,6 +57,17 @@ never a flat window biased to the most-recent or most-relevant frames.
   (via the new `AnswerProvider::answer_context_budget`) so a user-lowered `sidecar.ctx_size` can't make
   it pack summaries the sidecar then truncates (Codex). (5) Doc-comment clarified that the default
   `summarize` does not forward the system prompt (Claude).
+- **Review fixes (PR #33, round 2).** (1) The temporal sampler returned ~half the requested frames
+  whenever a period had just over the limit (a `ceil(total/limit)` stride doubling at `total > limit`,
+  e.g. 41 frames → 21); replaced with even-rank bucketing that returns the full `min(total, limit)`
+  quota (Codex). (2) Prompted reports no longer show the "range trimmed to fit" notice spuriously —
+  the relevance path now flags `truncated` only when the search cap is actually hit, not when
+  empty-text hits are filtered (Claude). (3) Empty/no-evidence reports no longer require the answer
+  sidecar, so they work on first launch while the model is still downloading (Codex). (4) Daily/Weekly/
+  Custom ranges are computed from local calendar days instead of fixed 86.4M-ms spans, so DST
+  transition days no longer include/drop an hour (Codex). (5) The `frames_summarized` doc-comment no
+  longer claims equality with `cited_frame_ids.len()` (it can exceed it when the citation cap fires)
+  (Claude).
 
 ### 0.2.0 PR3 — Attention-first text filtering
 Replaces PR2's `content_text` passthrough with a real span-aware filter so search, Ask, and
