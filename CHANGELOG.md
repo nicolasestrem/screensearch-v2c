@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.0 PR2 — Text-signal data model + OCR spans
+The schema, types, and OCR geometry the attention-first retrieval pipeline needs (`03 §3/§3b/§4`,
+`docs/0.2.0.md` PR2). No behaviour change for users yet — `content_text` is a passthrough copy of
+`raw_text` until PR3's classifier lands (clean-DB assumption, `07` #51).
+
+- **OCR now emits per-word spans.** `crates/ocr` walks WinRT `Lines().Words()` and emits one
+  `TextSpan` per word with its `BoundingRect` normalized to `[0,1]` (origin top-left). WinRT exposes
+  no per-word confidence, so the `CONFIDENCE_UNKNOWN` sentinel stays; PR2 spans are role `unknown`
+  (PR3 classifies). Verified live on real WinRT OCR (gated test asserts every bbox is in `[0,1]`).
+- **Schema `schema_version` 2 → 3 (forward-only).** New `frame_text` (preserved `raw_text` +
+  filtered `content_text` + `primary_source`/`filter_version`/`suppressed_count` + foreground
+  metadata), `frame_text_fts` (content-text FTS) and `frame_text_raw_fts` (raw FTS), per-word
+  `text_spans` (normalized geometry + role, CHECK-constrained), and `chrome_text_catalog` (PR3's
+  suppression counter). Every per-frame table cascades on frame delete. On a clean DB the legacy
+  `ocr_text` table is dropped — `frame_text` is the single text store (`03 §4`).
+- **New types.** `TextSource` / `TextRole` / `SuppressReason` enums + `TextSpan`; `OcrResult` gains
+  `spans`; `FrameDetail` replaces `text` with `raw_text` + `content_text` + `text_source` +
+  `suppressed_text_count`; `SearchQuery` gains `include_chrome` (default `false`). ts-rs bindings
+  regenerated.
+- **Default retrieval is now content text.** Hybrid search's FTS arm runs over `content_text`;
+  `include_chrome=true` adds a raw-text FTS arm (chosen over a role-filtered spans FTS — roles
+  aren't populated until PR3). Embeddings and Ask grounding read `content_text`. The FTS fallback is
+  never removed.
+- **Moment view** surfaces `content_text` with `raw_text` always viewable via a disclosure — raw is
+  preserved and viewable even though search defaults to content.
+
 ### Docs — Planned 0.2.0 roadmap: attention-first text retrieval + recall reports
 - **Added `docs/0.2.0.md` (now tracked).** Plans the 0.2.0 line. Core fix: today the app indexes
   raw full-screen OCR with no filtering, so search / Ask / embeddings get dominated by static

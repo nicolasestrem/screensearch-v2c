@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::domain::VisionAnalysis;
+use crate::domain::{TextSource, VisionAnalysis};
 use crate::jobs::{JobKind, JobStats};
 
 /// Half-open `[start, end)` time window (start inclusive, end exclusive), unix
@@ -35,6 +35,11 @@ pub struct SearchQuery {
     pub text: String,
     pub limit: u32,
     pub time_range: Option<TimeRange>,
+    /// Also search raw/app-chrome text, not just `content_text` (`03 §3b`). Default
+    /// `false` → retrieval over content text only. `#[serde(default)]` so a client
+    /// that omits it gets the safe default.
+    #[serde(default)]
+    pub include_chrome: bool,
 }
 
 /// One hybrid-search result row (`search` output).
@@ -166,7 +171,17 @@ pub struct FrameDetail {
     pub window_title: Option<String>,
     pub browser_url: Option<String>,
     pub activity_type: Option<String>,
-    pub text: Option<String>,
+    /// Full, unfiltered OCR/UIA text — always preserved (`03 §3b`). `None` when no
+    /// `frame_text` row exists yet.
+    pub raw_text: Option<String>,
+    /// Filtered default-retrieval text (`03 §3b`). In 0.2.0 this is a passthrough
+    /// copy of `raw_text` until PR3's classifier lands (`07` #51).
+    pub content_text: Option<String>,
+    /// Which engine produced the primary text (`ocr` in 0.2.0; `uia` from 0.2.1).
+    pub text_source: TextSource,
+    /// Spans dropped from `content_text` (the suppression-rate metric, `03 §3b`).
+    /// Always `0` in PR2 (no filtering yet).
+    pub suppressed_text_count: u32,
     pub vision: Option<VisionAnalysis>,
     pub tags: Vec<String>,
 }

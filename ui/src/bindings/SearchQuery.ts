@@ -4,4 +4,10 @@ import type { TimeRange } from "./TimeRange";
 /**
  * Input to the `search` command.
  */
-export type SearchQuery = { text: string, limit: number, time_range: TimeRange | null, };
+export type SearchQuery = { text: string, limit: number, time_range: TimeRange | null, 
+/**
+ * Also search raw/app-chrome text, not just `content_text` (`03 §3b`). Default
+ * `false` → retrieval over content text only. `#[serde(default)]` so a client
+ * that omits it gets the safe default.
+ */
+include_chrome: boolean, };

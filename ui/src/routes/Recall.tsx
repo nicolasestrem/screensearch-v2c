@@ -46,7 +46,9 @@ export function Component() {
   }, [text]);
 
   const query: SearchQuery = useMemo(
-    () => ({ text: debounced, limit: SEARCH_LIMIT, time_range: selectedRange }),
+    // Default retrieval is content text only; the include-chrome/raw toggle lands in
+    // PR3 (03 §3b). Until then search stays over content_text.
+    () => ({ text: debounced, limit: SEARCH_LIMIT, time_range: selectedRange, include_chrome: false }),
     [debounced, selectedRange],
   );
   const search = useSearch(query, mode === "search");

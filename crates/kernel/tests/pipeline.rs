@@ -63,6 +63,7 @@ impl OcrProvider for FakeOcr {
             text: format!("ocr text for frame at {}", frame.captured_at),
             mean_confidence: 0.9,
             engine: "fake".to_string(),
+            spans: Vec::new(),
         })
     }
 }
@@ -126,14 +127,16 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
     )
     .await;
 
-    // every frame: row stored with OCR text + foreground context + a JPEG on disk
+    // every frame: row stored with OCR text + foreground context + a JPEG on disk.
+    // content_text is a passthrough copy of raw_text in PR2 (03 §3b).
     for i in 0..3 {
         let id = i64::from(i) + 1;
         let detail = db.get_frame(id).await.unwrap().expect("frame stored");
         assert_eq!(detail.captured_at, 1_000 + i64::from(i));
         assert_eq!(detail.app_hint.as_deref(), Some("Firefox"));
         assert_eq!(detail.window_title.as_deref(), Some("Inbox"));
-        assert!(detail.text.as_deref().unwrap().contains("ocr text"));
+        assert!(detail.content_text.as_deref().unwrap().contains("ocr text"));
+        assert_eq!(detail.raw_text, detail.content_text);
         assert!(
             data_dir.join(&detail.image_path).exists(),
             "jpeg should be written at {}",

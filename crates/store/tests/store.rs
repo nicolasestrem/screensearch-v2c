@@ -9,8 +9,26 @@ use std::sync::Arc;
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
     ChunkSource, Embedding, EmbeddingProvider, FrameMeta, JobKind, JobState, NewFrame, NewJob,
-    OcrResult, SearchQuery, TimeRange, TimelineBucket, VisionAnalysis,
+    OcrResult, SearchQuery, TextRole, TextSource, TextSpan, TimeRange, TimelineBucket,
+    VisionAnalysis,
 };
+
+/// One unsuppressed OCR span at the given normalized bbox — the shape PR2's OCR
+/// engine emits (role `unknown`, searchable, no suppression).
+fn span(text: &str, x: f32, y: f32, w: f32, h: f32) -> TextSpan {
+    TextSpan {
+        normalized_text: traits::normalize_text(text),
+        text: text.to_string(),
+        source: TextSource::Ocr,
+        role: TextRole::Unknown,
+        x,
+        y,
+        w,
+        h,
+        is_searchable: true,
+        suppress_reason: None,
+    }
+}
 
 /// A job of the given kind with sensible defaults (immediately runnable).
 fn job(kind: JobKind, priority: i64, max_attempts: i64, not_before: i64) -> NewJob {
@@ -154,7 +172,8 @@ async fn insert_frame_then_get_frame_returns_context() {
     assert_eq!(detail.app_hint.as_deref(), Some("Firefox"));
     assert_eq!(detail.window_title.as_deref(), Some("Inbox"));
     // no OCR / vision / tags yet
-    assert_eq!(detail.text, None);
+    assert_eq!(detail.raw_text, None);
+    assert_eq!(detail.content_text, None);
     assert!(detail.vision.is_none());
     assert!(detail.tags.is_empty());
 
@@ -173,13 +192,76 @@ async fn insert_ocr_then_get_frame_has_text() {
                 text: "quarterly invoice total due".to_string(),
                 mean_confidence: 0.94,
                 engine: "winrt".to_string(),
+                spans: vec![span("quarterly", 0.0, 0.0, 0.2, 0.05)],
             },
         )
         .await
         .unwrap();
 
     let detail = store.get_frame(id).await.unwrap().unwrap();
-    assert_eq!(detail.text.as_deref(), Some("quarterly invoice total due"));
+    // PR2 interim: content_text is a passthrough copy of raw_text (`07` #51).
+    assert_eq!(
+        detail.raw_text.as_deref(),
+        Some("quarterly invoice total due")
+    );
+    assert_eq!(
+        detail.content_text.as_deref(),
+        Some("quarterly invoice total due")
+    );
+    assert_eq!(detail.text_source, TextSource::Ocr);
+    assert_eq!(detail.suppressed_text_count, 0);
+}
+
+#[tokio::test]
+async fn insert_ocr_persists_spans_with_pr2_defaults() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(2_500)).await.unwrap();
+    store
+        .insert_ocr(
+            id,
+            OcrResult {
+                text: "Hello World".to_string(),
+                mean_confidence: -1.0,
+                engine: "winrt".to_string(),
+                spans: vec![
+                    span("Hello", 0.10, 0.20, 0.15, 0.05),
+                    span("World", 0.30, 0.20, 0.15, 0.05),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let spans = store.frame_spans(id).await.unwrap();
+    assert_eq!(spans.len(), 2);
+    // Order preserved by span_index; PR2 emits role=unknown, searchable, no suppress.
+    assert_eq!(spans[0].text, "Hello");
+    assert_eq!(spans[0].normalized_text, "hello");
+    assert_eq!(spans[1].text, "World");
+    for s in &spans {
+        assert_eq!(s.source, TextSource::Ocr);
+        assert_eq!(s.role, TextRole::Unknown);
+        assert!(s.is_searchable);
+        assert!(s.suppress_reason.is_none());
+        assert!((0.0..=1.0).contains(&s.x) && s.x + s.w <= 1.0 + 1e-6);
+    }
+
+    // Re-OCR replaces spans wholesale (idempotent).
+    store
+        .insert_ocr(
+            id,
+            OcrResult {
+                text: "Replaced".to_string(),
+                mean_confidence: -1.0,
+                engine: "winrt".to_string(),
+                spans: vec![span("Replaced", 0.0, 0.0, 0.4, 0.06)],
+            },
+        )
+        .await
+        .unwrap();
+    let spans = store.frame_spans(id).await.unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].text, "Replaced");
 }
 
 #[tokio::test]
@@ -310,6 +392,7 @@ async fn delete_frame_cascades_and_purges_vectors() {
                 text: "doomed".to_string(),
                 mean_confidence: 0.9,
                 engine: "winrt".to_string(),
+                spans: vec![span("doomed", 0.0, 0.0, 0.3, 0.05)],
             },
         )
         .await
@@ -339,6 +422,15 @@ async fn delete_frame_cascades_and_purges_vectors() {
         .await
         .unwrap()
         .is_empty());
+    // frame_text + text_spans cascade with the frame, and the content FTS mirror is
+    // purged by its delete trigger (a search for the deleted term finds nothing).
+    assert!(store.frame_spans(f).await.unwrap().is_empty());
+    assert!(store.ocr_texts(&[f]).await.unwrap().is_empty());
+    assert!(store
+        .hybrid_search(&query("doomed", 10))
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 /// Seeds a frame with OCR text and (optionally) a text embedding; returns its id.
@@ -351,6 +443,7 @@ async fn seed(store: &SqliteStore, at: i64, text: &str, emb: Option<&Embedding>)
                 text: text.to_string(),
                 mean_confidence: 0.9,
                 engine: "winrt".to_string(),
+                spans: vec![span(text, 0.0, 0.0, 0.5, 0.05)],
             },
         )
         .await
@@ -369,6 +462,7 @@ fn query(text: &str, limit: u32) -> SearchQuery {
         text: text.to_string(),
         limit,
         time_range: None,
+        include_chrome: false,
     }
 }
 
@@ -439,6 +533,7 @@ async fn hybrid_search_honors_time_range() {
             start: 4_000,
             end: 6_000,
         }),
+        include_chrome: false,
     };
     let hits = store.hybrid_search(&q).await.unwrap();
     assert_eq!(hits.len(), 1);
@@ -775,6 +870,7 @@ async fn works_through_the_store_trait_object() {
                 text: "trait object path".to_string(),
                 mean_confidence: 0.9,
                 engine: "winrt".to_string(),
+                spans: vec![span("trait", 0.0, 0.0, 0.2, 0.05)],
             },
         )
         .await
@@ -821,6 +917,7 @@ async fn frame_enrichment_input_reads_path_and_optional_text() {
                 text: "hello world".to_string(),
                 mean_confidence: -1.0,
                 engine: "test".to_string(),
+                spans: vec![span("hello", 0.0, 0.0, 0.2, 0.05)],
             },
         )
         .await
@@ -1022,6 +1119,7 @@ async fn ocr_texts_bulk_fetches_nonempty_only() {
         text: text.to_string(),
         mean_confidence: -1.0,
         engine: "winrt".to_string(),
+        spans: Vec::new(),
     };
     store.insert_ocr(f1, ocr("login screen")).await.unwrap();
     store.insert_ocr(f2, ocr("")).await.unwrap(); // empty → omitted

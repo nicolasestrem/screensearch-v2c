@@ -7,15 +7,21 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 2;
+pub const LATEST_SCHEMA_VERSION: i32 = 3;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
 pub const EMBEDDING_DIM: usize = 768;
 
+/// `frame_text.filter_version` written by PR2's interim passthrough populator
+/// (`07` #51): `0` marks "no attention filter applied — `content_text` is a raw copy".
+/// PR3's classifier writes `1`+ and is bumpable to recompute the chrome catalog
+/// (`03 §3b`).
+pub const UNFILTERED_FILTER_VERSION: i32 = 0;
+
 /// Ordered, forward-only migrations. Each is applied in its own transaction when
 /// the DB's tracked version is below it.
-pub const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2)];
+pub const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3)];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
 /// vector-sync triggers the spec describes in prose).
@@ -132,4 +138,96 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 /// accumulate (no purge yet). Index-only, no data change.
 const MIGRATION_V2: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_jobs_frame_kind_state ON jobs(frame_id, kind, state);
+"#;
+
+/// v3 — 0.2.x text signal (`03 §3b`/`§4`, `docs/0.2.0.md` PR2). Splits the single
+/// unfiltered OCR string into a preserved `raw_text` layer and a filtered
+/// `content_text` layer, adds per-word `text_spans` (normalized geometry + role) and
+/// the `chrome_text_catalog` PR3's static-chrome suppression will drive.
+///
+/// Clean-DB assumption (`07` #51): `ocr_text` is empty in every install reaching v3,
+/// so it is dropped — `frame_text.raw_text` becomes the single raw store
+/// (`03 §4` "legacy ocr_text … not required going forward"). The `DROP … IF EXISTS`
+/// form keeps the migration idempotent. `include_chrome=true` searches raw via a
+/// dedicated raw FTS5 mirror (`frame_text_raw_fts`); roles aren't populated until PR3,
+/// so a role-filtered spans FTS would be meaningless now (`05`).
+///
+/// FTS5 + trigger style mirrors v1's `ocr_text_fts` exactly: external-content over
+/// `frame_text` keyed on `frame_id`, kept in sync by AFTER INSERT/DELETE/UPDATE
+/// triggers (the `'delete'` command form purges the old row).
+const MIGRATION_V3: &str = r#"
+-- clean-DB: retire the legacy single-string OCR store (frame_text replaces it)
+DROP TRIGGER IF EXISTS ocr_text_au;
+DROP TRIGGER IF EXISTS ocr_text_ad;
+DROP TRIGGER IF EXISTS ocr_text_ai;
+DROP TABLE   IF EXISTS ocr_text_fts;
+DROP TABLE   IF EXISTS ocr_text;
+
+-- frame_text: preserved raw text + filtered default-retrieval text, one row per frame
+CREATE TABLE frame_text (
+  frame_id            INTEGER PRIMARY KEY REFERENCES frames(id) ON DELETE CASCADE,
+  raw_text            TEXT    NOT NULL,          -- full unfiltered OCR/UIA text (preserved)
+  content_text        TEXT    NOT NULL,          -- filtered text (NOT vision); default retrieval input
+  primary_source      TEXT    NOT NULL CHECK (primary_source IN ('ocr','uia')),
+  filter_version      INTEGER NOT NULL,          -- bump to recompute the chrome catalog
+  suppressed_count    INTEGER NOT NULL,          -- spans dropped from content_text (suppression-rate metric)
+  target_window_title TEXT,                      -- foreground window title (metadata, nullable)
+  target_app_hint     TEXT,                      -- foreground app hint (metadata, nullable)
+  created_at          INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+
+-- default search FTS mirrors content_text (porter), external-content over frame_text
+CREATE VIRTUAL TABLE frame_text_fts USING fts5(content_text, content='frame_text',
+                                               content_rowid='frame_id', tokenize='porter');
+CREATE TRIGGER frame_text_ai AFTER INSERT ON frame_text BEGIN
+  INSERT INTO frame_text_fts(rowid, content_text) VALUES (new.frame_id, new.content_text);
+END;
+CREATE TRIGGER frame_text_ad AFTER DELETE ON frame_text BEGIN
+  INSERT INTO frame_text_fts(frame_text_fts, rowid, content_text) VALUES('delete', old.frame_id, old.content_text);
+END;
+CREATE TRIGGER frame_text_au AFTER UPDATE ON frame_text BEGIN
+  INSERT INTO frame_text_fts(frame_text_fts, rowid, content_text) VALUES('delete', old.frame_id, old.content_text);
+  INSERT INTO frame_text_fts(rowid, content_text) VALUES (new.frame_id, new.content_text);
+END;
+
+-- raw FTS mirror (porter) — searched only when include_chrome=true (03 §3b/§4)
+CREATE VIRTUAL TABLE frame_text_raw_fts USING fts5(raw_text, content='frame_text',
+                                                   content_rowid='frame_id', tokenize='porter');
+CREATE TRIGGER frame_text_raw_ai AFTER INSERT ON frame_text BEGIN
+  INSERT INTO frame_text_raw_fts(rowid, raw_text) VALUES (new.frame_id, new.raw_text);
+END;
+CREATE TRIGGER frame_text_raw_ad AFTER DELETE ON frame_text BEGIN
+  INSERT INTO frame_text_raw_fts(frame_text_raw_fts, rowid, raw_text) VALUES('delete', old.frame_id, old.raw_text);
+END;
+CREATE TRIGGER frame_text_raw_au AFTER UPDATE ON frame_text BEGIN
+  INSERT INTO frame_text_raw_fts(frame_text_raw_fts, rowid, raw_text) VALUES('delete', old.frame_id, old.raw_text);
+  INSERT INTO frame_text_raw_fts(rowid, raw_text) VALUES (new.frame_id, new.raw_text);
+END;
+
+-- text_spans: per-frame OCR/UIA spans with normalized geometry + classified role
+CREATE TABLE text_spans (
+  frame_id        INTEGER NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+  span_index      INTEGER NOT NULL,
+  text            TEXT    NOT NULL,
+  normalized_text TEXT    NOT NULL,
+  source          TEXT    NOT NULL CHECK (source IN ('ocr','uia')),
+  role            TEXT    NOT NULL CHECK (role IN ('content','chrome','background','system','unknown')),
+  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,  -- normalized [0,1] bbox
+  is_searchable   INTEGER NOT NULL CHECK (is_searchable IN (0,1)),
+  suppress_reason TEXT CHECK (suppress_reason IS NULL
+                              OR suppress_reason IN ('static_chrome','system_ui','background_window')),
+  PRIMARY KEY (frame_id, span_index)
+);
+
+-- chrome_text_catalog: signature counter that drives static-chrome suppression (PR3)
+CREATE TABLE chrome_text_catalog (
+  signature       TEXT PRIMARY KEY,              -- app_hint + normalized_text + region_bucket
+  app_hint        TEXT,
+  region_bucket   TEXT,
+  normalized_text TEXT    NOT NULL,
+  seen_count      INTEGER NOT NULL,
+  first_seen_at   INTEGER NOT NULL,
+  last_seen_at    INTEGER NOT NULL,
+  suppressed      INTEGER NOT NULL DEFAULT 0     -- 0/1; marked chrome after a configurable threshold (§8)
+);
 "#;

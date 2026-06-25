@@ -1,9 +1,11 @@
 // MomentDetail — one captured frame in full (UI_REFERENCE §4 Moment / §5). The
 // image (intrinsic w/h → no layout shift), its capture context, the deferred vision
 // analysis (or the on-demand "Tag with vision" entry point when it hasn't run yet —
-// the partial state), the tags, and the recognized OCR text. Purely presentational:
-// the route owns data fetching and wires `onQueueVision` to the enqueue_vision
-// mutation. Tokens only.
+// the partial state), the tags, and the recognized text. Text is shown as
+// content_text (the default-retrieval layer) with raw_text always available via a
+// disclosure — raw is preserved and viewable even though search defaults to content
+// (03 §3b). Purely presentational: the route owns data fetching and wires
+// `onQueueVision` to the enqueue_vision mutation. Tokens only.
 import type { FrameDetail } from "../../bindings/FrameDetail";
 import { Button, Chip, Panel } from "../primitives";
 import { FrameImage } from "./FrameImage";
@@ -53,12 +55,22 @@ export function MomentDetail({ detail, onQueueVision, queueing }: MomentDetailPr
           className="h-auto w-full rounded-panel border border-line bg-overlay object-contain"
         />
         <Panel title="Recognized text">
-          {detail.text ? (
+          {detail.content_text ? (
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
-              {detail.text}
+              {detail.content_text}
             </pre>
           ) : (
             <p className="text-body text-ink-faint font-body">No text was recognized in this frame.</p>
+          )}
+          {detail.raw_text && (
+            <details className="mt-3 border-t border-line pt-3">
+              <summary className="eyebrow cursor-pointer select-none text-ink-muted">
+                Raw text{detail.raw_text !== detail.content_text ? " (includes app chrome)" : ""}
+              </summary>
+              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
+                {detail.raw_text}
+              </pre>
+            </details>
           )}
         </Panel>
       </div>

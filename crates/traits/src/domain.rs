@@ -46,12 +46,152 @@ pub struct CapturedFrame {
     pub window_title: Option<String>,
 }
 
-/// Result of running OCR over a [`CapturedFrame`].
+/// Origin of a text span / the primary text of a frame (`03 §3b`). Serializes to
+/// the DB `source` / `primary_source` columns (`'ocr' | 'uia'`, `03 §4`). UIA is
+/// modelled now but only produced from 0.2.1 (`07` #48); 0.2.0 OCR is always `Ocr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum TextSource {
+    Ocr,
+    Uia,
+}
+
+impl TextSource {
+    /// The DB token for the `source` / `primary_source` columns (`03 §4` CHECK).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            TextSource::Ocr => "ocr",
+            TextSource::Uia => "uia",
+        }
+    }
+
+    /// Parses the DB token back into a [`TextSource`]; `None` on an unknown token.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "ocr" => Some(TextSource::Ocr),
+            "uia" => Some(TextSource::Uia),
+            _ => None,
+        }
+    }
+}
+
+/// Classified role of a text span (`03 §3b`). Serializes to the DB `role` column
+/// (`03 §4` CHECK). PR2 emits every span as [`TextRole::Unknown`]; PR3's classifier
+/// assigns the real roles and drops non-`content` spans from `content_text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum TextRole {
+    Content,
+    Chrome,
+    Background,
+    System,
+    Unknown,
+}
+
+impl TextRole {
+    /// The DB token for the `role` column (`03 §4` CHECK).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            TextRole::Content => "content",
+            TextRole::Chrome => "chrome",
+            TextRole::Background => "background",
+            TextRole::System => "system",
+            TextRole::Unknown => "unknown",
+        }
+    }
+
+    /// Parses the DB token back into a [`TextRole`]; `None` on an unknown token.
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "content" => Some(TextRole::Content),
+            "chrome" => Some(TextRole::Chrome),
+            "background" => Some(TextRole::Background),
+            "system" => Some(TextRole::System),
+            "unknown" => Some(TextRole::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// Why a span was excluded from `content_text` (`03 §3b`). `Option<SuppressReason>`
+/// maps to the nullable `text_spans.suppress_reason` column — `None` = a searchable,
+/// non-suppressed span (no redundant in-enum `None` variant, `03 §4`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum SuppressReason {
+    StaticChrome,
+    SystemUi,
+    BackgroundWindow,
+}
+
+impl SuppressReason {
+    /// The DB token for the `suppress_reason` column (`03 §4` CHECK).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            SuppressReason::StaticChrome => "static_chrome",
+            SuppressReason::SystemUi => "system_ui",
+            SuppressReason::BackgroundWindow => "background_window",
+        }
+    }
+
+    /// Parses the DB token back into a [`SuppressReason`]; `None` on an unknown token
+    /// (including the SQL `NULL` → "not suppressed" case the caller handles).
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "static_chrome" => Some(SuppressReason::StaticChrome),
+            "system_ui" => Some(SuppressReason::SystemUi),
+            "background_window" => Some(SuppressReason::BackgroundWindow),
+            _ => None,
+        }
+    }
+}
+
+/// One OCR/UIA text span with normalized `[0,1]` geometry (`03 §3b`). Carried on
+/// [`OcrResult::spans`] and persisted to `text_spans` (`03 §4`). Internal — it never
+/// crosses the typed IPC boundary (`FrameDetail` surfaces only raw/content text).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextSpan {
+    /// The recognized text, verbatim.
+    pub text: String,
+    /// Normalized form used for chrome-signature matching (`03 §3b`,
+    /// [`normalize_text`]).
+    pub normalized_text: String,
+    pub source: TextSource,
+    pub role: TextRole,
+    /// Normalized `[0,1]` bounding box (origin top-left), relative to the
+    /// full-resolution frame the OCR ran on.
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Whether the span is included in searchable text. PR2 marks every span
+    /// searchable; PR3 sets this from the classified role.
+    pub is_searchable: bool,
+    pub suppress_reason: Option<SuppressReason>,
+}
+
+/// Normalizes span text for chrome-signature matching and dedup (`03 §3b`):
+/// lowercased, internal whitespace collapsed to single spaces, ends trimmed. Shared
+/// so the OCR producer and PR3's classifier derive identical signatures.
+pub fn normalize_text(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Result of running OCR over a [`CapturedFrame`]. `spans` carry per-word geometry
+/// for the 0.2.x text-signal pipeline (`03 §3/§3b`); empty when the engine produced
+/// no words.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
     pub text: String,
     pub mean_confidence: f32,
     pub engine: String,
+    pub spans: Vec<TextSpan>,
 }
 
 /// A dense embedding vector. Length always equals the provider's

@@ -149,6 +149,7 @@ async fn hybrid_search_under_200ms_on_realistic_db() {
                     text: text.clone(),
                     mean_confidence: -1.0,
                     engine: "perf".to_string(),
+                    spans: Vec::new(),
                 },
             )
             .await
@@ -199,6 +200,7 @@ async fn hybrid_search_under_200ms_on_realistic_db() {
         text: (*t).to_string(),
         limit: 20,
         time_range: (n % 3 == 0).then_some(mid),
+        include_chrome: false,
     })
     .collect();
 

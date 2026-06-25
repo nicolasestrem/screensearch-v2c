@@ -5,8 +5,12 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
-use traits::{FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, VisionAnalysis};
+use traits::{
+    FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason, TextRole,
+    TextSource, TextSpan, VisionAnalysis,
+};
 
+use crate::schema::UNFILTERED_FILTER_VERSION;
 use crate::SqliteStore;
 
 impl SqliteStore {
@@ -35,19 +39,90 @@ impl SqliteStore {
         .await
     }
 
-    /// Stores (or replaces) the OCR text for a frame. The FTS5 mirror is kept in
-    /// sync by the schema triggers (`03 §4`).
+    /// Stores (or replaces) the text signal for a frame (`03 §3b`/`§4`): the
+    /// `frame_text` row (raw + content text, both FTS-mirrored by the schema
+    /// triggers) and the per-word `text_spans`. Atomic — all writes share one
+    /// transaction, mirroring [`Self::insert_vision`].
+    ///
+    /// **Interim populator (PR2, `07` #51):** PR3's classifier isn't wired yet, so
+    /// `content_text` is a passthrough copy of `raw_text` (the column is `NOT NULL`),
+    /// `filter_version` is the unfiltered marker, and `suppressed_count` is 0. The
+    /// foreground-window context already on the `frames` row (gap #12) is copied into
+    /// `target_window_title` / `target_app_hint`. Re-OCR replaces spans wholesale
+    /// (delete-then-insert) so it is idempotent.
     pub async fn insert_ocr(&self, frame_id: i64, ocr: OcrResult) -> Result<()> {
         self.with_conn(move |conn| {
-            conn.execute(
-                "INSERT INTO ocr_text (frame_id, text, mean_confidence, engine)
-                 VALUES (?1, ?2, ?3, ?4)
+            let tx = conn.unchecked_transaction()?;
+
+            // Foreground-window metadata (gap #12); the frame row was inserted just
+            // before this call (`03 §5`). A missing row leaves both NULL.
+            let (target_app_hint, target_window_title): (Option<String>, Option<String>) = tx
+                .query_row(
+                    "SELECT app_hint, window_title FROM frames WHERE id = ?1",
+                    params![frame_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((None, None));
+
+            // `?2` (raw_text) is bound once and reused for content_text (passthrough).
+            tx.execute(
+                "INSERT INTO frame_text
+                   (frame_id, raw_text, content_text, primary_source, filter_version,
+                    suppressed_count, target_window_title, target_app_hint)
+                 VALUES (?1, ?2, ?2, ?3, ?4, 0, ?5, ?6)
                  ON CONFLICT(frame_id) DO UPDATE SET
-                   text = excluded.text,
-                   mean_confidence = excluded.mean_confidence,
-                   engine = excluded.engine",
-                params![frame_id, ocr.text, ocr.mean_confidence, ocr.engine],
+                   raw_text = excluded.raw_text,
+                   content_text = excluded.content_text,
+                   primary_source = excluded.primary_source,
+                   filter_version = excluded.filter_version,
+                   suppressed_count = excluded.suppressed_count,
+                   target_window_title = excluded.target_window_title,
+                   target_app_hint = excluded.target_app_hint",
+                params![
+                    frame_id,
+                    ocr.text,
+                    TextSource::Ocr.as_db_str(),
+                    UNFILTERED_FILTER_VERSION,
+                    target_window_title,
+                    target_app_hint,
+                ],
             )?;
+
+            // Replace spans wholesale (idempotent re-OCR). Enum→DB token via the
+            // shared `as_db_str` helpers; the CHECK constraints catch any drift.
+            tx.execute(
+                "DELETE FROM text_spans WHERE frame_id = ?1",
+                params![frame_id],
+            )?;
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO text_spans
+                       (frame_id, span_index, text, normalized_text, source, role,
+                        x, y, w, h, is_searchable, suppress_reason)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+                for (i, span) in ocr.spans.iter().enumerate() {
+                    stmt.execute(params![
+                        frame_id,
+                        i as i64,
+                        span.text,
+                        span.normalized_text,
+                        span.source.as_db_str(),
+                        span.role.as_db_str(),
+                        // Bind as f64 (the REAL column type) — portable across
+                        // rusqlite versions; f32→f64→f32 is lossless.
+                        span.x as f64,
+                        span.y as f64,
+                        span.w as f64,
+                        span.h as f64,
+                        span.is_searchable as i32,
+                        span.suppress_reason.map(|r| r.as_db_str()),
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -90,9 +165,13 @@ impl SqliteStore {
     }
 
     /// The minimal inputs the embedding worker needs to enrich a frame — the stored
-    /// JPEG's relative path and the OCR text (if recognized) — in one round-trip, or
+    /// JPEG's relative path and the **content text** (if any) — in one round-trip, or
     /// `None` if the frame no longer exists (`03 §5`). Lighter than [`Self::get_frame`]
     /// (no vision/tags), so the worker doesn't pay for context it won't embed.
+    ///
+    /// Embeddings run over `content_text` (`03 §3b`); in PR2 that equals `raw_text`
+    /// (passthrough), so behavior is unchanged until PR3's filter lands. The field is
+    /// still called `ocr_text` on [`FrameEnrichmentInput`] to keep the worker stable.
     pub async fn frame_enrichment_input(
         &self,
         frame_id: i64,
@@ -100,8 +179,8 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let row = conn
                 .query_row(
-                    "SELECT f.image_path, o.text
-                     FROM frames f LEFT JOIN ocr_text o ON o.frame_id = f.id
+                    "SELECT f.image_path, ft.content_text
+                     FROM frames f LEFT JOIN frame_text ft ON ft.frame_id = f.id
                      WHERE f.id = ?1",
                     params![frame_id],
                     |r| {
@@ -165,8 +244,9 @@ impl SqliteStore {
         .await
     }
 
-    /// Bulk-fetches OCR text for many frames in one `IN (…)` query (the `ask`
-    /// grounding hydrate, `03 §7/§13.5`). Only frames with non-empty text are returned.
+    /// Bulk-fetches **content text** for many frames in one `IN (…)` query (the `ask`
+    /// grounding hydrate, `03 §7/§13.5`). Grounding uses content text (`03 §3b`); only
+    /// frames with non-empty content are returned.
     pub async fn ocr_texts(&self, frame_ids: &[i64]) -> Result<HashMap<i64, String>> {
         if frame_ids.is_empty() {
             return Ok(HashMap::new());
@@ -175,8 +255,8 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let placeholders = vec!["?"; ids.len()].join(",");
             let sql = format!(
-                "SELECT frame_id, text FROM ocr_text
-                 WHERE frame_id IN ({placeholders}) AND text <> ''"
+                "SELECT frame_id, content_text FROM frame_text
+                 WHERE frame_id IN ({placeholders}) AND content_text <> ''"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
@@ -192,9 +272,10 @@ impl SqliteStore {
         .await
     }
 
-    /// Assembles the full per-frame detail (frame context + OCR text + vision +
-    /// tags), or `None` if the frame does not exist. Backs the `get_frame`
-    /// command (`03 §7`).
+    /// Assembles the full per-frame detail (frame context + raw/content text +
+    /// vision + tags), or `None` if the frame does not exist. Backs the `get_frame`
+    /// command (`03 §7`). Raw text stays viewable here even though retrieval defaults
+    /// to content text (`03 §3b`).
     pub async fn get_frame(&self, frame_id: i64) -> Result<Option<FrameDetail>> {
         self.with_conn(move |conn| {
             let base = conn
@@ -215,7 +296,10 @@ impl SqliteStore {
                             window_title: r.get(6)?,
                             browser_url: r.get(7)?,
                             activity_type: r.get(8)?,
-                            text: None,
+                            raw_text: None,
+                            content_text: None,
+                            text_source: TextSource::Ocr,
+                            suppressed_text_count: 0,
                             vision: None,
                             tags: Vec::new(),
                         })
@@ -227,13 +311,27 @@ impl SqliteStore {
                 return Ok(None);
             };
 
-            detail.text = conn
+            if let Some((raw, content, source, suppressed)) = conn
                 .query_row(
-                    "SELECT text FROM ocr_text WHERE frame_id = ?1",
+                    "SELECT raw_text, content_text, primary_source, suppressed_count
+                     FROM frame_text WHERE frame_id = ?1",
                     params![frame_id],
-                    |r| r.get::<_, String>(0),
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, i64>(3)?,
+                        ))
+                    },
                 )
-                .optional()?;
+                .optional()?
+            {
+                detail.raw_text = Some(raw);
+                detail.content_text = Some(content);
+                detail.text_source = TextSource::from_db_str(&source).unwrap_or(TextSource::Ocr);
+                detail.suppressed_text_count = suppressed.max(0) as u32;
+            }
 
             detail.vision = conn
                 .query_row(
@@ -262,6 +360,41 @@ impl SqliteStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(Some(detail))
+        })
+        .await
+    }
+
+    /// All text spans for a frame, ordered by `span_index` (`03 §3b`/`§4`). An
+    /// inherent read that makes the `text_spans` write path observable — like
+    /// [`Self::get_frame`] / `delete_frame` (`07` engineering note) — and the read
+    /// PR3's classifier uses to recompute roles. Empty when the frame has no spans.
+    pub async fn frame_spans(&self, frame_id: i64) -> Result<Vec<TextSpan>> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT text, normalized_text, source, role, x, y, w, h,
+                        is_searchable, suppress_reason
+                 FROM text_spans WHERE frame_id = ?1 ORDER BY span_index",
+            )?;
+            let spans = stmt
+                .query_map(params![frame_id], |r| {
+                    let source: String = r.get(2)?;
+                    let role: String = r.get(3)?;
+                    let suppress: Option<String> = r.get(9)?;
+                    Ok(TextSpan {
+                        text: r.get(0)?,
+                        normalized_text: r.get(1)?,
+                        source: TextSource::from_db_str(&source).unwrap_or(TextSource::Ocr),
+                        role: TextRole::from_db_str(&role).unwrap_or(TextRole::Unknown),
+                        x: r.get::<_, f64>(4)? as f32,
+                        y: r.get::<_, f64>(5)? as f32,
+                        w: r.get::<_, f64>(6)? as f32,
+                        h: r.get::<_, f64>(7)? as f32,
+                        is_searchable: r.get::<_, i64>(8)? != 0,
+                        suppress_reason: suppress.as_deref().and_then(SuppressReason::from_db_str),
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(spans)
         })
         .await
     }
