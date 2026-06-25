@@ -86,10 +86,29 @@ impl SqliteStore {
             .map(|t| (t.start, t.end))
             .unwrap_or((i64::MIN, i64::MAX));
 
-        // --- FTS arm (carries the highlighted snippets) ---
-        let fts = self.fts_arm(&q.text, start, end, pool).await?;
+        // --- content FTS arm (default retrieval text; carries the highlighted snippets) ---
+        let fts = self
+            .fts_arm("frame_text_fts", &q.text, start, end, pool)
+            .await?;
         let fts_ids: Vec<i64> = fts.iter().map(|(id, _)| *id).collect();
-        let snippets: HashMap<i64, String> = fts.into_iter().collect();
+        let mut snippets: HashMap<i64, String> = fts.into_iter().collect();
+
+        // --- raw FTS arm (only when the caller opts into chrome/raw text, `03 §3b`) ---
+        // Searches `frame_text.raw_text` so static chrome the content filter drops is
+        // still reachable. The content snippet wins; raw snippets fill only ids the
+        // content arm didn't match.
+        let raw_ids: Vec<i64> = if q.include_chrome {
+            let raw = self
+                .fts_arm("frame_text_raw_fts", &q.text, start, end, pool)
+                .await?;
+            let ids: Vec<i64> = raw.iter().map(|(id, _)| *id).collect();
+            for (id, snip) in raw {
+                snippets.entry(id).or_insert(snip);
+            }
+            ids
+        } else {
+            Vec::new()
+        };
 
         // --- vector arm (only when an embedder is present and the query is non-blank) ---
         // Clone the Arc out from under the lock first — the read guard must never be
@@ -111,13 +130,23 @@ impl SqliteStore {
             _ => Vec::new(),
         };
 
-        let fused = rrf_fuse(&[fts_ids, vec_ids], limit);
+        // Fuse the active arms (the raw arm only participates when opted in).
+        let mut arms: Vec<Vec<i64>> = vec![fts_ids];
+        if q.include_chrome {
+            arms.push(raw_ids);
+        }
+        arms.push(vec_ids);
+        let fused = rrf_fuse(&arms, limit);
         self.hydrate(fused, snippets).await
     }
 
-    /// BM25-ranked FTS hits within the time window, with highlighted snippets.
+    /// BM25-ranked FTS hits within the time window, with highlighted snippets, over
+    /// the given external-content FTS5 table (`frame_text_fts` for content text,
+    /// `frame_text_raw_fts` for raw text). `table` is a fixed internal identifier, not
+    /// user input, so interpolating it is injection-safe.
     async fn fts_arm(
         &self,
+        table: &str,
         text: &str,
         start: i64,
         end: i64,
@@ -126,17 +155,18 @@ impl SqliteStore {
         let Some(match_q) = fts_match_query(text) else {
             return Ok(Vec::new());
         };
+        let sql = format!(
+            "SELECT fts.rowid,
+                    snippet({table}, 0, '[', ']', '…', 12) AS snip,
+                    bm25({table}) AS rank
+             FROM {table} fts
+             JOIN frames fr ON fr.id = fts.rowid
+             WHERE {table} MATCH ?1 AND fr.captured_at >= ?2 AND fr.captured_at < ?3
+             ORDER BY rank
+             LIMIT ?4"
+        );
         self.with_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT fts.rowid,
-                        snippet(ocr_text_fts, 0, '[', ']', '…', 12) AS snip,
-                        bm25(ocr_text_fts) AS rank
-                 FROM ocr_text_fts fts
-                 JOIN frames fr ON fr.id = fts.rowid
-                 WHERE ocr_text_fts MATCH ?1 AND fr.captured_at >= ?2 AND fr.captured_at < ?3
-                 ORDER BY rank
-                 LIMIT ?4",
-            )?;
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt
                 .query_map(params![match_q, start, end, pool as i64], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
@@ -213,7 +243,7 @@ impl SqliteStore {
                 })?
                 .collect::<rusqlite::Result<_>>()?;
 
-            // bulk-fetch OCR text only for hits lacking an FTS snippet (the fallback)
+            // bulk-fetch content text only for hits lacking an FTS snippet (the fallback)
             let need_text: Vec<i64> = ids
                 .iter()
                 .copied()
@@ -223,7 +253,7 @@ impl SqliteStore {
                 HashMap::new()
             } else {
                 let ocr_sql = format!(
-                    "SELECT frame_id, text FROM ocr_text WHERE frame_id IN ({})",
+                    "SELECT frame_id, content_text FROM frame_text WHERE frame_id IN ({})",
                     placeholders(need_text.len())
                 );
                 conn.prepare(&ocr_sql)?
@@ -271,4 +301,88 @@ fn placeholders(n: usize) -> String {
         s.push('?');
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use traits::{NewFrame, OcrResult};
+
+    fn frame(at: i64) -> NewFrame {
+        NewFrame {
+            captured_at: at,
+            monitor_index: 0,
+            width: 1920,
+            height: 1080,
+            image_path: format!("frames/{at}.jpg"),
+            content_hash: format!("h{at}"),
+            app_hint: None,
+            window_title: None,
+            browser_url: None,
+        }
+    }
+
+    fn q(text: &str, include_chrome: bool) -> SearchQuery {
+        SearchQuery {
+            text: text.to_string(),
+            limit: 10,
+            time_range: None,
+            include_chrome,
+        }
+    }
+
+    /// `include_chrome` searches `raw_text` via the raw FTS arm, independent of
+    /// `content_text` (`03 §3b`). PR2's populator writes content == raw, so we widen
+    /// `raw_text` directly to simulate PR3's filter dropping a term to the chrome
+    /// layer: the term is then reachable only with `include_chrome = true`, while
+    /// content text stays searchable in both modes.
+    #[tokio::test]
+    async fn include_chrome_searches_raw_text_independently_of_content() {
+        let store = crate::SqliteStore::open_in_memory().unwrap();
+        let fid = store.insert_frame(frame(1_000)).await.unwrap();
+        store
+            .insert_ocr(
+                fid,
+                OcrResult {
+                    text: "alpha".to_string(),
+                    mean_confidence: -1.0,
+                    engine: "test".to_string(),
+                    spans: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        // Diverge raw from content: "bravo" now lives only in raw_text. The raw FTS
+        // update trigger keeps frame_text_raw_fts in sync.
+        store
+            .with_conn(move |conn| {
+                conn.execute(
+                    "UPDATE frame_text SET raw_text = ?2 WHERE frame_id = ?1",
+                    params![fid, "alpha bravo"],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Default (content only): "bravo" is not in content_text → no hit.
+        assert!(store
+            .hybrid_search(&q("bravo", false))
+            .await
+            .unwrap()
+            .is_empty());
+        // include_chrome: the raw arm finds it.
+        let hits = store.hybrid_search(&q("bravo", true)).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].frame_id, fid);
+        // content text stays searchable regardless of the flag.
+        assert_eq!(
+            store.hybrid_search(&q("alpha", false)).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            store.hybrid_search(&q("alpha", true)).await.unwrap().len(),
+            1
+        );
+    }
 }

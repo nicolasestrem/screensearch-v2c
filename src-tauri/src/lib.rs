@@ -247,6 +247,8 @@ async fn ask(
             text: request.query.clone(),
             limit: ASK_TOP_K,
             time_range: None,
+            // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
+            include_chrome: false,
         })
         .await
         .map_err(|e| e.to_string())?;

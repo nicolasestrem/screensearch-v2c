@@ -71,8 +71,13 @@ async fn capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs() {
         frame.image_path
     );
 
-    // The OCR row exists (text may be empty on a blank screen — that's fine).
-    assert!(frame.text.is_some(), "ocr_text row present for the frame");
+    // The frame_text row exists (raw/content text may be empty on a blank screen —
+    // that's fine); content_text is a passthrough copy of raw_text in PR2 (03 §3b).
+    assert!(
+        frame.raw_text.is_some(),
+        "frame_text row present for the frame"
+    );
+    assert_eq!(frame.raw_text, frame.content_text);
 
     // An embed_text job was enqueued; NO vision_tag job ever is (13.3).
     let stats = store.job_stats().await.unwrap();

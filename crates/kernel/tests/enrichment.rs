@@ -106,6 +106,7 @@ fn ocr(text: &str) -> OcrResult {
         text: text.to_string(),
         mean_confidence: -1.0,
         engine: "fake".to_string(),
+        spans: Vec::new(),
     }
 }
 
@@ -193,6 +194,7 @@ async fn process_job_completes_on_empty_ocr_without_embedding() {
             text: "anything".to_string(),
             limit: 10,
             time_range: None,
+            include_chrome: false,
         })
         .await
         .unwrap();
@@ -420,6 +422,7 @@ async fn attach_embedder_drains_backlog_and_vector_arm_finds_frame() {
             text: "xyzzy".to_string(),
             limit: 10,
             time_range: None,
+            include_chrome: false,
         })
         .await
         .unwrap();

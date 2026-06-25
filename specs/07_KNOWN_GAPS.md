@@ -57,7 +57,7 @@
 | 48 | 2026-06-25 | **UIA text (0.2.0 deferral → 0.2.1)** — UI Automation text from the target window (with OCR fallback) would yield more structured, higher-fidelity `content_text` than OCR alone, but is greenfield, stateful, and thread-affinity-sensitive. | **Deferred to 0.2.1** (`docs/0.2.0.md`): own PR; needs a capability probe + a measured latency budget before wiring into capture. `primary_source`/`TextSource` already model `uia` in `03 §3b`. | agent | 0.2.1 |
 | 49 | 2026-06-25 | **Smart enrichment throttle (0.2.0 deferral → 0.2.1)** — pausing `vision_tag`/`embed_image` and reducing `embed_text` concurrency under sustained CPU/GPU pressure (capture/OCR/storage never pause) needs a pressure probe that doesn't exist (only a flag-capability probe does, `crates/inference/src/flags.rs`). | **Deferred to 0.2.1** (`docs/0.2.0.md`): own PR; GPU utilization is NVIDIA/NVML-only, so a weak iGPU laptop is CPU-pressure-only — implement with truthful status. | agent | 0.2.1 |
 | 50 | 2026-06-25 | **Scheduled / saved reports (deferred beyond PR6)** — PR6 ships on-demand Daily/Weekly/Custom reports with **no** saved-report table; recurring scheduled reports + persistence are out of 0.2.0 scope (`03 §8b`). | **Deferred** (`docs/0.2.0.md` PR6): revisit after the reports feature lands; would add a saved-report/schedule store + a scheduler. | agent | post-0.2.0 |
-| 51 | 2026-06-25 | **PR2→PR3 interim: `content_text` is a raw passthrough, no backfill** — PR2 adds the `frame_text` schema before PR3's classifier, so PR2 fills `content_text` as a copy of `raw_text` (the column is `NOT NULL`). PR3's filter applies to captures from its deploy onward. | **By design (clean-DB assumption)** (`docs/0.2.0.md` PR2/PR3; `03 §3b`/`§4`): frames captured in the PR2→PR3 window keep unfiltered `content_text` and are **not** backfilled; `schema_version` still bumps 2→3. Acceptable because 0.2.0 is single-user with no old data to migrate. | agent | 0.2.0 PR3 |
+| 51 | 2026-06-25 | **PR2→PR3 interim: `content_text` is a raw passthrough, no backfill** — PR2 adds the `frame_text` schema before PR3's classifier, so PR2 fills `content_text` as a copy of `raw_text` (the column is `NOT NULL`). PR3's filter applies to captures from its deploy onward. | **By design (clean-DB assumption)** (`docs/0.2.0.md` PR2/PR3; `03 §3b`/`§4`): frames captured in the PR2→PR3 window keep unfiltered `content_text` and are **not** backfilled; `schema_version` still bumps 2→3. Acceptable because 0.2.0 is single-user with no old data to migrate. **Landed (PR2, 2026-06-25, `feat/0.2.0-pr2-text-signal`):** migration v3 created `frame_text`/`text_spans`/`chrome_text_catalog` and dropped legacy `ocr_text`; `insert_ocr` writes `content_text = raw_text` with `filter_version = UNFILTERED_FILTER_VERSION (0)` and `suppressed_count = 0`. PR3 wires the classifier and bumps `filter_version`. | agent | 0.2.0 PR3 |
 
 Resolved engineering decisions (spec silent on *how*, recorded for traceability):
 - **ts-rs 64-bit ints → TS `number`** via per-field `#[ts(type = "number")]` (Tauri JSON wire);
@@ -132,6 +132,18 @@ Resolved engineering decisions (spec silent on *how*, recorded for traceability)
   of capture (`02 §5` background trigger); stop-on-exit is best-effort (the startup sweep is the
   real safety net). `embed_text` embeds the whole OCR text as one chunk (`chunk_index = 0`);
   chunking is a non-breaking later addition.
+- **`include_chrome` raw-search mechanism (0.2.0 PR2):** `03 §4` left this to PR2 (raw FTS vs
+  role-filtered spans FTS). Chose a **dedicated raw FTS5 table** `frame_text_raw_fts` over
+  `frame_text.raw_text`: roles aren't populated until PR3 (a spans-FTS would index only `unknown`
+  rows now), content==raw in PR2 (a spans-FTS would duplicate the content arm), and a raw FTS is
+  stable across PR3 (raw_text is never filtered). `include_chrome=true` adds the raw arm to the
+  existing RRF fusion; the content snippet wins on overlap. (`05` PR2.)
+- **PR2 span column values + `frame_spans` read (0.2.0 PR2):** spec-silent on the role of a span
+  before PR3 classifies — PR2 emits `role=unknown`, `is_searchable=1`, `suppress_reason=NULL`
+  (honest "unclassified, kept"; PR3 reclassifies). `filter_version=0` (`UNFILTERED_FILTER_VERSION`),
+  `suppressed_count=0`. Added an inherent `SqliteStore::frame_spans` read (mirrors the
+  `get_frame`/`delete_frame` observability precedent) so the `text_spans` write path is testable and
+  PR3 can read spans to recompute roles. (`05` PR2.)
 
 Manual steps still required (e.g. signing certs, first-run model download, CI secrets):
 - **First-run model download** — embedding models (P3) auto-download via fastembed into

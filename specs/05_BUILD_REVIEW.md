@@ -1839,3 +1839,76 @@ Four actionable threads, all addressed in the contract (still specs-only):
 - **Codex (`04 §1`):** `04` now makes `docs/0.2.0.md` mandatory reading, but the roadmap's Status said
   "no implementation started / PR1 not done" — a future PR2 agent under stop-at-ambiguity would have
   hit a contradiction. Updated `docs/0.2.0.md` Status to record PR1 complete, PR2 next.
+
+## 0.2.0 PR2 — 2026-06-25 — Text-signal data model + OCR spans (`feat/0.2.0-pr2-text-signal`)
+
+### Implemented
+- **OCR span geometry** (`crates/ocr`): `recognize_blocking` walks WinRT `Lines().Words()` → one
+  `TextSpan`/word; pure `normalize_rect` maps `BoundingRect` (pixels) to `[0,1]` (clamped so
+  `x+w≤1`, `y+h≤1`; zero-area frame → zero box). `CONFIDENCE_UNKNOWN` sentinel kept (no per-word
+  confidence). PR2 spans: `source=ocr`, `role=unknown`, searchable, no suppression.
+- **Schema v2→v3** (`crates/store/src/schema.rs`, forward-only): `frame_text` (+`frame_text_fts`
+  over `content_text`, +`frame_text_raw_fts` over `raw_text` — both external-content, v1 trigger
+  style), `text_spans` (CHECK-constrained), `chrome_text_catalog`; all per-frame tables
+  `ON DELETE CASCADE`. Legacy `ocr_text`+FTS **dropped** (clean DB). `UNFILTERED_FILTER_VERSION = 0`
+  marks the interim passthrough.
+- **Types** (`crates/traits`): `TextSource`/`TextRole`/`SuppressReason` (ts-rs-exported +
+  `as_db_str`/`from_db_str`), internal `TextSpan`, shared `normalize_text`; `OcrResult.spans`;
+  `FrameDetail` (`text` → `raw_text`+`content_text`+`text_source`+`suppressed_text_count`);
+  `SearchQuery.include_chrome`.
+- **Store wiring**: `insert_ocr` writes `frame_text` (content = raw passthrough, `target_*` from the
+  frame's foreground context) + `text_spans` atomically; `frame_enrichment_input`/`ocr_texts`/
+  `get_frame`/search FTS + hydrate repoint to `frame_text`/`content_text`; new inherent `frame_spans`
+  read for observability. Search: content FTS arm + opt-in raw FTS arm fused via the existing RRF.
+- **UI**: `MomentDetail` renders `content_text` + a raw-text disclosure; `Recall` passes
+  `include_chrome:false`; bindings regenerated.
+
+### Decisions (user-approved before implementation)
+- **D1 drop `ocr_text`** → `frame_text` is the single text store (`03 §4` "legacy ocr_text not
+  required going forward"; empty on a clean DB → zero data loss).
+- **D2 replace `FrameDetail.text`** (it duplicated `raw_text`).
+- **D3 per-word** span granularity (most faithful to "walk `Lines().Words()`"; PR3 regroups).
+- **D4 raw-search mechanism = a dedicated raw FTS5 table** (`frame_text_raw_fts`), **not** a
+  role-filtered `text_spans` FTS: roles aren't populated until PR3 (a spans-FTS would index only
+  `unknown` rows = meaningless), content==raw in PR2 (a spans-FTS would be redundant with content
+  FTS), and raw FTS is stable across PR3 (raw_text never filtered). `include_chrome` semantics are
+  "also search raw" (`03 §3b`), which raw FTS matches exactly.
+- **D5 Recall toggle UI deferred to PR3** — backend `include_chrome` + raw arm land now (no visible
+  effect in PR2 since content==raw); PR2's UI scope per `docs/0.2.0.md` is Moment raw-vs-content only.
+
+### Skipped / deferred (correct for PR2)
+- No PR3 classifier — `content_text` is a passthrough copy of `raw_text`, no backfill (`07` #51).
+- `ASK_TOP_K`/`retrieval.default_top_k` untouched (PR6). `chrome_text_catalog` is created but unused
+  until PR3. Suppression-threshold settings remain provisional (`03 §8`).
+
+### Broke / regressed
+- Nothing. All existing tests updated for the new `OcrResult.spans` / `SearchQuery.include_chrome`
+  fields and the `FrameDetail` text-field replacement; full suite green.
+
+### Still risky / watch in PR3
+- **Span volume**: per-word spans on a busy screen = hundreds of `text_spans` rows/frame. Acceptable
+  for PR3's classifier (needs word geometry); revisit if storage growth is observed.
+- **`frame_text.target_*`** are copied from `frames.app_hint`/`window_title` (foreground = target in
+  PR2); PR3 refines true target-window semantics.
+- The interim `content_text == raw_text` means PR2 search/embeddings still include chrome until PR3 —
+  by design (`07` #51).
+
+### Verification (verbatim)
+- `npm ci` (0 vuln) · `npm run lint` clean · `npm run build` → `✓ built in 1.75s`.
+- `cargo fmt --all -- --check` clean · `cargo clippy --workspace --all-targets -- -D warnings`
+  `Finished` · `cargo build --workspace` `Finished` 33.25s · `cargo test --workspace` all green.
+- Store integration **45 passed** (incl. v3 migration, span persistence, delete cascade, raw-arm
+  search); ocr `normalize_rect` unit test passed.
+- **Live (gated):** `winrt_ocr_recognizes_blank_image ... ok` (bbox ∈ [0,1] asserted) and
+  `capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs ... ok` (3.42s, real WGC+WinRT →
+  `frame_text` → `get_frame` → embed jobs).
+
+### Review follow-ups (PR #31, Gemini Code Assist)
+Codex and Claude (CI) found no issues; Gemini raised two medium-priority items, both applied:
+- **`chrome_text_catalog.suppressed` now `CHECK (suppressed IN (0,1))`** — enforces the documented
+  0/1 boolean semantic, matching the `is_searchable` convention in `text_spans` (same v3 migration).
+  v3 is unreleased (introduced in this PR), so tightening its DDL is not schema drift; `03 §4`'s
+  canonical DDL updated in lockstep to keep spec ↔ code in sync.
+- **`normalize_text` allocation** — rewritten to build the collapsed string in one capacity-hinted
+  allocation (was: intermediate `Vec` + `join`), keeping the final `to_lowercase()` so casing
+  semantics (incl. Greek final sigma) are byte-for-byte unchanged. Hot path: one call per OCR word.

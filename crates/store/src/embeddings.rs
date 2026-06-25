@@ -253,9 +253,9 @@ impl SqliteStore {
         .await
     }
 
-    /// Deletes a frame and everything that hangs off it (OCR/FTS, vision,
-    /// embeddings + vec0 shadows, tags, jobs) via FK cascade + the vec-cleanup
-    /// triggers. The retention-purge primitive (`storage.retention_days`).
+    /// Deletes a frame and everything that hangs off it (frame_text + FTS mirrors,
+    /// text_spans, vision, embeddings + vec0 shadows, tags, jobs) via FK cascade + the
+    /// FTS/vec-cleanup triggers. The retention-purge primitive (`storage.retention_days`).
     pub async fn delete_frame(&self, frame_id: i64) -> Result<()> {
         self.with_conn(move |conn| {
             conn.execute("DELETE FROM frames WHERE id = ?1", params![frame_id])?;
