@@ -81,6 +81,28 @@ Detailed schema, traits, command/event contracts, and sidecar protocol live in `
 - **Later (nice-to-haves):** multi-model routing UI, timeline analytics, export, sharing,
   auto-update, OS automation.
 
+## 5b. Post-1.0 arc — 0.2.x (attention-first text signal + recall workflows)
+
+P0–P5 (v1.0) are complete and merged; the 0.2.x line is a **separate arc** layered on the shipped
+app, **not** a retrofit of the v1.0 phases above. It is tracked in detail in `docs/0.2.0.md`
+(roadmap) and `03` (contract); this section states only the strategic *what/why*.
+
+- **The problem.** Capture indexes **raw full-screen OCR with no filtering**, so search, Ask, and
+  embeddings get dominated by static chrome — taskbars, desktop icons, browser toolbars, even the
+  app's own sidebar labels. Searching "Firefox" / "Steam" / "Deck" surfaces frames purely because
+  those labels were on screen, not because they were the user's actual work.
+- **P6 — Attention-first text signal + recall workflows.** Preserve raw text, but derive a default
+  **content-text** layer (filtered OCR/UIA text — *not* vision descriptions) and make search, Ask,
+  embeddings, and reports use it by default. Raw / app-chrome text stays searchable **opt-in**
+  (`include_chrome`); default search stays **hybrid (FTS + vector) over content text** and the FTS
+  fallback is never removed. Adds Recall **reports** (daily/weekly/custom) and premade Ask cards on
+  top of the cleaned signal.
+- **Ships in 0.2.0** (clean DB, no backfill): PR1 specs → PR2 data model + OCR spans → PR3
+  attention-first filtering → PR6 reports → PR7 audit.
+- **Deferred to 0.2.1** (highest-risk, most-invasive, not needed for the retrieval fix):
+  event-driven capture, UIA text, and a smart enrichment throttle — each its own gated PR, recorded
+  in `07`. **0.2.0 keeps timer/idle capture; no raw keystrokes or clipboard text are ever stored.**
+
 ## 6. Risks & mitigations
 
 | Risk | Mitigation |
@@ -98,6 +120,8 @@ V1 data import.
 
 ## 8. Status
 - **License decided: MIT.** No open strategic questions.
+- **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24). Active arc: **0.2.x — attention-first text
+  signal + recall workflows** (see `§5b` and `docs/0.2.0.md`).
 
 ---
 

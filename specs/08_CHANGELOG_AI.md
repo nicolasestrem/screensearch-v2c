@@ -11,6 +11,34 @@
 
 ---
 
+## 2026-06-25 — Specs: 0.2.0 PR1 attention-first text contract (`docs/0.2.0-pr1-specs`)
+- **Change:** Wrote the 0.2.0 contract into `/specs/` (no code):
+  1. `02 §5b` — 0.2.x arc + **P6** (attention-first text signal + recall workflows) as a post-1.0 arc.
+  2. `03` — `§3b` raw vs content text / window semantics / spans / roles / static chrome suppression
+     + new types (`TextSource`/`TextRole`/`SuppressReason`, `TextSpan`, `OcrResult.spans`,
+     `FrameDetail` + `SearchQuery.include_chrome`); `§4` `frame_text` + `frame_text_fts`, `text_spans`,
+     `chrome_text_catalog` (`schema_version` 2→3); `§7` `generate_report`; `§8` 0.2.x settings keys;
+     `§8b` Recall reports.
+  3. `UI_REFERENCE` — Recall Search/Ask/Reports, content/raw toggle, premade Ask cards, all five
+     states for new/changed screens.
+  4. `07` — gaps #47–#51 (0.2.1 deferrals + the PR2→PR3 interim passthrough / no-backfill).
+  5. `04` — reading order + build order extended to the 0.2.x PR sequence; `04` recycled as each PR's
+     operating prompt.
+  6. `CHANGELOG.md` `[Unreleased]` + this entry + `05` build-review entry.
+- **Why:** PR1 of `docs/0.2.0.md`. Today capture indexes **raw full-screen OCR with no filtering**
+  (`crates/store/src/schema.rs`: `ocr_text`→`ocr_text_fts`; `crates/kernel/src/worker_pool.rs` embeds
+  the whole frame as one chunk), so search / Ask / embeddings are dominated by static chrome. The
+  spec must state the content-text contract **before** PR2 code references it (`04 §1` reading order,
+  `04 §5` stop-at-ambiguity). User decision: land the **full** authoritative contract (concepts +
+  DDL + types) in `03` now so PR2/PR3 implement `03` verbatim.
+- **Verification:** **Specs-only — no build/test delta.** `git diff --stat` touches only `docs/`,
+  `specs/`, and `CHANGELOG.md` (nothing under `crates/`, `src-tauri/`, `ui/`). Contract
+  self-consistency checked: `content_text` is filtered OCR/UIA (not vision); raw text is preserved
+  but is **not** the default retrieval input; default search stays hybrid (FTS + vector) over content
+  text.
+
+---
+
 ## 2026-06-24 — Fix Quality (8B) vision download lock-race + storm (`release/v0.1.0`)
 - **Change:**
   1. *Single-instance.* `src-tauri/src/lib.rs` registers `tauri-plugin-single-instance` (first plugin):

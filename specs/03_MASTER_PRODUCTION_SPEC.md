@@ -65,7 +65,8 @@ pub struct CapturedFrame { pub monitor_index: u32, pub width: u32, pub height: u
     async fn next_frame(&mut self) -> Result<Option<CapturedFrame>>;
 }
 
-pub struct OcrResult { pub text: String, pub mean_confidence: f32, pub engine: String }
+pub struct OcrResult { pub text: String, pub mean_confidence: f32, pub engine: String,
+                       pub spans: Vec<TextSpan> }   // 0.2.x: per-line/word geometry — see §3b
 #[async_trait] pub trait OcrProvider: Send + Sync {
     async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult>;
 }
@@ -115,6 +116,72 @@ pub struct AnswerOpts { pub thinking: bool, pub max_tokens: u32 }
 }
 ```
 
+## 3b. Text signal (0.2.x): raw vs content text, windows, spans, roles
+
+*Added by the 0.2.x arc (`02 §5b`, `docs/0.2.0.md`). v1.0 stored one unfiltered OCR string per
+frame; 0.2.x splits that into a preserved raw layer and a filtered default-retrieval layer.*
+
+**Raw vs content text.**
+- **`raw_text`** — the full, unfiltered OCR/UIA text of the frame. **Always preserved.**
+- **`content_text`** — **filtered OCR/UIA text** (explicitly: *not* vision descriptions — those stay
+  in `vision_analysis`). This is the **default** input for search, Ask, embeddings, and reports. It
+  keeps `content` (+ useful `unknown`) inside the target window and excludes
+  `system`/`background`/`chrome`.
+- **Default search stays hybrid (FTS + vector) over `content_text`; the FTS fallback is never
+  removed.** Raw / app-chrome text is searchable only when the caller opts in via
+  `SearchQuery.include_chrome = true`. So **raw text is preserved but is *not* the default retrieval
+  input.**
+
+**Active / target window semantics.** The foreground (target) window's rectangle and title define
+the user's focus. Text inside that rect is eligible for `content`; visible text from other windows
+is `background`. The foreground window **title** is carried as frame metadata (`target_window_title`
+/ `target_app_hint`), **not** injected into `content_text` as repeated body text.
+
+**Text roles** (per span; stored in `text_spans`, `§4`):
+- `system` — taskbar, desktop icons, tray, clock, Start/search bar.
+- `background` — visible text outside the target/foreground window.
+- `chrome` — menus, tabs, sidebars, toolbars, status bars, repeated app labels.
+- `content` — document/editor/browser/terminal/chat/report body text.
+- `unknown` — kept only when not obviously static noise.
+
+**Static chrome suppression.** A span's signature is `app_hint + normalized_text + region_bucket`
+(catalogued in `chrome_text_catalog`, `§4`). After repeated appearances a signature is marked chrome
+and dropped from `content_text`. Constraints:
+- **Thresholds are Settings-configurable, not hardcoded** (`§8`) — the project already hit the
+  hardcoded-constant anti-pattern with the vision batch size.
+- Never suppress a long, information-rich line solely because it repeats; never suppress text inside
+  `content`/editor roles solely because it repeats.
+- `filter_version` (on `frame_text`) is bumpable to recompute the whole catalog.
+- **False suppression is the top risk (silent data loss).** Expose a per-app **suppression-rate
+  metric** so over-suppression is observable; `include_chrome` + preserved `raw_text` always recover
+  anything wrongly suppressed.
+
+**New types** (`traits` crate; exported via `ts-rs`, regenerated in PR2 — not in PR1):
+
+```rust
+pub enum TextSource { Ocr, Uia }                 // primary_source / span source
+pub enum TextRole { Content, Chrome, Background, System, Unknown }
+pub enum SuppressReason { StaticChrome, SystemUi, BackgroundWindow }
+
+// One OCR/UIA span with normalized [0,1] geometry; carried on OcrResult.spans (§3).
+// WinRT exposes no per-word confidence, so OcrResult keeps the CONFIDENCE_UNKNOWN sentinel.
+// suppress_reason is Option — None maps to the nullable `text_spans.suppress_reason` column
+// (a searchable, non-suppressed span); no redundant in-enum None variant (§4 DDL).
+pub struct TextSpan { pub text: String, pub normalized_text: String,
+                      pub source: TextSource, pub role: TextRole,
+                      pub x: f32, pub y: f32, pub w: f32, pub h: f32,   // normalized [0,1]
+                      pub is_searchable: bool, pub suppress_reason: Option<SuppressReason> }
+
+// FrameDetail (returned by `get_frame`, §7) gains: raw_text, content_text,
+//   text_source: TextSource, suppressed_text_count: u32.
+// SearchQuery gains: include_chrome: bool (default false).
+```
+
+This contract is implemented across **PR2** (schema + span geometry + types) and **PR3** (the
+classifier that fills roles and `content_text`). **Interim:** PR2 lands before PR3, so PR2 fills
+`content_text` as a **passthrough copy of `raw_text`**; PR3's filter applies from its deploy onward
+with **no backfill** (clean-DB assumption — see `07`).
+
 ## 4. Data model (SQLite, WAL) — authoritative DDL
 
 Single file `screensearch.db`. Migrations are forward-only, tracked in `schema_version`.
@@ -145,6 +212,56 @@ CREATE TABLE ocr_text (
 CREATE VIRTUAL TABLE ocr_text_fts USING fts5(text, content='ocr_text', content_rowid='frame_id',
                                              tokenize='porter');
 -- triggers keep FTS in sync (insert/delete/update) — standard external-content pattern
+
+-- 0.2.x text signal (schema_version 2 → 3; clean DB, forward-only migration authored in PR2).
+-- frame_text: preserved raw text + filtered default-retrieval text, one row per frame.
+CREATE TABLE frame_text (
+  frame_id            INTEGER PRIMARY KEY REFERENCES frames(id) ON DELETE CASCADE,
+  raw_text            TEXT    NOT NULL,          -- full unfiltered OCR/UIA text (preserved)
+  content_text        TEXT    NOT NULL,          -- filtered text (NOT vision); default retrieval input
+  primary_source      TEXT    NOT NULL CHECK (primary_source IN ('ocr','uia')),
+  filter_version      INTEGER NOT NULL,          -- bump to recompute the chrome catalog
+  suppressed_count    INTEGER NOT NULL,          -- spans dropped from content_text (suppression-rate metric)
+  target_window_title TEXT,                      -- foreground window title (metadata, nullable)
+  target_app_hint     TEXT,                      -- foreground app hint (metadata, nullable)
+  created_at          INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+-- default search FTS mirrors content_text (porter), external-content over frame_text
+CREATE VIRTUAL TABLE frame_text_fts USING fts5(content_text, content='frame_text',
+                                               content_rowid='frame_id', tokenize='porter');
+-- triggers keep frame_text_fts in sync — same external-content pattern as ocr_text_fts.
+-- include_chrome=true also searches raw_text (a raw FTS or a role-filtered text_spans FTS, chosen
+-- in PR2). With a clean DB, frame_text.raw_text is the single raw store — the legacy ocr_text table
+-- is not required going forward.
+
+-- text_spans: per-frame OCR/UIA spans with normalized geometry + classified role.
+CREATE TABLE text_spans (
+  frame_id        INTEGER NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+  span_index      INTEGER NOT NULL,
+  text            TEXT    NOT NULL,
+  normalized_text TEXT    NOT NULL,
+  source          TEXT    NOT NULL CHECK (source IN ('ocr','uia')),
+  role            TEXT    NOT NULL CHECK (role IN ('content','chrome','background','system','unknown')),
+  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,  -- normalized [0,1] bbox
+  is_searchable   INTEGER NOT NULL CHECK (is_searchable IN (0,1)),
+  suppress_reason TEXT CHECK (suppress_reason IS NULL
+                              OR suppress_reason IN ('static_chrome','system_ui','background_window')),
+  PRIMARY KEY (frame_id, span_index)
+);
+
+-- chrome_text_catalog: signature counter that drives static-chrome suppression (PR3).
+CREATE TABLE chrome_text_catalog (
+  signature       TEXT PRIMARY KEY,              -- app_hint + normalized_text + region_bucket
+  app_hint        TEXT,
+  region_bucket   TEXT,
+  normalized_text TEXT    NOT NULL,
+  seen_count      INTEGER NOT NULL,
+  first_seen_at   INTEGER NOT NULL,
+  last_seen_at    INTEGER NOT NULL,
+  suppressed      INTEGER NOT NULL DEFAULT 0     -- 0/1; marked chrome after a configurable threshold (§8)
+);
+-- Interim (PR2 lands before PR3): insert_ocr fills content_text = raw_text (NOT NULL passthrough);
+-- frames captured in the PR2→PR3 window are not backfilled (clean-DB assumption — see 07).
 
 -- vision analysis (deferred, optional, one row per analyzed frame)
 CREATE TABLE vision_analysis (
@@ -268,6 +385,7 @@ duplicates). **Commands** (UI → core):
 | `ask` | `AskRequest` → `()` (answer streamed via `answer_delta` events) |
 | `get_timeline` | `TimeRange` → `TimelineBucket[]` |
 | `get_frame` | `frame_id` → `FrameDetail` |
+| `generate_report` | `ReportRequest` → `ReportResponse` (0.2.x; daily/weekly/custom over `content_text`, cites frames — `§8b`) |
 | `enqueue_vision` | `frame_id \| TimeRange` → `enqueued_count` |
 | `get_job_stats` | `()` → `JobStats` |
 | `get_settings` / `set_settings` | `()` / `Settings` |
@@ -299,8 +417,43 @@ the dominant VRAM lever) · `sidecar.kv_cache_type` (`q8_0`; one of `f16`/`q8_0`
 only when flash attention is active) · `sidecar.flash_attn` (`auto`; one of `auto`/`on`/`off`) ·
 `privacy.excluded_apps` (["1Password","KeePass","Bitwarden"]) · `privacy.pause_on_lock` (true).
 
+**0.2.x text-signal keys** (defaults provisional — finalized/tuned in PR2/PR3; thresholds are
+settings, never hardcoded, per `§3b` and the guardrail in `04 §4`):
+`text.include_chrome_default` (false — default search uses `content_text`) ·
+`text.chrome_suppress_min_seen` (12 — appearances before a signature is marked chrome) ·
+`text.chrome_protect_min_chars` (48 — lines longer than this are never suppressed for repeating) ·
+`text.chrome_region_buckets` (8 — grid resolution for `region_bucket`) ·
+`retrieval.default_top_k` (8 — replaces the hardcoded `ASK_TOP_K`; per-request override allowed) ·
+`reports.daily_top_k` (40) · `reports.weekly_top_k` (200) ·
+`reports.map_reduce_min_frames` (20 — frame count above which a range uses map-reduce, `§8b`; set
+at the worst-case single-pass fit so frames are batched, not dropped, before the 8192 answer context
+overflows: ~400 tok/frame × 20 ≈ 8192).
+
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.
+
+## 8b. Recall reports (0.2.x)
+
+`generate_report(ReportRequest) -> ReportResponse` (`§7`) summarizes work/content over a time range
+from **`frame_text.content_text`** (never raw full-screen text) and **cites the frames** it used.
+There is **no saved-report table** — scheduled/saved reports are deferred (`07`).
+
+- **Ranges.** Daily = local "today"; Weekly = trailing 7 local days; Custom = a selected range +
+  optional user prompt.
+- **Context strategy (tiered, weak-hardware-safe, no `ctx_size` bump):**
+  - *Daily / small range* → **single pass** over content text (filtered text is ~150–400 tok/frame,
+    so only ~20 frames fit the pinned 8192 answer context in the worst case — hence the
+    `reports.map_reduce_min_frames` default, `§8`).
+  - *Weekly / large range* → **map-reduce**: batch-summarize frames to fit 8192, then summarize the
+    summaries (triggered above `reports.map_reduce_min_frames`, `§8`, so frames are batched rather
+    than dropped). VRAM-flat; costs more sidecar calls.
+  - Retrieval depth and reply budget are **per-request** (`ReportRequest` + settings `§8`), removing
+    the hardcoded `ASK_TOP_K`. The existing answer budgeter (`crates/inference`) already packs frames
+    best-first, drops overflow, and cites only what the model actually read.
+  - `sidecar.ctx_size` stays the existing power-user / hardware knob — **not** bumped by default.
+- **Honest framing:** "retrieve up to N, summarize what fits" — not a guarantee that all N frames
+  are read. Empty / no-evidence ranges produce honest output (no fabrication), consistent with the
+  Ask no-evidence behavior.
 
 ## 9. Logging & observability
 `tracing` + daily-rotating file (`tracing-appender`) and console. Job-queue depth, sidecar state
