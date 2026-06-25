@@ -2241,3 +2241,24 @@ re-raised (confirmed resolved). The five new findings, each addressed:
   exit 0 · `cargo test --workspace` **0 failed** (new `frames` regression test) · `git diff
   --exit-code -- ui/src/bindings` (the `frames_summarized` doc-comment regenerated its binding if ts-rs
   emits doc comments — committed).
+
+#### Coverage correctness fix — dense single periods no longer truncate (PR #33, follow-up)
+Self-found while reviewing the round-2 fixes against a live Daily report footer ("10/40 frames
+summarized — range trimmed to fit"). **Root cause:** a single calendar period is one map group
+(always the case for Daily, and for short Custom ranges), and the map-reduce only fanned out *across*
+groups — so a dense period's frames were packed into one 8192 pass and `build_summary_messages`
+truncated them, silently dropping coverage despite the per-period guarantee. The old fast-path gate
+`groups.len() <= 1 || frames_sampled <= map_reduce_min_frames` short-circuited a dense single period
+straight into one truncated `summarize`. **Fix (`crates/kernel/src/reports.rs`):** before the map step,
+`split_groups_to_fit` splits any group whose content overflows one window into pass-sized sub-batches
+(reusing `split_chunks_into_batches`; chunk order preserved, parts labelled "(part k of n)"), so a
+dense day fans out into several map passes and the reduce folds them back. The fast path now collapses
+to one final pass **only** when the whole report genuinely fits one window (`groups.len() == 1`, or a
+small report whose combined content fits via the new `chunks_fit_one_pass` gate) — never truncating.
+`periods_covered` is captured before the split, so sub-splitting doesn't inflate the period count. New
+test `dense_single_period_splits_into_passes_without_truncating` (40 large-text frames in one day →
+`MapReduce`, ≥3 passes, all 40 summarized, `truncated == false`, first+last frame cited, still
+1/1 periods). **Verify:** `cargo fmt --all -- --check` exit 0 · `cargo clippy --workspace
+--all-targets -- -D warnings` exit 0, 0 warnings · `cargo build --workspace` exit 0 · `cargo test
+--workspace` **0 failed** · `git diff --exit-code -- ui/src/bindings` clean (kernel-internal change,
+no IPC type touched).

@@ -6,10 +6,13 @@
 //! window (that scales KV-cache VRAM and forces a sidecar relaunch); instead the
 //! model window stays pinned flat and the **number of bounded passes scales with the
 //! range**: the range is split into a per-period grid (one calendar period each),
-//! every active period gets its own MAP pass with its own frame budget — so a dense
-//! Monday cannot starve a quiet Saturday — and the per-period summaries are combined
-//! by a bounded hierarchical REDUCE. Coverage is structural: every period with frames
-//! is summarized, and the per-period floor guarantees each contributes.
+//! every active period gets its own frame budget — so a dense Monday cannot starve a
+//! quiet Saturday — and is summarized by **one or more** MAP passes (a period holding
+//! more content than a single window is split into pass-sized sub-batches, so a dense day
+//! is never truncated to one window). The per-period summaries are then combined by a
+//! bounded hierarchical REDUCE. Coverage is structural in both axes: every period with
+//! frames is summarized (the per-period floor guarantees each contributes), and within a
+//! period every sampled frame is read across the split passes.
 //!
 //! Two retrieval paths feed the same map→reduce machinery (`docs/0.2.0.md` PR6):
 //! - **coverage** (Daily / Weekly / Custom *without* a prompt): one group per active
@@ -211,8 +214,26 @@ pub async fn generate_report(
     };
     let periods_covered = groups.len() as u32;
 
-    // --- Single-pass fast path (Daily common case / small ranges) ---
-    if groups.len() <= 1 || frames_sampled <= cfg.map_reduce_min_frames as usize {
+    // Bound every group to a single map pass. The map step summarizes each group in exactly
+    // one pass, and a dense period — or a whole single-period Daily range, which is one
+    // group — can hold far more content than one 8192 window. Without this it would be
+    // summarized in one truncated pass, silently dropping frames despite the per-period
+    // coverage guarantee (the daily-report "more was captured than summarized" bug). Splitting
+    // an over-large group into pass-sized sub-batches lets the map fan out *within* the period
+    // and the reduce fold the parts back, so coverage is complete, not merely per-period.
+    // `periods_covered` is captured above (the active-period count), so sub-splitting a period
+    // never inflates it.
+    let groups = split_groups_to_fit(groups, cfg.reply_budget, ctx_tokens);
+
+    // --- Single-pass fast path (small ranges that fit one window) ---
+    // Collapse to a single final pass only when the whole report genuinely fits one window:
+    // a lone fitted group always qualifies, and a small report (<= `map_reduce_min_frames`
+    // frames) collapses too *iff* its combined content still fits — never truncating, since a
+    // dense report falls through to map → reduce where every pass is already bounded above.
+    let collapse = groups.len() == 1
+        || (frames_sampled <= cfg.map_reduce_min_frames as usize
+            && chunks_fit_one_pass(&groups, cfg.reply_budget, ctx_tokens));
+    if collapse {
         check_cancel(cancel)?;
         emit(progress, "Writing report", 1, 1);
         let mut all: Vec<RetrievedChunk> = groups.into_iter().flat_map(|g| g.chunks).collect();
@@ -436,6 +457,52 @@ fn split_chunks_into_batches(
         batches.push(cur);
     }
     batches
+}
+
+/// Bounds each group to a single map pass by splitting any whose content overflows one
+/// window into pass-sized sub-batches (via [`split_chunks_into_batches`]), preserving chunk
+/// order. A group that already fits is returned unchanged (its label preserved); a split
+/// group's parts are suffixed "(part k of n)" so the per-period structure stays legible.
+/// This is what guarantees within-period completeness — the map step summarizes each group
+/// in one pass, so an unsplit dense period would be truncated to whatever fits.
+fn split_groups_to_fit(groups: Vec<Group>, reply_budget: u32, ctx_tokens: usize) -> Vec<Group> {
+    let mut out = Vec::with_capacity(groups.len());
+    for Group { label, chunks } in groups {
+        let batches = split_chunks_into_batches(chunks, reply_budget, ctx_tokens);
+        let n = batches.len();
+        if n <= 1 {
+            for chunks in batches {
+                out.push(Group {
+                    label: label.clone(),
+                    chunks,
+                });
+            }
+        } else {
+            for (i, chunks) in batches.into_iter().enumerate() {
+                out.push(Group {
+                    label: format!("{label} (part {} of {n})", i + 1),
+                    chunks,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Whether all of `groups`' chunks fit a single map pass within `ctx_tokens` — the gate for
+/// collapsing a small multi-period report into one final pass without truncating. Mirrors
+/// [`split_chunks_into_batches`]'s per-batch budget (a conservative heuristic; the inference
+/// budgeter is the hard bound).
+fn chunks_fit_one_pass(groups: &[Group], reply_budget: u32, ctx_tokens: usize) -> bool {
+    let reserve = reply_budget as usize + est_tokens(MAP_SYSTEM_PROMPT) + REPORT_TEMPLATE_OVERHEAD;
+    let budget = ctx_tokens.saturating_sub(reserve);
+    let used: usize = groups
+        .iter()
+        .flat_map(|g| &g.chunks)
+        .filter(|c| !c.text.trim().is_empty())
+        .map(|c| est_tokens(c.text.trim()) + REPORT_ID_FRAMING)
+        .sum();
+    used <= budget
 }
 
 /// Wraps section-summary strings as pseudo-chunks for a reduce/final pass (the frame
@@ -670,6 +737,44 @@ mod tests {
         ids
     }
 
+    /// Like [`seed_day`] but with caller-supplied (large) `content_text`, to push a single
+    /// period past one map pass and exercise within-period splitting. `insert_ocr` is the
+    /// passthrough populator, so the text is stored verbatim.
+    async fn seed_day_text(store: &SqliteStore, day_start: i64, n: usize, text: &str) -> Vec<i64> {
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let at = day_start + (i as i64) * 1000;
+            let fid = store
+                .insert_frame(NewFrame {
+                    captured_at: at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{at}.jpg"),
+                    content_hash: format!("h{at}"),
+                    app_hint: None,
+                    window_title: None,
+                    browser_url: None,
+                })
+                .await
+                .unwrap();
+            store
+                .insert_ocr(
+                    fid,
+                    OcrResult {
+                        text: text.to_string(),
+                        mean_confidence: -1.0,
+                        engine: "test".to_string(),
+                        spans: Vec::new(),
+                    },
+                )
+                .await
+                .unwrap();
+            ids.push(fid);
+        }
+        ids
+    }
+
     #[tokio::test]
     async fn empty_range_is_honest_with_no_sidecar_call() {
         let store = SqliteStore::open_in_memory().unwrap();
@@ -728,6 +833,56 @@ mod tests {
         assert_eq!(out.mode, ReportMode::SinglePass);
         assert_eq!(out.passes, 1);
         assert_eq!(out.frames_summarized, 5);
+    }
+
+    #[tokio::test]
+    async fn dense_single_period_splits_into_passes_without_truncating() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        // One day, 40 frames each carrying large content_text → far more than one 8192 pass.
+        // The single calendar period must fan out into several map passes (the daily-report
+        // "more was captured than summarized" bug) instead of collapsing to one truncated pass.
+        let big_text = "lorem ipsum dolor sit amet ".repeat(40); // ~1080 chars → ~540 tokens
+        let ids = seed_day_text(&store, 0, 40, &big_text).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let answer = FakeAnswer {
+            calls: calls.clone(),
+            big: false,
+        };
+        let cancel = AtomicBool::new(false);
+        let out = generate_report(
+            &store,
+            &answer,
+            ReportRange::Daily,
+            0,
+            DAY_MS,
+            None,
+            cfg(),
+            None,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            out.mode,
+            ReportMode::MapReduce,
+            "a dense single day must fan out, not run one truncated pass"
+        );
+        assert!(
+            out.passes >= 3,
+            ">= 2 map passes + final (within-period split): {} passes",
+            out.passes
+        );
+        assert_eq!(out.periods_total, 1);
+        assert_eq!(
+            out.periods_covered, 1,
+            "still one calendar period — the split is internal"
+        );
+        // No truncation: every sampled frame is summarized across the split passes.
+        assert_eq!(out.frames_summarized, ids.len() as u32);
+        assert!(!out.truncated, "splitting covers all sampled frames");
+        // The day's span survives: earliest and latest frames are both cited.
+        assert!(out.cited_frame_ids.contains(ids.first().unwrap()));
+        assert!(out.cited_frame_ids.contains(ids.last().unwrap()));
     }
 
     #[tokio::test]

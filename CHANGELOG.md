@@ -68,6 +68,14 @@ never a flat window biased to the most-recent or most-relevant frames.
   transition days no longer include/drop an hour (Codex). (5) The `frames_summarized` doc-comment no
   longer claims equality with `cited_frame_ids.len()` (it can exceed it when the citation cap fires)
   (Claude).
+- **Coverage fix — dense single periods no longer truncate (PR #33).** A single calendar period
+  (always the case for a Daily report, and for short Custom ranges) was one map group, and map-reduce
+  only fanned out *across* groups — so a dense day's frames were crammed into one 8192-token pass and
+  silently trimmed ("more was captured than summarized"). Each over-large period is now split into
+  pass-sized sub-batches before the map step, so a dense day fans out into several passes and the
+  reduce folds them back: within-period coverage is complete, not just per-period. The collapse-to-one-
+  pass fast path now fires only when the whole report genuinely fits one window. New kernel regression
+  test.
 
 ### 0.2.0 PR3 — Attention-first text filtering
 Replaces PR2's `content_text` passthrough with a real span-aware filter so search, Ask, and
