@@ -22,6 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Planning doc only — no runtime or code changes.** Also un-ignored `docs/0.2.0.md` in
   `.gitignore` so the roadmap is version-controlled.
 
+### Docs — 0.2.0 PR1: specs contract for attention-first content text + Recall reports
+- **Wrote the 0.2.0 contract into `/specs/` (specs-only; no runtime or code changes).** The roadmap
+  in `docs/0.2.0.md` is now the authoritative spec contract that PR2–PR7 implement:
+  - `specs/02 §5b` — the **0.2.x arc** (P6: attention-first text signal + recall workflows), framed
+    as a post-1.0 arc, **not** retrofitted into the P0–P5 v1.0 framing.
+  - `specs/03` — raw vs **content text** (filtered OCR/UIA, *not* vision descriptions; the default
+    retrieval input), active/target-window semantics, text spans + roles, static chrome suppression;
+    the `frame_text` / `text_spans` / `chrome_text_catalog` schema (`schema_version` 2→3);
+    `TextSource` / `TextRole` / `SuppressReason` plus `OcrResult.spans`,
+    `FrameDetail`, and `SearchQuery.include_chrome`; and `generate_report` reports (`§8b`). Default
+    search stays **hybrid (FTS + vector) over content text**; raw text is preserved but opt-in via
+    `include_chrome`.
+  - `specs/UI_REFERENCE.md` — Recall = **Search / Ask / Reports**, content-text default + raw/chrome
+    toggle, premade Ask cards, all five view states for the new/changed screens.
+  - `specs/07` — deferrals (event-driven capture, UIA text, smart enrichment throttle → 0.2.1;
+    scheduled reports) and the **PR2→PR3 interim**: `content_text` is a passthrough copy of
+    `raw_text` until PR3's filter lands, with no backfill (clean-DB assumption).
+  - `specs/04` — `docs/0.2.0.md` added to the reading order; the PR1→PR2→PR3→PR6→PR7 build order
+    appended alongside P0–P5.
+
 ## [0.1.0] — 2026-06-24
 
 ### Packaging — First public release: standalone unsigned Windows installer

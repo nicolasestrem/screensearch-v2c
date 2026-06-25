@@ -75,7 +75,7 @@ AppShell
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
      /            Deck      — at-a-glance: capture status, today's activity, jump back in
-     /recall      Recall    — Ask (RAG answer) + hybrid search results
+     /recall      Recall    — Search · Ask · Reports (0.2.x); content text default, opt-in raw/chrome
      /timeline    Timeline  — the Scanline Timeline browser
      /timeline/:id Moment   — one frame: image, OCR text, vision tags, context, actions
      /insights    Insights  — activity analytics (nice-to-have; ships as real or honest-empty)
@@ -92,8 +92,9 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Screen | empty | error | partial | notes |
 |---|---|---|---|---|
 | Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding |
-| Recall (search) | "No matches — try different words / widen the time range" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | never zero-result dead end |
-| Recall (ask) | prompt invites a question | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames |
+| Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
+| Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
+| Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + model/tokens footer; honest empty on no-evidence ranges |
 | Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank |
 | Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
@@ -109,6 +110,10 @@ Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`
 Domain: `ScanlineTimeline`, `FrameTile`, `FrameImage` (lazy), `AnswerStream` (markdown + citations),
 `SearchResult`, `MomentDetail`, `JobQueueMeter`, `ModelTierPicker` (Default/Quality/Beta),
 `ScheduleControl` (on-demand/timer/idle), `RetentionControl`.
+Domain (0.2.x): `RecallModeTabs` (Search/Ask/Reports), `TextSourceToggle` (content / include-chrome),
+`ReportBuilder` (daily/weekly/custom range → Generate), `ReportView` (markdown + clickable
+source-frame chips + Copy + `.md` download + model/tokens footer), `PromptCardGrid` (premade Ask
+cards: Day Recap, Standup Update, Time Breakdown, Top of Mind, AI Habits — click fills + submits).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
 
 ## 6. Data & state (reliability by construction)
@@ -116,7 +121,11 @@ Each component owns one job; a label labels, an example demonstrates — nothing
   imported by the UI. The UI **never** hand-writes an API type. Contract drift is impossible.
 - **TanStack Query** owns all server-state (commands): one place for cache/loading/error/refetch.
   No bespoke `useEffect` fetch-and-setState.
-- **Zustand** only for ephemeral UI state (palette open, selected range).
+- **Zustand** only for ephemeral UI state (palette open, selected range, active Recall mode).
+- **Content vs raw text is a typed query param (0.2.x):** the Recall toggle sets
+  `SearchQuery.include_chrome` (default `false`); reports call `generate_report`. Both flow through
+  TanStack Query — no ad-hoc `useEffect` fetches; premade Ask cards just prefill + submit the
+  existing `ask` flow.
 - Streaming (`ask`) consumes `answer_delta` events into a reducer; `readiness_changed` /
   `sidecar_status` / `job_progress` drive the StatusRail live.
 - **Rules of Hooks are inviolable** — all hooks before any early return; JSX conditionals, not

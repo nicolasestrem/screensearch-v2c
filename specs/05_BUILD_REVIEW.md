@@ -1793,3 +1793,35 @@ follow-up verified round 1 and surfaced two more diagnostic gaps. `gemini-code-a
   exit 0; `cargo test -p inference` **58 passed, 0 failed**; `cargo test --workspace` all crates **0
   failed**.
 - No UI or IPC-type changes this round (no `ts-rs` regeneration; binding guard stays clean).
+
+---
+
+## 0.2.0 PR1 — 2026-06-25 — Specs contract (no code)
+
+**Branch:** `docs/0.2.0-pr1-specs`. First PR of the 0.2.x arc (`docs/0.2.0.md`, `02 §5b`).
+
+### Implemented
+- Wrote the attention-first content-text + Recall-reports contract into `/specs/`: `02 §5b` (0.2.x
+  arc / P6), `03 §3b` (raw vs content text, window semantics, spans, roles, suppression, new types),
+  `03 §4` (`frame_text` + `frame_text_fts`, `text_spans`, `chrome_text_catalog`; `schema_version`
+  2→3), `03 §7` (`generate_report`), `03 §8` (0.2.x settings keys), `03 §8b` (reports), `UI_REFERENCE`
+  (Recall Search/Ask/Reports + toggle + premade cards + all five states), `07` (#47–#51 deferrals +
+  PR2→PR3 interim), `04` (reading + build order), `CHANGELOG.md` + `08`.
+- Per the user's decision, `03` carries the **full** authoritative contract (concepts + DDL + types),
+  so PR2/PR3 implement `03` verbatim rather than re-deriving from the roadmap.
+
+### Skipped / deferred
+- No code, no schema migration, no OCR rewrite, no binding regen, no UI build — those are PR2–PR6.
+- Settings defaults for suppression thresholds / report depths are listed as **provisional** in
+  `03 §8`; PR2/PR3 finalize and tune them.
+
+### Hallucinated / corrected
+- An exploration agent proposed a new `specs/10_CONTENT_TEXT_DESIGN.md` file; rejected as out of
+  scope — the content-text design lives **inside** `03`, per the roadmap's file list.
+
+### Broke / regressed
+- Nothing — specs-only; no code paths touched.
+
+### Still risky
+- The provisional settings defaults and the FTS-for-`include_chrome` choice (raw FTS vs role-filtered
+  `text_spans` FTS) are explicitly left for PR2 to finalize; PR2 must document the decision.

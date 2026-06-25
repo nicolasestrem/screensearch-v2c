@@ -17,6 +17,8 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 3. `03_MASTER_PRODUCTION_SPEC.md` — exactly how (schema, traits, protocols, DoD).
 `00_PROJECT_INTAKE.md` is raw source material — consult for model tiers, distribution, license.
 **For any frontend work (P5):** also read `UI_REFERENCE.md` — it is authoritative for the UI.
+**For 0.2.x work:** also read `docs/0.2.0.md` (the attention-first roadmap) plus `02 §5b` and
+`03 §3b`/`§8b` — the content-text + reports contract.
 
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
@@ -24,6 +26,7 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 | Question | Authority |
 |---|---|
 | Why are we doing this / scope / phases | `02` |
+| 0.2.x arc scope / PR order / content-text rationale | `docs/0.2.0.md` (+ `02 §5b`) |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
 | UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
@@ -40,6 +43,11 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   lifecycle before** wiring real inference (prove no-orphan first).
 - Each phase ends with: code compiles, `clippy -D warnings` clean, its tests green, and the
   relevant `03 §13` items demonstrably met.
+- **0.2.x arc (post-1.0, `02 §5b` / `docs/0.2.0.md`):** **PR1 Specs contract** → **PR2 Text-signal
+  data model + OCR spans** → **PR3 Attention-first filtering** → **PR6 Recall reports + Ask cards** →
+  **PR7 Integration audit**. Each PR is its own branch, runs the full PR7 verification suite, updates
+  `05`–`08`, and **recycles this file (`04`) as its operating prompt**. (Former PR4/PR5 —
+  event-driven capture, UIA text, smart enrichment throttle — are deferred to 0.2.1; see `07`.)
 
 ## 4. Guardrails (hard rules — violating any = stop)
 - **No destructive git.** Feature branches only; never force-push or reset shared history; never
