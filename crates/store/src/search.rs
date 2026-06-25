@@ -16,9 +16,15 @@ use crate::SqliteStore;
 /// RRF damping constant (the conventional value). A larger `k` flattens the
 /// contribution of top ranks; 60 is the de-facto standard.
 const RRF_K: f64 = 60.0;
-/// Backend ceiling for one search response, matching the Recall UI's current max.
-const MAX_SEARCH_LIMIT: usize = 100;
-const MAX_CANDIDATE_POOL: usize = MAX_SEARCH_LIMIT * 5;
+/// Backend ceiling for one search response. The Recall **search** UI sends its own
+/// smaller limit (`SEARCH_LIMIT = 100`); this higher bound exists so report retrieval
+/// (Custom-with-prompt, `kernel::reports`) can honor `reports.weekly_top_k` (up to 2000)
+/// instead of being silently clamped to the UI's max and dropping relevant evidence.
+const MAX_SEARCH_LIMIT: usize = 2_000;
+/// Per-arm candidate over-fetch ceiling — kept **independent** of `MAX_SEARCH_LIMIT` so a
+/// large report limit can't explode each arm's scan (UI search limits keep the pool small
+/// either way: `candidate_pool` only over-fetches `5×` the requested limit).
+const MAX_CANDIDATE_POOL: usize = 2_000;
 
 fn normalized_limit(limit: u32) -> usize {
     (limit as usize).clamp(1, MAX_SEARCH_LIMIT)
@@ -329,6 +335,20 @@ mod tests {
             time_range: None,
             include_chrome,
         }
+    }
+
+    #[test]
+    fn normalized_limit_clamps_to_the_backend_ceiling() {
+        assert_eq!(normalized_limit(0), 1, "zero floors to one");
+        assert_eq!(normalized_limit(50), 50, "in-range passes through");
+        // A report can ask for up to `reports.weekly_top_k` (2000); it is honored, not
+        // clamped to the search-UI's 100 max (the prompted-report retrieval regression).
+        assert_eq!(normalized_limit(2_000), MAX_SEARCH_LIMIT);
+        assert_eq!(
+            normalized_limit(u32::MAX),
+            MAX_SEARCH_LIMIT,
+            "an absurd limit clamps to the ceiling, never panics"
+        );
     }
 
     /// `include_chrome` searches `raw_text` via the raw FTS arm, independent of

@@ -50,10 +50,12 @@ const MAX_REPORT_PASSES: u32 = 64;
 /// `frames_summarized` count still reflects the full union.
 const MAX_REPORT_CITATIONS: usize = 200;
 
-/// The pinned answer context window reports budget against (`sidecar.ctx_size` default
-/// for the answer lane; reports never bump it). A heuristic for the reduce-fits gate
-/// and batch splitting only — the inference crate's `build_summary_messages` is the
-/// hard bound that actually prevents an overflowing prompt.
+/// Fallback answer context window used only when the provider doesn't report its own
+/// (e.g. a test fake) — matches the answer lane's `sidecar.ctx_size` default. The live
+/// budget comes from [`AnswerProvider::answer_context_budget`] so a user-lowered
+/// `ctx_size` is respected. A heuristic for the reduce-fits gate and batch splitting
+/// only — the inference crate's `build_summary_messages` is the hard bound that actually
+/// prevents an overflowing prompt.
 const REPORT_CTX_TOKENS: usize = 8192;
 const REPORT_TEMPLATE_OVERHEAD: usize = 96;
 const REPORT_ID_FRAMING: usize = 6;
@@ -113,6 +115,14 @@ pub async fn generate_report(
         thinking: false,
         max_tokens: cfg.reply_budget,
     };
+    // Budget the batch/reduce planning against the provider's *actual* answer-lane context
+    // window — the user can lower `sidecar.ctx_size`, and assuming a larger window would let
+    // the planner pack summaries the sidecar then silently truncates. Falls back to the
+    // pinned default for providers that don't report one (e.g. the test fake).
+    let ctx_tokens = answer
+        .answer_context_budget()
+        .map(|c| c as usize)
+        .unwrap_or(REPORT_CTX_TOKENS);
 
     // --- Grouping: relevance batches (prompt) vs coverage grid (time) ---
     let (groups, periods_total, total_in_range) = if let Some(p) = prompt {
@@ -126,7 +136,7 @@ pub async fn generate_report(
             .await?;
         let retrieved = hits.len() as u64;
         let chunks = hydrate_hits(store, hits).await?;
-        let batches = split_chunks_into_batches(chunks, cfg.reply_budget);
+        let batches = split_chunks_into_batches(chunks, cfg.reply_budget, ctx_tokens);
         let groups: Vec<Group> = batches
             .into_iter()
             .enumerate()
@@ -143,10 +153,36 @@ pub async fn generate_report(
         let total_in_range: u64 = buckets.iter().map(|b| u64::from(b.count)).sum();
         let counts: Vec<u32> = buckets.iter().map(|b| b.count).collect();
         let quotas = plan_depth(&counts, cfg.daily_top_k, cfg.weekly_top_k);
-        let mut groups = Vec::new();
+        // Sample each active period's frames (one windowed query per period — inherent to
+        // per-period coverage), then hydrate **all** of them with a single bulk `ocr_texts`
+        // read rather than one query per period (avoids an N+1 over the grid).
+        let mut periods_frames = Vec::with_capacity(buckets.len());
         for (b, quota) in buckets.iter().zip(quotas) {
+            periods_frames.push(store.sample_frames_in_range(b.start, b.end, quota).await?);
+        }
+        let all_ids: Vec<i64> = periods_frames
+            .iter()
+            .flatten()
+            .map(|f| f.frame_id)
+            .collect();
+        let texts = store.ocr_texts(&all_ids).await.unwrap_or_default();
+        let mut groups = Vec::new();
+        for (b, frames) in buckets.iter().zip(periods_frames) {
             let day = ((b.start - start) / DAY_MS + 1).max(1);
-            let chunks = sample_period_chunks(store, b.start, b.end, quota).await?;
+            let chunks: Vec<RetrievedChunk> = frames
+                .into_iter()
+                .filter_map(|f| {
+                    texts
+                        .get(&f.frame_id)
+                        .filter(|t| !t.trim().is_empty())
+                        .map(|t| RetrievedChunk {
+                            frame_id: f.frame_id,
+                            text: t.clone(),
+                            score: 0.0,
+                            captured_at: f.captured_at,
+                        })
+                })
+                .collect();
             if !chunks.is_empty() {
                 groups.push(Group {
                     label: format!("day {day}"),
@@ -230,13 +266,19 @@ pub async fn generate_report(
     }
 
     // --- REDUCE: bounded hierarchical fan-in, time order preserved ---
-    while nodes.len() > 1 && !fits_single_pass(&nodes, cfg.reply_budget) {
+    while nodes.len() > 1 && !fits_single_pass(&nodes, cfg.reply_budget, ctx_tokens) {
         if passes >= MAX_REPORT_PASSES {
             truncated = true;
             break;
         }
         let mut next = Vec::with_capacity(nodes.len() / REDUCE_FANOUT + 1);
         for chunk_group in nodes.chunks(REDUCE_FANOUT) {
+            // A trailing group of one needs no combining — pass it through untouched
+            // rather than spend a model call summarizing a single summary.
+            if chunk_group.len() == 1 {
+                next.push(chunk_group[0].clone());
+                continue;
+            }
             check_cancel(cancel)?;
             emit(progress, "Combining summaries", passes, MAX_REPORT_PASSES);
             let (text, _) = answer
@@ -285,35 +327,6 @@ pub async fn generate_report(
         passes,
         truncated,
     })
-}
-
-/// Even temporal sample of one period's `content_text` chunks, chronological.
-async fn sample_period_chunks(
-    store: &dyn Store,
-    start: i64,
-    end: i64,
-    quota: u32,
-) -> Result<Vec<RetrievedChunk>> {
-    let frames = store.sample_frames_in_range(start, end, quota).await?;
-    if frames.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ids: Vec<i64> = frames.iter().map(|f| f.frame_id).collect();
-    let texts = store.ocr_texts(&ids).await.unwrap_or_default();
-    Ok(frames
-        .into_iter()
-        .filter_map(|f| {
-            texts
-                .get(&f.frame_id)
-                .filter(|t| !t.trim().is_empty())
-                .map(|t| RetrievedChunk {
-                    frame_id: f.frame_id,
-                    text: t.clone(),
-                    score: 0.0,
-                    captured_at: f.captured_at,
-                })
-        })
-        .collect())
 }
 
 /// Hydrate relevance hits with their `content_text` in one bulk read (`Store::ocr_texts`
@@ -370,12 +383,13 @@ fn grid_size(start: i64, end: i64, max_periods: u32) -> u32 {
     n_days.clamp(1, max_periods.max(1))
 }
 
-/// Whether the section summaries fit a single (final) pass within the pinned context.
-/// Conservative heuristic; the inference budgeter is the hard bound.
-fn fits_single_pass(nodes: &[String], reply_budget: u32) -> bool {
+/// Whether the section summaries fit a single (final) pass within `ctx_tokens` (the
+/// provider's effective context window). Conservative heuristic; the inference budgeter
+/// is the hard bound.
+fn fits_single_pass(nodes: &[String], reply_budget: u32, ctx_tokens: usize) -> bool {
     let reserve =
         reply_budget as usize + est_tokens(FINAL_SYSTEM_PROMPT) + REPORT_TEMPLATE_OVERHEAD;
-    let budget = REPORT_CTX_TOKENS.saturating_sub(reserve);
+    let budget = ctx_tokens.saturating_sub(reserve);
     let used: usize = nodes
         .iter()
         .map(|n| est_tokens(n) + REPORT_ID_FRAMING)
@@ -383,13 +397,15 @@ fn fits_single_pass(nodes: &[String], reply_budget: u32) -> bool {
     used <= budget
 }
 
-/// Splits relevance chunks (prompt path) into batches each fitting one map pass. Pure.
+/// Splits relevance chunks (prompt path) into batches each fitting one map pass within
+/// `ctx_tokens` (the provider's effective context window). Pure.
 fn split_chunks_into_batches(
     chunks: Vec<RetrievedChunk>,
     reply_budget: u32,
+    ctx_tokens: usize,
 ) -> Vec<Vec<RetrievedChunk>> {
     let reserve = reply_budget as usize + est_tokens(MAP_SYSTEM_PROMPT) + REPORT_TEMPLATE_OVERHEAD;
-    let per_batch = REPORT_CTX_TOKENS.saturating_sub(reserve).max(1);
+    let per_batch = ctx_tokens.saturating_sub(reserve).max(1);
     let mut batches: Vec<Vec<RetrievedChunk>> = Vec::new();
     let mut cur: Vec<RetrievedChunk> = Vec::new();
     let mut spent = 0usize;
@@ -531,9 +547,14 @@ mod tests {
     #[test]
     fn fits_single_pass_detects_overflow() {
         let small = vec!["short summary".to_string(); 3];
-        assert!(fits_single_pass(&small, 512));
+        assert!(fits_single_pass(&small, 512, REPORT_CTX_TOKENS));
         let huge = vec!["x".repeat(8_000); 7]; // ~28k tokens >> 8192
-        assert!(!fits_single_pass(&huge, 512));
+        assert!(!fits_single_pass(&huge, 512, REPORT_CTX_TOKENS));
+        // A smaller provider context tightens the gate: summaries that fit 8192 no longer
+        // fit a lowered window (mirrors a user-lowered `sidecar.ctx_size`).
+        let medium = vec!["lorem ipsum dolor ".repeat(60); 4];
+        assert!(fits_single_pass(&medium, 512, REPORT_CTX_TOKENS));
+        assert!(!fits_single_pass(&medium, 512, 1_024));
     }
 
     #[test]
@@ -546,7 +567,7 @@ mod tests {
                 captured_at: i,
             })
             .collect();
-        let batches = split_chunks_into_batches(chunks, 512);
+        let batches = split_chunks_into_batches(chunks, 512, REPORT_CTX_TOKENS);
         let total: usize = batches.iter().map(|b| b.len()).sum();
         assert_eq!(total, 50, "no chunk dropped");
         assert!(
@@ -789,7 +810,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(out.mode, ReportMode::MapReduce);
-        // 7 map + (ceil(7/6)=2) reduce + 1 final = 10 passes (hierarchical engaged).
+        // 7 map + 1 reduce (the 6-node group; the trailing single node passes through with
+        // no call) + 1 final = 9 passes (hierarchical reduce engaged).
         assert!(
             out.passes >= 9,
             "hierarchical reduce ran: {} passes",

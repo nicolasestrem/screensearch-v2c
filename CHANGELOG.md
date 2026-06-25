@@ -48,6 +48,15 @@ never a flat window biased to the most-recent or most-relevant frames.
   (`ts-rs` bindings regenerated). Ask output is unchanged (the shared context-packer is byte-identical
   to before). Deviations from the literal spec and three accepted limitations (DST grid skew,
   structural bounds as constants, estimated-token footer) are recorded in `specs/06`/`07`.
+- **Review fixes (PR #33).** (1) Removed an N+1 over the report's day grid — the coverage path now
+  bulk-fetches every active day's text in one query (Gemini). (2) A trailing single summary in the
+  hierarchical reduce passes through instead of spending a model call to "combine" one node (Gemini).
+  (3) Prompted (Custom-with-prompt) reports no longer cap relevance retrieval at the search-UI's 100
+  frames — the backend ceiling was raised so `reports.weekly_top_k` (up to 2000) is honored (Codex).
+  (4) The report planner budgets passes against the provider's **actual** answer-lane context window
+  (via the new `AnswerProvider::answer_context_budget`) so a user-lowered `sidecar.ctx_size` can't make
+  it pack summaries the sidecar then truncates (Codex). (5) Doc-comment clarified that the default
+  `summarize` does not forward the system prompt (Claude).
 
 ### 0.2.0 PR3 — Attention-first text filtering
 Replaces PR2's `content_text` passthrough with a real span-aware filter so search, Ask, and

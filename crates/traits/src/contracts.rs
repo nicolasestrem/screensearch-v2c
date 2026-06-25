@@ -77,9 +77,12 @@ pub trait AnswerProvider: Send + Sync {
     /// orchestrator uses it for both the map step (per-period) and the reduce step.
     ///
     /// The default reuses [`Self::answer`] (passing `instruction` as the query) and
-    /// collects its deltas — draining concurrently so the bounded delta channel
-    /// can't deadlock — so any provider works out of the box. `AnswerSidecar`
-    /// overrides it with a report-specific `system_prompt`.
+    /// collects its deltas — draining concurrently so the bounded delta channel can't
+    /// deadlock — so a provider that only implements [`Self::answer`] still compiles and
+    /// runs. **The default does NOT forward `system_prompt`**: it falls back to
+    /// `answer`'s own grounding prompt, so a provider whose report quality depends on the
+    /// map/reduce/final prompts must override this. `AnswerSidecar` does, honoring
+    /// `system_prompt` directly.
     async fn summarize(
         &self,
         system_prompt: &str,
@@ -125,6 +128,15 @@ pub trait AnswerProvider: Send + Sync {
     /// `None` if no model is available. Default `None` for providers that don't track
     /// a model.
     async fn answer_model_label(&self) -> Option<String> {
+        None
+    }
+
+    /// The effective answer-lane context window (`n_ctx`, in tokens) this provider runs
+    /// with, if known. The report planner budgets its map/reduce passes against this so a
+    /// user-lowered `sidecar.ctx_size` can't make it pack summaries the provider then
+    /// silently truncates. `None` = unknown → the caller falls back to its own default.
+    /// (The provider's own per-pass prompt bound remains the hard safety net regardless.)
+    fn answer_context_budget(&self) -> Option<u32> {
         None
     }
 }

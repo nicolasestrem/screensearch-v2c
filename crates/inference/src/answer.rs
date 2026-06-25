@@ -215,6 +215,19 @@ impl AnswerProvider for AnswerSidecar {
         models::resolve_spec(&self.models_root, ModelLane::Answer, tier, params)
             .map(|s| report_model_label(&s.gguf_path))
     }
+
+    /// The answer-lane context window the next `summarize` will run with, resolved from
+    /// the launch options exactly as [`models::resolve_spec`] would (an explicit
+    /// `ctx_size`, or the per-lane auto default when `0`). Lets the report planner budget
+    /// against the user's real `sidecar.ctx_size` instead of assuming the default.
+    fn answer_context_budget(&self) -> Option<u32> {
+        let params = self.launch.read().expect("answer launch lock");
+        Some(if params.ctx_size == 0 {
+            models::default_ctx_for(ModelLane::Answer)
+        } else {
+            params.ctx_size
+        })
+    }
 }
 
 async fn emit_segment(
