@@ -11,6 +11,94 @@
 
 ---
 
+## 2026-06-25 — 0.2.0 PR3 review fixes (PR #32)
+- **Change:** Addressed the two substantive bot findings on PR #32.
+  1. **N+1 catalog query** (`crates/store/src/records.rs`) — replaced `SqlCatalog::seen_count` (one
+     `SELECT` per candidate line, 10–30 per OCR frame on the hot path) with `load_chrome_catalog`,
+     which pre-fetches the foreground app's catalog rows in a single
+     `SELECT signature, seen_count … WHERE app_hint IS ?1` into a `HashMap<String, u32>` (already a
+     `ChromeCatalog`). One bulk read replaces N point-lookups.
+  2. **Unknown-rect over-suppression** (`crates/textfilter/src/lib.rs`) — static-chrome
+     cataloguing/suppression now requires a known `target_rect`. Previously `target_rect = None`
+     made `interior` false, so every short line became a chrome candidate and a repeated real body
+     line could be dropped. Rect-less short lines now fall through to `unknown` (kept).
+- **Why:** (1) hot-path DB efficiency (Claude P1 / Gemini high); (2) restores the documented
+  invariant that a missing/wrong rect can only *under*-suppress, never silently lose content
+  (Codex P2) — the project's top risk is false suppression (`03 §3b`).
+- **Verification:**
+  ```
+  $ cargo fmt --all -- --check          # clean
+  $ cargo clippy --workspace --all-targets -- -D warnings   # 0 warnings
+  $ cargo test --workspace              # 0 failures; textfilter 7 (was 6), store 1+47
+  $ git diff --exit-code -- ui/src/bindings   # clean (no traits/IPC change)
+  ```
+  New regression test `no_target_rect_never_suppresses_even_a_saturated_signature` asserts a
+  catalog-saturated signature survives a rect-less frame.
+
+---
+
+## 2026-06-25 — 0.2.0 PR3: attention-first text filtering (`feat/0.2.0-pr3-text-filter`)
+- **Change:** Implemented `03 §3b/§4/§8` (PR3 of `docs/0.2.0.md`) verbatim — replaced PR2's
+  `content_text` passthrough with a real span-aware filter:
+  1. **New crate `crates/textfilter`** — a pure, deterministic, `traits`-only classifier (no I/O, no
+     Windows). `classify(input, catalog, config)` groups spans by `line_index` into lines (union
+     bbox + centroid) and assigns one of five roles in priority order (**geometry before
+     repetition**): `system` (short, bottom band `y > SYSTEM_BAND_TOP=0.95`, rect known & outside),
+     `background` (rect known & outside), `chrome` (line == normalized `target_window_title`),
+     static-chrome candidate (short + not interior, catalogue `seen_count+1 ≥ min_seen`),
+     else `content` (rect known) / `unknown`. Builds the filtered `content_text` from the kept spans
+     (not string-subtraction); long lines (≥ `chrome_protect_min_chars`) are never catalogued or
+     suppressed for repeating; short interior content is never catalogued. Signature =
+     `app_hint ⏐ normalized_text ⏐ region_bucket` joined by `U+001F`; `region_bucket` = line centroid
+     in an N×N grid. 6 golden tests over an anonymized **synthetic** OCR fixture (`src/tests.rs`).
+  2. **`crates/traits`** — `TextSpan` gains `line_index: u32`; `CapturedFrame` gains
+     `target_rect: Option<[f32;4]>`; `Settings` gains `text_include_chrome_default` (false),
+     `text_chrome_suppress_min_seen` (12), `text_chrome_protect_min_chars` (48),
+     `text_chrome_region_buckets` (8); new IPC type `AppSuppression` (i64 fields `#[ts(type=number)]`,
+     added to the `no_bigint_in_ipc_types` guard); new `TextFilterContext`. Three defaulted `Store`
+     trait methods (`insert_ocr_filtered`, `text_filter_stats`, `reconcile_filter_version`) so fakes
+     compile. ts-rs bindings regenerated (`Settings.ts`, new `AppSuppression.ts`).
+  3. **`crates/ocr`** — `recognize_blocking` carries a per-line counter (`Lines().Words()`) into each
+     word span's `line_index`.
+  4. **`crates/store`** — schema `LATEST_SCHEMA_VERSION = 4`, `MIGRATION_V4` adds
+     `text_spans.line_index INTEGER NOT NULL DEFAULT 0`; `pub const FILTER_VERSION = 1`.
+     `insert_ocr_filtered` does the catalog read → `textfilter::classify` → filtered `frame_text`
+     insert → `replace_text_spans` → catalog upsert (`CASE WHEN seen_count+1 ≥ ?min_seen`) in **one**
+     transaction (content FTS written once — no transient unfiltered window). `text_filter_stats`
+     groups `text_spans`+`frame_text` by `target_app_hint` filtered on the current `filter_version`;
+     `reconcile_filter_version` wipes `chrome_text_catalog` + rewrites the `text.catalog_filter_version`
+     watermark when it changes. `insert_ocr` passthrough kept for fakes/fallback.
+  5. **`crates/capture`** — `monitors.rs` carries `rcMonitor` origin (`MonitorBounds`/`monitor_bounds`);
+     `privacy.rs` adds `foreground_window_rect` (`GetForegroundWindow`/`DwmGetWindowAttribute`
+     `DWMWA_EXTENDED_FRAME_BOUNDS`, `IsIconic` guard); `lib.rs` computes per-frame `target_rect` via a
+     pure `normalize_window_rect` (maps the window into the captured monitor by center-point
+     containment; `None` when on another monitor — the safe fallback). 4 new unit tests.
+  6. **`crates/kernel`** — `settings.rs` load/save/sanitize the 4 `text.*` keys (clamps
+     `min_seen 2..100000`, `protect 1..4096`, `buckets 1..32`); `capture_loop.rs` `process_frame`
+     calls `insert_ocr_filtered` with a `TextFilterContext` from `frame.target_rect` + config.
+  7. **`src-tauri`** — `get_text_filter_stats` command (registered in `generate_handler!`);
+     `reconcile_filter_version(FILTER_VERSION)` once after `open_store`.
+  8. **UI** — Settings "Text filtering" panel (toggle + 3 threshold fields with mirrored clamps +
+     a per-app suppression-rate readout with all states); Recall search `include_chrome` toggle.
+- **Why:** PR3 of `docs/0.2.0.md`. Today capture indexed raw full-screen OCR with no filtering, so
+  search/Ask/embeddings were dominated by chrome (taskbar, icons, toolbars, background windows).
+  Because the embed worker and search already consume `content_text`, filtering it is what makes
+  retrieval stop ranking on chrome with **no** embed-worker or search change. The top risk —
+  **false suppression (silent data loss)** — drove a conservative, fully recoverable design
+  (`raw_text` preserved, `include_chrome` recovers, per-app suppression-rate alarm). Decisions
+  recorded in `07` gaps #52–57.
+- **Verification:** `cd ui && npm run lint` (Rules-of-Hooks gate, exit 0) + `npm run build`
+  (`✓ built`); `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets --
+  -D warnings` (exit 0 — fixed a `doc_lazy_continuation` from a `+`-led wrapped doc line);
+  `cargo build --workspace` (exit 0); `cargo test --workspace` — **0 failed** across all crates
+  (textfilter **6**, store unit **1** + integration **47** incl. the new
+  `insert_ocr_filtered_suppresses_repeated_chrome_after_threshold` /
+  `reconcile_filter_version_wipes_catalog_on_change`, traits **43**, capture **13**, kernel **2** +
+  pipeline **5** + settings **6**, ocr **1**, screensearch_lib **6**, inference no_orphan **1** /
+  reap **3** / sidecar **8**, embeddings **1**). Bindings regenerated and committed (the post-`cargo
+  test` `git diff -- ui/src/bindings` is clean once committed). **Manual multi-DPI / secondary-monitor
+  `target_rect` check is the one acceptance item CI cannot cover** (gap #54).
+
 ## 2026-06-25 — 0.2.0 PR2: text-signal data model + OCR spans (`feat/0.2.0-pr2-text-signal`)
 - **Change:** Implemented `03 §3/§3b/§4` (PR2 of `docs/0.2.0.md`) verbatim:
   1. `crates/traits` — `TextSource`/`TextRole`/`SuppressReason` enums (ts-rs-exported, with

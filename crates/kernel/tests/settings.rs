@@ -53,6 +53,10 @@ async fn round_trips_non_default_values() {
         sidecar_flash_attn: FlashAttnSetting::Off,
         privacy_excluded_apps: vec!["Signal".to_string(), "Element".to_string()],
         privacy_pause_on_lock: false,
+        text_include_chrome_default: true,
+        text_chrome_suppress_min_seen: 20,
+        text_chrome_protect_min_chars: 64,
+        text_chrome_region_buckets: 12,
     };
 
     save_settings(dyn_store, &original)

@@ -72,6 +72,15 @@ export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: cmd.getSettings });
 }
 
+/** Per-app text-filter suppression rates (PR3 guardrail). */
+export function useTextFilterStats(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.textFilterStats,
+    queryFn: cmd.getTextFilterStats,
+    enabled,
+  });
+}
+
 /** Hybrid search; idle until there is a non-empty query (no empty-string calls). */
 export function useSearch(query: SearchQuery, enabled = true) {
   return useQuery({

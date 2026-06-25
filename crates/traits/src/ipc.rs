@@ -137,6 +137,26 @@ pub struct StorageStats {
     pub total_bytes: u64,
 }
 
+/// One row of the per-app text-filter suppression metric (`get_text_filter_stats`
+/// output, `03 §3b`). The guardrail that makes silent over-suppression observable:
+/// `rate` = `suppressed_spans / total_spans` over frames classified by the live
+/// `filter_version`. `app` (the foreground/target app) is `None` for frames with no
+/// resolved foreground app. False suppression is the top risk, so this is surfaced
+/// in the UI and recoverable via `include_chrome` + preserved `raw_text`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct AppSuppression {
+    pub app: Option<String>,
+    /// Total classified spans for this app.
+    #[ts(type = "number")]
+    pub total_spans: i64,
+    /// Spans dropped from `content_text` (role `chrome`/`system`/`background`).
+    #[ts(type = "number")]
+    pub suppressed_spans: i64,
+    /// `suppressed_spans / total_spans`, in `[0,1]` (`0` when `total_spans == 0`).
+    pub rate: f32,
+}
+
 /// One row of the [`InsightsSummary`] top-apps breakdown. `app` is `None` for
 /// frames with no resolved foreground app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -364,6 +384,20 @@ pub struct Settings {
     pub sidecar_flash_attn: FlashAttnSetting,
     pub privacy_excluded_apps: Vec<String>,
     pub privacy_pause_on_lock: bool,
+    /// Default value of the Recall search "include app chrome / raw text" toggle
+    /// (`03 §8` `text.include_chrome_default`). `false` → default search uses
+    /// `content_text` only; the per-query `SearchQuery.include_chrome` can still opt in.
+    pub text_include_chrome_default: bool,
+    /// Appearances of a span signature before it is marked static chrome and dropped
+    /// from `content_text` (`03 §8` `text.chrome_suppress_min_seen`). A threshold, never
+    /// hardcoded (`03 §3b`).
+    pub text_chrome_suppress_min_seen: u32,
+    /// Lines at least this many characters are never suppressed for merely repeating
+    /// (`03 §8` `text.chrome_protect_min_chars`) — protects long, information-rich text.
+    pub text_chrome_protect_min_chars: u32,
+    /// Grid resolution for a span's `region_bucket` in the chrome signature
+    /// (`03 §8` `text.chrome_region_buckets`); an N×N grid over the normalized frame.
+    pub text_chrome_region_buckets: u32,
 }
 
 impl Default for Settings {
@@ -407,6 +441,12 @@ impl Default for Settings {
                 "Bitwarden".to_string(),
             ],
             privacy_pause_on_lock: true,
+            // 0.2.x attention-first text signal (03 §8). Thresholds are settings, never
+            // hardcoded (03 §3b); these defaults match the spec and are tuned in PR3.
+            text_include_chrome_default: false,
+            text_chrome_suppress_min_seen: 12,
+            text_chrome_protect_min_chars: 48,
+            text_chrome_region_buckets: 8,
         }
     }
 }
@@ -621,6 +661,7 @@ mod ts_number_guard {
             ("TimelineBucket", TimelineBucket::inline()),
             ("InsightsSummary", InsightsSummary::inline()),
             ("StorageStats", StorageStats::inline()),
+            ("AppSuppression", AppSuppression::inline()),
             ("FrameDetail", FrameDetail::inline()),
             ("VisionTarget", VisionTarget::inline()),
             ("CaptureTick", CaptureTick::inline()),

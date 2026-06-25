@@ -1,0 +1,19 @@
+[package]
+name = "textfilter"
+description = "Attention-first text classifier: roles spans into content/chrome/system/background/unknown and derives filtered content_text (0.2.x, 03 §3b)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "textfilter"
+path = "src/lib.rs"
+
+# Pure classifier — depends on `traits` (shared domain types) only, no I/O, no
+# Windows APIs, no other module crates (03 §2 dependency rule). Deterministic so the
+# golden CI tests need no DB or screenshots.
+[dependencies]
+traits = { workspace = true }

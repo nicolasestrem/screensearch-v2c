@@ -52,4 +52,26 @@ sidecar_kv_cache_type: KvCacheType,
  * Flash-attention mode (`--flash-attn`). Reduces attention memory and unlocks KV
  * quantization; `Auto` enables it when the bundled binary supports it.
  */
-sidecar_flash_attn: FlashAttnSetting, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, };
+sidecar_flash_attn: FlashAttnSetting, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, 
+/**
+ * Default value of the Recall search "include app chrome / raw text" toggle
+ * (`03 §8` `text.include_chrome_default`). `false` → default search uses
+ * `content_text` only; the per-query `SearchQuery.include_chrome` can still opt in.
+ */
+text_include_chrome_default: boolean, 
+/**
+ * Appearances of a span signature before it is marked static chrome and dropped
+ * from `content_text` (`03 §8` `text.chrome_suppress_min_seen`). A threshold, never
+ * hardcoded (`03 §3b`).
+ */
+text_chrome_suppress_min_seen: number, 
+/**
+ * Lines at least this many characters are never suppressed for merely repeating
+ * (`03 §8` `text.chrome_protect_min_chars`) — protects long, information-rich text.
+ */
+text_chrome_protect_min_chars: number, 
+/**
+ * Grid resolution for a span's `region_bucket` in the chrome signature
+ * (`03 §8` `text.chrome_region_buckets`); an N×N grid over the normalized frame.
+ */
+text_chrome_region_buckets: number, };

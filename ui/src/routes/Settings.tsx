@@ -14,7 +14,13 @@ import { useEffect, useState, type ChangeEvent } from "react";
 
 import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState, Select } from "../components/primitives";
 import { ModelPanel, ModelTierPicker, RetentionControl, ScheduleControl } from "../components/domain";
-import { useMonitors, useReadiness, useSettings, useSidecarDevices } from "../lib/ipc/queries";
+import {
+  useMonitors,
+  useReadiness,
+  useSettings,
+  useSidecarDevices,
+  useTextFilterStats,
+} from "../lib/ipc/queries";
 import { useSetModelTier, useSetSettings } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
 import type { Settings } from "../bindings/Settings";
@@ -83,6 +89,10 @@ function sanitizeSettings(s: Settings): Settings {
     // to a sane window. The two enum fields are constrained by their Select options.
     sidecar_ctx_size: s.sidecar_ctx_size === 0 ? 0 : clampInt(s.sidecar_ctx_size, 512, 32_768),
     sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
+    // PR3 attention-filter thresholds — mirror the backend clamps (03 §8).
+    text_chrome_suppress_min_seen: clampInt(s.text_chrome_suppress_min_seen, 2, 100_000),
+    text_chrome_protect_min_chars: clampInt(s.text_chrome_protect_min_chars, 1, 4_096),
+    text_chrome_region_buckets: clampInt(s.text_chrome_region_buckets, 1, 32),
   };
 }
 
@@ -93,6 +103,51 @@ function SettingsSkeleton() {
       <Skeleton className="h-48 w-full" />
       <Skeleton className="h-48 w-full" />
       <Skeleton className="h-40 w-full" />
+    </div>
+  );
+}
+
+/**
+ * Per-app suppression-rate readout (PR3 guardrail, `03 §3b`): makes silent
+ * over-suppression observable. All view states — loading, error, empty, populated.
+ */
+function SuppressionReadout() {
+  const stats = useTextFilterStats();
+  if (stats.isLoading) return <Skeleton className="h-16 w-full" />;
+  if (stats.isError) {
+    return (
+      <p className="text-caption text-ink-muted">
+        Couldn't load suppression rates: {String(stats.error)}
+      </p>
+    );
+  }
+  const rows = stats.data ?? [];
+  if (rows.length === 0) {
+    return (
+      <p className="text-caption text-ink-muted">
+        No filtered captures yet — start capture to see how much chrome each app sheds.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-caption text-ink-muted">
+        Share of recognised text dropped as chrome/system/background, per foreground app. A very
+        high rate can signal over-suppression — raw text and “include app chrome” always recover it.
+      </p>
+      <ul className="flex flex-col gap-1">
+        {rows.slice(0, 12).map((r) => (
+          <li
+            key={r.app ?? "(unknown)"}
+            className="flex items-center justify-between gap-3"
+          >
+            <span className="text-body text-ink truncate">{r.app ?? "(unknown app)"}</span>
+            <span className="text-caption text-ink-muted tabular-nums">
+              {Math.round(r.rate * 100)}% · {r.suppressed_spans}/{r.total_spans}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -408,6 +463,47 @@ export function Component() {
             batchSize={draft.enrich_vision_batch_size}
             onChange={patch}
           />
+        </div>
+      </Panel>
+
+      <Panel title="Text filtering">
+        <div className="flex flex-col gap-4">
+          <Toggle
+            label="Search app chrome by default"
+            checked={draft.text_include_chrome_default}
+            onChange={(v) => set("text_include_chrome_default", v)}
+            hint={`When on, Recall searches raw / app-chrome text by default instead of just cleaned content. ${APPLY_NOW}`}
+          />
+          <Field
+            label="Suppress after (appearances)"
+            type="number"
+            min={2}
+            value={draft.text_chrome_suppress_min_seen}
+            onChange={intHandler("text_chrome_suppress_min_seen")}
+            hint={`A repeated short label (toolbar / menu / tab) becomes chrome after this many appearances. ${APPLY_CAPTURE}`}
+          />
+          <Field
+            label="Protect lines ≥ (characters)"
+            type="number"
+            min={1}
+            max={4096}
+            value={draft.text_chrome_protect_min_chars}
+            onChange={intHandler("text_chrome_protect_min_chars")}
+            hint={`Lines at least this long are never suppressed just for repeating. ${APPLY_CAPTURE}`}
+          />
+          <Field
+            label="Region grid (N×N)"
+            type="number"
+            min={1}
+            max={32}
+            value={draft.text_chrome_region_buckets}
+            onChange={intHandler("text_chrome_region_buckets")}
+            hint={`Screen-position resolution used to tell fixed chrome from moving content. ${APPLY_CAPTURE}`}
+          />
+          <div className="flex flex-col gap-2 border-t border-line pt-3">
+            <span className="eyebrow">Per-app suppression</span>
+            <SuppressionReadout />
+          </div>
         </div>
       </Panel>
 

@@ -17,9 +17,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
 use traits::{
-    AnswerEvent, AnswerOpts, AskRequest, CaptureControl, CaptureSource, CapturedFrame,
-    ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary, JobStats,
-    ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit,
+    AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
+    CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
+    JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, RetrievedChunk, SearchHit,
     SearchQuery, SetModelTier, Settings, StorageStats, Store, TimeRange, TimelineBucket,
     ToastLevel, VisionTarget,
 };
@@ -135,6 +135,21 @@ async fn get_storage_stats(state: State<'_, AppState>) -> Result<StorageStats, S
 #[tauri::command]
 fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
     Ok(capture::enumerate_monitors())
+}
+
+/// Per-app text-filter suppression metric (`get_text_filter_stats`, `03 §3b`): the
+/// guardrail that makes silent over-suppression observable. Over frames classified by
+/// the live `filter_version`.
+#[tauri::command]
+async fn get_text_filter_stats(state: State<'_, AppState>) -> Result<Vec<AppSuppression>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .text_filter_stats(store::FILTER_VERSION)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Lists llama.cpp device ids reported by the resolved sidecar binary (`--list-devices`).
@@ -604,6 +619,22 @@ pub fn run() {
             let embed_models_dir = data_dir.join("models").join("fastembed");
 
             let (store, db_readiness) = open_store(&db_path);
+            // PR3: reconcile the attention filter_version once at startup. If it changed
+            // since the last run, the chrome catalog is wiped so signatures rebuild from
+            // new captures (no backfill of old frames — `03 §3b`, `07` #52). Runs before
+            // capture can start (capture is user-triggered, much later).
+            if let Some(store) = &store {
+                let store = store.clone();
+                match tauri::async_runtime::block_on(
+                    store.reconcile_filter_version(store::FILTER_VERSION),
+                ) {
+                    Ok(true) => {
+                        tracing::info!("text filter_version changed → chrome catalog reset")
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "reconcile_filter_version failed"),
+                }
+            }
             let readiness = Readiness {
                 db: db_readiness,
                 ..Default::default()
@@ -720,7 +751,8 @@ pub fn run() {
             get_frame_context,
             get_insights,
             get_settings,
-            set_settings
+            set_settings,
+            get_text_filter_stats
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

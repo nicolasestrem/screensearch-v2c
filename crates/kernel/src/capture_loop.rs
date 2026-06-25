@@ -14,7 +14,7 @@ use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use tokio::sync::{broadcast, watch};
 use traits::{
     CaptureSource, CaptureTick, CapturedFrame, JobKind, NewFrame, NewJob, OcrProvider, Result,
-    Store,
+    Store, TextFilterContext,
 };
 
 use crate::events::KernelEvent;
@@ -46,6 +46,14 @@ pub struct LoopCtx {
     pub jpeg_quality: u8,
     /// `storage.max_width` — JPEGs wider than this are downscaled (aspect kept).
     pub max_width: u32,
+    /// PR3 attention-filter thresholds (`03 §8`), snapshotted at capture start (a
+    /// runtime change applies on the next capture start, like the other capture/storage
+    /// settings — `07` #35). `text.chrome_suppress_min_seen`.
+    pub chrome_suppress_min_seen: u32,
+    /// `text.chrome_protect_min_chars`.
+    pub chrome_protect_min_chars: u32,
+    /// `text.chrome_region_buckets`.
+    pub chrome_region_buckets: u32,
 }
 
 /// Runs the capture loop until the source yields `None` (shutdown) or `stop` fires.
@@ -112,9 +120,24 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
         })
         .await?;
 
-    ctx.store.insert_ocr(frame_id, ocr).await?;
+    // Apply PR3's attention filter in the same write (`03 §3b`): classify spans into
+    // roles, store the filtered `content_text` (so embeddings + default search use
+    // filtered text), and bump the chrome catalog. `target_rect` came from this frame's
+    // monitor at capture time; thresholds are the capture-start snapshot.
+    ctx.store
+        .insert_ocr_filtered(
+            frame_id,
+            ocr,
+            TextFilterContext {
+                target_rect: frame.target_rect,
+                chrome_suppress_min_seen: ctx.chrome_suppress_min_seen,
+                chrome_protect_min_chars: ctx.chrome_protect_min_chars,
+                chrome_region_buckets: ctx.chrome_region_buckets,
+            },
+        )
+        .await?;
 
-    // After insert_ocr succeeds → enqueue embed_text (priority normal), and
+    // After the text is stored → enqueue embed_text (priority normal), and
     // embed_image when image embeddings are enabled. vision_tag is NEVER
     // auto-enqueued here (03 §5, 13.3).
     if ctx.enrich_embed_text {

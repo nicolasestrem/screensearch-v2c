@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 3;
+pub const LATEST_SCHEMA_VERSION: i32 = 4;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -15,13 +15,25 @@ pub const EMBEDDING_DIM: usize = 768;
 
 /// `frame_text.filter_version` written by PR2's interim passthrough populator
 /// (`07` #51): `0` marks "no attention filter applied — `content_text` is a raw copy".
-/// PR3's classifier writes `1`+ and is bumpable to recompute the chrome catalog
-/// (`03 §3b`).
+/// PR3's classifier writes [`FILTER_VERSION`] and is bumpable to recompute the chrome
+/// catalog (`03 §3b`).
 pub const UNFILTERED_FILTER_VERSION: i32 = 0;
+
+/// `frame_text.filter_version` written by PR3's attention filter. Bumping this is the
+/// "recompute the chrome catalog" lever (`03 §3b`): on startup the store wipes
+/// `chrome_text_catalog` when the active version changes so signatures rebuild from new
+/// captures. No backfill — old frames keep their old `content_text`/version (clean-DB,
+/// `07` #51/#52).
+pub const FILTER_VERSION: i32 = 1;
 
 /// Ordered, forward-only migrations. Each is applied in its own transaction when
 /// the DB's tracked version is below it.
-pub const MIGRATIONS: &[(i32, &str)] = &[(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3)];
+pub const MIGRATIONS: &[(i32, &str)] = &[
+    (1, MIGRATION_V1),
+    (2, MIGRATION_V2),
+    (3, MIGRATION_V3),
+    (4, MIGRATION_V4),
+];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
 /// vector-sync triggers the spec describes in prose).
@@ -230,4 +242,14 @@ CREATE TABLE chrome_text_catalog (
   last_seen_at    INTEGER NOT NULL,
   suppressed      INTEGER NOT NULL DEFAULT 0 CHECK (suppressed IN (0,1))  -- 0/1; marked chrome after a configurable threshold (§8)
 );
+"#;
+
+/// v4 — PR3 attention filter (`03 §3b`, `docs/0.2.0.md` PR3). Carries the OCR
+/// `line_index` onto each span so the classifier groups words into lines exactly
+/// (the engine already computed line boundaries; PR2 flattened spans to words and
+/// dropped them). Clean-DB: `text_spans` is empty at v4, so the `DEFAULT 0` only
+/// shapes the column, not existing rows. Index-light: the `(frame_id, span_index)`
+/// PK already covers the per-frame read PR3's filter does.
+const MIGRATION_V4: &str = r#"
+ALTER TABLE text_spans ADD COLUMN line_index INTEGER NOT NULL DEFAULT 0;
 "#;

@@ -215,6 +215,9 @@ impl Kernel {
             enrich_image_embeddings: settings.enrich_image_embeddings,
             jpeg_quality: settings.storage_jpeg_quality,
             max_width: settings.storage_max_width,
+            chrome_suppress_min_seen: settings.text_chrome_suppress_min_seen,
+            chrome_protect_min_chars: settings.text_chrome_protect_min_chars,
+            chrome_region_buckets: settings.text_chrome_region_buckets,
         };
         let id = self.capture_generation.fetch_add(1, Ordering::Relaxed);
         let capture_slot = self.capture.clone();

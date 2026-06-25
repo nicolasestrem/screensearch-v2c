@@ -193,7 +193,9 @@ fn recognize_blocking(
 
     let mut text = String::new();
     let mut spans: Vec<TextSpan> = Vec::new();
-    for line in result.Lines()? {
+    // `Lines()` order is reading order; the index groups a line's words so PR3's
+    // classifier reconstructs lines exactly (no geometry heuristic, `03 §3b`).
+    for (line_index, line) in result.Lines()?.into_iter().enumerate() {
         text.push_str(&line.Text()?.to_string());
         text.push('\n');
         for word in line.Words()? {
@@ -211,6 +213,7 @@ fn recognize_blocking(
                 y,
                 w,
                 h,
+                line_index: line_index as u32,
                 is_searchable: true,
                 suppress_reason: None,
             });
@@ -241,6 +244,7 @@ mod tests {
             content_hash: "test".to_string(),
             app_hint: None,
             window_title: None,
+            target_rect: None,
         }
     }
 

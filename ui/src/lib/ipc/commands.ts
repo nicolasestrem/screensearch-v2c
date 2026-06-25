@@ -21,6 +21,7 @@ import type { InsightsSummary } from "../../bindings/InsightsSummary";
 import type { Settings } from "../../bindings/Settings";
 import type { StorageStats } from "../../bindings/StorageStats";
 import type { MonitorInfo } from "../../bindings/MonitorInfo";
+import type { AppSuppression } from "../../bindings/AppSuppression";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -110,3 +111,8 @@ export const getSettings = (): Promise<Settings> => invoke<Settings>("get_settin
 /** Persist user settings; tiers hot-apply, the rest on restart / next capture. */
 export const setSettings = (settings: Settings): Promise<void> =>
   invoke<void>("set_settings", { settings });
+
+/** Per-app text-filter suppression metric — the guardrail against silent
+ *  over-suppression (PR3, `03 §3b`). */
+export const getTextFilterStats = (): Promise<AppSuppression[]> =>
+  invoke<AppSuppression[]>("get_text_filter_stats");

@@ -73,6 +73,30 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
+        text_include_chrome_default: boolean(
+            store,
+            "text.include_chrome_default",
+            d.text_include_chrome_default,
+        )
+        .await,
+        text_chrome_suppress_min_seen: num(
+            store,
+            "text.chrome_suppress_min_seen",
+            d.text_chrome_suppress_min_seen,
+        )
+        .await,
+        text_chrome_protect_min_chars: num(
+            store,
+            "text.chrome_protect_min_chars",
+            d.text_chrome_protect_min_chars,
+        )
+        .await,
+        text_chrome_region_buckets: num(
+            store,
+            "text.chrome_region_buckets",
+            d.text_chrome_region_buckets,
+        )
+        .await,
     })
 }
 
@@ -183,6 +207,22 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "privacy.pause_on_lock".into(),
             bool_str(s.privacy_pause_on_lock).into(),
         ),
+        (
+            "text.include_chrome_default".into(),
+            bool_str(s.text_include_chrome_default).into(),
+        ),
+        (
+            "text.chrome_suppress_min_seen".into(),
+            s.text_chrome_suppress_min_seen.to_string(),
+        ),
+        (
+            "text.chrome_protect_min_chars".into(),
+            s.text_chrome_protect_min_chars.to_string(),
+        ),
+        (
+            "text.chrome_region_buckets".into(),
+            s.text_chrome_region_buckets.to_string(),
+        ),
     ];
     store.set_settings_batch(&kvs).await
 }
@@ -213,6 +253,12 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.sidecar_device = s
         .sidecar_device
         .and_then(|d| (!d.trim().is_empty()).then(|| d.trim().to_string()));
+    // PR3 attention-filter thresholds (03 §8). Floors keep the classifier sane: at
+    // least two appearances before suppression; a positive protect length; a non-zero
+    // region grid. Ceilings are generous guards against hand-edited extremes.
+    s.text_chrome_suppress_min_seen = clamp_u32(s.text_chrome_suppress_min_seen, 2, 100_000);
+    s.text_chrome_protect_min_chars = clamp_u32(s.text_chrome_protect_min_chars, 1, 4_096);
+    s.text_chrome_region_buckets = clamp_u32(s.text_chrome_region_buckets, 1, 32);
     s
 }
 

@@ -39,9 +39,37 @@ pub fn enumerate_monitors() -> Vec<MonitorInfo> {
 /// monitor list, and a small queue of changed frames produced by the last cycle.
 pub struct WgcCapture {
     monitors: Vec<MonitorInfo>,
+    /// Per-monitor screen bounds (same index as the captured frame's `monitor_index`),
+    /// used to map the foreground-window rect into each frame for PR3's `target_rect`.
+    monitor_bounds: Vec<monitors::MonitorBounds>,
     config: CaptureConfig,
     req_tx: Mutex<mpsc::Sender<CaptureRequest>>,
     queue: VecDeque<CapturedFrame>,
+}
+
+/// Maps a foreground-window screen rect `(left, top, right, bottom)` into a monitor's
+/// frame, normalized to `[0,1]` (origin top-left). Returns `None` unless the window's
+/// centre lies on this monitor (so a window on another display yields no `target_rect`)
+/// — pure, so it is unit-tested without any Win32 calls (`03 §3b`).
+fn normalize_window_rect(
+    win: (i32, i32, i32, i32),
+    mon: monitors::MonitorBounds,
+) -> Option<[f32; 4]> {
+    let (wl, wt, wr, wb) = win;
+    if mon.width <= 0 || mon.height <= 0 || wr <= wl || wb <= wt {
+        return None;
+    }
+    let cx = (wl + wr) / 2;
+    let cy = (wt + wb) / 2;
+    if cx < mon.left || cx >= mon.left + mon.width || cy < mon.top || cy >= mon.top + mon.height {
+        return None;
+    }
+    let (mw, mh) = (mon.width as f32, mon.height as f32);
+    let nx = ((wl - mon.left) as f32 / mw).clamp(0.0, 1.0);
+    let ny = ((wt - mon.top) as f32 / mh).clamp(0.0, 1.0);
+    let nr = ((wr - mon.left) as f32 / mw).clamp(0.0, 1.0);
+    let nb = ((wb - mon.top) as f32 / mh).clamp(0.0, 1.0);
+    Some([nx, ny, (nr - nx).max(0.0), (nb - ny).max(0.0)])
 }
 
 impl WgcCapture {
@@ -65,6 +93,8 @@ impl WgcCapture {
 
         Ok(Self {
             monitors,
+            // Same enumeration order as the worker → indices align with monitor_index.
+            monitor_bounds: monitors::monitor_bounds(),
             config,
             req_tx: Mutex::new(req_tx),
             queue: VecDeque::new(),
@@ -123,6 +153,9 @@ impl CaptureSource for WgcCapture {
             ) {
                 continue;
             }
+            // Foreground-window rect, read at the same instant as the app/title so the
+            // target window is consistent with the frame's context (PR3 `target_rect`).
+            let fg_rect = privacy::foreground_window_rect();
 
             let Some(frames) = self.capture_cycle().await else {
                 return Ok(None); // worker gone
@@ -133,6 +166,14 @@ impl CaptureSource for WgcCapture {
                 let Some(pixels) = RgbaImage::from_raw(fd.width, fd.height, fd.rgba) else {
                     continue;
                 };
+                // Map the foreground rect into this monitor's frame; `None` unless the
+                // window is on this monitor → no positional suppression there.
+                let target_rect = fg_rect.and_then(|w| {
+                    self.monitor_bounds
+                        .iter()
+                        .find(|b| b.index == fd.monitor_index)
+                        .and_then(|b| normalize_window_rect(w, *b))
+                });
                 self.queue.push_back(CapturedFrame {
                     monitor_index: fd.monitor_index,
                     width: fd.width,
@@ -142,6 +183,7 @@ impl CaptureSource for WgcCapture {
                     content_hash: fd.content_hash,
                     app_hint: app_hint.clone(),
                     window_title: window_title.clone(),
+                    target_rect,
                 });
             }
             // Loop: drain the queue, or sleep and try again if nothing changed.
@@ -155,4 +197,54 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::monitors::MonitorBounds;
+
+    fn mon(index: u32, left: i32, top: i32, width: i32, height: i32) -> MonitorBounds {
+        MonitorBounds {
+            index,
+            left,
+            top,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn window_rect_normalizes_within_its_monitor() {
+        let m = mon(0, 0, 0, 1920, 1080);
+        let r = normalize_window_rect((100, 50, 900, 650), m).expect("window is on this monitor");
+        assert!((r[0] - 100.0 / 1920.0).abs() < 1e-5);
+        assert!((r[1] - 50.0 / 1080.0).abs() < 1e-5);
+        assert!((r[2] - 800.0 / 1920.0).abs() < 1e-5);
+        assert!((r[3] - 600.0 / 1080.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn window_on_another_monitor_is_none() {
+        // Secondary monitor to the right; a window centred on it is not on monitor 0.
+        let m0 = mon(0, 0, 0, 1920, 1080);
+        // Window at x∈[2000,2800] → centre 2400, outside monitor 0.
+        assert!(normalize_window_rect((2000, 100, 2800, 700), m0).is_none());
+    }
+
+    #[test]
+    fn window_offset_maps_relative_to_monitor_origin() {
+        // Secondary monitor with a non-zero origin: coords are relative to it.
+        let m1 = mon(1, 1920, 0, 1920, 1080);
+        let r = normalize_window_rect((1920, 0, 1920 + 960, 540), m1).expect("on monitor 1");
+        assert!((r[0]).abs() < 1e-5, "left edge maps to 0");
+        assert!((r[2] - 0.5).abs() < 1e-5, "half width");
+        assert!((r[3] - 0.5).abs() < 1e-5, "half height");
+    }
+
+    #[test]
+    fn degenerate_inputs_are_none() {
+        assert!(normalize_window_rect((100, 100, 50, 50), mon(0, 0, 0, 1920, 1080)).is_none());
+        assert!(normalize_window_rect((0, 0, 10, 10), mon(0, 0, 0, 0, 0)).is_none());
+    }
 }

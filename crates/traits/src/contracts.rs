@@ -12,9 +12,11 @@ use tokio::sync::mpsc::Sender;
 
 use crate::domain::{
     AnswerOpts, CapturedFrame, ChunkSource, Embedding, FrameEnrichmentInput, NewFrame, OcrResult,
-    RetrievedChunk, VisionAnalysis,
+    RetrievedChunk, TextFilterContext, VisionAnalysis,
 };
-use crate::ipc::{AnswerDelta, InsightsSummary, SearchHit, SearchQuery, TimelineBucket};
+use crate::ipc::{
+    AnswerDelta, AppSuppression, InsightsSummary, SearchHit, SearchQuery, TimelineBucket,
+};
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::{MonitorInfo, Result};
 
@@ -77,6 +79,22 @@ pub trait Store: Send + Sync {
     // frames + ocr + vision
     async fn insert_frame(&self, f: NewFrame) -> Result<i64>;
     async fn insert_ocr(&self, frame_id: i64, ocr: OcrResult) -> Result<()>;
+    /// Inserts a frame's OCR **and** applies PR3's attention filter in one
+    /// transaction (`03 §3b`): classifies spans into roles, writes the filtered
+    /// `content_text` (so the content FTS index is written once, never a transient
+    /// unfiltered window), and bumps the chrome catalog. The capture loop calls this
+    /// instead of [`Self::insert_ocr`] so embeddings (which read `content_text`) and
+    /// default search operate on filtered text from the first capture. The default is
+    /// the passthrough [`Self::insert_ocr`] (filter unavailable), so fakes and stores
+    /// without the classifier still work.
+    async fn insert_ocr_filtered(
+        &self,
+        frame_id: i64,
+        ocr: OcrResult,
+        _ctx: TextFilterContext,
+    ) -> Result<()> {
+        self.insert_ocr(frame_id, ocr).await
+    }
     async fn insert_vision(&self, frame_id: i64, v: VisionAnalysis) -> Result<()>;
 
     // embeddings
@@ -169,6 +187,22 @@ pub trait Store: Send + Sync {
     /// (`03 §6` "restart + requeue"). Passing `0` requeues *all* `running` jobs — the
     /// startup sweep, when by definition no worker is live.
     async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64>;
+
+    /// Per-app text-filter suppression metric over frames classified by
+    /// `filter_version` (`03 §3b`): the guardrail that makes silent over-suppression
+    /// observable. Default returns empty for stores without the classifier.
+    async fn text_filter_stats(&self, _filter_version: i32) -> Result<Vec<AppSuppression>> {
+        Ok(Vec::new())
+    }
+
+    /// Reconciles the active attention `filter_version` (`03 §3b`): if `current`
+    /// differs from the stored watermark, wipes `chrome_text_catalog` so signatures
+    /// rebuild from new captures (no backfill of old frames — clean-DB, `07` #51/#52)
+    /// and records the new watermark. Returns `true` if the catalog was wiped. Called
+    /// once at startup. Default is a no-op (`false`).
+    async fn reconcile_filter_version(&self, _current: i32) -> Result<bool> {
+        Ok(false)
+    }
 
     // settings
     async fn get_setting(&self, key: &str) -> Result<Option<String>>;

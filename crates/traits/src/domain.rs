@@ -31,6 +31,13 @@ pub struct MonitorInfo {
 /// source already reads for the `privacy.excluded_apps` gate (`03 §8`); the kernel
 /// copies them onto the stored [`NewFrame`] so the timeline has context without a
 /// second OS call. `None` when the foreground window can't be resolved.
+///
+/// `target_rect` is the foreground (target) window's rectangle mapped into **this
+/// monitor's** frame and normalized to `[0,1]` (origin top-left) — the input PR3's
+/// attention filter uses to separate target-window `content` from `background`
+/// (`03 §3b`). `None` when the foreground window is on another monitor, minimized, or
+/// unresolved; with `None` the filter never classifies a span as `background` (the
+/// safe default — false suppression is the top risk).
 #[derive(Debug, Clone)]
 pub struct CapturedFrame {
     pub monitor_index: u32,
@@ -44,6 +51,9 @@ pub struct CapturedFrame {
     pub app_hint: Option<String>,
     /// Foreground window title at capture time.
     pub window_title: Option<String>,
+    /// Normalized `[0,1]` foreground-window rect within this monitor's frame, or
+    /// `None` (other monitor / minimized / unresolved). `[x, y, w, h]`.
+    pub target_rect: Option<[f32; 4]>,
 }
 
 /// Origin of a text span / the primary text of a frame (`03 §3b`). Serializes to
@@ -167,6 +177,11 @@ pub struct TextSpan {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Zero-based index of the OCR line this word belongs to (`Lines()` order). The
+    /// engine groups words into lines; carrying the index lets PR3's classifier group
+    /// spans back into lines exactly (no geometry heuristic) for line-level chrome
+    /// signatures and `content_text` reassembly (`03 §3b`).
+    pub line_index: u32,
     /// Whether the span is included in searchable text. PR2 marks every span
     /// searchable; PR3 sets this from the classified role.
     pub is_searchable: bool,
@@ -276,6 +291,25 @@ pub struct CaptureConfig {
     /// Pause capture entirely while the workstation is locked
     /// (`privacy.pause_on_lock`).
     pub pause_on_lock: bool,
+}
+
+/// Per-frame inputs for PR3's attention filter that aren't already on the stored
+/// frame (`03 §3b`). The store reads `target_app_hint`/`target_window_title` from the
+/// `frames` row itself; this carries the foreground rect (a capture-time OS fact) plus
+/// the configurable suppression thresholds (`03 §8`). Kept in `traits` (plain fields)
+/// so the `Store` trait can name it without depending on the `textfilter` crate (which
+/// depends on `traits`, not the reverse — `03 §2`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextFilterContext {
+    /// Normalized `[0,1]` foreground-window rect within the frame, or `None`
+    /// (other monitor / minimized / unresolved → no positional suppression).
+    pub target_rect: Option<[f32; 4]>,
+    /// `text.chrome_suppress_min_seen` (`03 §8`).
+    pub chrome_suppress_min_seen: u32,
+    /// `text.chrome_protect_min_chars` (`03 §8`).
+    pub chrome_protect_min_chars: u32,
+    /// `text.chrome_region_buckets` (`03 §8`).
+    pub chrome_region_buckets: u32,
 }
 
 /// Origin of an embedded text chunk. Serializes to the DB `source` column

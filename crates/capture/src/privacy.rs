@@ -17,8 +17,11 @@ pub fn is_excluded(app: Option<&str>, title: Option<&str>, excluded: &[String]) 
 
 #[cfg(windows)]
 mod win {
+    use std::ffi::c_void;
+
     use windows::core::PWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HWND};
+    use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
     use windows::Win32::System::StationsAndDesktops::{
         CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
     };
@@ -27,7 +30,7 @@ mod win {
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
     };
 
     /// `(app/process name, window title)` for the current foreground window, each
@@ -41,6 +44,36 @@ mod win {
                 return (None, None);
             }
             (process_name(hwnd), window_title(hwnd))
+        }
+    }
+
+    /// Screen-space rect `(left, top, right, bottom)` of the current foreground window
+    /// (physical pixels / virtual-desktop coords — the same space as `rcMonitor` and
+    /// the WGC texture, given the process is per-monitor-DPI-aware, `07` #54). Prefers
+    /// the visual frame bounds (`DWMWA_EXTENDED_FRAME_BOUNDS`, excludes the invisible
+    /// resize border), falling back to `GetWindowRect`. `None` when there is no
+    /// foreground window or it is minimized — PR3 then leaves `target_rect` unset and
+    /// suppresses nothing positionally (the safe default, `03 §3b`).
+    pub fn foreground_window_rect() -> Option<(i32, i32, i32, i32)> {
+        // SAFETY: plain Win32 queries on the calling thread; `rect` is fully written by
+        // the API before we read it, and the DWM out-buffer size is `size_of::<RECT>()`.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() || IsIconic(hwnd).as_bool() {
+                return None;
+            }
+            let mut rect = RECT::default();
+            let dwm_ok = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                std::ptr::addr_of_mut!(rect) as *mut c_void,
+                std::mem::size_of::<RECT>() as u32,
+            )
+            .is_ok();
+            if !dwm_ok && GetWindowRect(hwnd, &mut rect).is_err() {
+                return None;
+            }
+            Some((rect.left, rect.top, rect.right, rect.bottom))
         }
     }
 
@@ -94,7 +127,7 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{foreground_context, is_workstation_locked};
+pub use win::{foreground_context, foreground_window_rect, is_workstation_locked};
 
 #[cfg(test)]
 mod tests {
