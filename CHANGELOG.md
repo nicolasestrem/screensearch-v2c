@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR6 audit checkpoint
+Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
+local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidence under
+`.playwright-mcp/pr6-2026-06-26/`. Static wiring and targeted regression tests found no PR6
+implementation blocker: reports and Ask shortcuts are wired over `frame_text.content_text`, Ask
+defaults to `include_chrome=false`, and the report hardening tests for coverage splitting,
+empty/no-sidecar reports, settings clamps, cancellation, and report summary parsing pass. A second
+Computer Use run against the real dev executable completed the live UI audit: Search/Ask/Reports
+rendered, all five Ask cards were visible, Day Recap submitted with cited frames, Daily/Weekly/
+prompted-Custom/no-evidence-Custom reports generated, Settings showed `8/40/200/20`, and a
+controlled Windows Notepad capture stored the PR6 probe token in `content_text`. The upstream PR3
+static-chrome release blocker remains separate. Full verification passed after clearing a stale
+repo-local Vite/esbuild process left over from the dev run.
+
 ### Docs — 0.2.0 PR3 audit
 Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and release-tracking notes for the PR3
 attention-first filtering audit. The audit used the real dev app and existing app DB, confirmed the
