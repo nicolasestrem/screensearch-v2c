@@ -25,7 +25,18 @@
   hash, an avoidable failed verify + retry). The code already asserts the invariant in its own comment
   ("a brand-new zero-filled `.part` cannot have any completed chunks") — the guard now enforces it
   fully. No schema/IPC/API change; Windows-only path unchanged.
-- **Verification:** command output recorded in the session response.
+- **Verification:**
+  - `cargo test -p inference download`:
+    ```
+    test download::tests::fresh_part_discards_stale_all_done_manifest ... ok
+    test download::tests::fresh_part_discards_stale_partial_manifest ... ok
+    test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 4.05s
+    ```
+    The new test is a genuine regression guard: with the old `pending_indices().is_empty()` condition
+    restored it fails — `assertion left == right failed: published file must be the real bytes, not
+    zeros in the done-marked ranges` — and passes only with the `any_complete()` fix.
+  - `cargo fmt --all -- --check` → exit 0 (no diff).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished` with exit 0 (no warnings).
 
 ---
 

@@ -1582,7 +1582,7 @@ impl Manifest {
     /// True when the bitmap marks at least one chunk complete. Over a brand-new (zero-filled)
     /// `.part`, any such mark is necessarily stale — there are no real bytes on disk to back it.
     fn any_complete(&self) -> bool {
-        self.done.iter().any(|d| *d)
+        self.done.contains(&true)
     }
 
     fn completed_bytes(&self, chunk_size: u64, total: u64) -> u64 {
