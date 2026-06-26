@@ -2474,10 +2474,30 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
   -- --nocapture`, 5 passed), and `06-targeted-cargo-test-inference-report-summary.txt`
   (`cargo test -p inference report_summary -- --nocapture`, 2 passed).
 - **Live dev executable:** launched with `npm run tauri dev` and captured
-  `target/debug/screensearch.exe` (PID 19588 in first pass). The native window rendered and was
-  screenshotted, but Computer Use could not activate the WebView (`failed to activate captured
-  window`), so UI-click evidence for Recall tabs/cards/report generation remains a retry/manual
-  item in this audit branch.
+  `target/debug/screensearch.exe` (PID 19588 in first pass; PID 5960 in the successful retry). The
+  first Computer Use pass could screenshot but not activate the WebView; the retry succeeded and
+  completed the live PR6 UI pass.
+- **Live Recall/Ask:** Search mode rendered with `CONTENT TEXT ONLY`; Ask mode rendered all five
+  premade cards (`Day Recap`, `Standup Update`, `Time Breakdown`, `Top of Mind`, `AI Habits`).
+  Clicking `Day Recap` submitted through the normal Ask flow, loaded the sidecar on demand, returned
+  an answer, and rendered `CITED FRAMES`.
+- **Live Reports:** Daily generated with range-neutral progress and footer metadata (`5 passes`,
+  `1/1 periods`, `40/40 frames summarized`, trimmed warning). Weekly generated through the Weekly
+  path (`5 passes`, `1/7 periods`, `40/40 frames summarized`). Prompted Custom generated from
+  `PR6 audit reports Ask shortcuts content_text` and showed nine bounded passes. Custom no-evidence
+  for `06/25/2026` returned immediately with the honest empty message; code/tests verify the
+  response is `passes=0`, and the UI intentionally renders that as message-only with no chips/footer.
+- **Live Settings:** the "Reports & retrieval" fields showed the DB values:
+  `Ask retrieval depth=8`, `Report frames per day=40`, `Report frame cap=200`,
+  `Map-reduce threshold=20`.
+- **Controlled capture probe:** a Windows Notepad tab with
+  `PR6 PROBE TOKEN 20260626 8XK7 CONTENT TEXT CHECK` was captured while foreground. SQLite query
+  `46-pr6-notepad-probe-db.txt` shows frame `107`, `app_hint=Notepad`, and token pieces present in
+  `frame_text.content_text` (`PR6 PROBE TOKEN`, `20260626`, `8XK7`, `CONTENT TEXT CHECK` all count
+  1). OCR misread one body `PR6` as `PRS`, but the title and body token parts landed in
+  `content_text`.
+- **Process cleanup:** stopped the dev run after evidence capture; the after-stop process evidence
+  had no `screensearch.exe` or `llama-server.exe`, so no sidecar orphan was observed.
 - **Findings:** no PR6 implementation blocker found so far. The existing DB still contains
   static/app-chrome terms in `content_text` (`Firefox`, `Steam`, `Deck`, `Recall`), which is the
   already-recorded upstream PR3 release blocker rather than a PR6 routing defect. Doc drift recorded

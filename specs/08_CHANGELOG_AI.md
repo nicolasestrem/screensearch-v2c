@@ -25,10 +25,12 @@
 - **Verification:** Targeted raw outputs are preserved under `.playwright-mcp/pr6-2026-06-26/`:
   `cargo test -p kernel reports -- --nocapture` (11 passed),
   `cargo test -p store sample_ -- --nocapture` (5 passed), and
-  `cargo test -p inference report_summary -- --nocapture` (2 passed). The first live app session
-  booted `target/debug/screensearch.exe` through `npm run tauri dev`, but Computer Use could not
-  activate the WebView, so UI-click evidence is a retry/manual item rather than a completed live UI
-  pass.
+  `cargo test -p inference report_summary -- --nocapture` (2 passed). The second live app session
+  booted `target/debug/screensearch.exe` through `npm run tauri dev` and completed the UI pass:
+  Search/Ask/Reports rendered, the five Ask cards were visible, Day Recap submitted with cited
+  frames, Daily/Weekly/prompted-Custom/no-evidence-Custom reports generated, Settings showed
+  `8/40/200/20`, a controlled Windows Notepad probe landed in `frame_text.content_text`, and the
+  dev app/llama sidecar stopped without an observed orphan process.
 
 ---
 

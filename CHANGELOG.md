@@ -15,10 +15,12 @@ local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidenc
 `.playwright-mcp/pr6-2026-06-26/`. Static wiring and targeted regression tests found no PR6
 implementation blocker: reports and Ask shortcuts are wired over `frame_text.content_text`, Ask
 defaults to `include_chrome=false`, and the report hardening tests for coverage splitting,
-empty/no-sidecar reports, settings clamps, cancellation, and report summary parsing pass. The live
-dev executable booted against the existing DB after an online SQLite backup, but the first native
-automation pass could not activate the WebView, so deeper UI clicking/report generation remains a
-live-audit retry item. The upstream PR3 static-chrome release blocker remains separate.
+empty/no-sidecar reports, settings clamps, cancellation, and report summary parsing pass. A second
+Computer Use run against the real dev executable completed the live UI audit: Search/Ask/Reports
+rendered, all five Ask cards were visible, Day Recap submitted with cited frames, Daily/Weekly/
+prompted-Custom/no-evidence-Custom reports generated, Settings showed `8/40/200/20`, and a
+controlled Windows Notepad capture stored the PR6 probe token in `content_text`. The upstream PR3
+static-chrome release blocker remains separate.
 
 ### Docs — 0.2.0 PR3 audit
 Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and release-tracking notes for the PR3
