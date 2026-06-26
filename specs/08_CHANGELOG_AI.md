@@ -11,6 +11,27 @@
 
 ---
 
+## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
+- **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.
+  The ignored local audit file `docs/AUDIT_0.2.0_PR6_2026-06-26.md` and evidence directory
+  `.playwright-mcp/pr6-2026-06-26/` record the baseline, online SQLite backup, static wiring review,
+  targeted tests, and first real-dev-exe boot. Mirrored the tracked release notes into
+  `docs/0.2.0.md`, `05`, `06`, `07`, this changelog, and `CHANGELOG.md`.
+- **Why:** The 0.2.0 PR6 contract requires reports and premade Ask shortcuts to use current
+  `content_text` paths by default, with honest empty/no-sidecar behavior and bounded map-reduce
+  report coverage. This checkpoint found no PR6 wiring blocker by static review or targeted tests;
+  the remaining release blocker is the upstream PR3 static/app-chrome leakage in default
+  `content_text`.
+- **Verification:** Targeted raw outputs are preserved under `.playwright-mcp/pr6-2026-06-26/`:
+  `cargo test -p kernel reports -- --nocapture` (11 passed),
+  `cargo test -p store sample_ -- --nocapture` (5 passed), and
+  `cargo test -p inference report_summary -- --nocapture` (2 passed). The first live app session
+  booted `target/debug/screensearch.exe` through `npm run tauri dev`, but Computer Use could not
+  activate the WebView, so UI-click evidence is a retry/manual item rather than a completed live UI
+  pass.
+
+---
+
 ## 2026-06-26 — 0.2.0 PR3 attention-first filtering audit (`codex/0.2.0-pr3-audit`)
 - **Change:** Audited PR3 with the real dev app (`npm run tauri dev`) against the existing
   `%APPDATA%\app.screensearchv2c.desktop` DB, after an online backup and without reset/backfill.

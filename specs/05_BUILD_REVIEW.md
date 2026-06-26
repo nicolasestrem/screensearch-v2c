@@ -2447,3 +2447,38 @@ cargo test -p inference --lib                       → 87 passed; 0 failed (was
      manifest_load_or_init_distinguishes_missing_valid_and_mismatched)
 git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
 ```
+
+## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
+
+- **Scope:** audited PR6 (Recall reports + premade Ask shortcuts) as a scoped feature review on
+  current `main` (`43053c4fabefa493d74184b3a0257fa269116017`) using the existing
+  `%APPDATA%\app.screensearchv2c.desktop\screensearch.db`, no reset/backfill/destructive SQL.
+- **Local evidence:** ignored by policy under `.playwright-mcp/pr6-2026-06-26/`; ignored local audit
+  markdown at `docs/AUDIT_0.2.0_PR6_2026-06-26.md`.
+- **Baseline:** schema version 4; `frames=105`; `frame_text=105`; `embeddings=102`; `jobs done=292`;
+  all frames on active day `2026-06-26`; report settings `retrieval.default_top_k=8`,
+  `reports.daily_top_k=40`, `reports.weekly_top_k=200`, `reports.map_reduce_min_frames=20`.
+  Online SQLite backup created at
+  `.playwright-mcp/pr6-2026-06-26/screensearch-pr6-before.sqlite`.
+- **Static wiring:** `generate_report(ReportRequest) -> ReportResponse`, `report_progress`,
+  `cancel_report`, `AskRequest.top_k`, report settings, generated TS bindings, Recall tabs,
+  premade Ask cards, report builder/view, and Settings fields are wired. Reports hydrate
+  `frame_text.content_text` through `Store::ocr_texts`; prompted Custom reports use
+  `hybrid_search(... include_chrome=false)`; Ask defaults to `include_chrome=false`.
+- **Hardening re-check:** static/targeted review covered coverage sampling, dense single-period
+  splitting, prompted Custom cap, lowered sidecar context budgeting, empty report without sidecar,
+  cancellation/progress, settings clamps, and absence of a hardcoded `ASK_TOP_K`.
+- **Targeted verification:** raw outputs preserved locally:
+  `04-targeted-cargo-test-kernel-reports.txt` (`cargo test -p kernel reports -- --nocapture`, 11
+  passed), `05b-targeted-cargo-test-store-sampler-sample-prefix.txt` (`cargo test -p store sample_
+  -- --nocapture`, 5 passed), and `06-targeted-cargo-test-inference-report-summary.txt`
+  (`cargo test -p inference report_summary -- --nocapture`, 2 passed).
+- **Live dev executable:** launched with `npm run tauri dev` and captured
+  `target/debug/screensearch.exe` (PID 19588 in first pass). The native window rendered and was
+  screenshotted, but Computer Use could not activate the WebView (`failed to activate captured
+  window`), so UI-click evidence for Recall tabs/cards/report generation remains a retry/manual
+  item in this audit branch.
+- **Findings:** no PR6 implementation blocker found so far. The existing DB still contains
+  static/app-chrome terms in `content_text` (`Firefox`, `Steam`, `Deck`, `Recall`), which is the
+  already-recorded upstream PR3 release blocker rather than a PR6 routing defect. Doc drift recorded
+  in `06` #9 and `07` #65.

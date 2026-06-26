@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR6 audit checkpoint
+Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
+local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidence under
+`.playwright-mcp/pr6-2026-06-26/`. Static wiring and targeted regression tests found no PR6
+implementation blocker: reports and Ask shortcuts are wired over `frame_text.content_text`, Ask
+defaults to `include_chrome=false`, and the report hardening tests for coverage splitting,
+empty/no-sidecar reports, settings clamps, cancellation, and report summary parsing pass. The live
+dev executable booted against the existing DB after an online SQLite backup, but the first native
+automation pass could not activate the WebView, so deeper UI clicking/report generation remains a
+live-audit retry item. The upstream PR3 static-chrome release blocker remains separate.
+
 ### Docs — 0.2.0 PR3 audit
 Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and release-tracking notes for the PR3
 attention-first filtering audit. The audit used the real dev app and existing app DB, confirmed the
