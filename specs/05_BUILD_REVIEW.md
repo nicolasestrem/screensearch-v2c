@@ -2510,3 +2510,49 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
   `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings` all exited 0 with raw
   outputs preserved in `54` through `58`.
+
+## 2026-06-26 — 0.2.0 PR8 audit checkpoint (`codex/0.2.0-pr8-audit`)
+
+- **Scope:** audited PR8 (parallel model downloader) on current `main` after PR1/PR2/PR3/PR6/PR7/PR8
+  had merged, including follow-up commit `d85331f` for stale partial manifests. PR3 static-chrome
+  failure stayed out of scope except for release-status cross-reference.
+- **Local evidence:** `docs/AUDIT_0.2.0_PR8_2026-06-26.md` plus ignored evidence under
+  `.playwright-mcp/pr8-2026-06-26/`. The evidence directory contains static `rg`/commit captures,
+  the `npm run tauri dev` logs, resume state files, final model file inventory, and raw verification
+  outputs.
+- **Static review:** `crates/inference/src/download.rs` contains the PR8 chunked path: redirect-less
+  HF resolve probe, `Range` planning, per-chunk resolve, positioned writes into one preallocated
+  `.part`, bitmap manifest, aggregate progress/stall detection, `X-Linked-ETag` sha256 integrity,
+  clean-layout publish, and hf-hub fallback for range-less servers. Follow-up hardening is present:
+  stale fresh-part manifests (complete and partial) are reset, transport errors retry, unreadable
+  manifests fail accurately, writes are coalesced, and exhausted transient errors are not mislabeled
+  as ignored `Range`.
+- **Surface check:** no PR8 schema, IPC, Tauri command, or generated-binding drift was found. The
+  only expected public/dependency changes are `sha2` and the env overrides
+  `SSV2C_DOWNLOAD_CONNECTIONS` / `SSV2C_DOWNLOAD_CHUNK_SIZE`.
+- **Live dev executable:** launched with `npm run tauri dev`; Computer Use confirmed the active
+  process as `target/debug/screensearch.exe`. From a reset app-data state, Settings -> Inference
+  engine downloaded the default answer model and showed live progress (`11% · 218 MB / 2.0 GB` in
+  the sampled chip). Vision Quality was selected, a fresh frame was captured, Moment -> `TAG WITH
+  VISION` downloaded `Qwen3VL-8B-Instruct-Q4_K_M.gguf` plus
+  `mmproj-Qwen3VL-8B-Instruct-F16.gguf`, removed `.part`/`.parts`, loaded the sidecar, and rendered a
+  vision result. The user's Beta warning was honored: Vision Beta was used only for download/resume,
+  not as a tag-quality assertion.
+- **Resume:** with `SSV2C_DOWNLOAD_CONNECTIONS=1`, Vision Beta was interrupted after a manifest
+  showed `Chunks: 170`, `Done: 73`, `Pending: 97`. Restarting normal `npm run tauri dev` resumed at
+  `86%` rather than zero and finalized both `Qwen3.5-9B-Q4_K_M.gguf` and `mmproj-F16.gguf`; partial
+  artifacts were gone afterward.
+- **Process cleanup:** after stopping the dev app, no `screensearch.exe` or `llama-server.exe`
+  process remained.
+- **Findings:** no PR8 release blocker. Gap #46 remains only for the hf-hub range-less fallback
+  path. A new narrow hardening gap is tracked in `07`: a stale bitmap beside an existing-but-truncated
+  `.part` can still be trusted because the current fresh-part guard only fires when the `.part` is
+  newly created.
+- **Verification:** raw outputs are preserved in `.playwright-mcp/pr8-2026-06-26/`:
+  `verify-ui-npm-ci-lint-build.txt` (`cd ui && npm ci && npm run lint && npm run build`, exit 0),
+  `verify-cargo-fmt.txt` (`cargo fmt --all -- --check`, exit 0),
+  `verify-cargo-clippy.txt` (`cargo clippy --workspace --all-targets -- -D warnings`, exit 0),
+  `verify-cargo-build.txt` (`cargo build --workspace`, exit 0),
+  `verify-cargo-test-inference-lib.txt` (`cargo test -p inference --lib`, 88 passed),
+  `verify-cargo-test-workspace.txt` (`cargo test --workspace`, all non-ignored tests passed), and
+  `verify-bindings-diff.txt` (`git diff --exit-code -- ui/src/bindings`, exit 0).

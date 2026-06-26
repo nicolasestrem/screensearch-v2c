@@ -11,6 +11,27 @@
 
 ---
 
+## 2026-06-26 — 0.2.0 PR8 parallel download audit (`codex/0.2.0-pr8-audit`)
+- **Change:** Added the PR8 audit record `docs/AUDIT_0.2.0_PR8_2026-06-26.md`, updated
+  `docs/0.2.0.md` to mark PR8 accepted while preserving the separate PR3 release blocker, updated
+  `CHANGELOG.md`, and recorded this build-loop entry plus the new narrow PR8 hardening gap in `07`.
+  Evidence is preserved under `.playwright-mcp/pr8-2026-06-26/`.
+- **Why:** The 0.2.0 release plan required a detailed audit of PR8 after PR1/PR2/PR3/PR6/PR7/PR8
+  had merged to `main`, including the follow-up hardening commit. The audit needed static review of
+  `crates/inference/src/download.rs`, real dev-exe exercise through `npm run tauri dev`, default
+  answer download, Vision Quality 8B GGUF + mmproj download through Moment -> Tag with vision, and
+  interrupted resume behavior. The user's note that Vision Beta does not work for tagging was honored
+  by using Beta only as a download/resume target.
+- **Verification:** Raw command output is preserved verbatim under `.playwright-mcp/pr8-2026-06-26/`.
+  The planned gates all passed: `cd ui && npm ci && npm run lint && npm run build`;
+  `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`;
+  `cargo build --workspace`; `cargo test -p inference --lib` (88 passed); `cargo test --workspace`;
+  and `git diff --exit-code -- ui/src/bindings`. The live dev-exe pass downloaded the default answer
+  model, Vision Quality GGUF + mmproj, and Vision Beta GGUF + mmproj; the Beta interruption captured
+  `Chunks: 170`, `Done: 73`, `Pending: 97`, and the restart resumed at `86%` before finalizing.
+
+---
+
 ## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
 - **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.
   The ignored local audit file `docs/AUDIT_0.2.0_PR6_2026-06-26.md` and evidence directory
