@@ -14,6 +14,38 @@ For each build pass, append an entry:
 
 ---
 
+## Audit — 2026-06-26 — 0.2.0 PR3 attention-first filtering
+
+**Branch:** `codex/0.2.0-pr3-audit`. Runtime: `npm run tauri dev` launching
+`target/debug/screensearch.exe`. DB policy: existing
+`%APPDATA%\app.screensearchv2c.desktop\screensearch.db`, online backup to
+`.playwright-mcp/pr3-2026-06-26/screensearch-pr3-before.sqlite`, no reset/backfill/destructive SQL.
+
+### Implemented / audited
+- Added the audit artifact `docs/AUDIT_0.2.0_PR3_2026-06-26.md`.
+- Verified PR3's storage/retrieval plumbing: raw text is preserved, filtered content/spans/filter
+  version are written, embeddings read `content_text`, default search uses content FTS, and
+  `include_chrome=true` keeps raw/static recovery available.
+- Verified Settings text-filter thresholds and per-app suppression readout load and match grouped
+  SQL for the audited corpus.
+
+### Broke / regressed / release blocker
+- **Release blocker:** strict PR3 acceptance is not met. Default content search still has content FTS
+  hits for static/app chrome terms (`Firefox` 24, `Steam` 24, `Deck` 68, `Recall` 42,
+  `GPU Memory` 15) on the baseline DB. A fresh Notepad capture preserved the deliberate foreground
+  content, but also indexed `Firefox`, `Deck`, `Recall`, and `COMMAND` in default `content_text`.
+  See `docs/AUDIT_0.2.0_PR3_2026-06-26.md`, `06` patch #8, and `07` gap #64.
+
+### Verbatim verification
+Raw logs are preserved under `.playwright-mcp/pr3-2026-06-26/29-verify-ui-npm-ci-lint-build.txt`
+through `34-verify-bindings-diff.txt`; the audit report includes the command output summary and
+the exact evidence paths. All required commands exited 0:
+`cd ui && npm ci && npm run lint && npm run build`, `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+`cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
+
+---
+
 ## Pass 1 — 2026-06-21 — P0 Scaffold
 
 **Branch:** `p0-scaffold`. Toolchain observed: rustc/cargo 1.96.0, Node v26.3.0, npm 11.16.0,

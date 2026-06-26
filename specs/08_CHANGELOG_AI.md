@@ -11,6 +11,23 @@
 
 ---
 
+## 2026-06-26 — 0.2.0 PR3 attention-first filtering audit (`codex/0.2.0-pr3-audit`)
+- **Change:** Audited PR3 with the real dev app (`npm run tauri dev`) against the existing
+  `%APPDATA%\app.screensearchv2c.desktop` DB, after an online backup and without reset/backfill.
+  Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and recorded the release-blocker notes in
+  `docs/0.2.0.md`, `05`, `06`, `07`, this changelog, and `CHANGELOG.md`.
+- **Why:** The 0.2.0 release plan requires PR3 to stop desktop icons, toolbars, app nav, and other
+  static chrome from dominating default retrieval, while preserving raw recovery. The audit confirms
+  the plumbing is mostly correct but the strict default-search acceptance still fails on both the
+  populated corpus and a fresh Notepad capture.
+- **Verification:** Raw output is preserved in `.playwright-mcp/pr3-2026-06-26/29-verify-ui-npm-ci-lint-build.txt`
+  through `34-verify-bindings-diff.txt`; all required commands exited 0:
+  `cd ui && npm ci && npm run lint && npm run build`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
+
+---
+
 ## 2026-06-26 — Chunked download: reset stale manifest for ANY fresh part (`fix/chunked-download-partial-stale-manifest`)
 - **Change:** Generalised the fresh-part stale-manifest guard in `crates/inference/src/download.rs`.
   The condition `part_created && manifest.pending_indices().is_empty()` (reinit only when the

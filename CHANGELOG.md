@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR3 audit
+Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and release-tracking notes for the PR3
+attention-first filtering audit. The audit used the real dev app and existing app DB, confirmed the
+storage/retrieval plumbing is mostly wired correctly, and records a **release blocker**: default
+content search still surfaces static/app chrome for `Firefox`, `Steam`, `Deck`, `Recall`, and
+`GPU Memory`, including a fresh Notepad capture that also indexed desktop/app navigation terms in
+`content_text`. No code fixes were made in this audit pass.
+
 ### Docs — 0.2.0 PR1/PR2 audit follow-ups
 Recorded a short `docs/0.2.0.md` handoff list for a later LLM pass before tagging 0.2.0. The note
 captures the open PR7 static-chrome retrieval acceptance issue, roadmap/status drift around PR7 and
