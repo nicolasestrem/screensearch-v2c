@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR1/PR2 audit follow-ups
+Recorded a short `docs/0.2.0.md` handoff list for a later LLM pass before tagging 0.2.0. The note
+captures the open PR7 static-chrome retrieval acceptance issue, roadmap/status drift around PR7 and
+PR8, missing PR8 sequencing in `02`/`04`, `03` schema/type drift versus schema v4
+`text_spans.line_index`, stale mandatory-reading docs, and the PR2 audit verdict. Follow-up review
+clarified that the PR7 static-chrome failure remains a release blocker unless the acceptance
+contract changes.
+
 ### 0.2.0 PR8 — Parallel model download
 Replaces the single-stream first-run model fetch with a **multi-connection chunked downloader** so
 the GGUF/mmproj download saturates the user's bandwidth instead of being capped at hf-hub's one
