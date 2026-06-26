@@ -1447,3 +1447,100 @@
   -D warnings` (exit 0); `cargo test -p store` (store integration **44 passed**, 0 failed, incl. the
   migration + dead-job tests); `cargo test -p kernel` (settings **5 passed**, enrichment **10
   passed**); `cargo test --workspace` (all crates 0 failed).
+
+## 2026-06-26 — 0.2.0 PR8: parallel model download (`feat/0.2.0-pr8-parallel-download`)
+- **Context:** first-run model download went single-stream via hf-hub, capped ~20 MB/s by HF's CDN
+  throttling one connection, so the ~5 GB Quality (8B) vision model took minutes. PR8 (`docs/0.2.0.md`)
+  adds a multi-connection chunked downloader. Confined to `crates/inference/src/download.rs` (+ tests)
+  and `Cargo.toml`; independent of the retrieval chain.
+- **Change (downloader):** `fetch_one` now probes the HF `resolve` URL with `Range: bytes=0-0`
+  **without following the 302**, reading the redirect's own `X-Linked-Size` + `Accept-Ranges` +
+  `X-Linked-ETag` (the LFS sha256), and — when ranges are supported — fetches the file with
+  `DOWNLOAD_CONNECTIONS` (default 8, env `SSV2C_DOWNLOAD_CONNECTIONS`, clamp 1–16) parallel `Range`
+  requests into one pre-allocated `<base>.part` via positioned `seek_write`. A per-chunk completion
+  bitmap `<base>.parts` (fsync'd **after** its chunk data) drives crash-safe resume. Chunk futures run
+  via `buffer_unordered` awaited inside the fetch task, so the existing stall watchdog's `task.abort()`
+  cancels every in-flight chunk (no orphaned writers — the gap-#46 fix for this path).
+- **Fix (live-HF 403 storm):** the first cut pinned one signed CDN URL (`resp.url()`) for all chunks
+  and hit `403 server ignored Range` against real HF. Root cause (confirmed by decoding the
+  CloudFront policy): HF Xet-bridge signed URLs pin `"ByteRange":{"ExpectedHeader":"bytes=0-0"}`, so a
+  URL minted for one range is rejected for any other. Each chunk now re-requests the stable `resolve`
+  URL with its own `Range` and follows the redirect per request (reqwest keeps `Range` across the
+  hop) — minting a fresh range-matched signed URL, the `hf_transfer` approach. Transient
+  `403`/`401`/`429`/`5xx` retries with backoff. Verified live with curl: signed-URL reuse → 403;
+  per-request resolve → 206. Added tests `chunk_requests_follow_redirect_and_preserve_range` and
+  `chunk_retries_transient_403_then_succeeds`.
+- **Fix (live-HF sha256 / Xet-hash storm):** with the 403 fixed, downloads *completed* but failed
+  sha256 every time and looped at ~75%. Root cause: the probe followed the 302 and read the **CDN**
+  response's bare `ETag`, which on a Xet-backed repo is the **Xet content hash** (`X-Xet-Hash`), not
+  the file sha256 — a clean 64-hex value that passed `parse_sha256`, so the correctly-assembled blob
+  (`66358cb1…`) was verified against the Xet hash (`d4ccbe2a…`) and rejected forever (the GGUF is
+  ~75% of the GGUF+mmproj total, so it finished and restarted before the mmproj began). The real
+  sha256 is in `X-Linked-ETag` on the `resolve` redirect, discarded by reqwest's auto-follow. Fix:
+  probe **redirect-less** and read the 302's own headers; `lfs_sha256` trusts `X-Linked-ETag`
+  **only**, never the bare `ETag`. Verified live: the 302's `X-Linked-ETag` = the HF-API LFS oid =
+  our downloaded bytes (`66358cb1…`); the CDN `ETag`/`X-Xet-Hash` = `d4ccbe2a…`. Added test
+  `lfs_sha256_trusts_only_x_linked_etag_not_cdn_etag` (rejects a bare CDN/Xet `ETag`).
+- **Change (reuse, not bypass):** all chunks feed the existing `downloaded` `AtomicU64`, so the UI
+  percentage and aggregate-progress stall detection are unchanged; the finalize phase sets the
+  existing `copying` flag; the blob lands in the clean layout via atomic rename; the already-in-layout
+  / already-a-cache-blob fast paths are still first.
+- **Change (fallback + integrity):** a range-less server (no `Accept-Ranges`/no length) or a probe
+  failure falls back to the unchanged single-stream `download_with_lock_retry`. A per-chunk `206`
+  assertion refuses a server that ignores `Range`; `401`/`403` re-resolves the signed URL once; the
+  assembled file is verified against the LFS sha256 (`X-Linked-ETag`) when advertised (else byte
+  length), and a mismatch discards the partial for a clean retry. Added `sha2` as a direct dep
+  (already transitive).
+- **Decision:** connection count is a const + env override (not a `Settings` field) — user-approved,
+  keeps PR8 confined to `download.rs` and matches the file's existing const/env convention; no IPC/
+  bindings/UI change.
+- **Tests (PR8 owns them, fully mocked — wiremock + a local hang-after-206 server, no network):**
+  `chunked_download_assembles_byte_identical_file`, `resume_skips_already_completed_chunks`,
+  `chunked_download_fails_fast_on_stuck_chunk`, `chunked_download_errors_when_server_ignores_range`,
+  `integrity_accepts_matching_sha256_and_rejects_a_wrong_one`, `range_plan_requires_ranges_and_known_
+  size`, `parse_sha256_normalizes_etag_forms`, `lfs_sha256_trusts_only_x_linked_etag_not_cdn_etag`,
+  `content_range_total_parses_suffix`.
+- **Interface review:** no trait-signature, IPC, command, or `ts-rs` change (binding guard clean).
+- **Verification:** `cd ui && npm ci && npm run lint && npm run build` (lint clean; `vite build` ✓);
+  `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets -- -D warnings`
+  (0 warnings); `cargo build --workspace` (Finished); `cargo test --workspace` (all crates 0 failed,
+  **inference 84 passed** incl. the 11 new tests); `git diff --exit-code -- ui/src/bindings` (clean).
+
+### 2026-06-26 — PR8 review hardening (PR #35 bot review)
+
+Addressed the PR #35 bot review (Gemini + the GitHub `claude` reviewer; bot replies not posted, per the
+request). Five robustness fixes in `download.rs`, each with a test; two cross-platform suggestions
+declined as out-of-policy. Still confined to `download.rs` (+ tests + docs); no IPC/binding change.
+
+- **Stale-manifest silent corruption (claude, medium).** `open_preallocated` now returns
+  `(File, created)` — `created` via an atomic `create_new` open, no `exists()` TOCTOU. `chunked_download`
+  re-initialises an all-done `.parts` bitmap sitting over a **freshly created** (zero-filled) `.part`
+  (`Manifest::reinit` / new `init_sync`), so a prior run's failed post-publish bitmap cleanup can't make
+  the next run skip every chunk and publish zeros (length check passes; sha256 absent when no
+  `X-Linked-ETag`). Proven: with the guard disabled the new test publishes an all-zero file; with it,
+  byte-identical.
+- **Network-error retry (gemini, high).** A chunk request's transport error (dropped connection /
+  timeout / DNS) was propagated by `?`, failing the whole download on the first hiccup. It now feeds the
+  same bounded backoff loop as a transient HTTP status.
+- **Don't clobber progress on an unreadable manifest (gemini, high).** `Manifest::load_or_init_sync`
+  now matches on the read: `NotFound` → init fresh; any other error (a Windows sharing violation from
+  AV / the indexer) → propagate, so the job-queue retries instead of truncating a valid bitmap and
+  losing real download progress.
+- **Coalesced writes (gemini, medium).** Body frames buffer to `CHUNK_WRITE_BUFFER` (256 KiB) before
+  each positioned `spawn_blocking` write (`flush_chunk_writes`), cutting blocking-task churn; bytes
+  still accrue into the progress counter per frame.
+- **Accurate terminal error (claude, low).** The chunk failure return now distinguishes "server ignored
+  Range" (a `200`) from "failed after N retries" (an exhausted `403`/`429`).
+- **Declined (gemini, two high):** add `#[cfg(unix)]` `write_at` / cfg-gate `FileExt` so `download.rs`
+  compiles on macOS/Linux. The project is **Windows-only by design** (CLAUDE.md hard rule; CI is
+  `windows-latest`; `flags.rs`/`lib.rs` already use Windows-native APIs without cross-platform branches).
+  Confirmed with the user before declining.
+- **New tests:** `fresh_part_discards_stale_all_done_manifest`,
+  `exhausted_transient_is_not_reported_as_ignored_range`,
+  `manifest_load_or_init_distinguishes_missing_valid_and_mismatched`. (The present-but-unreadable
+  manifest branch is covered by inspection — a non-`NotFound` read error can't be injected
+  deterministically without a real sharing violation.)
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets -- -D
+  warnings` (0 warnings); `cargo test --workspace` (all crates 0 failed; **inference lib 87 passed**,
+  +3 new); `git diff --exit-code -- ui/src/bindings` (clean). The #6 test was confirmed to fail with the
+  guard disabled (published an all-zero file) before being restored.

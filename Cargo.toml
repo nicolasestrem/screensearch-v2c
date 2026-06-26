@@ -62,6 +62,10 @@ hf-hub = { version = "0.4", default-features = false, features = [
 ] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
+# Verifies a parallel-downloaded model blob against HuggingFace's LFS sha256
+# (the `X-Linked-Etag` OID) when the CDN advertises it. Already in the tree
+# transitively (hf-hub/rustls), so a direct dep adds no new compilation.
+sha2 = "0.10"
 
 # data spine: SQLite (bundled, FTS5) + sqlite-vec (vec0) + stable content hashing.
 # `bundled` compiles a recent SQLite so we never depend on a system libsqlite3 on

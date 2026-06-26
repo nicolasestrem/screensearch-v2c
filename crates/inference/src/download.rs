@@ -11,15 +11,18 @@
 //! unit-tested; the network fetches run at app first-run and in the gated manual
 //! smoke (they are not exercised by `cargo test`).
 
+use std::os::windows::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use futures::stream::{self, StreamExt};
 use hf_hub::api::tokio::{ApiBuilder, ApiError, ApiRepo, Progress};
 use hf_hub::{Cache, Repo, RepoType};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use traits::{ModelDownloadPhase, ModelDownloadStatus};
 
@@ -65,6 +68,44 @@ const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// process is released by the OS, so this only ever waits on a genuinely live holder.)
 const LOCK_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 const LOCK_RETRY_MAX_ATTEMPTS: u32 = 5;
+
+/// Parallel HTTP `Range` connections the chunked model downloader opens. HF's CDN throttles a
+/// single connection to ~20 MB/s but serves many in parallel, so several connections saturate a
+/// fast link; past ~8 the per-connection gain flattens while TLS/connection overhead grows.
+/// Overridable via `SSV2C_DOWNLOAD_CONNECTIONS` (clamped to [`DOWNLOAD_CONNECTIONS_MIN`]..=
+/// [`DOWNLOAD_CONNECTIONS_MAX`]); a range-less server downloads single-stream regardless.
+const DOWNLOAD_CONNECTIONS: usize = 8;
+const DOWNLOAD_CONNECTIONS_MIN: usize = 1;
+const DOWNLOAD_CONNECTIONS_MAX: usize = 16;
+
+/// Size of each `Range` request. Big enough that per-request HTTP/TLS overhead is negligible
+/// against a multi-GB model, small enough that a mid-chunk interruption only re-fetches a
+/// bounded amount on resume (≤ `chunk_size` × connections). Overridable via
+/// `SSV2C_DOWNLOAD_CHUNK_SIZE` (bytes; floored at [`DOWNLOAD_CHUNK_SIZE_MIN`]).
+const DOWNLOAD_CHUNK_SIZE: u64 = 32 * 1024 * 1024;
+const DOWNLOAD_CHUNK_SIZE_MIN: u64 = 1024 * 1024;
+
+/// Connect / per-read timeouts for the chunked downloader's HTTP client. The read timeout
+/// fails a connection that goes *silent* mid-transfer — so one dead chunk socket fails fast
+/// instead of pinning the pool — without aborting a slow-but-progressing one. The aggregate
+/// stall watchdog in [`ModelDownloader::run_download`] is the backstop for "every chunk dead at
+/// once" (no aggregate progress), unchanged by the chunked path since all chunks feed one
+/// counter.
+const CHUNK_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const CHUNK_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bounded retry for a chunk request that comes back with a transient failure (a `403`/`401` from
+/// a single-use signed CDN URL race, a `429`, or a `5xx`). Each retry re-requests the **resolve**
+/// URL, so the redirect mints a fresh signed CDN URL — the same per-request resolution `hf` /
+/// `hf_transfer` rely on. A chunk that exhausts these still leaves its `.part` for resume.
+const CHUNK_RETRY_MAX_ATTEMPTS: u32 = 4;
+const CHUNK_RETRY_BACKOFF: Duration = Duration::from_millis(400);
+
+/// Coalesce streamed body frames up to this many bytes before handing them to a `spawn_blocking`
+/// positioned write. reqwest yields frames as small as a single TCP segment (~16–64 KiB); spawning
+/// a blocking task per frame churns the pool. Buffering to 256 KiB cuts the write-task count by an
+/// order of magnitude while keeping per-chunk memory bounded (one buffer per in-flight connection).
+const CHUNK_WRITE_BUFFER: usize = 256 * 1024;
 
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
@@ -708,9 +749,10 @@ impl Progress for ByteCounter {
     async fn finish(&mut self) {}
 }
 
-// TODO(0.1.1, perf): hf-hub fetches single-stream (~20 MB/s, HF CDN throttles one connection).
-// Replace with a parallel chunked downloader (N HTTP Range requests -> one pre-allocated file) to
-// saturate bandwidth — tracked in specs/07_KNOWN_GAPS.md ("parallel model download").
+// PR8 (0.2.0): each file is fetched by the parallel chunked downloader in [`fetch_one`] — N HTTP
+// `Range` requests writing into one pre-allocated `.part` — to saturate bandwidth instead of being
+// capped at hf-hub's single throttled connection (~20 MB/s). A range-less server falls back to the
+// single-stream hf-hub path. The progress/stall/clean-layout machinery is reused, not bypassed.
 /// Resolves the repo's GGUF (+ same-repo mmproj for vision) and fetches each into the clean
 /// layout, accumulating real downloaded bytes into `downloaded` for the progress watchdog.
 async fn download_repo_files(
@@ -765,9 +807,10 @@ async fn download_repo_files(
 
 /// Fetches one repo file into the clean layout with real-byte progress. Checks in order:
 /// already in the clean layout → already a finalized blob in the HF cache (no network) →
-/// download (resuming any `.sync.part`). `download_with_progress` advances `downloaded` via
-/// hf-hub's [`Progress`] callbacks; the skip paths add the on-disk size manually so the bar
-/// reflects bytes that were already present.
+/// **parallel chunked download** (N `Range` requests, resumable) → single-stream hf-hub
+/// fallback for a range-less server. The chunked path publishes its own `.part` into the
+/// layout; the skip/fallback paths add the on-disk size or stream via hf-hub's [`Progress`]
+/// callbacks so the bar reflects every byte (already-present or freshly fetched).
 async fn fetch_one(
     repo_api: &ApiRepo,
     cache_dir: &Path,
@@ -803,6 +846,20 @@ async fn fetch_one(
         return Ok(());
     }
 
+    // Parallel chunked path: probe the CDN; if it advertises ranged downloads, fetch the file
+    // in N parallel connections into a pre-allocated `.part` (resumable across restarts) and
+    // publish it. A chunked error propagates (the `.part` stays for resume) rather than falling
+    // back — only a range-less/probe-failed server takes the single-stream path below.
+    let cfg = ChunkConfig::from_env();
+    let resolve_url = hf_resolve_url(repo_id, filename);
+    if let Some(info) = probe_range(&resolve_url, &cfg).await {
+        if range_plan(info.is_partial, info.accept_ranges, info.total) {
+            return chunked_download(&info, &resolve_url, dir, base, downloaded, copying, &cfg)
+                .await;
+        }
+    }
+
+    // Single-stream fallback (range-less server, or probe failure): unchanged hf-hub path.
     let cached = download_with_lock_retry(repo_api, filename, downloaded)
         .await
         .with_context(|| format!("download {filename}"))?;
@@ -848,6 +905,721 @@ async fn download_with_lock_retry(
             }
         }
     }
+}
+
+// ── Parallel chunked downloader (PR8) ──────────────────────────────────────────────────────
+//
+// N parallel HTTP `Range` requests stream into one pre-allocated `.part`, with a per-chunk
+// resume bitmap so an interrupted download continues where it stopped. All chunks feed the same
+// `downloaded` counter, so the existing aggregate-progress stall watchdog and the UI percentage
+// stay truthful with concurrent writers. On success the assembled file is verified (LFS sha256
+// when advertised, else byte length) and atomically renamed into the clean layout.
+
+/// Tuning for the chunked downloader. Production reads it from [`ChunkConfig::from_env`]
+/// (constants + `SSV2C_*` overrides); tests pass tiny chunk sizes and millisecond timeouts so
+/// resume / stall behaviour is exercised deterministically without real network waits.
+#[derive(Debug, Clone, Copy)]
+struct ChunkConfig {
+    conns: usize,
+    chunk_size: u64,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+}
+
+impl ChunkConfig {
+    fn from_env() -> Self {
+        let conns = std::env::var("SSV2C_DOWNLOAD_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DOWNLOAD_CONNECTIONS)
+            .clamp(DOWNLOAD_CONNECTIONS_MIN, DOWNLOAD_CONNECTIONS_MAX);
+        let chunk_size = std::env::var("SSV2C_DOWNLOAD_CHUNK_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(DOWNLOAD_CHUNK_SIZE)
+            .max(DOWNLOAD_CHUNK_SIZE_MIN);
+        Self {
+            conns,
+            chunk_size,
+            connect_timeout: CHUNK_CONNECT_TIMEOUT,
+            read_timeout: CHUNK_READ_TIMEOUT,
+        }
+    }
+}
+
+/// The HuggingFace `resolve` URL for a repo file on the default (`main`) revision. A `GET` here
+/// 302-redirects to a single-use signed CDN blob URL. [`probe_range`] reads this redirect's own
+/// headers *without following it* (they carry the size + sha256); each chunk then re-requests this
+/// same stable URL and follows its own fresh redirect (`Range` is preserved across the hop), so no
+/// signed CDN URL is ever shared between requests. Public models only — no auth header.
+fn hf_resolve_url(repo_id: &str, filename: &str) -> String {
+    format!("https://huggingface.co/{repo_id}/resolve/main/{filename}")
+}
+
+/// What [`probe_range`] learned: the total size, whether the server honours byte ranges, and the
+/// LFS sha256 (normalised, when advertised). The CDN URL is deliberately **not** captured: HF's
+/// signed CDN URLs are single-use (consumed by the request that follows the redirect), so each
+/// chunk re-requests the stable `resolve` URL and follows its own fresh redirect.
+struct RangeInfo {
+    total: u64,
+    is_partial: bool,
+    accept_ranges: bool,
+    sha256: Option<String>,
+}
+
+/// Probes a HuggingFace `resolve` URL to learn whether the file supports ranged, resumable,
+/// parallel downloads, how big it is, and its content sha256. The probe deliberately **does not
+/// follow the redirect**: huggingface.co answers the `resolve` request with a `302` whose own
+/// headers are the authoritative source — `Accept-Ranges: bytes`, `X-Linked-Size` (the true file
+/// size), and `X-Linked-ETag` (the LFS sha256). The CDN response *behind* the redirect is not read,
+/// because its `ETag` is the Xet content hash rather than the file sha256 (verifying against it
+/// fails every download). A `Range: bytes=0-0` is still sent so a non-LFS file served directly
+/// (no redirect) yields a cheap `206`/`200` whose `Content-Range`/`Content-Length` we read the same
+/// way. Returns `None` when the probe fails or the size is unknown → single-stream fallback.
+async fn probe_range(resolve_url: &str, cfg: &ChunkConfig) -> Option<RangeInfo> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(cfg.connect_timeout)
+        .read_timeout(cfg.read_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()?;
+    let resp = client
+        .get(resolve_url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+        .ok()?;
+    let status = resp.status();
+    let headers = resp.headers();
+    let is_partial = status == reqwest::StatusCode::PARTIAL_CONTENT;
+    let accept_ranges = headers
+        .get(reqwest::header::ACCEPT_RANGES)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("bytes"));
+    // The resolve `302` reports the file size in `X-Linked-Size`; a directly-served `206` in
+    // `Content-Range: bytes 0-0/N`; a directly-served `200` in `Content-Length`.
+    let total = x_linked_size(headers)
+        .or_else(|| content_range_total(headers))
+        .or_else(|| content_length(headers))?;
+    let sha256 = lfs_sha256(headers);
+    Some(RangeInfo {
+        total,
+        is_partial,
+        accept_ranges,
+        sha256,
+    })
+}
+
+/// Whether a probe response means we can do a chunked (ranged) download — the pure core of the
+/// chunked-vs-single-stream decision, unit-tested without network: a `206 Partial Content` (or
+/// an explicit `Accept-Ranges: bytes`) plus a known, non-zero total length.
+fn range_plan(is_partial: bool, accept_ranges: bool, total: u64) -> bool {
+    (is_partial || accept_ranges) && total > 0
+}
+
+fn content_length(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Total size from a `Content-Range: bytes 0-0/12345` header (the `/N` suffix). `*` (unknown) and
+/// malformed values yield `None`.
+fn content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let v = headers.get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
+    let total = v.rsplit('/').next()?.trim();
+    (total != "*").then(|| total.parse().ok()).flatten()
+}
+
+/// True file size from HuggingFace's `X-Linked-Size` header on the `resolve` redirect — the LFS
+/// object length, and the authoritative size for the redirect-less probe (the `302` never carries
+/// a body-length header of its own).
+fn x_linked_size(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("x-linked-size")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The LFS object sha256 of the file content, which HuggingFace exposes **only** via the
+/// `X-Linked-ETag` header on the `resolve` redirect. The bare `ETag` is deliberately *not* a
+/// fallback: on a Xet-backed repo the CDN blob's `ETag` is the *Xet content hash* (a different
+/// 64-hex digest of the same bytes, surfaced separately as `X-Xet-Hash`), and on classic LFS it is
+/// an S3 multipart validator (`md5-partcount`) — neither equals the file sha256, so trusting it
+/// would reject every correct download. Returned only when it is a clean 64-hex digest; used for
+/// opportunistic integrity verification (a missing/garbled value degrades to the byte-length check).
+fn lfs_sha256(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("x-linked-etag")
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_sha256)
+}
+
+/// Extracts a 64-hex-char sha256 from an `ETag`/`X-Linked-Etag` value, which may be quoted,
+/// weak-validator-prefixed (`W/"…"`), or `sha256:`-prefixed. Returns `None` for anything that
+/// isn't a clean 64-hex digest — we verify only when we are sure what we have.
+fn parse_sha256(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let s = s.strip_prefix("W/").unwrap_or(s);
+    let s = s.trim_matches('"');
+    let s = s.strip_prefix("sha256:").unwrap_or(s);
+    let s = s.trim_matches('"');
+    (s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())).then(|| s.to_ascii_lowercase())
+}
+
+/// Byte length of chunk `index`: `chunk_size`, except the final chunk which holds the remainder.
+fn chunk_byte_len(index: usize, chunk_size: u64, total: u64) -> u64 {
+    let start = index as u64 * chunk_size;
+    (start + chunk_size).min(total) - start
+}
+
+/// Downloads `info.effective_url` into `dir/<base>` using `cfg.conns` parallel HTTP `Range`
+/// requests writing into one pre-allocated `<base>.part`, resuming any chunks a prior run
+/// already completed (tracked in the `<base>.parts` bitmap). Real downloaded bytes accrue into
+/// `downloaded` for the progress watchdog — including the resume prefix, added once up front. On
+/// success the file is verified, atomically renamed to `<base>`, and the bitmap removed; on any
+/// error the `.part` + bitmap are left on disk so the next attempt resumes. The chunk-streaming
+/// phase feeds the counter continuously (no `copying` pause); only the no-network finalize phase
+/// (fsync + optional hash) sets `copying` so the stall watchdog ignores it.
+async fn chunked_download(
+    info: &RangeInfo,
+    resolve_url: &str,
+    dir: &Path,
+    base: &str,
+    downloaded: &Arc<AtomicU64>,
+    copying: &Arc<AtomicBool>,
+    cfg: &ChunkConfig,
+) -> Result<()> {
+    let part = dir.join(format!("{base}.part"));
+    let manifest_path = dir.join(format!("{base}.parts"));
+    let total = info.total;
+    let chunk_size = cfg.chunk_size;
+    let chunk_count = total.div_ceil(chunk_size) as usize;
+
+    let (part_file, part_created) = open_preallocated(&part, total).await?;
+    let file = Arc::new(part_file);
+    let mut manifest =
+        Manifest::load_or_init(&manifest_path, total, chunk_size, chunk_count).await?;
+
+    // A brand-new (zero-filled) `.part` cannot have any completed chunks. If a matching all-done
+    // manifest survived here, it is stale — left when a prior run's post-publish cleanup of the
+    // bitmap silently failed. Trusting it would skip the download entirely and publish a zero-filled
+    // file: the length check passes (`set_len` gives exactly `total` bytes) and the sha256 check is
+    // skipped whenever the CDN advertised no `X-Linked-ETag`. Re-initialise so every chunk refetches.
+    if part_created && manifest.pending_indices().is_empty() {
+        manifest = Manifest::reinit(&manifest_path, total, chunk_size, chunk_count).await?;
+    }
+
+    // Seed the bar with bytes already on disk (mirrors hf-hub's resume-prefix `update(start)`).
+    let already = manifest.completed_bytes(chunk_size, total);
+    if already > 0 {
+        downloaded.fetch_add(already, Ordering::Relaxed);
+    }
+
+    let pending = manifest.pending_indices();
+    if !pending.is_empty() {
+        let client = Arc::new(
+            reqwest::Client::builder()
+                .connect_timeout(cfg.connect_timeout)
+                .read_timeout(cfg.read_timeout)
+                .build()
+                .context("build chunked download http client")?,
+        );
+        let manifest = Arc::new(AsyncMutex::new(manifest));
+
+        // `buffer_unordered` runs up to `conns` chunk futures at once, awaited *inside* this task
+        // so the watchdog's `task.abort()` drops every in-flight chunk (no orphaned writers —
+        // the gap-#46 fix for this path). `?` on the first error stops scheduling new chunks; the
+        // `.part` + bitmap survive for resume.
+        let mut stream = stream::iter(pending.into_iter().map(|index| {
+            let client = client.clone();
+            let file = file.clone();
+            let manifest = manifest.clone();
+            let downloaded = downloaded.clone();
+            async move {
+                fetch_chunk(
+                    &client,
+                    resolve_url,
+                    &file,
+                    index,
+                    chunk_size,
+                    total,
+                    &downloaded,
+                    &manifest,
+                )
+                .await
+            }
+        }))
+        .buffer_unordered(cfg.conns);
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+    }
+
+    verify_and_publish(file, &part, &manifest_path, dir, base, total, info, copying).await
+}
+
+/// Opens (creating if absent) the `.part` file for read+write and ensures it is `total` bytes
+/// long via `set_len`, so every chunk can `seek_write` at its fixed offset without concurrently
+/// extending the file. Returns `(file, created)` where `created` is `true` only when this call
+/// brought the file into existence — the caller uses that to reject a stale all-done manifest left
+/// over a brand-new (zero-filled) part. `create_new` makes the create-vs-existed decision atomic
+/// (no `exists()` TOCTOU). Off the async runtime — file allocation is blocking I/O.
+async fn open_preallocated(part: &Path, total: u64) -> Result<(std::fs::File, bool)> {
+    let part = part.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<(std::fs::File, bool)> {
+        let (file, created) = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&part)
+        {
+            Ok(file) => (file, true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&part)
+                    .with_context(|| format!("open {}", part.display()))?;
+                (file, false)
+            }
+            Err(e) => return Err(e).with_context(|| format!("create {}", part.display())),
+        };
+        if file.metadata()?.len() != total {
+            file.set_len(total)
+                .with_context(|| format!("preallocate {} to {total} bytes", part.display()))?;
+        }
+        Ok((file, created))
+    })
+    .await
+    .context("open part-file task failed")?
+}
+
+/// Writes the whole buffer at `offset` using positioned writes (no shared seek cursor, so
+/// concurrent chunk writers to non-overlapping regions never race). Loops over short writes.
+fn write_all_at(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        let n = file.seek_write(buf, offset)?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "seek_write wrote 0 bytes",
+            ));
+        }
+        buf = &buf[n..];
+        offset += n as u64;
+    }
+    Ok(())
+}
+
+/// Writes the coalesced `buf` to `file` at `offset` off the async runtime (draining `buf` and
+/// leaving it empty-but-preallocated for reuse), returning the advanced offset. A no-op when empty.
+async fn flush_chunk_writes(
+    file: &Arc<std::fs::File>,
+    buf: &mut Vec<u8>,
+    offset: u64,
+    index: usize,
+) -> Result<u64> {
+    if buf.is_empty() {
+        return Ok(offset);
+    }
+    let bytes = std::mem::replace(buf, Vec::with_capacity(CHUNK_WRITE_BUFFER));
+    let count = bytes.len() as u64;
+    let file = file.clone();
+    tokio::task::spawn_blocking(move || write_all_at(&file, &bytes, offset))
+        .await
+        .context("chunk write task failed")?
+        .with_context(|| format!("write chunk {index} at {offset}"))?;
+    Ok(offset + count)
+}
+
+/// Downloads chunk `index` (`[index·chunk_size, min(end, total))`) via a single `Range` request
+/// and writes it into the shared part file at the chunk's offset. The request targets the stable
+/// `resolve_url` and **follows the redirect per request** (`Range` is preserved across redirects),
+/// so each chunk consumes its own fresh single-use HF signed CDN URL rather than sharing one. A
+/// `206` is required; a transient failure — a `403`/`401`/`429`/`5xx`, or a network-level error
+/// (dropped connection / timeout / DNS blip) — is retried with backoff (a fresh redirect each
+/// time); a `200` means the server ignored the range and would corrupt the file, so we error
+/// rather than write a full body at a chunk offset. Bytes accrue into `downloaded` as they arrive
+/// and are coalesced into ~`CHUNK_WRITE_BUFFER` writes; on full receipt the file data is fsync'd
+/// **before** the chunk is marked complete — a crash must never mark a chunk whose bytes are still
+/// only in the OS cache.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_chunk(
+    client: &reqwest::Client,
+    resolve_url: &str,
+    file: &Arc<std::fs::File>,
+    index: usize,
+    chunk_size: u64,
+    total: u64,
+    downloaded: &Arc<AtomicU64>,
+    manifest: &Arc<AsyncMutex<Manifest>>,
+) -> Result<()> {
+    let start = index as u64 * chunk_size;
+    let len = chunk_byte_len(index, chunk_size, total);
+    let end = start + len - 1; // inclusive
+
+    let mut attempt: u32 = 0;
+    let resp = loop {
+        let send_result = client
+            .get(resolve_url)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+            .send()
+            .await;
+        match send_result {
+            Ok(resp) => {
+                let status = resp.status();
+                if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                    break resp;
+                }
+                // A single-use signed CDN URL can race (403/401), or the CDN can throttle
+                // (429/5xx). Re-requesting the resolve URL mints a fresh redirect, so retry.
+                let transient = status == reqwest::StatusCode::FORBIDDEN
+                    || status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status.is_server_error();
+                if transient && attempt < CHUNK_RETRY_MAX_ATTEMPTS {
+                    attempt += 1;
+                    tracing::warn!(
+                        chunk = index,
+                        attempt,
+                        %status,
+                        "chunk request failed transiently; re-resolving and retrying"
+                    );
+                    tokio::time::sleep(CHUNK_RETRY_BACKOFF * attempt).await;
+                    continue;
+                }
+                // Two distinct terminal failures exit here; keep them distinguishable so a log
+                // reader isn't sent chasing a Range-support problem that doesn't exist. A non-206
+                // success (e.g. `200`) means the server *ignored* the Range header; an exhausted
+                // transient (e.g. `403`/`429`) means it kept failing under retry.
+                return Err(if transient {
+                    anyhow!(
+                        "chunk {index} failed after {CHUNK_RETRY_MAX_ATTEMPTS} retries: status {status}"
+                    )
+                } else {
+                    anyhow!(
+                        "server ignored Range for chunk {index}: status {status} (expected 206)"
+                    )
+                });
+            }
+            // A dropped connection / timeout / DNS blip is exactly the transient the retry loop is
+            // for; a bare `?` here would have failed the whole download on the first network hiccup.
+            Err(e) => {
+                if attempt < CHUNK_RETRY_MAX_ATTEMPTS {
+                    attempt += 1;
+                    tracing::warn!(
+                        chunk = index,
+                        attempt,
+                        error = %e,
+                        "chunk request failed with a network error; re-resolving and retrying"
+                    );
+                    tokio::time::sleep(CHUNK_RETRY_BACKOFF * attempt).await;
+                    continue;
+                }
+                return Err(e).with_context(|| {
+                    format!(
+                        "request chunk {index} ({start}-{end}) after {CHUNK_RETRY_MAX_ATTEMPTS} retries"
+                    )
+                });
+            }
+        }
+    };
+
+    let limit = end + 1; // exclusive upper bound this chunk may write to
+    let mut received = start; // absolute position of the next byte to arrive
+    let mut written = start; // absolute position of the next byte to write
+    let mut buf: Vec<u8> = Vec::with_capacity(CHUNK_WRITE_BUFFER);
+    let mut body = resp.bytes_stream();
+    while let Some(frame) = body.next().await {
+        let frame = frame.with_context(|| format!("read chunk {index} body"))?;
+        if frame.is_empty() {
+            continue;
+        }
+        let n = frame.len() as u64;
+        if received + n > limit {
+            return Err(anyhow!("chunk {index} overran its range"));
+        }
+        received += n;
+        downloaded.fetch_add(n, Ordering::Relaxed);
+        buf.extend_from_slice(&frame);
+        if buf.len() >= CHUNK_WRITE_BUFFER {
+            written = flush_chunk_writes(file, &mut buf, written, index).await?;
+        }
+    }
+    written = flush_chunk_writes(file, &mut buf, written, index).await?;
+    if written != limit {
+        return Err(anyhow!(
+            "chunk {index} short read: got {}, expected {len}",
+            written - start
+        ));
+    }
+
+    // Durability ordering: data first, then the completion mark.
+    let f = file.clone();
+    tokio::task::spawn_blocking(move || f.sync_data())
+        .await
+        .context("chunk fsync task failed")?
+        .context("fsync chunk data")?;
+    manifest.lock().await.mark_complete(index).await
+}
+
+/// Verifies the assembled part file and atomically publishes it into the clean layout, then
+/// removes the resume bitmap. Integrity is the LFS sha256 when the CDN advertised one
+/// (strongest), else the byte length — a missing/garbled hash never fails the download. The
+/// finalize phase streams no new bytes, so `copying` pauses the network stall watchdog (a
+/// multi-GB fsync + hash on a slow disk can outlast its window).
+#[allow(clippy::too_many_arguments)]
+async fn verify_and_publish(
+    file: Arc<std::fs::File>,
+    part: &Path,
+    manifest_path: &Path,
+    dir: &Path,
+    base: &str,
+    total: u64,
+    info: &RangeInfo,
+    copying: &Arc<AtomicBool>,
+) -> Result<()> {
+    copying.store(true, Ordering::Relaxed);
+    let result = verify_and_publish_inner(file, part, manifest_path, dir, base, total, info).await;
+    copying.store(false, Ordering::Relaxed);
+    result
+}
+
+async fn verify_and_publish_inner(
+    file: Arc<std::fs::File>,
+    part: &Path,
+    manifest_path: &Path,
+    dir: &Path,
+    base: &str,
+    total: u64,
+    info: &RangeInfo,
+) -> Result<()> {
+    // Flush everything before the integrity read, then release the handle so the rename can't
+    // race an open writer.
+    tokio::task::spawn_blocking(move || file.sync_all())
+        .await
+        .context("final fsync task failed")?
+        .context("fsync assembled file")?;
+
+    let part_buf = part.to_path_buf();
+    let expected_sha = info.sha256.clone();
+    let verify = tokio::task::spawn_blocking(move || -> Result<()> {
+        let len = std::fs::metadata(&part_buf)
+            .with_context(|| format!("stat {}", part_buf.display()))?
+            .len();
+        if len != total {
+            return Err(anyhow!(
+                "assembled {} is {len} bytes, expected {total}",
+                part_buf.display()
+            ));
+        }
+        if let Some(expected) = expected_sha {
+            let actual =
+                sha256_file(&part_buf).with_context(|| format!("hash {}", part_buf.display()))?;
+            if actual != expected {
+                return Err(anyhow!(
+                    "sha256 mismatch for {}: got {actual}, expected {expected}",
+                    part_buf.display()
+                ));
+            }
+        }
+        Ok(())
+    })
+    .await
+    .context("verify task failed")?;
+    if let Err(e) = verify {
+        // A corrupt assembly (or a wrong advertised hash) won't fix itself on resume — every
+        // chunk is already marked done — so discard the partial to force a clean re-download.
+        let _ = tokio::fs::remove_file(part).await;
+        let _ = tokio::fs::remove_file(manifest_path).await;
+        return Err(e);
+    }
+
+    let dest = dir.join(base);
+    tokio::fs::rename(part, &dest)
+        .await
+        .with_context(|| format!("publish {}", dest.display()))?;
+    let _ = tokio::fs::remove_file(manifest_path).await;
+    Ok(())
+}
+
+/// Streams a file through sha256 (constant memory — the model is multi-GB).
+fn sha256_file(path: &Path) -> Result<String> {
+    use std::io::Read as _;
+    let mut f = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    Ok(hex)
+}
+
+/// Per-chunk completion bitmap persisted next to the `.part` so a download resumes across process
+/// restarts. On-disk layout: a header line `SSV2CPARTS v1 {total} {chunk_size} {chunk_count}\n`
+/// then one byte per chunk (`b'1'` = complete). Marking a chunk writes its single byte and fsyncs
+/// — atomic per chunk, no full rewrite, no torn-write window. A header that doesn't match the
+/// current download means the partial belongs to a different upstream file → start clean.
+struct Manifest {
+    path: PathBuf,
+    chunk_count: usize,
+    done: Vec<bool>,
+    header_len: u64,
+}
+
+impl Manifest {
+    fn header_for(total: u64, chunk_size: u64, chunk_count: usize) -> String {
+        format!("SSV2CPARTS v1 {total} {chunk_size} {chunk_count}\n")
+    }
+
+    async fn load_or_init(
+        path: &Path,
+        total: u64,
+        chunk_size: u64,
+        chunk_count: usize,
+    ) -> Result<Manifest> {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            Manifest::load_or_init_sync(&path, total, chunk_size, chunk_count)
+        })
+        .await
+        .context("load parts manifest task failed")?
+    }
+
+    fn load_or_init_sync(
+        path: &Path,
+        total: u64,
+        chunk_size: u64,
+        chunk_count: usize,
+    ) -> Result<Manifest> {
+        let header = Manifest::header_for(total, chunk_size, chunk_count);
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                // Only trust a bitmap whose header matches this exact download; otherwise it is a
+                // stale partial for a different file and is re-initialised below.
+                if bytes.starts_with(header.as_bytes()) && bytes.len() == header.len() + chunk_count
+                {
+                    let done = bytes[header.len()..].iter().map(|b| *b == b'1').collect();
+                    return Ok(Manifest {
+                        path: path.to_path_buf(),
+                        chunk_count,
+                        done,
+                        header_len: header.len() as u64,
+                    });
+                }
+            }
+            // No manifest yet → start a fresh download.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // A manifest that *exists* but won't read (a Windows sharing violation from AV / the
+            // search indexer, a transient permissions hiccup) must not be treated as absent:
+            // re-initialising would truncate a valid bitmap and silently discard real download
+            // progress. Surface it so the job-queue retries the whole job instead.
+            Err(e) => {
+                return Err(e).with_context(|| format!("read parts manifest {}", path.display()));
+            }
+        }
+        Manifest::init_sync(path, total, chunk_size, chunk_count)
+    }
+
+    /// Forcibly writes a fresh all-zero bitmap, discarding any existing one. Used for the first
+    /// download and to drop a stale all-done manifest left over a brand-new (zero-filled) `.part`.
+    fn init_sync(path: &Path, total: u64, chunk_size: u64, chunk_count: usize) -> Result<Manifest> {
+        let header = Manifest::header_for(total, chunk_size, chunk_count);
+        let mut init = Vec::with_capacity(header.len() + chunk_count);
+        init.extend_from_slice(header.as_bytes());
+        init.resize(header.len() + chunk_count, b'0');
+        write_file_durable(path, &init)
+            .with_context(|| format!("init parts manifest {}", path.display()))?;
+        Ok(Manifest {
+            path: path.to_path_buf(),
+            chunk_count,
+            done: vec![false; chunk_count],
+            header_len: header.len() as u64,
+        })
+    }
+
+    /// Off-runtime [`Manifest::init_sync`] — re-initialises the bitmap to all-pending.
+    async fn reinit(
+        path: &Path,
+        total: u64,
+        chunk_size: u64,
+        chunk_count: usize,
+    ) -> Result<Manifest> {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            Manifest::init_sync(&path, total, chunk_size, chunk_count)
+        })
+        .await
+        .context("reinit parts manifest task failed")?
+    }
+
+    fn pending_indices(&self) -> Vec<usize> {
+        (0..self.chunk_count).filter(|i| !self.done[*i]).collect()
+    }
+
+    fn completed_bytes(&self, chunk_size: u64, total: u64) -> u64 {
+        (0..self.chunk_count)
+            .filter(|i| self.done[*i])
+            .map(|i| chunk_byte_len(i, chunk_size, total))
+            .sum()
+    }
+
+    async fn mark_complete(&mut self, index: usize) -> Result<()> {
+        if self.done[index] {
+            return Ok(());
+        }
+        let path = self.path.clone();
+        let offset = self.header_len + index as u64;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .with_context(|| format!("open parts manifest {}", path.display()))?;
+            write_all_at(&f, b"1", offset)?;
+            f.sync_data().context("fsync parts manifest")?;
+            Ok(())
+        })
+        .await
+        .context("mark-complete task failed")??;
+        self.done[index] = true;
+        Ok(())
+    }
+}
+
+/// Writes `bytes` to `path` (truncating) and fsyncs — used to initialise the parts bitmap.
+fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .with_context(|| format!("create {}", path.display()))?;
+    f.write_all(bytes)
+        .with_context(|| format!("write {}", path.display()))?;
+    f.sync_data()
+        .with_context(|| format!("fsync {}", path.display()))?;
+    Ok(())
 }
 
 /// Diagnostic entry point for `examples/repro_8b.rs` (not used by the app): download a single
@@ -1231,5 +2003,702 @@ mod tests {
             .unwrap();
         writer.write_all(contents).unwrap();
         writer.finish().unwrap().into_inner()
+    }
+
+    // ── Parallel chunked downloader (PR8) ───────────────────────────────────────────────────
+
+    /// Deterministic pseudo-random bytes (an LCG — `Math.random` is unavailable and we need a
+    /// reproducible fixture). Compressible-resistant enough that a misplaced chunk shows up as a
+    /// byte-identity failure.
+    fn synthetic_blob(len: usize) -> Vec<u8> {
+        let mut v = Vec::with_capacity(len);
+        let mut state: u32 = 0x1234_5678;
+        for _ in 0..len {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            v.push((state >> 24) as u8);
+        }
+        v
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        let digest = h.finalize();
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{b:02x}");
+        }
+        hex
+    }
+
+    fn test_cfg(conns: usize, chunk_size: u64) -> ChunkConfig {
+        ChunkConfig {
+            conns,
+            chunk_size,
+            connect_timeout: Duration::from_secs(5),
+            read_timeout: Duration::from_secs(5),
+        }
+    }
+
+    fn test_info(total: u64, sha256: Option<String>) -> RangeInfo {
+        RangeInfo {
+            total,
+            is_partial: true,
+            accept_ranges: true,
+            sha256,
+        }
+    }
+
+    /// Parses a `bytes=START-END` request range (both bounds always present in our requests).
+    fn parse_byte_range(raw: &str) -> Option<(u64, u64)> {
+        let spec = raw.trim().strip_prefix("bytes=")?;
+        let (s, e) = spec.split_once('-')?;
+        Some((s.trim().parse().ok()?, e.trim().parse().ok()?))
+    }
+
+    /// A wiremock responder that honours `Range`: a ranged request gets `206` + the slice +
+    /// `Content-Range`/`Accept-Ranges`; an un-ranged request gets the full `200` body. It logs
+    /// every served range so a test can assert which chunks were (not) fetched.
+    struct RangeResponder {
+        body: Vec<u8>,
+        log: Arc<std::sync::Mutex<Vec<(u64, u64)>>>,
+    }
+
+    impl wiremock::Respond for RangeResponder {
+        fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+            let range = req
+                .headers
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_byte_range);
+            match range {
+                Some((start, end)) => {
+                    let end = end.min(self.body.len() as u64 - 1);
+                    self.log.lock().unwrap().push((start, end));
+                    let slice = self.body[start as usize..=end as usize].to_vec();
+                    let content_range = format!("bytes {start}-{end}/{}", self.body.len());
+                    ResponseTemplate::new(206)
+                        .insert_header("Accept-Ranges", "bytes")
+                        .insert_header("Content-Range", content_range.as_str())
+                        .set_body_raw(slice, "application/octet-stream")
+                }
+                None => ResponseTemplate::new(200)
+                    .insert_header("Accept-Ranges", "bytes")
+                    .set_body_raw(self.body.clone(), "application/octet-stream"),
+            }
+        }
+    }
+
+    /// A responder that returns `403` for its first `fail_first` requests (the single-use signed-URL
+    /// race we hit in production) and serves the range thereafter — to exercise the bounded retry.
+    struct FlakyResponder {
+        body: Vec<u8>,
+        fail_first: u32,
+        seen: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl wiremock::Respond for FlakyResponder {
+        fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+            if self.seen.fetch_add(1, Ordering::Relaxed) < self.fail_first {
+                return ResponseTemplate::new(403).set_body_string("denied");
+            }
+            match req
+                .headers
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_byte_range)
+            {
+                Some((start, end)) => {
+                    let end = end.min(self.body.len() as u64 - 1);
+                    let slice = self.body[start as usize..=end as usize].to_vec();
+                    let content_range = format!("bytes {start}-{end}/{}", self.body.len());
+                    ResponseTemplate::new(206)
+                        .insert_header("Accept-Ranges", "bytes")
+                        .insert_header("Content-Range", content_range.as_str())
+                        .set_body_raw(slice, "application/octet-stream")
+                }
+                None => ResponseTemplate::new(200)
+                    .set_body_raw(self.body.clone(), "application/octet-stream"),
+            }
+        }
+    }
+
+    async fn mount_range_server(
+        body: Vec<u8>,
+    ) -> (MockServer, Arc<std::sync::Mutex<Vec<(u64, u64)>>>) {
+        let server = MockServer::start().await;
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .respond_with(RangeResponder {
+                body,
+                log: log.clone(),
+            })
+            .mount(&server)
+            .await;
+        (server, log)
+    }
+
+    #[test]
+    fn range_plan_requires_ranges_and_known_size() {
+        assert!(range_plan(true, false, 1000), "206 alone is enough");
+        assert!(
+            range_plan(false, true, 1000),
+            "Accept-Ranges alone is enough"
+        );
+        assert!(
+            !range_plan(false, false, 1000),
+            "no range support → single-stream"
+        );
+        assert!(!range_plan(true, true, 0), "unknown size → single-stream");
+    }
+
+    #[test]
+    fn parse_sha256_normalizes_etag_forms() {
+        let hex = "a".repeat(64);
+        assert_eq!(parse_sha256(&format!("\"{hex}\"")), Some(hex.clone()));
+        assert_eq!(
+            parse_sha256(&format!("W/\"sha256:{}\"", hex.to_uppercase())),
+            Some(hex.clone()),
+            "weak validator + sha256: prefix + uppercase normalizes"
+        );
+        assert_eq!(parse_sha256("\"deadbeef\""), None, "too short");
+        assert_eq!(parse_sha256("not-a-hash-value-xyz"), None);
+    }
+
+    #[test]
+    fn lfs_sha256_trusts_only_x_linked_etag_not_cdn_etag() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        // Real-world Xet-backed file: the resolve `302` carries the true file sha256 in
+        // `X-Linked-ETag`, while the CDN blob's bare `ETag` is the *Xet content hash* — a different
+        // 64-hex digest of the same bytes. Trusting the bare `ETag` made every verification fail.
+        let real = "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a";
+        let xet = "d4ccbe2aafe6a38e45695e8414f071078f894e3aa59426454d3242e5944397c5";
+
+        // The CDN response behind the redirect carries only a bare `ETag` (the Xet hash). It must
+        // NOT be treated as the file sha256 — better to skip integrity than to verify against the
+        // wrong digest and reject every (correct) download.
+        let mut cdn = HeaderMap::new();
+        cdn.insert(
+            "etag",
+            HeaderValue::from_str(&format!("\"{xet}\"")).unwrap(),
+        );
+        assert_eq!(
+            lfs_sha256(&cdn),
+            None,
+            "a bare CDN ETag is not the file sha256 and must be ignored"
+        );
+
+        // The resolve `302` carries `X-Linked-ETag` — the real sha256 — even alongside a (different)
+        // bare `ETag`. That is the value we verify against.
+        let mut redirect = HeaderMap::new();
+        redirect.insert(
+            "x-linked-etag",
+            HeaderValue::from_str(&format!("\"{real}\"")).unwrap(),
+        );
+        redirect.insert(
+            "etag",
+            HeaderValue::from_str(&format!("\"{xet}\"")).unwrap(),
+        );
+        assert_eq!(
+            lfs_sha256(&redirect),
+            Some(real.to_string()),
+            "X-Linked-ETag is the file sha256"
+        );
+    }
+
+    #[test]
+    fn content_range_total_parses_suffix() {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(
+            reqwest::header::CONTENT_RANGE,
+            "bytes 0-0/123456".parse().unwrap(),
+        );
+        assert_eq!(content_range_total(&h), Some(123456));
+        h.insert(
+            reqwest::header::CONTENT_RANGE,
+            "bytes 0-0/*".parse().unwrap(),
+        );
+        assert_eq!(content_range_total(&h), None, "unknown total → None");
+    }
+
+    #[tokio::test]
+    async fn chunked_download_assembles_byte_identical_file() {
+        let blob = synthetic_blob(700 * 1024);
+        let (server, _log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-integrity");
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(blob.len() as u64, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, 64 * 1024); // ~11 chunks across 4 connections
+
+        chunked_download(&info, &url, &dir, "blob.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect("chunked download should succeed");
+
+        let out = std::fs::read(dir.join("blob.gguf")).unwrap();
+        assert_eq!(
+            out, blob,
+            "assembled file must be byte-identical to the source"
+        );
+        assert_eq!(
+            downloaded.load(Ordering::Relaxed),
+            blob.len() as u64,
+            "progress counter must equal the total"
+        );
+        assert!(
+            !dir.join("blob.gguf.part").exists(),
+            "the .part must be renamed away on success"
+        );
+        assert!(
+            !dir.join("blob.gguf.parts").exists(),
+            "the resume bitmap must be removed on success"
+        );
+        assert!(
+            !copying.load(Ordering::Relaxed),
+            "copying flag must be cleared after finalize"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn chunk_requests_follow_redirect_and_preserve_range() {
+        // The real bug: HF's `resolve` URL 302-redirects to a *single-use* signed CDN URL, so each
+        // chunk must re-request the resolve URL and follow its own redirect — with `Range` surviving
+        // the (cross-origin) hop. Two servers stand in for huggingface.co → CDN. If `Range` were
+        // dropped on the redirect, the CDN would return a 200 full body and `fetch_chunk` would error.
+        let blob = synthetic_blob(300 * 1024);
+        let cdn = MockServer::start().await;
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Mock::given(method("GET"))
+            .and(path("/cdn"))
+            .respond_with(RangeResponder {
+                body: blob.clone(),
+                log: log.clone(),
+            })
+            .mount(&cdn)
+            .await;
+        let resolve = MockServer::start().await;
+        let cdn_url = format!("{}/cdn", cdn.uri());
+        Mock::given(method("GET"))
+            .and(path("/resolve"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", cdn_url.as_str()))
+            .mount(&resolve)
+            .await;
+
+        let dir = unique_temp_dir("chunk-redirect");
+        let url = format!("{}/resolve", resolve.uri());
+        let info = test_info(blob.len() as u64, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, 48 * 1024);
+
+        chunked_download(&info, &url, &dir, "r.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect("a chunked download via a redirecting resolve URL should succeed");
+
+        let out = std::fs::read(dir.join("r.gguf")).unwrap();
+        assert_eq!(
+            out, blob,
+            "file assembled through the redirect must be byte-identical"
+        );
+        assert!(
+            !log.lock().unwrap().is_empty(),
+            "the CDN must have served ranged requests (Range survived the redirect → 206)"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn chunk_retries_transient_403_then_succeeds() {
+        // The production failure mode (single-use signed-URL race) but recoverable: the first
+        // request 403s, the retry succeeds. The download must not treat the 403 as fatal.
+        let blob = synthetic_blob(40 * 1024);
+        let server = MockServer::start().await;
+        let seen = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        Mock::given(method("GET"))
+            .and(path("/flaky"))
+            .respond_with(FlakyResponder {
+                body: blob.clone(),
+                fail_first: 1,
+                seen: seen.clone(),
+            })
+            .mount(&server)
+            .await;
+        let dir = unique_temp_dir("chunk-retry");
+        let url = format!("{}/flaky", server.uri());
+        let info = test_info(blob.len() as u64, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(1, blob.len() as u64); // a single chunk
+
+        chunked_download(&info, &url, &dir, "flaky.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect("a transient 403 must be retried, not fatal");
+
+        assert_eq!(std::fs::read(dir.join("flaky.gguf")).unwrap(), blob);
+        assert!(
+            seen.load(Ordering::Relaxed) >= 2,
+            "the chunk should have been retried after the 403"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn resume_skips_already_completed_chunks() {
+        let blob = synthetic_blob(500 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-resume");
+        let base = "model.gguf";
+
+        // Pre-seed: pre-allocate the part, write chunk 0's correct bytes, mark chunk 0 done.
+        let part = dir.join(format!("{base}.part"));
+        {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&part)
+                .unwrap();
+            f.set_len(total).unwrap();
+            let c0 = chunk_byte_len(0, chunk_size, total) as usize;
+            f.seek_write(&blob[..c0], 0).unwrap();
+        }
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            let mut marks = vec![b'0'; chunk_count];
+            marks[0] = b'1';
+            bytes.extend_from_slice(&marks);
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect("resume should succeed");
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(out, blob, "resumed file must be byte-identical");
+        let ranges = log.lock().unwrap();
+        assert!(
+            ranges.iter().all(|(start, _)| *start != 0),
+            "chunk 0 was pre-completed and must not be re-fetched; served ranges = {ranges:?}"
+        );
+        assert_eq!(
+            ranges.len(),
+            chunk_count - 1,
+            "exactly the {} missing chunks should be fetched",
+            chunk_count - 1
+        );
+        assert_eq!(
+            downloaded.load(Ordering::Relaxed),
+            total,
+            "counter must include the seeded resume prefix plus the streamed remainder"
+        );
+        drop(ranges);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn chunked_download_errors_when_server_ignores_range() {
+        // A server that returns 200 (full body) for a ranged request would corrupt the file if
+        // written at a chunk offset — fetch_chunk must reject it instead.
+        let blob = synthetic_blob(100 * 1024);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/full"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Accept-Ranges", "bytes")
+                    .set_body_raw(blob.clone(), "application/octet-stream"),
+            )
+            .mount(&server)
+            .await;
+        let dir = unique_temp_dir("chunk-200");
+        let url = format!("{}/full", server.uri());
+        let info = test_info(blob.len() as u64, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(2, 32 * 1024);
+
+        let err = chunked_download(&info, &url, &dir, "full.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect_err("a 200 (range ignored) must error, not corrupt the file");
+        assert!(
+            err.to_string().contains("ignored Range"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !dir.join("full.gguf").exists(),
+            "no file should be published when the server ignores Range"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn fresh_part_discards_stale_all_done_manifest() {
+        // Regression for the silent-corruption path: a prior run published the model but its
+        // post-publish `remove_file(<base>.parts)` silently failed, leaving an all-`1` bitmap. The
+        // model file is later removed; the next run creates a fresh zero-filled `.part`. Trusting
+        // the stale manifest would skip every chunk and publish zeros — the length check passes and
+        // there is no sha256 to catch it. The downloader must notice the brand-new part and refetch.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-stale-manifest");
+        let base = "model.gguf";
+
+        // Pre-seed ONLY a stale, all-complete manifest — no `.part` on disk.
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            bytes.extend_from_slice(&vec![b'1'; chunk_count]);
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+        assert!(
+            !dir.join(format!("{base}.part")).exists(),
+            "precondition: no part file yet"
+        );
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None); // no sha256 — re-fetching is the only safety net
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect(
+                "a fresh part with a stale all-done manifest must re-download, not publish zeros",
+            );
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(
+            out, blob,
+            "published file must be the real bytes, not zeros"
+        );
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after the stale manifest is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn exhausted_transient_is_not_reported_as_ignored_range() {
+        // A chunk that 403s past its retry budget is an auth/throttle failure, not a server that
+        // ignored Range. Both terminate at the same return; the message must still tell them apart
+        // so a log reader doesn't chase a Range-support bug that doesn't exist.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/denied"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("denied"))
+            .mount(&server)
+            .await;
+        let dir = unique_temp_dir("chunk-403-forever");
+        let url = format!("{}/denied", server.uri());
+        let total = 20 * 1024u64;
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(1, total); // one chunk; it exhausts its retries and fails
+
+        let err = chunked_download(
+            &info,
+            &url,
+            &dir,
+            "denied.gguf",
+            &downloaded,
+            &copying,
+            &cfg,
+        )
+        .await
+        .expect_err("a chunk that 403s past its retry budget must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed after") && msg.contains("retries"),
+            "expected a retry-exhaustion message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("ignored Range"),
+            "a 403 is not an ignored-Range condition: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn manifest_load_or_init_distinguishes_missing_valid_and_mismatched() {
+        // Guards the load/init refactor: a missing manifest starts all-pending; a valid one is
+        // loaded verbatim; a header that belongs to a different download is re-initialised. (The
+        // separate present-but-unreadable → propagate-error branch can't be injected without a real
+        // sharing violation, so it is covered by inspection rather than a unit test.)
+        let dir = unique_temp_dir("manifest-load");
+        let path = dir.join("m.parts");
+        let total = 300 * 1024u64;
+        let chunk_size = 64 * 1024u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+
+        // Missing → fresh, nothing complete.
+        let fresh = Manifest::load_or_init_sync(&path, total, chunk_size, chunk_count).unwrap();
+        assert_eq!(fresh.pending_indices().len(), chunk_count);
+        assert!(path.exists(), "init must persist a bitmap");
+
+        // Valid existing (chunk 0 marked) → loaded verbatim.
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            let mut marks = vec![b'0'; chunk_count];
+            marks[0] = b'1';
+            bytes.extend_from_slice(&marks);
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        let loaded = Manifest::load_or_init_sync(&path, total, chunk_size, chunk_count).unwrap();
+        assert_eq!(
+            loaded.pending_indices().len(),
+            chunk_count - 1,
+            "a valid bitmap must be loaded, not clobbered"
+        );
+
+        // Header for a *different* download (different total) → re-initialised all-pending.
+        let other = Manifest::load_or_init_sync(&path, total + 1, chunk_size, chunk_count).unwrap();
+        assert_eq!(
+            other.pending_indices().len(),
+            chunk_count,
+            "a mismatched header must be treated as stale and re-initialised"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn chunked_download_fails_fast_on_stuck_chunk() {
+        // The chunk source sends 206 headers then hangs; the per-read timeout must fail the chunk
+        // quickly (the per-chunk backstop to the aggregate-progress stall watchdog).
+        let total = 64 * 1024u64;
+        let addr = spawn_hang_after_206(total).await;
+        let dir = unique_temp_dir("chunk-stall");
+        let url = format!("http://{addr}/x");
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = ChunkConfig {
+            conns: 2,
+            chunk_size: total,
+            connect_timeout: Duration::from_millis(500),
+            read_timeout: Duration::from_millis(80),
+        };
+
+        let started = std::time::Instant::now();
+        let err = chunked_download(&info, &url, &dir, "x.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect_err("a stuck chunk must error, not hang");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "stuck chunk should fail fast via the read timeout, took {elapsed:?}"
+        );
+        let _ = err;
+        assert!(
+            dir.join("x.gguf.part").exists(),
+            "the .part must remain for resume after a transient stall"
+        );
+        assert!(
+            dir.join("x.gguf.parts").exists(),
+            "the resume bitmap must remain for resume after a transient stall"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn integrity_accepts_matching_sha256_and_rejects_a_wrong_one() {
+        let blob = synthetic_blob(120 * 1024);
+        let (server, _log) = mount_range_server(blob.clone()).await;
+        let url = format!("{}/blob", server.uri());
+
+        // Matching hash → published.
+        let good = test_info(blob.len() as u64, Some(sha256_hex(&blob)));
+        let dir_ok = unique_temp_dir("chunk-sha-ok");
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(3, 32 * 1024);
+        chunked_download(&good, &url, &dir_ok, "ok.gguf", &downloaded, &copying, &cfg)
+            .await
+            .expect("matching sha256 must verify");
+        assert!(
+            dir_ok.join("ok.gguf").exists(),
+            "verified file is published"
+        );
+        let _ = std::fs::remove_dir_all(dir_ok);
+
+        // Wrong hash → rejected, partial discarded so a retry is clean.
+        let bad = test_info(blob.len() as u64, Some("0".repeat(64)));
+        let dir_bad = unique_temp_dir("chunk-sha-bad");
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let err = chunked_download(
+            &bad,
+            &url,
+            &dir_bad,
+            "bad.gguf",
+            &downloaded,
+            &copying,
+            &cfg,
+        )
+        .await
+        .expect_err("a wrong sha256 must fail the download");
+        assert!(
+            err.to_string().contains("sha256 mismatch"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !dir_bad.join("bad.gguf").exists(),
+            "a hash-mismatched file must never be published"
+        );
+        assert!(
+            !dir_bad.join("bad.gguf.part").exists(),
+            "a hash-mismatched partial must be discarded for a clean retry"
+        );
+        let _ = std::fs::remove_dir_all(dir_bad);
+    }
+
+    /// A local TCP server that, for any request, writes `206` headers promising `total` bytes and
+    /// then hangs without sending a body — the deterministic stand-in for a CDN that accepts the
+    /// socket then goes silent mid-transfer.
+    async fn spawn_hang_after_206(total: u64) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let headers = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n\r\n",
+                        total - 1,
+                        total,
+                        total
+                    );
+                    let _ = sock.write_all(headers.as_bytes()).await;
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                });
+            }
+        });
+        addr
     }
 }

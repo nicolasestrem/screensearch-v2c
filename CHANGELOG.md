@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.0 PR8 — Parallel model download
+Replaces the single-stream first-run model fetch with a **multi-connection chunked downloader** so
+the GGUF/mmproj download saturates the user's bandwidth instead of being capped at hf-hub's one
+HuggingFace-CDN connection (~20 MB/s). Confined to `crates/inference/src/download.rs` (+ its tests),
+independent of the retrieval chain (`docs/0.2.0.md` PR8).
+
+- **Chunked, resumable, parallel.** A `Range` probe learns the total size, range support, and the
+  LFS sha256 (when advertised); if the server honours ranges, the file is fetched with N parallel
+  `Range` requests (`DOWNLOAD_CONNECTIONS`, default 8 — `SSV2C_DOWNLOAD_CONNECTIONS` to override,
+  clamped 1–16) writing into one pre-allocated `.part` via positioned writes. A per-chunk completion
+  **bitmap** (`<base>.parts`) is fsync'd *after* its chunk's data, so an interrupted download resumes
+  exactly where it stopped with no torn-write window.
+- **Per-request resolve (HF Xet bridge).** HuggingFace's signed CDN URLs are cryptographically bound
+  to the exact `Range` they were minted for (the CloudFront policy pins
+  `ByteRange.ExpectedHeader`), so a single resolved URL **cannot** be reused across chunks — reuse
+  returns `403`. Each chunk therefore re-requests the stable `…/resolve/main/…` URL with its own
+  `Range` and follows the redirect (reqwest preserves `Range` across the hop), minting a fresh
+  range-matched signed URL per chunk — the same approach `hf_transfer` uses. A transient
+  `403`/`401`/`429`/`5xx` is retried with backoff.
+- **Correct integrity target (HF Xet bridge).** A file's true content sha256 is exposed **only** in
+  the `X-Linked-ETag` header on the `resolve` *redirect* (alongside `X-Linked-Size` and
+  `Accept-Ranges`). The CDN blob *behind* the redirect carries a bare `ETag` that is the **Xet
+  content hash** (a different 64-hex digest of the same bytes, also surfaced as `X-Xet-Hash`), not
+  the file sha256 — and on classic LFS it is an S3 multipart validator (`md5-partcount`). The probe
+  therefore reads the redirect's **own** headers *without following it*, and verifies only against
+  `X-Linked-ETag`; the bare `ETag` is never trusted. Previously the probe followed the redirect and
+  read the CDN `ETag`, so a correctly-downloaded Xet model (e.g. Qwen3-VL-4B `Q4_K_M`) failed sha256
+  every time and re-downloaded in a loop — visible as a stall at ~75% (the GGUF is 75% of the
+  GGUF+mmproj total, so it finished, failed verification, and restarted before the mmproj began).
+- **Reuses the existing machinery, doesn't bypass it.** All chunks feed the same downloaded-byte
+  counter, so the UI percentage and the aggregate-progress stall watchdog stay truthful with
+  concurrent writers ("no aggregate progress across all chunks" is the stall condition, unchanged).
+  The finished blob still lands in the clean layout via an atomic rename, and `fetch_one`'s
+  already-in-layout / already-a-cache-blob fast paths are still checked first.
+- **Range-less fallback + integrity.** A server that doesn't advertise ranges (no `Accept-Ranges` /
+  no length) falls back to the single-stream hf-hub path, so a non-resumable mirror still downloads.
+  The assembled file is verified against the LFS sha256 when present (else byte length); a mismatch
+  discards the partial for a clean retry. A per-chunk `206` assertion refuses a server that silently
+  ignores `Range` rather than corrupting the file; an expired CDN signed URL (`401`/`403`) triggers
+  one re-resolve.
+- **Cancellable (gap #46 for this path).** The chunk futures are awaited inside the fetch task with
+  `buffer_unordered`, so the stall watchdog's `task.abort()` drops every in-flight chunk — no orphaned
+  writers, unlike hf-hub's internally-detached chunk tasks on the fallback path.
+- **Tests (this PR owns them):** parallel byte-identity, resume-skips-completed-chunks,
+  fail-fast-on-stuck-chunk, range-ignored rejection, sha256 accept/reject, `X-Linked-ETag`-only
+  integrity (rejects the bare CDN/Xet `ETag`), and the `range_plan` decision — all fully mocked
+  (wiremock + a local hang-after-206 server), no network.
+- **PR8 review hardening (PR #35 bot review).** Five robustness fixes in `download.rs`, all with
+  tests: (1) a brand-new (zero-filled) `.part` now **discards a stale all-done `.parts` manifest**
+  rather than trusting it — `open_preallocated` reports whether it created the file (atomic via
+  `create_new`), and an all-complete bitmap over a fresh part is re-initialised, closing a path that
+  could publish a zero-filled model when no `X-Linked-ETag` was advertised; (2) a transient
+  **network error** on a chunk request (dropped connection / timeout / DNS blip) is now retried with
+  backoff instead of failing the whole download on the first hiccup; (3) a **present-but-unreadable**
+  `.parts` manifest (a Windows sharing violation from AV / the indexer) now surfaces an error so the
+  job-queue retries, instead of silently truncating the bitmap and discarding real progress; (4)
+  streamed body frames are **coalesced to ~256 KiB** before each positioned write, cutting
+  `spawn_blocking` churn; (5) the terminal chunk error now distinguishes "server ignored Range"
+  (a `200`) from "failed after N retries" (an exhausted `403`/`429`), so logs don't send an operator
+  chasing a non-existent range-support bug. Two reviewer suggestions to make `download.rs` compile on
+  macOS/Linux (`#[cfg(unix)]` `write_at`) were intentionally **declined** — the project is
+  Windows-only by design (CLAUDE.md hard rule; CI is `windows-latest`), matching the
+  Windows-native convention already in `flags.rs`/`lib.rs`.
+
 ### 0.2.0 PR7 — Integration audit
 Ran the PR7 end-to-end audit against the existing populated app-data DB using `npm run tauri dev`
 and the real debug executable (`target/debug/screensearch.exe`). Evidence screenshots were captured
@@ -255,10 +319,11 @@ The schema, types, and OCR geometry the attention-first retrieval pipeline needs
   flag, so a console flashed each time Settings opened (alarming, looks malware-ish). Now suppressed,
   matching the sidecar/`probe_caps` spawns. (`src-tauri/src/lib.rs::list_devices_from_binary`.)
 
-### Known limitation — first-run model download speed (tracked for 0.1.1)
-- Models download **single-stream** via hf-hub (~20 MB/s; HuggingFace's CDN throttles single
-  connections), so the ~5 GB Quality vision model takes a few minutes. A parallel/chunked downloader
-  to saturate bandwidth is a tracked follow-up — see `specs/07_KNOWN_GAPS.md`.
+### Known limitation — first-run model download speed (RESOLVED in 0.2.0 PR8)
+- Models used to download **single-stream** via hf-hub (~20 MB/s; HuggingFace's CDN throttles single
+  connections), so the ~5 GB Quality vision model took a few minutes. **Resolved by the 0.2.0 PR8
+  multi-connection chunked downloader above** (single-stream remains the fallback for a range-less
+  server).
 
 ### Added — Model-tier tooltips (2026-06-24)
 - **The Default / Quality / Beta tier buttons now show which model they map to** on hover and
