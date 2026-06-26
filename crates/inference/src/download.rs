@@ -101,6 +101,12 @@ const CHUNK_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CHUNK_RETRY_MAX_ATTEMPTS: u32 = 4;
 const CHUNK_RETRY_BACKOFF: Duration = Duration::from_millis(400);
 
+/// Coalesce streamed body frames up to this many bytes before handing them to a `spawn_blocking`
+/// positioned write. reqwest yields frames as small as a single TCP segment (~16–64 KiB); spawning
+/// a blocking task per frame churns the pool. Buffering to 256 KiB cuts the write-task count by an
+/// order of magnitude while keeping per-chunk memory bounded (one buffer per in-flight connection).
+const CHUNK_WRITE_BUFFER: usize = 256 * 1024;
+
 /// GitHub "list releases" endpoint for the upstream llama.cpp project, newest first.
 /// We scan the recent page rather than `/releases/latest`: llama.cpp's CI sometimes
 /// publishes a release with an incomplete asset set (no `win-vulkan-x64` zip), and a
@@ -1098,8 +1104,19 @@ async fn chunked_download(
     let chunk_size = cfg.chunk_size;
     let chunk_count = total.div_ceil(chunk_size) as usize;
 
-    let file = Arc::new(open_preallocated(&part, total).await?);
-    let manifest = Manifest::load_or_init(&manifest_path, total, chunk_size, chunk_count).await?;
+    let (part_file, part_created) = open_preallocated(&part, total).await?;
+    let file = Arc::new(part_file);
+    let mut manifest =
+        Manifest::load_or_init(&manifest_path, total, chunk_size, chunk_count).await?;
+
+    // A brand-new (zero-filled) `.part` cannot have any completed chunks. If a matching all-done
+    // manifest survived here, it is stale — left when a prior run's post-publish cleanup of the
+    // bitmap silently failed. Trusting it would skip the download entirely and publish a zero-filled
+    // file: the length check passes (`set_len` gives exactly `total` bytes) and the sha256 check is
+    // skipped whenever the CDN advertised no `X-Linked-ETag`. Re-initialise so every chunk refetches.
+    if part_created && manifest.pending_indices().is_empty() {
+        manifest = Manifest::reinit(&manifest_path, total, chunk_size, chunk_count).await?;
+    }
 
     // Seed the bar with bytes already on disk (mirrors hf-hub's resume-prefix `update(start)`).
     let already = manifest.completed_bytes(chunk_size, total);
@@ -1152,22 +1169,35 @@ async fn chunked_download(
 
 /// Opens (creating if absent) the `.part` file for read+write and ensures it is `total` bytes
 /// long via `set_len`, so every chunk can `seek_write` at its fixed offset without concurrently
-/// extending the file. Off the async runtime — file allocation is blocking I/O.
-async fn open_preallocated(part: &Path, total: u64) -> Result<std::fs::File> {
+/// extending the file. Returns `(file, created)` where `created` is `true` only when this call
+/// brought the file into existence — the caller uses that to reject a stale all-done manifest left
+/// over a brand-new (zero-filled) part. `create_new` makes the create-vs-existed decision atomic
+/// (no `exists()` TOCTOU). Off the async runtime — file allocation is blocking I/O.
+async fn open_preallocated(part: &Path, total: u64) -> Result<(std::fs::File, bool)> {
     let part = part.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<std::fs::File> {
-        let file = std::fs::OpenOptions::new()
+    tokio::task::spawn_blocking(move || -> Result<(std::fs::File, bool)> {
+        let (file, created) = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(false)
+            .create_new(true)
             .open(&part)
-            .with_context(|| format!("open {}", part.display()))?;
+        {
+            Ok(file) => (file, true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&part)
+                    .with_context(|| format!("open {}", part.display()))?;
+                (file, false)
+            }
+            Err(e) => return Err(e).with_context(|| format!("create {}", part.display())),
+        };
         if file.metadata()?.len() != total {
             file.set_len(total)
                 .with_context(|| format!("preallocate {} to {total} bytes", part.display()))?;
         }
-        Ok(file)
+        Ok((file, created))
     })
     .await
     .context("open part-file task failed")?
@@ -1190,15 +1220,38 @@ fn write_all_at(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> std::i
     Ok(())
 }
 
+/// Writes the coalesced `buf` to `file` at `offset` off the async runtime (draining `buf` and
+/// leaving it empty-but-preallocated for reuse), returning the advanced offset. A no-op when empty.
+async fn flush_chunk_writes(
+    file: &Arc<std::fs::File>,
+    buf: &mut Vec<u8>,
+    offset: u64,
+    index: usize,
+) -> Result<u64> {
+    if buf.is_empty() {
+        return Ok(offset);
+    }
+    let bytes = std::mem::replace(buf, Vec::with_capacity(CHUNK_WRITE_BUFFER));
+    let count = bytes.len() as u64;
+    let file = file.clone();
+    tokio::task::spawn_blocking(move || write_all_at(&file, &bytes, offset))
+        .await
+        .context("chunk write task failed")?
+        .with_context(|| format!("write chunk {index} at {offset}"))?;
+    Ok(offset + count)
+}
+
 /// Downloads chunk `index` (`[index·chunk_size, min(end, total))`) via a single `Range` request
 /// and writes it into the shared part file at the chunk's offset. The request targets the stable
 /// `resolve_url` and **follows the redirect per request** (`Range` is preserved across redirects),
 /// so each chunk consumes its own fresh single-use HF signed CDN URL rather than sharing one. A
-/// `206` is required; a transient `403`/`401`/`429`/`5xx` (signed-URL race or throttle) is retried
-/// with backoff (a fresh redirect each time); a `200` means the server ignored the range and would
-/// corrupt the file, so we error rather than write a full body at a chunk offset. Bytes accrue
-/// into `downloaded` as they arrive; on full receipt the file data is fsync'd **before** the chunk
-/// is marked complete — a crash must never mark a chunk whose bytes are still only in the OS cache.
+/// `206` is required; a transient failure — a `403`/`401`/`429`/`5xx`, or a network-level error
+/// (dropped connection / timeout / DNS blip) — is retried with backoff (a fresh redirect each
+/// time); a `200` means the server ignored the range and would corrupt the file, so we error
+/// rather than write a full body at a chunk offset. Bytes accrue into `downloaded` as they arrive
+/// and are coalesced into ~`CHUNK_WRITE_BUFFER` writes; on full receipt the file data is fsync'd
+/// **before** the chunk is marked complete — a crash must never mark a chunk whose bytes are still
+/// only in the OS cache.
 #[allow(clippy::too_many_arguments)]
 async fn fetch_chunk(
     client: &reqwest::Client,
@@ -1216,41 +1269,76 @@ async fn fetch_chunk(
 
     let mut attempt: u32 = 0;
     let resp = loop {
-        let resp = client
+        let send_result = client
             .get(resolve_url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
             .send()
-            .await
-            .with_context(|| format!("request chunk {index} ({start}-{end})"))?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::PARTIAL_CONTENT {
-            break resp;
+            .await;
+        match send_result {
+            Ok(resp) => {
+                let status = resp.status();
+                if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                    break resp;
+                }
+                // A single-use signed CDN URL can race (403/401), or the CDN can throttle
+                // (429/5xx). Re-requesting the resolve URL mints a fresh redirect, so retry.
+                let transient = status == reqwest::StatusCode::FORBIDDEN
+                    || status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status.is_server_error();
+                if transient && attempt < CHUNK_RETRY_MAX_ATTEMPTS {
+                    attempt += 1;
+                    tracing::warn!(
+                        chunk = index,
+                        attempt,
+                        %status,
+                        "chunk request failed transiently; re-resolving and retrying"
+                    );
+                    tokio::time::sleep(CHUNK_RETRY_BACKOFF * attempt).await;
+                    continue;
+                }
+                // Two distinct terminal failures exit here; keep them distinguishable so a log
+                // reader isn't sent chasing a Range-support problem that doesn't exist. A non-206
+                // success (e.g. `200`) means the server *ignored* the Range header; an exhausted
+                // transient (e.g. `403`/`429`) means it kept failing under retry.
+                return Err(if transient {
+                    anyhow!(
+                        "chunk {index} failed after {CHUNK_RETRY_MAX_ATTEMPTS} retries: status {status}"
+                    )
+                } else {
+                    anyhow!(
+                        "server ignored Range for chunk {index}: status {status} (expected 206)"
+                    )
+                });
+            }
+            // A dropped connection / timeout / DNS blip is exactly the transient the retry loop is
+            // for; a bare `?` here would have failed the whole download on the first network hiccup.
+            Err(e) => {
+                if attempt < CHUNK_RETRY_MAX_ATTEMPTS {
+                    attempt += 1;
+                    tracing::warn!(
+                        chunk = index,
+                        attempt,
+                        error = %e,
+                        "chunk request failed with a network error; re-resolving and retrying"
+                    );
+                    tokio::time::sleep(CHUNK_RETRY_BACKOFF * attempt).await;
+                    continue;
+                }
+                return Err(e).with_context(|| {
+                    format!(
+                        "request chunk {index} ({start}-{end}) after {CHUNK_RETRY_MAX_ATTEMPTS} retries"
+                    )
+                });
+            }
         }
-        // A single-use signed CDN URL can race (403/401), or the CDN can throttle (429/5xx).
-        // Re-requesting the resolve URL mints a fresh redirect, so retry with backoff.
-        let transient = status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || status.is_server_error();
-        if transient && attempt < CHUNK_RETRY_MAX_ATTEMPTS {
-            attempt += 1;
-            tracing::warn!(
-                chunk = index,
-                attempt,
-                %status,
-                "chunk request failed transiently; re-resolving and retrying"
-            );
-            tokio::time::sleep(CHUNK_RETRY_BACKOFF * attempt).await;
-            continue;
-        }
-        return Err(anyhow!(
-            "server ignored Range for chunk {index}: status {status} (expected 206)"
-        ));
     };
 
     let limit = end + 1; // exclusive upper bound this chunk may write to
-    let mut offset = start;
+    let mut received = start; // absolute position of the next byte to arrive
+    let mut written = start; // absolute position of the next byte to write
+    let mut buf: Vec<u8> = Vec::with_capacity(CHUNK_WRITE_BUFFER);
     let mut body = resp.bytes_stream();
     while let Some(frame) = body.next().await {
         let frame = frame.with_context(|| format!("read chunk {index} body"))?;
@@ -1258,23 +1346,21 @@ async fn fetch_chunk(
             continue;
         }
         let n = frame.len() as u64;
-        if offset + n > limit {
+        if received + n > limit {
             return Err(anyhow!("chunk {index} overran its range"));
         }
-        let bytes = frame.to_vec();
-        let file = file.clone();
-        let write_at = offset;
-        tokio::task::spawn_blocking(move || write_all_at(&file, &bytes, write_at))
-            .await
-            .context("chunk write task failed")?
-            .with_context(|| format!("write chunk {index} at {write_at}"))?;
-        offset += n;
+        received += n;
         downloaded.fetch_add(n, Ordering::Relaxed);
+        buf.extend_from_slice(&frame);
+        if buf.len() >= CHUNK_WRITE_BUFFER {
+            written = flush_chunk_writes(file, &mut buf, written, index).await?;
+        }
     }
-    if offset != limit {
+    written = flush_chunk_writes(file, &mut buf, written, index).await?;
+    if written != limit {
         return Err(anyhow!(
             "chunk {index} short read: got {}, expected {len}",
-            offset - start
+            written - start
         ));
     }
 
@@ -1427,20 +1513,38 @@ impl Manifest {
         chunk_count: usize,
     ) -> Result<Manifest> {
         let header = Manifest::header_for(total, chunk_size, chunk_count);
-        let header_len = header.len() as u64;
-        if let Ok(bytes) = std::fs::read(path) {
-            // Only trust a bitmap whose header matches this exact download; otherwise it is a
-            // stale partial for a different file and must not be reused.
-            if bytes.starts_with(header.as_bytes()) && bytes.len() == header.len() + chunk_count {
-                let done = bytes[header.len()..].iter().map(|b| *b == b'1').collect();
-                return Ok(Manifest {
-                    path: path.to_path_buf(),
-                    chunk_count,
-                    done,
-                    header_len,
-                });
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                // Only trust a bitmap whose header matches this exact download; otherwise it is a
+                // stale partial for a different file and is re-initialised below.
+                if bytes.starts_with(header.as_bytes()) && bytes.len() == header.len() + chunk_count
+                {
+                    let done = bytes[header.len()..].iter().map(|b| *b == b'1').collect();
+                    return Ok(Manifest {
+                        path: path.to_path_buf(),
+                        chunk_count,
+                        done,
+                        header_len: header.len() as u64,
+                    });
+                }
+            }
+            // No manifest yet → start a fresh download.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // A manifest that *exists* but won't read (a Windows sharing violation from AV / the
+            // search indexer, a transient permissions hiccup) must not be treated as absent:
+            // re-initialising would truncate a valid bitmap and silently discard real download
+            // progress. Surface it so the job-queue retries the whole job instead.
+            Err(e) => {
+                return Err(e).with_context(|| format!("read parts manifest {}", path.display()));
             }
         }
+        Manifest::init_sync(path, total, chunk_size, chunk_count)
+    }
+
+    /// Forcibly writes a fresh all-zero bitmap, discarding any existing one. Used for the first
+    /// download and to drop a stale all-done manifest left over a brand-new (zero-filled) `.part`.
+    fn init_sync(path: &Path, total: u64, chunk_size: u64, chunk_count: usize) -> Result<Manifest> {
+        let header = Manifest::header_for(total, chunk_size, chunk_count);
         let mut init = Vec::with_capacity(header.len() + chunk_count);
         init.extend_from_slice(header.as_bytes());
         init.resize(header.len() + chunk_count, b'0');
@@ -1450,8 +1554,23 @@ impl Manifest {
             path: path.to_path_buf(),
             chunk_count,
             done: vec![false; chunk_count],
-            header_len,
+            header_len: header.len() as u64,
         })
+    }
+
+    /// Off-runtime [`Manifest::init_sync`] — re-initialises the bitmap to all-pending.
+    async fn reinit(
+        path: &Path,
+        total: u64,
+        chunk_size: u64,
+        chunk_count: usize,
+    ) -> Result<Manifest> {
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            Manifest::init_sync(&path, total, chunk_size, chunk_count)
+        })
+        .await
+        .context("reinit parts manifest task failed")?
     }
 
     fn pending_indices(&self) -> Vec<usize> {
@@ -2324,6 +2443,143 @@ mod tests {
         assert!(
             !dir.join("full.gguf").exists(),
             "no file should be published when the server ignores Range"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn fresh_part_discards_stale_all_done_manifest() {
+        // Regression for the silent-corruption path: a prior run published the model but its
+        // post-publish `remove_file(<base>.parts)` silently failed, leaving an all-`1` bitmap. The
+        // model file is later removed; the next run creates a fresh zero-filled `.part`. Trusting
+        // the stale manifest would skip every chunk and publish zeros — the length check passes and
+        // there is no sha256 to catch it. The downloader must notice the brand-new part and refetch.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-stale-manifest");
+        let base = "model.gguf";
+
+        // Pre-seed ONLY a stale, all-complete manifest — no `.part` on disk.
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            bytes.extend_from_slice(&vec![b'1'; chunk_count]);
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+        assert!(
+            !dir.join(format!("{base}.part")).exists(),
+            "precondition: no part file yet"
+        );
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None); // no sha256 — re-fetching is the only safety net
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect(
+                "a fresh part with a stale all-done manifest must re-download, not publish zeros",
+            );
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(
+            out, blob,
+            "published file must be the real bytes, not zeros"
+        );
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after the stale manifest is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn exhausted_transient_is_not_reported_as_ignored_range() {
+        // A chunk that 403s past its retry budget is an auth/throttle failure, not a server that
+        // ignored Range. Both terminate at the same return; the message must still tell them apart
+        // so a log reader doesn't chase a Range-support bug that doesn't exist.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/denied"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("denied"))
+            .mount(&server)
+            .await;
+        let dir = unique_temp_dir("chunk-403-forever");
+        let url = format!("{}/denied", server.uri());
+        let total = 20 * 1024u64;
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(1, total); // one chunk; it exhausts its retries and fails
+
+        let err = chunked_download(
+            &info,
+            &url,
+            &dir,
+            "denied.gguf",
+            &downloaded,
+            &copying,
+            &cfg,
+        )
+        .await
+        .expect_err("a chunk that 403s past its retry budget must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed after") && msg.contains("retries"),
+            "expected a retry-exhaustion message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("ignored Range"),
+            "a 403 is not an ignored-Range condition: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn manifest_load_or_init_distinguishes_missing_valid_and_mismatched() {
+        // Guards the load/init refactor: a missing manifest starts all-pending; a valid one is
+        // loaded verbatim; a header that belongs to a different download is re-initialised. (The
+        // separate present-but-unreadable → propagate-error branch can't be injected without a real
+        // sharing violation, so it is covered by inspection rather than a unit test.)
+        let dir = unique_temp_dir("manifest-load");
+        let path = dir.join("m.parts");
+        let total = 300 * 1024u64;
+        let chunk_size = 64 * 1024u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+
+        // Missing → fresh, nothing complete.
+        let fresh = Manifest::load_or_init_sync(&path, total, chunk_size, chunk_count).unwrap();
+        assert_eq!(fresh.pending_indices().len(), chunk_count);
+        assert!(path.exists(), "init must persist a bitmap");
+
+        // Valid existing (chunk 0 marked) → loaded verbatim.
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            let mut marks = vec![b'0'; chunk_count];
+            marks[0] = b'1';
+            bytes.extend_from_slice(&marks);
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        let loaded = Manifest::load_or_init_sync(&path, total, chunk_size, chunk_count).unwrap();
+        assert_eq!(
+            loaded.pending_indices().len(),
+            chunk_count - 1,
+            "a valid bitmap must be loaded, not clobbered"
+        );
+
+        // Header for a *different* download (different total) → re-initialised all-pending.
+        let other = Manifest::load_or_init_sync(&path, total + 1, chunk_size, chunk_count).unwrap();
+        assert_eq!(
+            other.pending_indices().len(),
+            chunk_count,
+            "a mismatched header must be treated as stale and re-initialised"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

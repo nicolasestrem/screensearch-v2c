@@ -56,6 +56,22 @@ independent of the retrieval chain (`docs/0.2.0.md` PR8).
   fail-fast-on-stuck-chunk, range-ignored rejection, sha256 accept/reject, `X-Linked-ETag`-only
   integrity (rejects the bare CDN/Xet `ETag`), and the `range_plan` decision — all fully mocked
   (wiremock + a local hang-after-206 server), no network.
+- **PR8 review hardening (PR #35 bot review).** Five robustness fixes in `download.rs`, all with
+  tests: (1) a brand-new (zero-filled) `.part` now **discards a stale all-done `.parts` manifest**
+  rather than trusting it — `open_preallocated` reports whether it created the file (atomic via
+  `create_new`), and an all-complete bitmap over a fresh part is re-initialised, closing a path that
+  could publish a zero-filled model when no `X-Linked-ETag` was advertised; (2) a transient
+  **network error** on a chunk request (dropped connection / timeout / DNS blip) is now retried with
+  backoff instead of failing the whole download on the first hiccup; (3) a **present-but-unreadable**
+  `.parts` manifest (a Windows sharing violation from AV / the indexer) now surfaces an error so the
+  job-queue retries, instead of silently truncating the bitmap and discarding real progress; (4)
+  streamed body frames are **coalesced to ~256 KiB** before each positioned write, cutting
+  `spawn_blocking` churn; (5) the terminal chunk error now distinguishes "server ignored Range"
+  (a `200`) from "failed after N retries" (an exhausted `403`/`429`), so logs don't send an operator
+  chasing a non-existent range-support bug. Two reviewer suggestions to make `download.rs` compile on
+  macOS/Linux (`#[cfg(unix)]` `write_at`) were intentionally **declined** — the project is
+  Windows-only by design (CLAUDE.md hard rule; CI is `windows-latest`), matching the
+  Windows-native convention already in `flags.rs`/`lib.rs`.
 
 ### 0.2.0 PR7 — Integration audit
 Ran the PR7 end-to-end audit against the existing populated app-data DB using `npm run tauri dev`

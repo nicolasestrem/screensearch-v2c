@@ -2380,3 +2380,38 @@ Live HF check (curl, real Qwen3-VL-4B GGUF):
     (the prior "got"); the CDN ETag / X-Xet-Hash = d4ccbe2a… (the prior wrong "expected") — confirms
     the sha256 root cause + fix.
 ```
+
+### PR8 review hardening — 2026-06-26 (PR #35 bot review)
+
+Addressed the PR #35 bot review (Gemini Code Assist + the GitHub `claude` reviewer). Bots were not
+replied to (per the request); the substance was applied. Five fixes in `download.rs`, two
+cross-platform suggestions declined as out-of-policy (Windows-only by design — confirmed with the user).
+
+- **#6 stale-manifest silent corruption (medium).** `open_preallocated` → `(File, created)` (atomic
+  `create_new`, no `exists()` TOCTOU). A brand-new zero-filled `.part` under an all-done `.parts`
+  bitmap is re-initialised (`Manifest::reinit`/`init_sync`) instead of skipping the download and
+  publishing zeros. Proven: guard disabled → test publishes an all-zero file; guard restored →
+  byte-identical.
+- **#3 network-error retry (high).** A chunk request's transport error now feeds the bounded backoff
+  loop instead of a bare `?` failing the whole download on the first hiccup.
+- **#4 unreadable-manifest progress loss (high).** `load_or_init_sync` propagates a non-`NotFound`
+  read error (Windows sharing violation) so the job retries, instead of truncating a valid bitmap.
+- **#5 coalesced writes (medium).** Frames buffer to 256 KiB (`flush_chunk_writes`) before each
+  positioned write; progress still accrues per frame.
+- **#7 accurate terminal error (low).** Distinguishes "server ignored Range" (`200`) from "failed
+  after N retries" (exhausted `403`/`429`).
+- **Declined (two high):** `#[cfg(unix)]` `write_at` to compile on macOS/Linux — Windows-only hard
+  rule, CI is `windows-latest`, matches `flags.rs`/`lib.rs` convention.
+
+Verbatim verification (run 2026-06-26):
+
+```
+cargo fmt --all -- --check                          → exit 0 (clean)
+cargo clippy --workspace --all-targets -- -D warnings → Finished (0 warnings)
+cargo test --workspace                              → all crates 0 failed
+cargo test -p inference --lib                       → 87 passed; 0 failed (was 84; +3)
+    (new: fresh_part_discards_stale_all_done_manifest,
+     exhausted_transient_is_not_reported_as_ignored_range,
+     manifest_load_or_init_distinguishes_missing_valid_and_mismatched)
+git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
+```

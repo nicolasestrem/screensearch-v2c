@@ -1505,3 +1505,42 @@
   `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets -- -D warnings`
   (0 warnings); `cargo build --workspace` (Finished); `cargo test --workspace` (all crates 0 failed,
   **inference 84 passed** incl. the 11 new tests); `git diff --exit-code -- ui/src/bindings` (clean).
+
+### 2026-06-26 — PR8 review hardening (PR #35 bot review)
+
+Addressed the PR #35 bot review (Gemini + the GitHub `claude` reviewer; bot replies not posted, per the
+request). Five robustness fixes in `download.rs`, each with a test; two cross-platform suggestions
+declined as out-of-policy. Still confined to `download.rs` (+ tests + docs); no IPC/binding change.
+
+- **Stale-manifest silent corruption (claude, medium).** `open_preallocated` now returns
+  `(File, created)` — `created` via an atomic `create_new` open, no `exists()` TOCTOU. `chunked_download`
+  re-initialises an all-done `.parts` bitmap sitting over a **freshly created** (zero-filled) `.part`
+  (`Manifest::reinit` / new `init_sync`), so a prior run's failed post-publish bitmap cleanup can't make
+  the next run skip every chunk and publish zeros (length check passes; sha256 absent when no
+  `X-Linked-ETag`). Proven: with the guard disabled the new test publishes an all-zero file; with it,
+  byte-identical.
+- **Network-error retry (gemini, high).** A chunk request's transport error (dropped connection /
+  timeout / DNS) was propagated by `?`, failing the whole download on the first hiccup. It now feeds the
+  same bounded backoff loop as a transient HTTP status.
+- **Don't clobber progress on an unreadable manifest (gemini, high).** `Manifest::load_or_init_sync`
+  now matches on the read: `NotFound` → init fresh; any other error (a Windows sharing violation from
+  AV / the indexer) → propagate, so the job-queue retries instead of truncating a valid bitmap and
+  losing real download progress.
+- **Coalesced writes (gemini, medium).** Body frames buffer to `CHUNK_WRITE_BUFFER` (256 KiB) before
+  each positioned `spawn_blocking` write (`flush_chunk_writes`), cutting blocking-task churn; bytes
+  still accrue into the progress counter per frame.
+- **Accurate terminal error (claude, low).** The chunk failure return now distinguishes "server ignored
+  Range" (a `200`) from "failed after N retries" (an exhausted `403`/`429`).
+- **Declined (gemini, two high):** add `#[cfg(unix)]` `write_at` / cfg-gate `FileExt` so `download.rs`
+  compiles on macOS/Linux. The project is **Windows-only by design** (CLAUDE.md hard rule; CI is
+  `windows-latest`; `flags.rs`/`lib.rs` already use Windows-native APIs without cross-platform branches).
+  Confirmed with the user before declining.
+- **New tests:** `fresh_part_discards_stale_all_done_manifest`,
+  `exhausted_transient_is_not_reported_as_ignored_range`,
+  `manifest_load_or_init_distinguishes_missing_valid_and_mismatched`. (The present-but-unreadable
+  manifest branch is covered by inspection — a non-`NotFound` read error can't be injected
+  deterministically without a real sharing violation.)
+- **Verification:** `cargo fmt --all -- --check` (exit 0); `cargo clippy --workspace --all-targets -- -D
+  warnings` (0 warnings); `cargo test --workspace` (all crates 0 failed; **inference lib 87 passed**,
+  +3 new); `git diff --exit-code -- ui/src/bindings` (clean). The #6 test was confirmed to fail with the
+  guard disabled (published an all-zero file) before being restored.
