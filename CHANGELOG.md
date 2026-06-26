@@ -20,7 +20,8 @@ Computer Use run against the real dev executable completed the live UI audit: Se
 rendered, all five Ask cards were visible, Day Recap submitted with cited frames, Daily/Weekly/
 prompted-Custom/no-evidence-Custom reports generated, Settings showed `8/40/200/20`, and a
 controlled Windows Notepad capture stored the PR6 probe token in `content_text`. The upstream PR3
-static-chrome release blocker remains separate.
+static-chrome release blocker remains separate. Full verification passed after clearing a stale
+repo-local Vite/esbuild process left over from the dev run.
 
 ### Docs — 0.2.0 PR3 audit
 Added `docs/AUDIT_0.2.0_PR3_2026-06-26.md` and release-tracking notes for the PR3

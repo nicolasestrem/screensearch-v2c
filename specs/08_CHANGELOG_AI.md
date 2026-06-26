@@ -30,7 +30,13 @@
   Search/Ask/Reports rendered, the five Ask cards were visible, Day Recap submitted with cited
   frames, Daily/Weekly/prompted-Custom/no-evidence-Custom reports generated, Settings showed
   `8/40/200/20`, a controlled Windows Notepad probe landed in `frame_text.content_text`, and the
-  dev app/llama sidecar stopped without an observed orphan process.
+  dev app/llama sidecar stopped without an observed orphan process. Full verification then passed:
+  the first `cd ui && npm ci && npm run lint && npm run build` attempt failed with `EPERM unlink`
+  because the dev run left a repo-local Vite/esbuild process holding `esbuild.exe`; after stopping
+  only those matching repo-local processes, the same frontend gate passed on retry. The remaining
+  gates all exited 0: `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
 
 ---
 

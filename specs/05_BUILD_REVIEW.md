@@ -2502,3 +2502,11 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
   static/app-chrome terms in `content_text` (`Firefox`, `Steam`, `Deck`, `Recall`), which is the
   already-recorded upstream PR3 release blocker rather than a PR6 routing defect. Doc drift recorded
   in `06` #9 and `07` #65.
+- **Full verification:** the first frontend verification attempt failed because the dev run left a
+  repo-local Vite/esbuild service holding `ui/node_modules/@esbuild/win32-x64/esbuild.exe`
+  (`EPERM unlink`; evidence `51-verify-ui-npm-ci-lint-build.txt`). After stopping only the matching
+  repo-local Vite/esbuild processes (`52`/`53`), the exact frontend gate passed on retry
+  (`51b-verify-ui-npm-ci-lint-build-retry.txt`). `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings` all exited 0 with raw
+  outputs preserved in `54` through `58`.
