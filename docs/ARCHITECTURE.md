@@ -1,8 +1,8 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together as of **P5 plus the comprehensive review hardening
-pass** (capture → OCR → store → embeddings → hybrid search → **inference sidecar**: vision tagging +
-grounded `ask` → Command Deck UI). This describes the
+How ScreenSearch V2c is actually put together as of **v0.1.0 plus the 0.2.0 attention-first /
+Recall work and PR7 audit** (capture -> OCR -> content-text store -> embeddings -> hybrid search ->
+**inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI). This describes the
 **implemented** system and how to navigate the code; the design intent and the *why* live in
 [`specs/`](../specs) (`03_MASTER_PRODUCTION_SPEC.md` is authoritative for schema/traits/protocols).
 Where they ever disagree, the specs win — open an issue.
@@ -13,7 +13,11 @@ Where they ever disagree, the specs win — open an issue.
   Insights, Settings), plus P5 hardening for bounded IPC, range-aware navigation, retention,
   storage telemetry, typed operational events, cancellable ask streams, adaptive charts, monitor
   enumeration, and advanced sidecar device selection.
-- Not yet built: packaging (installer / portable ZIP + signing).
+- Implemented for 0.2.0: `frame_text` / `text_spans` / raw-vs-content retrieval, PR3's
+  attention-first classifier, the Recall Search/Ask/Reports UI, and Calendar-Grid Coverage
+  Map-Reduce reports. PR7 manual audit evidence is recorded in
+  [`AUDIT_0.2.0_PR7_2026-06-25.md`](AUDIT_0.2.0_PR7_2026-06-25.md).
+- Still open: code signing and some 0.2.x follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
 
@@ -79,10 +83,13 @@ Single file `screensearch.db`; forward-only migrations tracked in `schema_versio
 (`store::schema`, authoritative DDL in `03 §4`). Per-connection pragmas: `journal_mode=WAL`,
 `foreign_keys=ON`, `recursive_triggers=ON`, `busy_timeout=5000`.
 
-Core tables: `frames` (one row per stored changed capture), `ocr_text` + `ocr_text_fts` (FTS5
-mirror, porter tokenizer), `embeddings` + `embedding_vectors` (vec0 `FLOAT[768]` cosine shadow),
-`image_embeddings` + `image_embedding_vectors`, `vision_analysis` (P4), `jobs` (the durable
-queue), `tags`/`frame_tags`, `settings`.
+Core tables: `frames` (one row per stored changed capture), `frame_text` (preserved `raw_text`,
+filtered `content_text`, source/filter metadata, foreground app/window metadata), `text_spans`
+(OCR/UIA spans with role/suppression metadata), `chrome_text_catalog` (static-chrome signature
+counts), `frame_text_fts` (content-text FTS), `frame_text_raw_fts` (raw-text FTS for
+`include_chrome`), `embeddings` + `embedding_vectors` (vec0 `FLOAT[768]` cosine shadow),
+`image_embeddings` + `image_embedding_vectors`, `vision_analysis` (P4), `jobs` (the durable queue),
+`tags`/`frame_tags`, and `settings`.
 
 Each embedding lives in **two** lock-step places — a metadata row and its `vec0` shadow keyed by
 the same id. Upserts do both in one transaction; deletes are handled by `AFTER DELETE` triggers +
@@ -184,8 +191,10 @@ upsert/analyze errors → **retry** with backoff `1 s · 2^attempts` (cap 60 s).
 `hybrid_search(SearchQuery) → Vec<SearchHit>` fuses two ranked arms with **Reciprocal Rank Fusion**
 (`k = 60`):
 
-- **FTS arm** — BM25 over `ocr_text_fts` (porter tokenizer), with highlighted snippets. User text is
-  safely quoted per-term (no FTS-operator injection).
+- **FTS arm** — BM25 over `frame_text_fts.content_text` (porter tokenizer), with highlighted
+  snippets. User text is safely quoted per-term (no FTS-operator injection).
+- **Raw/app-chrome arm** — only when `SearchQuery.include_chrome = true`, searches
+  `frame_text_raw_fts.raw_text` so suppressed labels remain recoverable.
 - **Vector arm** — embed the query once (via the injected `EmbeddingProvider`), then sqlite-vec
   cosine KNN over `embedding_vectors`, de-duped by frame. Active only once an embedder is attached;
   before that, search degrades to FTS-only.
@@ -193,6 +202,9 @@ upsert/analyze errors → **retry** with backoff `1 s · 2^attempts` (cap 60 s).
 `SearchQuery.limit` is normalized at the backend to `1..=100` (matching the Recall UI). Both arms
 over-fetch a candidate pool (`max(limit·5, 50)`, capped at 500) and filter to the half-open time
 range `[start, end)`. Results hydrate in two bulk `IN` queries (frame context + fallback snippets).
+Ask, embeddings, and reports read `content_text`; raw/app chrome is opt-in. The PR7 audit found that
+static/app chrome can still appear in `content_text` for the populated corpus and for captures of the
+app's own UI/recents, so the acceptance is not treated as fully closed.
 
 The embedder is **runtime-settable** (`SqliteStore.embedder` is `Arc<RwLock<Option<…>>>` +
 `set_embedder`), so the composition root can attach the model *after* the off-thread load without

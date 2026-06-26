@@ -290,7 +290,7 @@ function ReportBody({ phase, progress, result, error }: ReportBodyProps) {
           {progress && progress.total > 0 ? ` (${progress.done}/${progress.total})` : ""}
         </div>
         <span className="text-caption text-ink-faint">
-          Weekly reports summarize each active day in turn, so they take a little longer.
+          Reports summarize active periods in bounded passes, so larger ranges can take a little longer.
         </span>
       </div>
     );

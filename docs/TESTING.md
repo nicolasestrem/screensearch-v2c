@@ -10,15 +10,17 @@ cargo test --workspace
 
 That runs every test. **0 failed = pass.** (GPU/model tests are skipped automatically — that's normal.)
 
-## 🔁 Before you push (4 gates)
+## 🔁 Before you push (CI-order gates)
 
-Run these four. All must be clean:
+Run these. All must be clean:
 
 ```sh
+(cd ui && npm ci && npm run lint && npm run build)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace
 cargo test --workspace
-cd ui && npm run build && cd ..
+git diff --exit-code -- ui/src/bindings
 ```
 
 Tip: copy-paste them one at a time. Don't move on until one passes.
@@ -58,3 +60,25 @@ cargo test -p inference --test no_orphan
 ```
 
 Want it to be `ok`. If it's not — stop and ask.
+
+## 🧭 Manual PR7 audit
+
+PR7 is a live UI audit over the user's populated app-data store. Run the app with:
+
+```sh
+npm run tauri dev
+```
+
+Use the existing `%APPDATA%\app.screensearchv2c.desktop` DB. Do not reset or backfill it. Store local
+evidence under an ignored folder such as `.playwright-mcp/pr7-YYYY-MM-DD/`; do not put PR7 images in
+`screenshots/` or commit them.
+
+Audit coverage:
+
+- Recall Search default content text vs. `include app chrome + raw text`.
+- Real content terms from the corpus.
+- Ask positive grounding and no-evidence behavior.
+- Daily and Weekly reports, including pass/frame footer metadata.
+- A short start/stop capture tick.
+
+The 2026-06-25 run is documented in `docs/AUDIT_0.2.0_PR7_2026-06-25.md`.
