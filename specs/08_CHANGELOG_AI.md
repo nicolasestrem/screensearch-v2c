@@ -11,6 +11,24 @@
 
 ---
 
+## 2026-06-26 — Chunked download: reset stale manifest for ANY fresh part (`fix/chunked-download-partial-stale-manifest`)
+- **Change:** Generalised the fresh-part stale-manifest guard in `crates/inference/src/download.rs`.
+  The condition `part_created && manifest.pending_indices().is_empty()` (reinit only when the
+  surviving bitmap is **all**-complete) became `part_created && manifest.any_complete()` (reinit when
+  it marks **any** chunk complete). Added the `Manifest::any_complete()` helper, updated the guard's
+  comment, and added the `fresh_part_discards_stale_partial_manifest` regression test.
+- **Why:** A PR #35 bot review (codex P2) found the all-done guard missed the **partly-done** case: a
+  header-matching `.parts` bitmap with some chunks marked `1` can survive over a brand-new zero-filled
+  `.part` — e.g. an interrupted download whose multi-GB `.part` a user/cleanup tool later reclaims.
+  The done-marked ranges were then skipped and left as zeros; the length check passes and sha256 is
+  skipped when the CDN advertises no `X-Linked-ETag`, so a corrupt GGUF could be published (or, with a
+  hash, an avoidable failed verify + retry). The code already asserts the invariant in its own comment
+  ("a brand-new zero-filled `.part` cannot have any completed chunks") — the guard now enforces it
+  fully. No schema/IPC/API change; Windows-only path unchanged.
+- **Verification:** command output recorded in the session response.
+
+---
+
 ## 2026-06-25 — 0.2.0 PR7 integration audit (`codex/0.2.0-pr7-integration-audit`)
 - **Change:** Ran the PR7 audit through the live dev app (`npm run tauri dev`, real
   `target/debug/screensearch.exe`) against the user's populated app-data DB. Captured local-only
