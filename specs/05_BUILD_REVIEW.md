@@ -2285,3 +2285,98 @@ executable (`target/debug/screensearch.exe`). Evidence screenshots are local-onl
   visible `20:26` frame, and advanced the queue from `done 1192` to `done 1194`.
 
 Audit artifact: `docs/AUDIT_0.2.0_PR7_2026-06-25.md`.
+
+## 0.2.0 PR8 — 2026-06-26 — Parallel model download (`feat/0.2.0-pr8-parallel-download`)
+Replaces the single-stream first-run model fetch (hf-hub, ~20 MB/s HF-CDN cap) with a
+multi-connection **chunked downloader**. Confined to `crates/inference/src/download.rs` (+ its
+tests) and `Cargo.toml` (+ a `sha2` direct dep, already in the tree transitively), independent of
+the retrieval chain (`docs/0.2.0.md` PR8).
+
+### Implemented
+- **Probe → capability only (redirect-less, not a reusable URL).** `probe_range` issues
+  `Range: bytes=0-0` against the HF `resolve` URL **without following the 302** and reads the
+  redirect's own headers: total size (`X-Linked-Size` → `Content-Range` → `Content-Length`),
+  `Accept-Ranges`, and the LFS sha256 (`X-Linked-ETag`). Reading the redirect directly (not the CDN
+  response behind it) is what makes the integrity hash correct — see the second fix note below. The
+  pure `range_plan(is_partial, accept_ranges, total)` is the chunked-vs-single-stream gate. It
+  deliberately does **not** capture/reuse the resolved CDN URL — see the fix notes below.
+- **Per-request resolve (the real-world fix).** First-cut code captured the probe's `resp.url()` and
+  reused that one signed CDN URL for every chunk, which **403'd against live HF** (a storm of
+  `server ignored Range … status 403`). Root cause, confirmed by decoding the CloudFront policy on
+  the signed URL: HF's Xet-bridge URLs pin `"ByteRange":{"ExpectedHeader":"bytes=0-0"}` — valid
+  **only** for the exact `Range` that minted them, so reuse with any other range fails the signature.
+  Fix: `fetch_chunk` re-requests the stable `resolve` URL with its own `Range` and follows the
+  redirect per request (reqwest preserves `Range` across the cross-origin hop), minting a fresh
+  range-matched signed URL per chunk — the `hf_transfer` approach. A transient `403`/`401`/`429`/`5xx`
+  retries with backoff (`CHUNK_RETRY_MAX_ATTEMPTS` × `CHUNK_RETRY_BACKOFF`). Verified live: reusing a
+  `bytes=0-0` URL for another range → `403`; per-request resolve for two distinct ranges → `206`.
+- **Correct integrity target (the second live-HF fix).** After the 403 fix, downloads *completed*
+  but failed sha256 every time and looped at ~75%. Root cause: the probe followed the 302 and read
+  the **CDN** response's bare `ETag`, which for a Xet-backed file is the **Xet content hash**
+  (surfaced separately as `X-Xet-Hash`), not the file sha256 — yet it is a clean 64-hex string that
+  passed `parse_sha256`, so the correctly-assembled blob (sha256 `66358cb1…`) was checked against the
+  Xet hash (`d4ccbe2a…`) and rejected forever (the GGUF is ~75% of the GGUF+mmproj total, so it
+  finished, failed, and restarted before the mmproj began — exactly the reported stall). The true
+  sha256 lives in `X-Linked-ETag` on the `resolve` **redirect**, which reqwest discarded when it
+  auto-followed. Fix: probe **redirect-less** (above) and read `X-Linked-ETag`; `lfs_sha256` trusts
+  that header **only** — never the bare `ETag` (the Xet hash, or an S3 `md5-partcount` on classic
+  LFS). Verified live: the `302` carries `X-Linked-ETag: 66358cb1…` = the HF-API LFS oid = our
+  downloaded bytes, while the CDN `ETag`/`X-Xet-Hash` is the unrelated `d4ccbe2a…`.
+- **Chunked, parallel, resumable.** `chunked_download` pre-allocates `<base>.part` (`set_len`), keeps
+  one shared `std::fs::File`, and writes via positioned `FileExt::seek_write` (no shared seek cursor,
+  race-free for non-overlapping regions). `DOWNLOAD_CONNECTIONS` (default 8, env
+  `SSV2C_DOWNLOAD_CONNECTIONS`, clamp 1–16) chunk futures run via `buffer_unordered` **awaited inside
+  the fetch task** so the stall watchdog's `task.abort()` cancels them all (the gap-#46 fix for this
+  path). A per-chunk completion **bitmap** `<base>.parts` is fsync'd *after* its chunk data, so a
+  crash never marks a chunk whose bytes are still in cache; on restart, completed chunks are skipped
+  and their bytes seeded into the progress counter once up front.
+- **Reuse, not bypass.** All chunks `fetch_add` into the same `downloaded` counter the existing
+  watchdog reads — UI percentage and "no aggregate progress across all chunks" stall detection stay
+  truthful. The finalize phase (fsync + optional hash) sets the existing `copying` flag so the
+  network watchdog ignores it; the finished blob lands in the clean layout via atomic rename;
+  `fetch_one`'s already-in-layout / already-a-cache-blob fast paths are still checked first.
+- **Fallback + integrity.** No `Accept-Ranges`/no length/probe failure → single-stream
+  `download_with_lock_retry` + `place_in_clean_layout_async`, unchanged. A per-chunk `206` assertion
+  rejects a server that ignores `Range` (no corruption); `401`/`403` re-resolves the signed URL once.
+  The assembled file is verified against the LFS sha256 (`X-Linked-ETag`) when advertised (else byte
+  length); a mismatch discards the partial for a clean retry.
+
+### Decisions
+- **Connection count is a const + env override, not a Settings field** (user-approved 2026-06-26):
+  keeps PR8 confined to `download.rs` and matches the file's existing convention (`STALL_TIMEOUT`,
+  `LOCK_RETRY_MAX_ATTEMPTS` consts; the `SSV2C_LLAMA_RELEASE_URL` env override). No `Settings`/IPC/
+  bindings/UI change → the binding guard stays clean by design.
+- **Verification failure discards the partial** (vs the network-error path that leaves it for resume)
+  because every chunk is already marked done — a resume would re-fail; a clean re-download is correct.
+
+### Skipped / deferred (intentional)
+- No real-network test (the gated `smoke` test still exercises a live fetch); the new tests are fully
+  mocked. Manual saturation/speed check on a multi-connection link is the gated smoke, not `cargo test`.
+
+### Verification (verbatim)
+```
+# UI
+> eslint .                       (clean, no output)
+> vite build                     ✓ built in 1.86s
+# Rust
+cargo fmt --all -- --check       → fmt: clean (exit 0)
+cargo clippy --workspace --all-targets -- -D warnings
+                                 → Finished (0 warnings)
+cargo build --workspace          → Finished `dev` in 31.53s
+cargo test --workspace           → all crates 0 failed; inference 84 passed
+    (new: range_plan_requires_ranges_and_known_size, parse_sha256_normalizes_etag_forms,
+     lfs_sha256_trusts_only_x_linked_etag_not_cdn_etag,
+     content_range_total_parses_suffix, chunked_download_assembles_byte_identical_file,
+     chunk_requests_follow_redirect_and_preserve_range, chunk_retries_transient_403_then_succeeds,
+     resume_skips_already_completed_chunks, chunked_download_errors_when_server_ignores_range,
+     chunked_download_fails_fast_on_stuck_chunk,
+     integrity_accepts_matching_sha256_and_rejects_a_wrong_one)
+git diff --exit-code -- ui/src/bindings   → bindings: clean (exit 0)
+
+Live HF check (curl, real Qwen3-VL-4B GGUF):
+  - reuse of a bytes=0-0 signed URL for another range → 403; per-request resolve for two distinct
+    ranges → 206 + exact bytes — confirms the 403 root cause + fix.
+  - the resolve 302's X-Linked-ETag = 66358cb1… = the HF-API LFS oid = our downloaded-bytes sha256
+    (the prior "got"); the CDN ETag / X-Xet-Hash = d4ccbe2a… (the prior wrong "expected") — confirms
+    the sha256 root cause + fix.
+```
