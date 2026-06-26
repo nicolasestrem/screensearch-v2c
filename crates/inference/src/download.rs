@@ -1109,12 +1109,14 @@ async fn chunked_download(
     let mut manifest =
         Manifest::load_or_init(&manifest_path, total, chunk_size, chunk_count).await?;
 
-    // A brand-new (zero-filled) `.part` cannot have any completed chunks. If a matching all-done
-    // manifest survived here, it is stale — left when a prior run's post-publish cleanup of the
-    // bitmap silently failed. Trusting it would skip the download entirely and publish a zero-filled
+    // A brand-new (zero-filled) `.part` cannot have any completed chunks — there are no real bytes
+    // on disk to back a `done` mark. A header-matching manifest that survived here is stale: either
+    // a prior run's post-publish cleanup of the bitmap silently failed (all-done), or an interrupted
+    // download left a partial bitmap whose multi-GB `.part` a user/cleanup tool later reclaimed
+    // (partly-done). Trusting *any* completed bit skips that range, leaving zeros in the assembled
     // file: the length check passes (`set_len` gives exactly `total` bytes) and the sha256 check is
     // skipped whenever the CDN advertised no `X-Linked-ETag`. Re-initialise so every chunk refetches.
-    if part_created && manifest.pending_indices().is_empty() {
+    if part_created && manifest.any_complete() {
         manifest = Manifest::reinit(&manifest_path, total, chunk_size, chunk_count).await?;
     }
 
@@ -1575,6 +1577,12 @@ impl Manifest {
 
     fn pending_indices(&self) -> Vec<usize> {
         (0..self.chunk_count).filter(|i| !self.done[*i]).collect()
+    }
+
+    /// True when the bitmap marks at least one chunk complete. Over a brand-new (zero-filled)
+    /// `.part`, any such mark is necessarily stale — there are no real bytes on disk to back it.
+    fn any_complete(&self) -> bool {
+        self.done.contains(&true)
     }
 
     fn completed_bytes(&self, chunk_size: u64, total: u64) -> u64 {
@@ -2495,6 +2503,66 @@ mod tests {
             log.lock().unwrap().len(),
             chunk_count,
             "every chunk must be re-fetched after the stale manifest is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn fresh_part_discards_stale_partial_manifest() {
+        // Sibling of the all-done case: an interrupted download leaves a *partial* bitmap (some
+        // chunks `1`, some `0`), then a user/cleanup tool reclaims the multi-GB `.part`. The next
+        // run creates a fresh zero-filled `.part` while the partial bitmap survives. Trusting it
+        // would skip the done-marked ranges, leaving zeros there — length passes and there is no
+        // sha256 to catch it. The downloader must notice the brand-new part and refetch *every*
+        // chunk, not just the ones still marked pending.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-stale-partial-manifest");
+        let base = "model.gguf";
+
+        // Pre-seed a stale, PARTIALLY-complete manifest (first half done) — no `.part` on disk.
+        let half = chunk_count / 2;
+        assert!(
+            half > 0 && half < chunk_count,
+            "need a genuine mix of done/pending chunks"
+        );
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            for i in 0..chunk_count {
+                bytes.push(if i < half { b'1' } else { b'0' });
+            }
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+        assert!(
+            !dir.join(format!("{base}.part")).exists(),
+            "precondition: no part file yet"
+        );
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None); // no sha256 — re-fetching is the only safety net
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect(
+                "a fresh part with a stale partial manifest must re-download, not publish zeros",
+            );
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(
+            out, blob,
+            "published file must be the real bytes, not zeros in the done-marked ranges"
+        );
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after the stale partial manifest is discarded"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

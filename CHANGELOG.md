@@ -72,6 +72,14 @@ independent of the retrieval chain (`docs/0.2.0.md` PR8).
   macOS/Linux (`#[cfg(unix)]` `write_at`) were intentionally **declined** — the project is
   Windows-only by design (CLAUDE.md hard rule; CI is `windows-latest`), matching the
   Windows-native convention already in `flags.rs`/`lib.rs`.
+- **PR8 follow-up (PR #35 bot review).** Generalised the fresh-part stale-manifest guard: a
+  brand-new (zero-filled) `.part` now discards a header-matching `.parts` bitmap that marks **any**
+  chunk complete, not only an all-complete one. The earlier guard caught the all-done case (failed
+  post-publish cleanup) but missed a **partly-done** bitmap surviving over a fresh part — e.g. an
+  interrupted download whose multi-GB `.part` a user/cleanup tool later reclaims. Trusting it would
+  skip the done-marked ranges, leaving zeros in the assembled GGUF (length passes; sha256 is skipped
+  with no advertised `X-Linked-ETag`). New `Manifest::any_complete()` drives the check; covered by
+  `fresh_part_discards_stale_partial_manifest`, which fails on the prior condition.
 
 ### 0.2.0 PR7 — Integration audit
 Ran the PR7 end-to-end audit against the existing populated app-data DB using `npm run tauri dev`
