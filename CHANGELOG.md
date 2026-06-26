@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR8 audit checkpoint
+Recorded the PR8 parallel model download audit on `codex/0.2.0-pr8-audit`. The audit used the real
+dev executable launched by `npm run tauri dev` from a reset app-data state, downloaded the default
+answer model, exercised the Vision Quality 8B GGUF + mmproj path through Moment -> Tag with vision,
+and verified an interrupted Vision Beta download resumed from its `.parts` bitmap instead of
+restarting from zero. Static review found no PR8 schema/IPC/binding drift beyond the documented
+`sha2` dependency and downloader env overrides. The existing PR3 static-chrome release blocker
+remains separate; one narrow accepted PR8 follow-up around a pre-existing truncated `.part` plus
+stale bitmap is tracked in `specs/07_KNOWN_GAPS.md`.
+
 ### Docs — 0.2.0 PR6 audit checkpoint
 Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
 local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidence under
