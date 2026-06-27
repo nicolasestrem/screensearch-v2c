@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
-use textfilter::{classify, ClassifyInput, FilterConfig};
+use textfilter::{classify, reconcile, ClassifyInput, FilterConfig};
 use traits::{
     AppSuppression, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason,
     TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
@@ -15,9 +15,14 @@ use crate::schema::{FILTER_VERSION, UNFILTERED_FILTER_VERSION};
 use crate::SqliteStore;
 
 /// The `settings` key holding the active attention `filter_version` watermark, used by
-/// [`SqliteStore::reconcile_filter_version`]. Internal bookkeeping — deliberately not a
+/// [`SqliteStore::backfill_filter_version`]. Internal bookkeeping — deliberately not a
 /// user-facing [`traits::Settings`] field.
 const CATALOG_FILTER_VERSION_KEY: &str = "text.catalog_filter_version";
+
+/// Frames re-cleaned per backfill transaction. Small enough to keep the write lock short
+/// (a concurrent capture isn't blocked for long) and the rollback bounded; large enough
+/// to amortize per-statement overhead. Internal tuning constant.
+const BACKFILL_BATCH: usize = 64;
 
 /// Loads the chrome catalog's prior `seen_count`s for the foreground `app_hint` in a
 /// single query, returning the `signature -> seen_count` map the pure classifier reads
@@ -59,6 +64,40 @@ fn frame_target_context(
         )
         .optional()?
         .unwrap_or((None, None)))
+}
+
+/// Reads a frame's `text_spans` in `span_index` (reading) order, reconstructing each
+/// [`TextSpan`] with its stored role/geometry. Sync (takes a borrowed connection or
+/// transaction) so it can run inside the filter-version backfill transaction; the async
+/// [`SqliteStore::frame_spans`] wraps it. Unknown role/source/suppress tokens fall back
+/// conservatively (never lose a span).
+fn read_text_spans(conn: &rusqlite::Connection, frame_id: i64) -> rusqlite::Result<Vec<TextSpan>> {
+    let mut stmt = conn.prepare(
+        "SELECT text, normalized_text, source, role, x, y, w, h,
+                line_index, is_searchable, suppress_reason
+         FROM text_spans WHERE frame_id = ?1 ORDER BY span_index",
+    )?;
+    let spans = stmt
+        .query_map(params![frame_id], |r| {
+            let source: String = r.get(2)?;
+            let role: String = r.get(3)?;
+            let suppress: Option<String> = r.get(10)?;
+            Ok(TextSpan {
+                text: r.get(0)?,
+                normalized_text: r.get(1)?,
+                source: TextSource::from_db_str(&source).unwrap_or(TextSource::Ocr),
+                role: TextRole::from_db_str(&role).unwrap_or(TextRole::Unknown),
+                x: r.get::<_, f64>(4)? as f32,
+                y: r.get::<_, f64>(5)? as f32,
+                w: r.get::<_, f64>(6)? as f32,
+                h: r.get::<_, f64>(7)? as f32,
+                line_index: r.get::<_, i64>(8)? as u32,
+                is_searchable: r.get::<_, i64>(9)? != 0,
+                suppress_reason: suppress.as_deref().and_then(SuppressReason::from_db_str),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(spans)
 }
 
 /// Replaces a frame's `text_spans` wholesale (idempotent re-OCR / re-filter). Shared by
@@ -317,12 +356,30 @@ impl SqliteStore {
         .await
     }
 
-    /// Reconciles the active attention `filter_version` (`03 §3b`). If `current`
-    /// differs from the stored watermark, wipes `chrome_text_catalog` (signatures
-    /// rebuild from new captures; old frames are **not** re-filtered — clean-DB,
-    /// `07` #51/#52) and records the new watermark, in one transaction. Returns whether
-    /// the catalog was wiped. Run once at startup.
-    pub async fn reconcile_filter_version(&self, current: i32) -> Result<bool> {
+    /// Backfills the active attention `filter_version` (`03 §3b`,
+    /// `docs/AUDIT_0.2.0_PR3_2026-06-26.md`). When the stored watermark differs from
+    /// `current`, re-cleans every frame whose `filter_version < current` against the
+    /// now-warm `chrome_text_catalog` via [`textfilter::reconcile`]: positional roles
+    /// decided at capture are preserved, but a short repeated edge label that was kept
+    /// during the catalog's cold-start window (before its signature crossed
+    /// `chrome_suppress_min_seen`) is retroactively demoted to chrome and dropped from
+    /// `content_text` (the content FTS re-syncs via its trigger). For frames whose
+    /// `content_text` actually changed, an `embed_text` job is enqueued (when `reembed`)
+    /// so the vector arm re-embeds from clean text; the embeddings `content_hash` makes
+    /// an unchanged frame a no-op. Monotonic and idempotent (only ever suppresses more):
+    /// each frame's `filter_version` advances as it is processed and the watermark is
+    /// recorded only after the whole pass, so an interrupted run safely resumes. Runs in
+    /// batched transactions ([`BACKFILL_BATCH`]) to bound the write lock. Returns the
+    /// number of frames whose `content_text` changed; a no-op returning `0` when the
+    /// watermark already equals `current`. Run once at startup.
+    pub async fn backfill_filter_version(
+        &self,
+        current: i32,
+        chrome_suppress_min_seen: u32,
+        chrome_protect_min_chars: u32,
+        chrome_region_buckets: u32,
+        reembed: bool,
+    ) -> Result<u64> {
         self.with_conn(move |conn| {
             let stored: Option<i32> = conn
                 .query_row(
@@ -333,17 +390,72 @@ impl SqliteStore {
                 .optional()?
                 .and_then(|v| v.parse().ok());
             if stored == Some(current) {
-                return Ok(false);
+                return Ok(0u64);
             }
-            let tx = conn.unchecked_transaction()?;
-            tx.execute("DELETE FROM chrome_text_catalog", [])?;
-            tx.execute(
+
+            let config = FilterConfig {
+                chrome_suppress_min_seen,
+                chrome_protect_min_chars,
+                chrome_region_buckets,
+            };
+
+            // Frames still below the current filter version, oldest first.
+            let frame_ids: Vec<i64> = {
+                let mut stmt = conn.prepare(
+                    "SELECT frame_id FROM frame_text WHERE filter_version < ?1 ORDER BY frame_id",
+                )?;
+                let ids = stmt
+                    .query_map(params![current], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                ids
+            };
+
+            let mut changed_total: u64 = 0;
+            for batch in frame_ids.chunks(BACKFILL_BATCH) {
+                let tx = conn.unchecked_transaction()?;
+                for &fid in batch {
+                    let (app_hint, old_content): (Option<String>, String) = tx.query_row(
+                        "SELECT target_app_hint, content_text FROM frame_text WHERE frame_id = ?1",
+                        params![fid],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    let catalog = load_chrome_catalog(&tx, app_hint.as_deref())?;
+                    let spans = read_text_spans(&tx, fid)?;
+                    let out = reconcile(&spans, app_hint.as_deref(), &catalog, &config);
+
+                    if out.content_text != old_content {
+                        tx.execute(
+                            "UPDATE frame_text
+                             SET content_text = ?2, suppressed_count = ?3, filter_version = ?4
+                             WHERE frame_id = ?1",
+                            params![fid, out.content_text, out.suppressed_count as i64, current],
+                        )?;
+                        replace_text_spans(&tx, fid, &out.spans)?;
+                        changed_total += 1;
+                        if reembed {
+                            tx.execute(
+                                "INSERT INTO jobs (kind, frame_id, priority, max_attempts, not_before)
+                                 VALUES ('embed_text', ?1, 0, 3, 0)",
+                                params![fid],
+                            )?;
+                        }
+                    } else {
+                        // No chrome to drop — just advance the version so it isn't rescanned.
+                        tx.execute(
+                            "UPDATE frame_text SET filter_version = ?2 WHERE frame_id = ?1",
+                            params![fid, current],
+                        )?;
+                    }
+                }
+                tx.commit()?;
+            }
+
+            conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![CATALOG_FILTER_VERSION_KEY, current.to_string()],
             )?;
-            tx.commit()?;
-            Ok(true)
+            Ok(changed_total)
         })
         .await
     }
@@ -589,34 +701,7 @@ impl SqliteStore {
     /// [`Self::get_frame`] / `delete_frame` (`07` engineering note) — and the read
     /// PR3's classifier uses to recompute roles. Empty when the frame has no spans.
     pub async fn frame_spans(&self, frame_id: i64) -> Result<Vec<TextSpan>> {
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT text, normalized_text, source, role, x, y, w, h,
-                        line_index, is_searchable, suppress_reason
-                 FROM text_spans WHERE frame_id = ?1 ORDER BY span_index",
-            )?;
-            let spans = stmt
-                .query_map(params![frame_id], |r| {
-                    let source: String = r.get(2)?;
-                    let role: String = r.get(3)?;
-                    let suppress: Option<String> = r.get(10)?;
-                    Ok(TextSpan {
-                        text: r.get(0)?,
-                        normalized_text: r.get(1)?,
-                        source: TextSource::from_db_str(&source).unwrap_or(TextSource::Ocr),
-                        role: TextRole::from_db_str(&role).unwrap_or(TextRole::Unknown),
-                        x: r.get::<_, f64>(4)? as f32,
-                        y: r.get::<_, f64>(5)? as f32,
-                        w: r.get::<_, f64>(6)? as f32,
-                        h: r.get::<_, f64>(7)? as f32,
-                        line_index: r.get::<_, i64>(8)? as u32,
-                        is_searchable: r.get::<_, i64>(9)? != 0,
-                        suppress_reason: suppress.as_deref().and_then(SuppressReason::from_db_str),
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(spans)
-        })
-        .await
+        self.with_conn(move |conn| Ok(read_text_spans(conn, frame_id)?))
+            .await
     }
 }

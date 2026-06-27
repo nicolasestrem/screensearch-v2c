@@ -11,6 +11,39 @@
 
 ---
 
+## 2026-06-27 — 0.2.0 PR3 audit fix: self-exclude + backfill + excluded-apps hot-apply (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Resolved the PR3 attention-filter release blocker (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`,
+  gap #64) across four coordinated changes:
+  1. **Self-exclude own window** — `capture::privacy::is_own_foreground_window()` (PID == current
+     process) gates the capture loop so ScreenSearch never indexes its own UI; a gated one-time
+     startup purge (`purge_self_captures` + `SqliteStore::frames_with_app_hint`) sweeps pre-existing
+     own-window frames (CASCADE + JPEG cleanup), recorded by the `maintenance.self_capture_purged`
+     watermark.
+  2. **Backfill** — `FILTER_VERSION` 1→2; `SqliteStore::backfill_filter_version` replaces the old
+     catalog-wipe `reconcile_filter_version`, re-cleaning sub-version frames against the warm catalog
+     via the new pure, monotonic `textfilter::reconcile` (preserves positional roles; needs no
+     `target_rect`; re-enqueues `embed_text` for changed frames). Runs batched in a background task at
+     startup.
+  3. **Cold-start** — `text.chrome_suppress_min_seen` default 12→4.
+  4. **Excluded-apps hot-apply** — `Kernel::reload_capture()` + `set_settings` compares the derived
+     `CaptureConfig` (now `PartialEq`) and restarts a running capture loop on change.
+- **Why:** The audit proved (and live corpus replay confirmed) the dominant default-search chrome
+  was ScreenSearch indexing its own window, plus a cold-start window the no-backfill design froze.
+  The classifier's "rect unknown → suppress nothing" safety invariant means the catalog/backfill
+  cannot place rect-None desktop chrome, so self-exclusion (user-chosen) carries the load for the
+  app's own UI while the backfill cleans catalogued chrome. The excluded-apps bug (config frozen at
+  capture start) was user-reported. `01 §5` Windows-only honored; no cross-platform stubs.
+- **Verification:** Full suite green —
+  `cd ui && npm ci && npm run lint && npm run build` (eslint clean, vite built),
+  `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets -- -D warnings`
+  (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass incl. new
+  `textfilter` reconcile goldens, `store` backfill + `frames_with_app_hint`, `kernel`
+  `reload_capture`), `git diff --exit-code -- ui/src/bindings` (clean). Live evidence: the shipped
+  `backfill_filter_version` + self-purge replayed over a copy of the audit's 313-frame corpus
+  (`.playwright-mcp/pr3-2026-06-26/screensearch-pr3-before.sqlite`) — default content FTS hits
+  before→after: `Deck` 68→26, `Recall` 42→15, `Firefox`/`Steam` 24→15, `GPU Memory` 19→15; raw FTS
+  still recovers all; `cargo test`=41 / `embeddings`=13 content hits preserved.
+
 ## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
 - **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.
   The ignored local audit file `docs/AUDIT_0.2.0_PR6_2026-06-26.md` and evidence directory

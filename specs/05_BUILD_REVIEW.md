@@ -2510,3 +2510,34 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
   `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings` all exited 0 with raw
   outputs preserved in `54` through `58`.
+
+## 2026-06-27 — PR3 audit fix: self-exclude + backfill + excluded-apps hot-apply (`fix/0.2.0-pr3-chrome-backfill`)
+- **Scope:** Resolve the PR3 attention-filter release blocker (`07` #64 → #66, `06` #8 → #10). The
+  user chose **self-exclude own window** after live evidence showed ScreenSearch indexing its own UI
+  was the dominant default-search chrome (a different case from their "don't exclude Chrome" steer —
+  the app's own window has no real content).
+- **Diagnosis method:** ran the *shipped* `backfill_filter_version` (and, separately, the self-purge
+  store primitives) over a throwaway copy of the audit corpus
+  (`.playwright-mcp/pr3-2026-06-26/screensearch-pr3-before.sqlite`). This isolated three causes: (1)
+  self-capture (53/313 frames were the ScreenSearch window itself); (2) a cold-start window the
+  no-backfill design froze; (3) the user-reported "Excluded Apps never applies" (capture config
+  frozen at `start_capture`). Key insight: the classifier's deliberate "rect unknown → suppress
+  nothing" invariant means the catalog/backfill alone can't place rect-None desktop chrome — hence
+  self-exclusion carries the app's own UI.
+- **Change set:** `textfilter::reconcile` (pure, monotonic, no `target_rect`) + 5 goldens;
+  `FILTER_VERSION` 1→2 with `SqliteStore::backfill_filter_version` (batched, idempotent, re-embeds
+  changed frames) replacing the catalog-wipe `reconcile_filter_version`; `chrome_suppress_min_seen`
+  12→4; `capture::privacy::is_own_foreground_window` (PID) wired into the gate + gated one-time
+  `purge_self_captures` (new `frames_with_app_hint`); `Kernel::reload_capture` + `set_settings`
+  `CaptureConfig`-diff reload; `CaptureConfig: PartialEq`; removed the unused
+  `Store::reconcile_filter_version` trait method.
+- **Live evidence (default content FTS hits, audit corpus, before → after purge+backfill):** `Deck`
+  68→26, `Recall` 42→15, `Firefox`/`Steam` 24→15, `GPU Memory` 19→15; 53 self-frames purged, 212/260
+  remaining frames re-cleaned; raw/`include_chrome` still recovers all; real work terms intact
+  (`cargo test`=41, `embeddings`=13). Residual (rect-None/multi-monitor *other*-app desktop chrome) →
+  `07` #58.
+- **Full verification:** `cd ui && npm ci && npm run lint && npm run build` (eslint clean, vite
+  built), `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets -- -D
+  warnings` (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass), and
+  `git diff --exit-code -- ui/src/bindings` (clean). The throwaway evidence test was removed before
+  commit (working tree shows only the intended source/doc changes).

@@ -688,6 +688,12 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
+    // Snapshot the capture-relevant config (interval, monitors, diff threshold, excluded
+    // apps, pause-on-lock) BEFORE persisting, so we can tell whether a running capture loop
+    // must pick up new values. Without this, capture/privacy changes silently waited for the
+    // next manual capture start — the user-reported "Excluded Apps never applies" bug.
+    let prev_capture_cfg =
+        kernel::settings::capture_config(&kernel::settings::load_settings(store.as_ref()).await);
     // Clamp once up front so the values handed to the live providers below are exactly what
     // gets persisted. `save_settings` sanitizes internally too, but a direct IPC call could
     // pass out-of-range values (e.g. a huge `sidecar_ctx_size`); without this, the DB would
@@ -751,6 +757,16 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
             kernel.reconfigure_enrichment().await;
         }
     }
+    // Hot-apply capture/privacy changes to a running capture loop (restarts it so the new
+    // CaptureConfig — e.g. a freshly excluded app — takes effect now, not on the next manual
+    // start). No-op when nothing capture-relevant changed or capture isn't running.
+    if let Some(kernel) = state.kernel.clone() {
+        if kernel::settings::capture_config(&settings) != prev_capture_cfg {
+            if let Err(e) = kernel.reload_capture().await {
+                tracing::warn!(error = %e, "capture reload after settings change failed");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -781,21 +797,39 @@ pub fn run() {
             let embed_models_dir = data_dir.join("models").join("fastembed");
 
             let (store, db_readiness) = open_store(&db_path);
-            // PR3: reconcile the attention filter_version once at startup. If it changed
-            // since the last run, the chrome catalog is wiped so signatures rebuild from
-            // new captures (no backfill of old frames — `03 §3b`, `07` #52). Runs before
-            // capture can start (capture is user-triggered, much later).
+            // PR3 audit fix: backfill the attention filter_version once at startup. When the
+            // version bumped since the last run, re-clean every sub-current frame's
+            // content_text against the now-warm chrome catalog (`textfilter::reconcile`) so
+            // the live classifier's cold-start window no longer leaves app/nav chrome
+            // permanently searchable (docs/AUDIT_0.2.0_PR3_2026-06-26.md). Spawned in the
+            // background so launch never blocks; batched + idempotent + resumable, and
+            // capture is user-triggered (much later), so there is no capture contention.
             if let Some(store) = &store {
                 let store = store.clone();
-                match tauri::async_runtime::block_on(
-                    store.reconcile_filter_version(store::FILTER_VERSION),
-                ) {
-                    Ok(true) => {
-                        tracing::info!("text filter_version changed → chrome catalog reset")
+                let purge_dir = data_dir.clone();
+                tauri::async_runtime::spawn(async move {
+                    // First sweep out any pre-existing own-window captures (PR3 self-
+                    // exclude), then re-clean the remaining frames against the warm
+                    // chrome catalog.
+                    purge_self_captures(store.clone(), purge_dir).await;
+                    let s = kernel::settings::load_settings(store.as_ref()).await;
+                    match store
+                        .backfill_filter_version(
+                            store::FILTER_VERSION,
+                            s.text_chrome_suppress_min_seen,
+                            s.text_chrome_protect_min_chars,
+                            s.text_chrome_region_buckets,
+                            s.enrich_embed_text,
+                        )
+                        .await
+                    {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            tracing::info!(frames = n, "filter_version backfill re-cleaned frames")
+                        }
+                        Err(e) => tracing::warn!(error = %e, "filter_version backfill failed"),
                     }
-                    Ok(false) => {}
-                    Err(e) => tracing::warn!(error = %e, "reconcile_filter_version failed"),
-                }
+                });
             }
             let readiness = Readiness {
                 db: db_readiness,
@@ -1311,6 +1345,71 @@ async fn run_retention_once(
         );
     }
     Ok(purged)
+}
+
+/// Settings watermark marking that the one-time self-capture purge has run.
+const SELF_PURGE_KEY: &str = "maintenance.self_capture_purged";
+
+/// One-time purge of the app's own previously-captured frames (PR3 audit,
+/// `docs/AUDIT_0.2.0_PR3_2026-06-26.md`). Before the self-window capture skip existed,
+/// foreground frames of the ScreenSearch window itself were stored; they hold only app
+/// chrome (sidebar nav, command palette, a results pane echoing other captures) and
+/// dominate `Deck`/`Recall` default search. Gated by [`SELF_PURGE_KEY`] so it runs once;
+/// a clean-DB install finds none and no-ops. Identifies own frames by the running exe's
+/// file stem (the same value the capture path recorded as `app_hint`). Deletes each
+/// frame's JPEG then its row (CASCADE clears frame_text / text_spans / embeddings /
+/// jobs). Batched, and bails if a batch makes no progress so a persistently failing
+/// delete can't spin forever.
+async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
+    if matches!(store.get_setting(SELF_PURGE_KEY).await, Ok(Some(_))) {
+        return;
+    }
+    let Some(own_hint) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .filter(|s| !s.is_empty())
+    else {
+        tracing::warn!("self-capture purge skipped: could not resolve own exe name");
+        return;
+    };
+    let mut purged = 0_u64;
+    loop {
+        let batch = match store.frames_with_app_hint(&own_hint, 256).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, "self-capture purge: list failed");
+                break;
+            }
+        };
+        if batch.is_empty() {
+            break;
+        }
+        let before = purged;
+        for frame in batch {
+            if let Some(path) = safe_frame_path(&data_dir, &frame.image_path) {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(path = %path.display(), error = %e, "self-capture purge: file delete failed");
+                    }
+                }
+            }
+            if let Err(e) = store.delete_frame(frame.frame_id).await {
+                tracing::error!(frame_id = frame.frame_id, error = %e, "self-capture purge: db delete failed");
+                continue;
+            }
+            purged += 1;
+        }
+        if purged == before {
+            // No progress this batch (every delete failed) — stop rather than spin.
+            break;
+        }
+    }
+    if let Err(e) = store.set_setting(SELF_PURGE_KEY, "1").await {
+        tracing::warn!(error = %e, "self-capture purge: could not record watermark");
+    }
+    if purged > 0 {
+        tracing::info!(purged, app = %own_hint, "purged own-window captures (PR3 self-exclude)");
+    }
 }
 
 fn safe_frame_path(data_dir: &Path, image_path: &str) -> Option<PathBuf> {

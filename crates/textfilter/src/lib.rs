@@ -275,11 +275,102 @@ pub fn classify(
     }
 }
 
+/// Re-applies **only** the static-chrome (repetition) suppression to a frame's already
+/// classified `spans`, against a now-warm `catalog`. Positional roles decided at capture
+/// (`background`/`system`/`chrome`) are preserved; only currently-kept lines
+/// (`content`/`unknown`) can be demoted to `chrome`.
+///
+/// Unlike [`classify`] this needs **no `target_rect`** — a line's chrome signature is
+/// centroid-grid + app based, both derivable from the stored span geometry — and it is
+/// **monotonic**: it can only ever suppress *more*, never resurrect content, so re-running
+/// it is safe and idempotent. It backs the store's `filter_version` backfill
+/// (`docs/0.2.0.md` PR3 follow-up): the live classifier's cold-start window — a repeated
+/// label is kept until its signature crosses `chrome_suppress_min_seen` — is retroactively
+/// cleaned once the catalog has learned the label, so old frames stop surfacing app/nav
+/// chrome in default search. The catalog already counts each frame's appearance (bumped at
+/// capture), so the test is `seen_count >= min_seen` — **no `+1`** (that would double-count
+/// this frame, unlike the live path where the bump happens after classify).
+pub fn reconcile(
+    spans: &[TextSpan],
+    target_app_hint: Option<&str>,
+    catalog: &dyn ChromeCatalog,
+    config: &FilterConfig,
+) -> ClassifyOutput {
+    let lines = group_lines(spans);
+    let protect_min = config.chrome_protect_min_chars as usize;
+    let min_seen = config.chrome_suppress_min_seen.max(1);
+    let buckets = config.chrome_region_buckets.max(1);
+
+    // Line indices to newly demote (content/unknown → chrome).
+    let mut newly_chrome: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for line in lines.values() {
+        // Preserve positional suppression already baked in at capture.
+        if !matches!(line.role, TextRole::Content | TextRole::Unknown) {
+            continue;
+        }
+        // Long, information-rich lines are never suppressed for repeating.
+        if line.normalized.chars().count() >= protect_min {
+            continue;
+        }
+        let (cx, cy) = line.centroid();
+        let sig = signature(
+            target_app_hint,
+            &region_bucket(cx, cy, buckets),
+            &line.normalized,
+        );
+        if catalog.seen_count(&sig) >= min_seen {
+            newly_chrome.insert(line.index);
+        }
+    }
+
+    // Apply to spans (same order as input), tally suppressed, rebuild content.
+    let mut out_spans = Vec::with_capacity(spans.len());
+    let mut suppressed_count: u32 = 0;
+    for span in spans {
+        let (role, reason, searchable) = if newly_chrome.contains(&span.line_index) {
+            (TextRole::Chrome, Some(SuppressReason::StaticChrome), false)
+        } else {
+            let kept = matches!(span.role, TextRole::Content | TextRole::Unknown);
+            (span.role, span.suppress_reason, kept)
+        };
+        if !searchable {
+            suppressed_count += 1;
+        }
+        out_spans.push(TextSpan {
+            role,
+            is_searchable: searchable,
+            suppress_reason: reason,
+            ..span.clone()
+        });
+    }
+
+    let content_text = lines
+        .values()
+        .filter(|l| {
+            matches!(l.role, TextRole::Content | TextRole::Unknown)
+                && !newly_chrome.contains(&l.index)
+        })
+        .map(|l| l.text())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    ClassifyOutput {
+        spans: out_spans,
+        content_text,
+        suppressed_count,
+        observed: Vec::new(),
+    }
+}
+
 /// One OCR line aggregated from its word spans.
 struct LineAcc {
     index: u32,
     words: Vec<String>,
     normalized: String,
+    /// The role already assigned to this line (from the first span's stored role).
+    /// `classify` ignores it — every input span is `Unknown` there — but [`reconcile`]
+    /// reads it to preserve positional suppression decided at capture.
+    role: TextRole,
     x0: f32,
     y0: f32,
     x1: f32,
@@ -315,6 +406,7 @@ fn group_lines(spans: &[TextSpan]) -> BTreeMap<u32, LineAcc> {
             index: span.line_index,
             words: Vec::new(),
             normalized: String::new(),
+            role: span.role,
             x0: f32::INFINITY,
             y0: f32::INFINITY,
             x1: f32::NEG_INFINITY,

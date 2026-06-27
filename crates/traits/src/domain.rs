@@ -276,7 +276,7 @@ pub struct FrameEnrichmentInput {
 /// construction. The kernel derives it from [`Settings`](crate::Settings) when
 /// capture starts (`03 §8`); it is shared here so the kernel can build it and the
 /// capture impl can consume it without either depending on the other (`03 §2`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CaptureConfig {
     /// Delay between capture cycles, ms (`capture.interval_ms`).
     pub interval_ms: u32,

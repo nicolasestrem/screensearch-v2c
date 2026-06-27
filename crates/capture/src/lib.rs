@@ -145,6 +145,14 @@ impl CaptureSource for WgcCapture {
             if self.config.pause_on_lock && privacy::is_workstation_locked() {
                 continue;
             }
+            // Never capture our own window: it only contains app chrome (sidebar nav,
+            // command palette) and a results pane that echoes other captures' chrome —
+            // the dominant source of the PR3 'Deck'/'Recall' self-capture leak
+            // (docs/AUDIT_0.2.0_PR3_2026-06-26.md). PID-based, so it can't mismatch a
+            // third-party window merely titled "screensearch".
+            if privacy::is_own_foreground_window() {
+                continue;
+            }
             let (app_hint, window_title) = privacy::foreground_context();
             if privacy::is_excluded(
                 app_hint.as_deref(),
