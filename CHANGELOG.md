@@ -14,6 +14,8 @@ Followed up on the PR7 no-evidence Ask audit finding: source-frame tiles that re
 context are now labeled **Frames checked** instead of **Cited frames**. This keeps the existing typed
 IPC stream and local-model prompt unchanged while avoiding the misleading implication that unrelated
 context frames support an honest no-evidence refusal.
+Verified in the dev executable launched by `npm run tauri dev`: a no-evidence token refusal rendered
+retrieved tiles under **Frames checked** and did not render the old **Cited frames** label.
 
 ### Docs — PR7 audit status reconciliation
 Reconciled tracked docs after the later PR3 audit fix: the old PR7 static-chrome finding is now
@@ -21,6 +23,8 @@ recorded as resolved by the self-exclude/backfill work, with the real residual k
 multi-monitor / rect-None gap. Also updated the Architecture search-limit wording to the current
 `1..=2,000` backend cap and clarified that detailed `docs/AUDIT*.md` / `.playwright-mcp/` artifacts
 are local-only ignored evidence.
+The same dev-exe pass also spot-checked the already-fixed range-neutral report progress copy and the
+default Chrome search path.
 
 ### Docs — 0.2.0 PR8 audit checkpoint
 Recorded the PR8 parallel model download audit on `codex/0.2.0-pr8-audit`. The audit used the real

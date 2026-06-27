@@ -23,8 +23,14 @@
   unrelated retrieved context under `CITED FRAMES`. The user chose the low-risk relabel fix, with no
   schema, migration, typed IPC, or model-output heuristic change. The stale PR7 static-chrome rows
   also needed to reflect the later PR3 audit fix instead of leaving a resolved release blocker open.
-- **Verification:** Pending in this branch; raw output will be recorded after the planned UI/Rust
-  gates and `npm run tauri dev` manual checks complete.
+- **Verification:** Passed on 2026-06-27. Automated gates run: `cd ui && npm ci && npm run lint &&
+  npm run build`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --
+  -D warnings`; `cargo build --workspace`; `cargo test --workspace`; and
+  `git diff --exit-code -- ui/src/bindings`. Manual dev-exe pass launched `npm run tauri dev`,
+  verified the no-evidence Ask token rendered `FRAMES CHECKED` with no `Cited frames` label,
+  confirmed Daily report progress kept the range-neutral bounded-pass copy, and spot-checked default
+  `chrome` search results with the content/static filter UI visible. Raw command output is preserved
+  in the final session response; dev logs are under `.playwright-mcp/pr7-followups-2026-06-27/`.
 
 ---
 

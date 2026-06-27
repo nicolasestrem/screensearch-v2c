@@ -38,8 +38,25 @@ For each build pass, append an entry:
   only makes the current reviewed-context UI truthful.
 
 ### Verification
-Pending. This branch will run the planned UI/Rust gates and a `npm run tauri dev` manual PR7 spot
-check before completion.
+Automated gates passed on 2026-06-27; raw command output is pasted in the final session response:
+- `cd ui && npm ci && npm run lint && npm run build`
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo build --workspace`
+- `cargo test --workspace`
+- `git diff --exit-code -- ui/src/bindings`
+
+Manual dev-exe verification passed with `npm run tauri dev`, launching
+`target/debug/screensearch.exe`; logs are stored under
+`.playwright-mcp/pr7-followups-2026-06-27/` and remain ignored local evidence.
+- Recall Ask no-evidence query `PR7_NO_EVIDENCE_UNIQUE_TOKEN_20260627_X9Q` rendered an honest
+  refusal and displayed retrieved tiles under `FRAMES CHECKED`; the old `Cited frames` label was not
+  present.
+- Daily report generation progress displayed the existing range-neutral copy:
+  `Reports summarize active periods in bounded passes, so larger ranges can take a little longer.`
+- Default Recall search for `chrome` returned result rows with the `CONTENT TEXT ONLY` control and
+  static-toolbar filter copy visible, including Chrome hits plus backfilled non-Chrome rows, with no
+  self-capture/static-chrome regression observed in the sampled dev app state.
 
 ---
 
