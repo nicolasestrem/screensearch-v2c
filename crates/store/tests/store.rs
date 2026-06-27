@@ -1636,31 +1636,217 @@ async fn insert_ocr_filtered_suppresses_repeated_chrome_after_threshold() {
 }
 
 #[tokio::test]
-async fn reconcile_filter_version_wipes_catalog_on_change() {
+async fn backfill_filter_version_recleans_old_frames_against_warm_catalog() {
     let store = SqliteStore::open_in_memory().expect("open store");
-    let id = store.insert_frame(editor_frame(1000)).await.unwrap();
+
+    // An older frame stored before the chrome catalog warmed up: its content_text still
+    // carries the toolbar (filter_version 0, the cold-start / passthrough case the PR3
+    // audit flagged — docs/AUDIT_0.2.0_PR3_2026-06-26.md).
+    let old_id = store.insert_frame(editor_frame(1000)).await.unwrap();
     store
-        .insert_ocr_filtered(
-            id,
-            editor_ocr("a sufficiently long body line of real content to keep around"),
-            filter_ctx(2),
+        .insert_ocr(
+            old_id,
+            editor_ocr(
+                "ALPHAUNIQUEBODY the annual planning doc lists each milestone owner and date",
+            ),
         )
         .await
         .unwrap();
+    let before = store.get_frame(old_id).await.unwrap().unwrap();
+    assert!(before
+        .content_text
+        .as_deref()
+        .unwrap()
+        .contains("ZTOOLBARZ"));
 
-    // No watermark yet → first reconcile wipes + records it.
-    assert!(store
-        .reconcile_filter_version(FILTER_VERSION)
+    // Two later captures teach the catalog the toolbar signature (seen_count → 2).
+    for (i, body) in [
+        "meeting notes capture the decisions and the owners for the next sprint here",
+        "the migration checklist enumerates each table and its forward only change set",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let id = store
+            .insert_frame(editor_frame(2000 + i as i64))
+            .await
+            .unwrap();
+        store
+            .insert_ocr_filtered(id, editor_ocr(body), filter_ctx(2))
+            .await
+            .unwrap();
+    }
+
+    // Backfill re-cleans every sub-current frame against the now-warm catalog.
+    let changed = store
+        .backfill_filter_version(FILTER_VERSION, 2, 48, 8, true)
         .await
-        .unwrap());
-    // Same version again → no-op.
+        .unwrap();
+    assert_eq!(changed, 1, "the one stale frame is re-cleaned");
+
+    // The toolbar is gone from content_text; the real body survives; raw still has it.
+    let after = store.get_frame(old_id).await.unwrap().unwrap();
+    assert!(!after.content_text.as_deref().unwrap().contains("ZTOOLBARZ"));
+    assert!(after
+        .content_text
+        .as_deref()
+        .unwrap()
+        .contains("ALPHAUNIQUEBODY"));
+    assert!(after.raw_text.as_deref().unwrap().contains("ZTOOLBARZ"));
+
+    // The toolbar span is now classified chrome + non-searchable.
+    let spans = store.frame_spans(old_id).await.unwrap();
+    let toolbar = spans.iter().find(|s| s.text == "ZTOOLBARZ").unwrap();
+    assert_eq!(toolbar.role, TextRole::Chrome);
+    assert!(!toolbar.is_searchable);
+
+    // A re-embed job was enqueued for the changed frame.
+    let jobs = store
+        .claim_jobs(&[JobKind::EmbedText], 10, 10_000_000)
+        .await
+        .unwrap();
+    assert!(jobs.iter().any(|j| j.frame_id == Some(old_id)));
+
+    // Default content search no longer surfaces the old frame by the chrome term;
+    // include_chrome still recovers it via preserved raw text (03 §3b acceptance).
+    let default: HashSet<i64> = store
+        .hybrid_search(&search("ZTOOLBARZ", false))
+        .await
+        .unwrap()
+        .iter()
+        .map(|h| h.frame_id)
+        .collect();
+    assert!(!default.contains(&old_id));
+    let raw: HashSet<i64> = store
+        .hybrid_search(&search("ZTOOLBARZ", true))
+        .await
+        .unwrap()
+        .iter()
+        .map(|h| h.frame_id)
+        .collect();
+    assert!(raw.contains(&old_id));
+
+    // Idempotent: the watermark is now current, so a second pass is a no-op.
+    assert_eq!(
+        store
+            .backfill_filter_version(FILTER_VERSION, 2, 48, 8, true)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn backfill_filter_version_invalidates_stale_text_embedding() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+
+    // An older frame whose content_text still carries the toolbar (filter_version 0),
+    // plus a text embedding built from that stale, chrome-laden content.
+    let old_id = store.insert_frame(editor_frame(1000)).await.unwrap();
+    store
+        .insert_ocr(
+            old_id,
+            editor_ocr(
+                "ALPHAUNIQUEBODY the annual planning doc lists each milestone owner and date",
+            ),
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_text_embedding(
+            old_id,
+            0,
+            "ZTOOLBARZ ...",
+            ChunkSource::Ocr,
+            &one_hot(0),
+            "gemma",
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.text_embedding_count().await.unwrap(), 1);
+    assert!(store
+        .nearest_text_frames(&one_hot(0), 5)
+        .await
+        .unwrap()
+        .contains(&old_id));
+
+    // Two later captures warm the catalog so the toolbar signature is suppressible.
+    for (i, body) in [
+        "meeting notes capture the decisions and the owners for the next sprint here",
+        "the migration checklist enumerates each table and its forward only change set",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let id = store
+            .insert_frame(editor_frame(2000 + i as i64))
+            .await
+            .unwrap();
+        store
+            .insert_ocr_filtered(id, editor_ocr(body), filter_ctx(2))
+            .await
+            .unwrap();
+    }
+
+    // Backfill re-cleans the stale frame — and must drop its now-stale text embedding so
+    // the dropped chrome can't keep surfacing the frame via hybrid_search's vector arm
+    // before the re-embed runs (Codex PR3 review, P1).
+    let changed = store
+        .backfill_filter_version(FILTER_VERSION, 2, 48, 8, true)
+        .await
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    // The stale embedding (and its vec0 shadow, via the embeddings_ad trigger) is gone;
+    // nothing surfaces old_id by the old vector anymore.
+    assert_eq!(store.text_embedding_count().await.unwrap(), 0);
     assert!(!store
-        .reconcile_filter_version(FILTER_VERSION)
+        .nearest_text_frames(&one_hot(0), 5)
         .await
-        .unwrap());
-    // A bumped version → wipes again (recompute the catalog).
+        .unwrap()
+        .contains(&old_id));
+
+    // A re-embed job was enqueued to rebuild it from the cleaned content_text.
+    let jobs = store
+        .claim_jobs(&[JobKind::EmbedText], 10, 10_000_000)
+        .await
+        .unwrap();
+    assert!(jobs.iter().any(|j| j.frame_id == Some(old_id)));
+}
+
+#[tokio::test]
+async fn frames_with_app_hint_matches_case_insensitively() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let mk = |at: i64, app: &str| NewFrame {
+        captured_at: at,
+        monitor_index: 0,
+        width: 100,
+        height: 100,
+        image_path: format!("frames/{at}.jpg"),
+        content_hash: format!("h{at}"),
+        app_hint: Some(app.to_string()),
+        window_title: Some("w".to_string()),
+        browser_url: None,
+    };
+    let a = store.insert_frame(mk(1000, "ScreenSearch")).await.unwrap();
+    let _b = store.insert_frame(mk(1001, "firefox")).await.unwrap();
+    let c = store.insert_frame(mk(1002, "screensearch")).await.unwrap();
+
+    // Backs the one-time self-capture purge: matches own frames regardless of case.
+    let ids: HashSet<i64> = store
+        .frames_with_app_hint("screensearch", 10)
+        .await
+        .unwrap()
+        .iter()
+        .map(|m| m.frame_id)
+        .collect();
+    assert_eq!(ids, HashSet::from([a, c]));
+
+    // Guards: empty hint or zero limit yields nothing.
+    assert!(store.frames_with_app_hint("", 10).await.unwrap().is_empty());
     assert!(store
-        .reconcile_filter_version(FILTER_VERSION + 1)
+        .frames_with_app_hint("screensearch", 0)
         .await
-        .unwrap());
+        .unwrap()
+        .is_empty());
 }

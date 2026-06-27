@@ -280,15 +280,6 @@ pub trait Store: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Reconciles the active attention `filter_version` (`03 §3b`): if `current`
-    /// differs from the stored watermark, wipes `chrome_text_catalog` so signatures
-    /// rebuild from new captures (no backfill of old frames — clean-DB, `07` #51/#52)
-    /// and records the new watermark. Returns `true` if the catalog was wiped. Called
-    /// once at startup. Default is a no-op (`false`).
-    async fn reconcile_filter_version(&self, _current: i32) -> Result<bool> {
-        Ok(false)
-    }
-
     // settings
     async fn get_setting(&self, key: &str) -> Result<Option<String>>;
     async fn set_setting(&self, key: &str, value: &str) -> Result<()>;

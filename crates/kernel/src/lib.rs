@@ -269,6 +269,34 @@ impl Kernel {
         tracing::info!("capture stopped");
     }
 
+    /// Re-applies capture/privacy/storage settings to a **running** capture loop by
+    /// restarting it. `start_capture` snapshots `CaptureConfig` (incl.
+    /// `privacy.excluded_apps`) into the capture source at start, so without this a
+    /// settings change silently waits for the next manual capture start; `set_settings`
+    /// calls this whenever the derived [`CaptureConfig`] changes so a newly excluded app,
+    /// changed monitor set, interval, or pause-on-lock takes effect immediately. A no-op
+    /// when capture isn't running (the next `start_capture` reads the new settings anyway)
+    /// — it never *starts* capture the user had stopped.
+    ///
+    /// The stop+start is **not atomic**: it releases the `capture` lock between the two
+    /// halves, and Tauri 2 async commands run concurrently (there is no global command
+    /// serialization), so a user-initiated `stop_capture` IPC call landing in that gap
+    /// would be undone by the trailing `start_capture` — restarting capture against the
+    /// user's intent. Each half is individually idempotent, which bounds the damage to an
+    /// unwanted restart (never corruption), but it does not make the combined outcome
+    /// neutral. The residual risk is **accepted**: the window is sub-millisecond and the
+    /// only caller is `set_settings`, while the UI surfaces no affordance to fire a save
+    /// and a Stop simultaneously. Closing it would mean splitting
+    /// `stop_capture`/`start_capture` into lock-held inner variants — a refactor of the
+    /// core capture lifecycle judged higher-risk than the race it removes.
+    pub async fn reload_capture(&self) -> anyhow::Result<()> {
+        if !self.is_capturing().await {
+            return Ok(());
+        }
+        self.stop_capture().await;
+        self.start_capture().await
+    }
+
     fn set_capture_readiness(&self, status: ComponentStatus, detail: Option<String>) {
         set_capture_readiness(&self.readiness, &self.events, status, detail);
     }

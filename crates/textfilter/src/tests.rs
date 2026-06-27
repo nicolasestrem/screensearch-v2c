@@ -245,3 +245,129 @@ fn empty_spans_produce_empty_output() {
     assert!(out.observed.is_empty());
     assert!(out.spans.is_empty());
 }
+
+// ---- reconcile (filter_version backfill) -----------------------------------------------
+
+#[test]
+fn reconcile_demotes_warm_catalog_chrome_preserving_content() {
+    // A frame captured with a cold catalog keeps its toolbar (the cold-start window).
+    let (spans, rect) = fixture();
+    let empty: HashMap<String, u32> = HashMap::new();
+    let captured = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    assert!(roles_of(&captured, 0)
+        .iter()
+        .all(|r| *r == TextRole::Content));
+    assert!(captured.content_text.contains("File Edit View Help"));
+    let toolbar_sig = observed_sig_for(&captured, "file edit view help");
+
+    // Later the catalog learns the toolbar. Reconcile re-cleans the stored spans.
+    let mut warm: HashMap<String, u32> = HashMap::new();
+    warm.insert(toolbar_sig, 12);
+    let out = reconcile(&captured.spans, Some("editor"), &warm, &cfg());
+
+    // Toolbar is now chrome; positional roles are preserved; real body survives.
+    assert!(roles_of(&out, 0).iter().all(|r| *r == TextRole::Chrome));
+    assert!(out
+        .spans
+        .iter()
+        .filter(|s| s.line_index == 0)
+        .all(|s| s.suppress_reason == Some(SuppressReason::StaticChrome) && !s.is_searchable));
+    assert!(roles_of(&out, 3).iter().all(|r| *r == TextRole::System));
+    assert!(roles_of(&out, 4).iter().all(|r| *r == TextRole::Background));
+    assert!(roles_of(&out, 1).iter().all(|r| *r == TextRole::Content));
+    assert!(roles_of(&out, 2).iter().all(|r| *r == TextRole::Content));
+
+    assert!(!out.content_text.contains("File Edit View Help"));
+    assert!(out.content_text.contains("the quick brown fox"));
+    assert!(out.content_text.contains("ok thanks"));
+    assert!(!out.content_text.contains("3:47"));
+    assert!(!out.content_text.contains("Inbox"));
+    // toolbar(4) + clock(2) + background(2) words dropped.
+    assert_eq!(out.suppressed_count, 8);
+}
+
+#[test]
+fn reconcile_is_idempotent() {
+    let (spans, rect) = fixture();
+    let empty: HashMap<String, u32> = HashMap::new();
+    let captured = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    let toolbar_sig = observed_sig_for(&captured, "file edit view help");
+    let mut warm: HashMap<String, u32> = HashMap::new();
+    warm.insert(toolbar_sig, 12);
+
+    let once = reconcile(&captured.spans, Some("editor"), &warm, &cfg());
+    let twice = reconcile(&once.spans, Some("editor"), &warm, &cfg());
+    assert_eq!(once.content_text, twice.content_text);
+    assert_eq!(once.suppressed_count, twice.suppressed_count);
+    assert_eq!(once.spans, twice.spans);
+}
+
+#[test]
+fn reconcile_demotes_only_the_catalogued_region() {
+    // Same words ("alpha beta") in two places: a top-edge toolbar and interior body.
+    // Only the catalogued (top) signature is chrome; the body copy stays content —
+    // proving a word is not blanket-denylisted (the PR3 "Firefox in body" nuance).
+    let rect = [0.1, 0.0, 0.8, 0.93];
+    let mut spans = Vec::new();
+    spans.extend(line_spans("alpha beta", 0, 0.12, 0.01)); // top edge → catalog candidate
+    spans.extend(line_spans("alpha beta", 1, 0.40, 0.45)); // interior body
+    let empty: HashMap<String, u32> = HashMap::new();
+    let captured = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    // Only the top-edge copy is catalogued.
+    assert_eq!(
+        captured
+            .observed
+            .iter()
+            .filter(|o| o.normalized_text == "alpha beta")
+            .count(),
+        1
+    );
+    let top_sig = observed_sig_for(&captured, "alpha beta");
+
+    let mut warm: HashMap<String, u32> = HashMap::new();
+    warm.insert(top_sig, 99);
+    let out = reconcile(&captured.spans, Some("editor"), &warm, &cfg());
+
+    assert!(roles_of(&out, 0).iter().all(|r| *r == TextRole::Chrome));
+    assert!(roles_of(&out, 1).iter().all(|r| *r == TextRole::Content));
+    // The body copy survives exactly once.
+    assert_eq!(out.content_text.matches("alpha beta").count(), 1);
+}
+
+#[test]
+fn reconcile_cleans_catalogued_chrome_even_without_target_rect() {
+    // A rect-less capture keeps everything as `unknown` (can't place positionally).
+    // Reconcile still demotes a line whose signature the catalog has learned — partly
+    // mitigating the no-rect leak — without touching content it cannot place.
+    let (spans, rect) = fixture();
+    let empty: HashMap<String, u32> = HashMap::new();
+    let with_rect = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    let toolbar_sig = observed_sig_for(&with_rect, "file edit view help");
+
+    let rectless = classify(&input(&spans, None, None), &empty, &cfg());
+    assert!(rectless.spans.iter().all(|s| s.role == TextRole::Unknown));
+
+    let mut warm: HashMap<String, u32> = HashMap::new();
+    warm.insert(toolbar_sig, 50);
+    let out = reconcile(&rectless.spans, Some("editor"), &warm, &cfg());
+
+    // Only the catalogued toolbar is demoted; the rest stays (recoverable, not lost).
+    assert!(roles_of(&out, 0).iter().all(|r| *r == TextRole::Chrome));
+    assert!(!out.content_text.contains("File Edit View Help"));
+    assert!(out.content_text.contains("the quick brown fox"));
+    assert!(out.content_text.contains("3:47")); // no rect ⇒ clock can't be positionally dropped
+    assert!(out.content_text.contains("Inbox"));
+    assert_eq!(out.suppressed_count, 4); // just the toolbar words
+}
+
+#[test]
+fn reconcile_with_cold_catalog_changes_nothing() {
+    // No learned signatures ⇒ reconcile reproduces the captured output byte-for-byte.
+    let (spans, rect) = fixture();
+    let empty: HashMap<String, u32> = HashMap::new();
+    let captured = classify(&input(&spans, Some(rect), None), &empty, &cfg());
+    let out = reconcile(&captured.spans, Some("editor"), &empty, &cfg());
+    assert_eq!(out.content_text, captured.content_text);
+    assert_eq!(out.suppressed_count, captured.suppressed_count);
+    assert_eq!(out.spans, captured.spans);
+}

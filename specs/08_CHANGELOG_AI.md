@@ -33,6 +33,90 @@
   (about 43% of the GGUF), later showing `86%` at the next sampled UI state before finalizing.
 
 ---
+## 2026-06-27 — 0.2.0 PR3 audit fix: self-exclude + backfill + excluded-apps hot-apply (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Resolved the PR3 attention-filter release blocker (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`,
+  gap #64) across four coordinated changes:
+  1. **Self-exclude own window** — `capture::privacy::is_own_foreground_window()` (PID == current
+     process) gates the capture loop so ScreenSearch never indexes its own UI; a gated one-time
+     startup purge (`purge_self_captures` + `SqliteStore::frames_with_app_hint`) sweeps pre-existing
+     own-window frames (CASCADE + JPEG cleanup), recorded by the `maintenance.self_capture_purged`
+     watermark.
+  2. **Backfill** — `FILTER_VERSION` 1→2; `SqliteStore::backfill_filter_version` replaces the old
+     catalog-wipe `reconcile_filter_version`, re-cleaning sub-version frames against the warm catalog
+     via the new pure, monotonic `textfilter::reconcile` (preserves positional roles; needs no
+     `target_rect`; re-enqueues `embed_text` for changed frames). Runs batched in a background task at
+     startup.
+  3. **Cold-start** — `text.chrome_suppress_min_seen` default 12→4.
+  4. **Excluded-apps hot-apply** — `Kernel::reload_capture()` + `set_settings` compares the derived
+     `CaptureConfig` (now `PartialEq`) and restarts a running capture loop on change.
+- **Why:** The audit proved (and live corpus replay confirmed) the dominant default-search chrome
+  was ScreenSearch indexing its own window, plus a cold-start window the no-backfill design froze.
+  The classifier's "rect unknown → suppress nothing" safety invariant means the catalog/backfill
+  cannot place rect-None desktop chrome, so self-exclusion (user-chosen) carries the load for the
+  app's own UI while the backfill cleans catalogued chrome. The excluded-apps bug (config frozen at
+  capture start) was user-reported. `01 §5` Windows-only honored; no cross-platform stubs.
+- **Verification:** Full suite green —
+  `cd ui && npm ci && npm run lint && npm run build` (eslint clean, vite built),
+  `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets -- -D warnings`
+  (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass incl. new
+  `textfilter` reconcile goldens, `store` backfill + `frames_with_app_hint`, `kernel`
+  `reload_capture`), `git diff --exit-code -- ui/src/bindings` (clean). Live evidence: the shipped
+  `backfill_filter_version` + self-purge replayed over a copy of the audit's 313-frame corpus
+  (`.playwright-mcp/pr3-2026-06-26/screensearch-pr3-before.sqlite`) — default content FTS hits
+  before→after: `Deck` 68→26, `Recall` 42→15, `Firefox`/`Steam` 24→15, `GPU Memory` 19→15; raw FTS
+  still recovers all; `cargo test`=41 / `embeddings`=13 content hits preserved.
+
+## 2026-06-27 — PR #41 review hardening (Codex + Gemini) (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Acted on the PR #41 review of the gap-#64/#66 fix (gap #67). Three code fixes:
+  1. **Invalidate stale embeddings during backfill (Codex P1).** When `backfill_filter_version`
+     rewrites a frame's `content_text` it now `DELETE`s that frame's stale `source='ocr'` row from
+     `embeddings` inside the same transaction (the `embeddings_ad` trigger cascades to the vec0
+     shadow). Added the `backfill_filter_version_invalidates_stale_text_embedding` store test.
+  2. **Catalog cache in backfill (Gemini).** The read-only chrome catalog is loaded once per
+     `app_hint` into a `HashMap` cache instead of one `chrome_text_catalog` query per frame (N+1).
+  3. **No file orphaning on purge (Gemini).** `purge_self_captures` `continue`s past a transient
+     JPEG-delete failure instead of deleting the row (mirrors the retention sweeper); the
+     no-progress guard still bounds the loop.
+- **Why:** (1) is correctness — without it, dropped chrome keeps surfacing the frame via
+  `hybrid_search`'s vector arm (fused even with `include_chrome=false`) until the async re-embed
+  runs, or indefinitely if text embedding is off, undermining the PR's whole point. (2) is startup
+  perf on large DBs. (3) prevents orphaned JPEGs, consistent with `01 §5`/the existing retention
+  pattern. Two findings were accepted as-is by user decision and documented (gap #67, method/CHANGELOG
+  comments): the 12→4 `chrome_suppress_min_seen` default reaches new installs only (no settings
+  migration — Codex P2), and `reload_capture`'s stop→start is left non-atomic (unreachable UI race —
+  Gemini).
+- **Verification:** `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets --
+  -D warnings` (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass;
+  `store` integration suite 48→49 with the new P1 test; 0 failures), `git diff --exit-code --
+  ui/src/bindings` (clean — no ts-rs type changed).
+
+## 2026-06-27 — PR #41 second review round (Codex + claude[bot]) (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Acted on the review of commit `f8f3d83` (gap #68). Two code fixes + one doc fix:
+  1. **Backfill releases the store connection between batches (Codex P2).** `backfill_filter_version`
+     no longer wraps the whole loop in one `with_conn` — which holds `SqliteStore`'s single
+     `Arc<Mutex<Connection>>` (every store method funnels through `with_conn`) for the entire pass. It
+     now does one short `with_conn` to check the watermark, list sub-version frames, and snapshot each
+     distinct `app_hint`'s catalog; then one `with_conn` per `BACKFILL_BATCH`; then one to advance the
+     watermark. The connection is free between batches.
+  2. **Self-purge watermark only on full drain (Codex P2).** `purge_self_captures` sets
+     `maintenance.self_capture_purged` only when the listing drains to empty after successful deletes;
+     a transient failure (now able to leave rows behind after #67's orphan fix) leaves it unset to
+     retry next launch.
+  3. **`reload_capture` doc comment corrected (claude[bot]).** Tauri 2 async commands are not
+     serialized, so the prior "unreachable / serialized command path" rationale was false. The comment
+     now states the race is real but accepted (sub-ms window, no UI affordance to fire a save + Stop at
+     once); the code is unchanged (user's earlier "leave as-is" decision stands).
+- **Why:** (1) keeps the app's DB responsive during the background startup backfill on large upgraded
+  DBs; the catalog snapshot is sound because concurrent capture only warms catalogs for *new* frames
+  (already at `current`), which the pass doesn't touch. (2) prevents a partial purge from being marked
+  permanently complete and leaving own-window chrome searchable. (3) keeps the documentation truthful.
+  The 12→4 upgrade-path concern was re-raised with a backfill-clamp variant (`min(stored,4)`); per user
+  decision it was declined — the tuned default reaches new installs only (gap #68).
+- **Verification:** `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets --
+  -D warnings` (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass; the
+  existing `store` backfill goldens — recleans-against-warm-catalog, the new stale-embedding test, and
+  idempotency — pass unchanged over the per-batch-connection rewrite; 0 failures), `git diff
+  --exit-code -- ui/src/bindings` (clean).
 
 ## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
 - **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.

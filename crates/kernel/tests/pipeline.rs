@@ -319,6 +319,58 @@ async fn kernel_clears_capture_and_marks_error_when_source_shuts_down() {
 }
 
 #[tokio::test]
+async fn reload_capture_restarts_loop_with_fresh_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+
+    // Record the CaptureConfig the factory is built with on each (re)start.
+    let configs: Arc<std::sync::Mutex<Vec<traits::CaptureConfig>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = configs.clone();
+    let factory: CaptureFactory = Arc::new(move |cfg| {
+        seen.lock().unwrap().push(cfg);
+        Ok(Box::new(FakeCapture {
+            frames: VecDeque::new(),
+            after_frames: AfterFrames::Pending,
+        }) as Box<dyn CaptureSource>)
+    });
+
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    // Reload before any start is a no-op (it never starts capture the user hasn't).
+    kernel.reload_capture().await.unwrap();
+    assert!(!kernel.is_capturing().await);
+    assert!(configs.lock().unwrap().is_empty());
+
+    kernel.start_capture().await.unwrap();
+    assert_eq!(configs.lock().unwrap().len(), 1);
+
+    // A newly excluded app is persisted, then reloaded: the loop restarts and the rebuilt
+    // CaptureConfig carries the new value — the fix for "Excluded Apps never applies".
+    store
+        .set_setting("privacy.excluded_apps", "[\"SecretApp\"]")
+        .await
+        .unwrap();
+    kernel.reload_capture().await.unwrap();
+    assert!(kernel.is_capturing().await);
+
+    let cfgs = configs.lock().unwrap();
+    assert_eq!(cfgs.len(), 2, "reload restarted the capture loop");
+    assert!(
+        cfgs[1].excluded_apps.iter().any(|a| a == "SecretApp"),
+        "rebuilt config picks up the newly excluded app"
+    );
+}
+
+#[tokio::test]
 async fn kernel_refuses_to_start_capture_when_ocr_is_unavailable() {
     let tmp = tempfile::tempdir().unwrap();
     let db = Arc::new(SqliteStore::open_in_memory().unwrap());

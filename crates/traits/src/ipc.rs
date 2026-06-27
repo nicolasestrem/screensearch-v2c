@@ -528,9 +528,13 @@ impl Default for Settings {
             ],
             privacy_pause_on_lock: true,
             // 0.2.x attention-first text signal (03 §8). Thresholds are settings, never
-            // hardcoded (03 §3b); these defaults match the spec and are tuned in PR3.
+            // hardcoded (03 §3b). suppress_min_seen=4 (lowered from 12 after the PR3 audit,
+            // docs/AUDIT_0.2.0_PR3_2026-06-26.md): a repeated short edge label is caught
+            // within a few captures instead of leaking through a long cold-start window;
+            // long lines, interior body, and rect-less frames stay protected, and the
+            // filter_version backfill + include_chrome/raw text recover any false positive.
             text_include_chrome_default: false,
-            text_chrome_suppress_min_seen: 12,
+            text_chrome_suppress_min_seen: 4,
             text_chrome_protect_min_chars: 48,
             text_chrome_region_buckets: 8,
             // 0.2.x retrieval + recall reports (03 §8). default_top_k replaces the
