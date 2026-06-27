@@ -17,7 +17,7 @@ export interface AskState {
   thinking: string;
   /** Accumulated answer prose (markdown). */
   answer: string;
-  /** Cited frame ids, in first-seen order, deduplicated. */
+  /** Source frame ids supplied to the model, in first-seen order, deduplicated. */
   citations: number[];
   error: string | null;
 }
@@ -46,6 +46,8 @@ function reducer(state: AskState, action: AskAction): AskState {
         case "token":
           return { ...state, answer: state.answer + d.text };
         case "citation":
+          // The current backend emits one id per frame included in the model prompt.
+          // The UI labels these as checked context, not claim-level citations.
           return state.citations.includes(d.frame_id)
             ? state
             : { ...state, citations: [...state.citations, d.frame_id] };

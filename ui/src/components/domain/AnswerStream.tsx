@@ -2,9 +2,10 @@
 // Folds the useAsk view-model into: a collapsible *thinking* trace (native
 // <details>, so keyboard + a11y come free), the answer prose (markdown via
 // react-markdown + GFM, themed with the `prose-deck` typography tokens), and the
-// grounding citations as clickable tiles that open each source moment. react-markdown
-// is imported only here, so it ships in the /recall route chunk (§8). The idle phase
-// renders nothing — the Recall screen owns the empty "ask a question" invitation.
+// reviewed source-frame context as clickable tiles that open each source moment.
+// react-markdown is imported only here, so it ships in the /recall route chunk (§8).
+// The idle phase renders nothing — the Recall screen owns the empty "ask a question"
+// invitation.
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,6 +18,7 @@ export interface AnswerStreamProps {
   phase: AskPhase;
   thinking: string;
   answer: string;
+  /** Frame ids supplied to the answer model as reviewed context. */
   citations: number[];
   error: string | null;
   /** Re-run the last question (shown on error). */
@@ -106,7 +108,7 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
 
       {citations.length > 0 && (
         <div className="flex flex-col gap-2">
-          <span className="eyebrow">Cited frames</span>
+          <span className="eyebrow">Frames checked</span>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {citations.map((id) => (
               <CitationTile key={id} frameId={id} />
