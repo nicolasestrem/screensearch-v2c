@@ -20,11 +20,14 @@ pub const EMBEDDING_DIM: usize = 768;
 pub const UNFILTERED_FILTER_VERSION: i32 = 0;
 
 /// `frame_text.filter_version` written by PR3's attention filter. Bumping this is the
-/// "recompute the chrome catalog" lever (`03 §3b`): on startup the store wipes
-/// `chrome_text_catalog` when the active version changes so signatures rebuild from new
-/// captures. No backfill — old frames keep their old `content_text`/version (clean-DB,
-/// `07` #51/#52).
-pub const FILTER_VERSION: i32 = 1;
+/// "recompute the chrome catalog" lever (`03 §3b`): on startup
+/// [`SqliteStore::backfill_filter_version`] re-cleans every frame below the active
+/// version against the now-warm chrome catalog (`textfilter::reconcile`), so the live
+/// classifier's cold-start window no longer leaves app/nav chrome permanently in
+/// `content_text` (the 2026-06-26 PR3 audit blocker;
+/// `docs/AUDIT_0.2.0_PR3_2026-06-26.md`). v2 turns on that backfill (v1 only wiped the
+/// catalog and left old frames dirty).
+pub const FILTER_VERSION: i32 = 2;
 
 /// Ordered, forward-only migrations. Each is applied in its own transaction when
 /// the DB's tracked version is below it.

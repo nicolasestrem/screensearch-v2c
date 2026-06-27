@@ -190,6 +190,32 @@ impl SqliteStore {
         .await
     }
 
+    /// Frames whose foreground `app_hint` equals `hint` (case-insensitive), oldest
+    /// first, capped at `limit`. Backs the one-time self-capture purge: the app never
+    /// indexes its own window after the PR3 audit
+    /// (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`), so any pre-existing own-window frames are
+    /// swept out. The caller deletes the returned rows and their JPEG files in batches.
+    pub async fn frames_with_app_hint(&self, hint: &str, limit: u32) -> Result<Vec<FrameMeta>> {
+        if hint.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let hint = hint.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, captured_at, image_path, app_hint
+                 FROM frames
+                 WHERE app_hint = ?1 COLLATE NOCASE
+                 ORDER BY captured_at ASC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![hint, i64::from(limit)], row_to_meta)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
     /// The captures immediately **bracketing** `at` (unix ms): up to `limit_each`
     /// frames just *before* it and up to `limit_each` just *after* it, within
     /// `±half_window_ms`, returned ascending by `captured_at`. The anchor's own row

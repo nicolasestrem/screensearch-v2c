@@ -26,7 +26,7 @@ mod win {
         CloseDesktop, OpenInputDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS,
     };
     use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -109,6 +109,26 @@ mod win {
             .map(|s| s.to_string_lossy().into_owned())
     }
 
+    /// Whether the current foreground window belongs to **our own** process (the
+    /// ScreenSearch window). Capturing our own UI only indexes app chrome — sidebar
+    /// nav, command palette, and a results pane that echoes other captures' chrome —
+    /// which was the dominant source of the PR3 `Deck`/`Recall` self-capture leak
+    /// (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`). PID-based so it is exact: it never
+    /// mismatches a third-party window that merely has "screensearch" in its title
+    /// (e.g. a browser tab on the project's GitHub page), unlike a name match.
+    pub fn is_own_foreground_window() -> bool {
+        // SAFETY: plain Win32 queries on the calling thread; no aliasing.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() {
+                return false;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            pid != 0 && pid == GetCurrentProcessId()
+        }
+    }
+
     /// Whether the workstation is locked. Heuristic (`07`): a non-elevated process
     /// cannot open the input desktop while the secure (lock) desktop is active, so
     /// a failed `OpenInputDesktop` is treated as "locked".
@@ -127,7 +147,9 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{foreground_context, foreground_window_rect, is_workstation_locked};
+pub use win::{
+    foreground_context, foreground_window_rect, is_own_foreground_window, is_workstation_locked,
+};
 
 #[cfg(test)]
 mod tests {

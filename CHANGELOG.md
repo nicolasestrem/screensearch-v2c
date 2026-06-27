@@ -9,6 +9,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — 0.2.0 PR3 attention-filter release blocker + Privacy/Excluded-Apps hot-apply
+Addressed the 2026-06-26 PR3 audit (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`): default content search
+no longer ranks frames because of static/app chrome.
+
+- **Self-exclude the app's own window.** The capture privacy gate now skips frames whose foreground
+  window belongs to ScreenSearch's own process (PID-based, so it never mismatches a third-party
+  window merely titled "screensearch"). Indexing our own UI only stored sidebar nav / command
+  palette / a results pane echoing other captures — the dominant `Deck`/`Recall` self-capture leak.
+  A gated, one-time startup purge removes any pre-existing own-window captures (a clean install finds
+  none and no-ops).
+- **Attention-filter backfill.** `FILTER_VERSION` 1→2: on startup the store re-cleans every frame
+  below the active version against the now-warm chrome catalog (`textfilter::reconcile`, pure +
+  monotonic — it only ever suppresses more, never resurrects content, and needs no `target_rect`).
+  Changed frames re-enqueue an `embed_text` job so the vector arm re-embeds from clean text. This
+  retroactively fixes the classifier's cold-start window (chrome kept until its signature crossed the
+  threshold) — previously frozen with no backfill.
+- **Faster cold-start.** `text.chrome_suppress_min_seen` default 12→4, so a repeated short edge label
+  is caught within a few captures; long lines, interior body, and rect-less frames stay protected,
+  and `include_chrome` + raw text recover any false positive.
+- **Privacy / Excluded Apps now apply immediately.** `set_settings` compares the derived
+  `CaptureConfig` and reloads a running capture loop on change, so adding an excluded app (or
+  changing monitors / interval / pause-on-lock) takes effect at once instead of silently waiting for
+  the next manual capture start (a user-reported bug).
+
+Evidence (shipped backfill + purge replayed over the real 313-frame audit corpus copy, default
+content FTS hits before→after): `Deck` 68→26, `Recall` 42→15, `Firefox` 24→15, `Steam` 24→15,
+`GPU Memory` 19→15 — the remainder is legitimate content (frames literally discussing those terms;
+`GPU Memory` in Task Manager). `include_chrome`/raw still recovers everything and real work terms are
+intact (`cargo test`=41, `embeddings`=13). Honest residual: rect-None / multi-monitor secondary
+captures of *other* apps' desktop chrome remain (gap #58 — needs `target_rect` for those frames).
+
+Review hardening (PR #41, Codex + Gemini):
+- **Stale embeddings invalidated during backfill (Codex P1).** When the backfill rewrites a frame's
+  `content_text`, it now deletes that frame's stale text embedding (`source = 'ocr'`) in the same
+  transaction (the `embeddings_ad` trigger cascades to the vec0 shadow). Otherwise the dropped chrome
+  terms could keep surfacing the frame through `hybrid_search`'s vector arm — which fuses even with
+  `include_chrome=false` — until the async re-embed ran, or *indefinitely* if text embedding is off.
+- **Backfill no longer re-queries the catalog per frame (Gemini).** The read-only chrome catalog is
+  cached by `app_hint` across the whole backfill instead of one `chrome_text_catalog` query per frame.
+- **Self-capture purge no longer orphans files (Gemini).** A transient JPEG-delete failure now skips
+  the row delete (matching the retention sweeper) so the file isn't orphaned; the no-progress guard
+  still stops the loop if a batch makes no headway.
+- **Backfill releases the store connection between batches (Codex P2, 2nd pass).** The whole backfill
+  no longer runs under a single `with_conn`, which would hold the store's one DB connection for the
+  entire pass and block search / settings / capture inserts on a large upgraded DB. It now snapshots
+  the catalog once up front and processes each batch in its own short-lived `with_conn`, so other DB
+  work interleaves during the background startup backfill.
+- **Self-purge watermark only on full drain (Codex P2, 2nd pass).** The one-time purge records its
+  `maintenance.self_capture_purged` watermark only after every own-window frame is actually gone — so
+  a transient failure that leaves frames behind retries on the next launch instead of permanently
+  skipping the purge (this matters more now that the orphan fix above can leave a locked frame behind).
+- **Accepted, documented as-is:** the lower `chrome_suppress_min_seen` default (12→4) reaches new
+  installs only — existing users keep their persisted value (no settings migration, and the
+  backfill-clamp alternative was also declined, by choice); and the `reload_capture` stop→start window
+  is left non-atomic — its doc comment was corrected (Tauri 2 async commands are *not* serialized, so
+  the race is real but accepted: sub-millisecond window, no UI affordance to fire both paths at once).
+
 ### Docs — 0.2.0 PR6 audit checkpoint
 Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
 local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidence under

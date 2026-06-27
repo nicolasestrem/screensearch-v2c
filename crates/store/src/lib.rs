@@ -311,9 +311,6 @@ impl Store for SqliteStore {
     async fn text_filter_stats(&self, filter_version: i32) -> Result<Vec<AppSuppression>> {
         SqliteStore::text_filter_stats(self, filter_version).await
     }
-    async fn reconcile_filter_version(&self, current: i32) -> Result<bool> {
-        SqliteStore::reconcile_filter_version(self, current).await
-    }
     async fn get_setting(&self, key: &str) -> Result<Option<String>> {
         SqliteStore::get_setting(self, key).await
     }
