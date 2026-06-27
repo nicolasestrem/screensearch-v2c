@@ -68,6 +68,34 @@
   `store` integration suite 48→49 with the new P1 test; 0 failures), `git diff --exit-code --
   ui/src/bindings` (clean — no ts-rs type changed).
 
+## 2026-06-27 — PR #41 second review round (Codex + claude[bot]) (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Acted on the review of commit `f8f3d83` (gap #68). Two code fixes + one doc fix:
+  1. **Backfill releases the store connection between batches (Codex P2).** `backfill_filter_version`
+     no longer wraps the whole loop in one `with_conn` — which holds `SqliteStore`'s single
+     `Arc<Mutex<Connection>>` (every store method funnels through `with_conn`) for the entire pass. It
+     now does one short `with_conn` to check the watermark, list sub-version frames, and snapshot each
+     distinct `app_hint`'s catalog; then one `with_conn` per `BACKFILL_BATCH`; then one to advance the
+     watermark. The connection is free between batches.
+  2. **Self-purge watermark only on full drain (Codex P2).** `purge_self_captures` sets
+     `maintenance.self_capture_purged` only when the listing drains to empty after successful deletes;
+     a transient failure (now able to leave rows behind after #67's orphan fix) leaves it unset to
+     retry next launch.
+  3. **`reload_capture` doc comment corrected (claude[bot]).** Tauri 2 async commands are not
+     serialized, so the prior "unreachable / serialized command path" rationale was false. The comment
+     now states the race is real but accepted (sub-ms window, no UI affordance to fire a save + Stop at
+     once); the code is unchanged (user's earlier "leave as-is" decision stands).
+- **Why:** (1) keeps the app's DB responsive during the background startup backfill on large upgraded
+  DBs; the catalog snapshot is sound because concurrent capture only warms catalogs for *new* frames
+  (already at `current`), which the pass doesn't touch. (2) prevents a partial purge from being marked
+  permanently complete and leaving own-window chrome searchable. (3) keeps the documentation truthful.
+  The 12→4 upgrade-path concern was re-raised with a backfill-clamp variant (`min(stored,4)`); per user
+  decision it was declined — the tuned default reaches new installs only (gap #68).
+- **Verification:** `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets --
+  -D warnings` (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass; the
+  existing `store` backfill goldens — recleans-against-warm-catalog, the new stale-embedding test, and
+  idempotency — pass unchanged over the per-batch-connection rewrite; 0 failures), `git diff
+  --exit-code -- ui/src/bindings` (clean).
+
 ## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
 - **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.
   The ignored local audit file `docs/AUDIT_0.2.0_PR6_2026-06-26.md` and evidence directory

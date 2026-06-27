@@ -1359,7 +1359,9 @@ const SELF_PURGE_KEY: &str = "maintenance.self_capture_purged";
 /// file stem (the same value the capture path recorded as `app_hint`). Deletes each
 /// frame's JPEG then its row (CASCADE clears frame_text / text_spans / embeddings /
 /// jobs). Batched, and bails if a batch makes no progress so a persistently failing
-/// delete can't spin forever.
+/// delete can't spin forever — and the [`SELF_PURGE_KEY`] watermark is recorded only on a
+/// full drain, so a transient failure that leaves frames behind retries next launch
+/// instead of marking the purge permanently complete.
 async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
     if matches!(store.get_setting(SELF_PURGE_KEY).await, Ok(Some(_))) {
         return;
@@ -1373,6 +1375,12 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
         return;
     };
     let mut purged = 0_u64;
+    // Only watermark the purge as done once every own-window frame is actually gone. A
+    // transient delete failure (Windows sharing violation, a DB error) trips the
+    // no-progress break with frames still present — leaving the watermark unset so the
+    // next launch retries, instead of permanently skipping the purge and leaving that
+    // chrome searchable.
+    let mut fully_drained = false;
     loop {
         let batch = match store.frames_with_app_hint(&own_hint, 256).await {
             Ok(b) => b,
@@ -1382,6 +1390,7 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
             }
         };
         if batch.is_empty() {
+            fully_drained = true;
             break;
         }
         let before = purged;
@@ -1410,8 +1419,10 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
             break;
         }
     }
-    if let Err(e) = store.set_setting(SELF_PURGE_KEY, "1").await {
-        tracing::warn!(error = %e, "self-capture purge: could not record watermark");
+    if fully_drained {
+        if let Err(e) = store.set_setting(SELF_PURGE_KEY, "1").await {
+            tracing::warn!(error = %e, "self-capture purge: could not record watermark");
+        }
     }
     if purged > 0 {
         tracing::info!(purged, app = %own_hint, "purged own-window captures (PR3 self-exclude)");

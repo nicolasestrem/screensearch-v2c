@@ -368,10 +368,17 @@ impl SqliteStore {
     /// so the vector arm re-embeds from clean text; the embeddings `content_hash` makes
     /// an unchanged frame a no-op. Monotonic and idempotent (only ever suppresses more):
     /// each frame's `filter_version` advances as it is processed and the watermark is
-    /// recorded only after the whole pass, so an interrupted run safely resumes. Runs in
-    /// batched transactions ([`BACKFILL_BATCH`]) to bound the write lock. Returns the
-    /// number of frames whose `content_text` changed; a no-op returning `0` when the
-    /// watermark already equals `current`. Run once at startup.
+    /// recorded only after the whole pass, so an interrupted run safely resumes.
+    ///
+    /// Each batch ([`BACKFILL_BATCH`]) runs in its own [`Self::with_conn`] call, so the
+    /// store's single connection is **released between batches** — the background startup
+    /// backfill never holds the DB lock across the whole run, keeping search / settings /
+    /// capture inserts responsive on a large upgraded DB. The chrome catalog is snapshotted
+    /// once up front (one query per distinct `app_hint`) and reused for every batch instead
+    /// of being re-read per frame; concurrent capture only warms catalogs for *new* frames
+    /// (already at `current`), which this pass doesn't touch, so the snapshot is sound.
+    /// Returns the number of frames whose `content_text` changed; a no-op returning `0`
+    /// when the watermark already equals `current`. Run once at startup.
     pub async fn backfill_filter_version(
         &self,
         current: i32,
@@ -380,102 +387,136 @@ impl SqliteStore {
         chrome_region_buckets: u32,
         reembed: bool,
     ) -> Result<u64> {
-        self.with_conn(move |conn| {
-            let stored: Option<i32> = conn
-                .query_row(
-                    "SELECT value FROM settings WHERE key = ?1",
-                    params![CATALOG_FILTER_VERSION_KEY],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?
-                .and_then(|v| v.parse().ok());
-            if stored == Some(current) {
-                return Ok(0u64);
-            }
+        // One short-lived lock: bail if already current, else list the sub-version frames
+        // (oldest first) and snapshot every distinct app_hint's chrome catalog. `None` =>
+        // watermark already current (nothing to do, no watermark write); `Some` => proceed
+        // (and advance the watermark afterwards even if no frame ends up changing).
+        type CatalogSnapshot = HashMap<Option<String>, HashMap<String, u32>>;
+        let plan: Option<(Vec<i64>, CatalogSnapshot)> = self
+            .with_conn(move |conn| {
+                let stored: Option<i32> = conn
+                    .query_row(
+                        "SELECT value FROM settings WHERE key = ?1",
+                        params![CATALOG_FILTER_VERSION_KEY],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .and_then(|v| v.parse().ok());
+                if stored == Some(current) {
+                    return Ok(None);
+                }
 
-            let config = FilterConfig {
-                chrome_suppress_min_seen,
-                chrome_protect_min_chars,
-                chrome_region_buckets,
-            };
-
-            // Frames still below the current filter version, oldest first.
-            let frame_ids: Vec<i64> = {
-                let mut stmt = conn.prepare(
-                    "SELECT frame_id FROM frame_text WHERE filter_version < ?1 ORDER BY frame_id",
-                )?;
-                let ids = stmt
-                    .query_map(params![current], |r| r.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                ids
-            };
-
-            // The chrome catalog is read-only during the backfill and most frames share
-            // an app_hint, so load each app's catalog once and reuse it across every
-            // frame/batch instead of re-querying chrome_text_catalog per frame.
-            let mut catalog_cache: HashMap<Option<String>, HashMap<String, u32>> = HashMap::new();
-            let mut changed_total: u64 = 0;
-            for batch in frame_ids.chunks(BACKFILL_BATCH) {
-                let tx = conn.unchecked_transaction()?;
-                for &fid in batch {
-                    let (app_hint, old_content): (Option<String>, String) = tx.query_row(
-                        "SELECT target_app_hint, content_text FROM frame_text WHERE frame_id = ?1",
-                        params![fid],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
+                let frame_ids: Vec<i64> = {
+                    let mut stmt = conn.prepare(
+                        "SELECT frame_id FROM frame_text WHERE filter_version < ?1 ORDER BY frame_id",
                     )?;
-                    if !catalog_cache.contains_key(&app_hint) {
-                        let cat = load_chrome_catalog(&tx, app_hint.as_deref())?;
-                        catalog_cache.insert(app_hint.clone(), cat);
-                    }
-                    let catalog = &catalog_cache[&app_hint];
-                    let spans = read_text_spans(&tx, fid)?;
-                    let out = reconcile(&spans, app_hint.as_deref(), catalog, &config);
+                    let ids = stmt
+                        .query_map(params![current], |r| r.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    ids
+                };
 
-                    if out.content_text != old_content {
-                        tx.execute(
-                            "UPDATE frame_text
-                             SET content_text = ?2, suppressed_count = ?3, filter_version = ?4
-                             WHERE frame_id = ?1",
-                            params![fid, out.content_text, out.suppressed_count as i64, current],
-                        )?;
-                        replace_text_spans(&tx, fid, &out.spans)?;
-                        // Invalidate the now-stale text embedding so the dropped chrome
-                        // terms can't keep surfacing the frame through hybrid_search's
-                        // vector arm (which fuses even when include_chrome=false) before
-                        // the re-embed runs — or indefinitely if text embedding is off.
-                        // The embeddings_ad trigger cascades to the vec0 shadow; the
-                        // embed_text job (when reembed) rebuilds it from the new content.
-                        tx.execute(
-                            "DELETE FROM embeddings WHERE frame_id = ?1 AND source = 'ocr'",
-                            params![fid],
-                        )?;
-                        changed_total += 1;
-                        if reembed {
-                            tx.execute(
-                                "INSERT INTO jobs (kind, frame_id, priority, max_attempts, not_before)
-                                 VALUES ('embed_text', ?1, 0, 3, 0)",
-                                params![fid],
-                            )?;
-                        }
-                    } else {
-                        // No chrome to drop — just advance the version so it isn't rescanned.
-                        tx.execute(
-                            "UPDATE frame_text SET filter_version = ?2 WHERE frame_id = ?1",
-                            params![fid, current],
-                        )?;
+                // Snapshot the catalog per distinct app_hint once (vs. one query per frame).
+                let mut catalogs: CatalogSnapshot = HashMap::new();
+                {
+                    let mut stmt = conn.prepare(
+                        "SELECT DISTINCT target_app_hint FROM frame_text WHERE filter_version < ?1",
+                    )?;
+                    let hints = stmt
+                        .query_map(params![current], |r| r.get::<_, Option<String>>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    for hint in hints {
+                        let cat = load_chrome_catalog(conn, hint.as_deref())?;
+                        catalogs.insert(hint, cat);
                     }
                 }
-                tx.commit()?;
-            }
+                Ok(Some((frame_ids, catalogs)))
+            })
+            .await?;
 
+        let Some((frame_ids, catalogs)) = plan else {
+            return Ok(0);
+        };
+        let catalogs = std::sync::Arc::new(catalogs);
+
+        let mut changed_total: u64 = 0;
+        for batch in frame_ids.chunks(BACKFILL_BATCH) {
+            // Each batch takes the store connection on its own, then drops it — so other
+            // DB work interleaves between batches instead of waiting out the whole pass.
+            let batch: Vec<i64> = batch.to_vec();
+            let catalogs = std::sync::Arc::clone(&catalogs);
+            let changed = self
+                .with_conn(move |conn| {
+                    let config = FilterConfig {
+                        chrome_suppress_min_seen,
+                        chrome_protect_min_chars,
+                        chrome_region_buckets,
+                    };
+                    let empty = HashMap::new();
+                    let tx = conn.unchecked_transaction()?;
+                    let mut changed = 0u64;
+                    for &fid in &batch {
+                        let (app_hint, old_content): (Option<String>, String) = tx.query_row(
+                            "SELECT target_app_hint, content_text FROM frame_text WHERE frame_id = ?1",
+                            params![fid],
+                            |r| Ok((r.get(0)?, r.get(1)?)),
+                        )?;
+                        let catalog = catalogs.get(&app_hint).unwrap_or(&empty);
+                        let spans = read_text_spans(&tx, fid)?;
+                        let out = reconcile(&spans, app_hint.as_deref(), catalog, &config);
+
+                        if out.content_text != old_content {
+                            tx.execute(
+                                "UPDATE frame_text
+                                 SET content_text = ?2, suppressed_count = ?3, filter_version = ?4
+                                 WHERE frame_id = ?1",
+                                params![fid, out.content_text, out.suppressed_count as i64, current],
+                            )?;
+                            replace_text_spans(&tx, fid, &out.spans)?;
+                            // Invalidate the now-stale text embedding so the dropped chrome
+                            // terms can't keep surfacing the frame through hybrid_search's
+                            // vector arm (which fuses even when include_chrome=false) before
+                            // the re-embed runs — or indefinitely if text embedding is off.
+                            // The embeddings_ad trigger cascades to the vec0 shadow; the
+                            // embed_text job (when reembed) rebuilds it from the new content.
+                            tx.execute(
+                                "DELETE FROM embeddings WHERE frame_id = ?1 AND source = 'ocr'",
+                                params![fid],
+                            )?;
+                            changed += 1;
+                            if reembed {
+                                tx.execute(
+                                    "INSERT INTO jobs (kind, frame_id, priority, max_attempts, not_before)
+                                     VALUES ('embed_text', ?1, 0, 3, 0)",
+                                    params![fid],
+                                )?;
+                            }
+                        } else {
+                            // No chrome to drop — just advance the version so it isn't rescanned.
+                            tx.execute(
+                                "UPDATE frame_text SET filter_version = ?2 WHERE frame_id = ?1",
+                                params![fid, current],
+                            )?;
+                        }
+                    }
+                    tx.commit()?;
+                    Ok(changed)
+                })
+                .await?;
+            changed_total += changed;
+        }
+
+        // Advance the watermark after the whole pass (its own short lock).
+        self.with_conn(move |conn| {
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![CATALOG_FILTER_VERSION_KEY, current.to_string()],
             )?;
-            Ok(changed_total)
+            Ok(())
         })
-        .await
+        .await?;
+        Ok(changed_total)
     }
 
     /// Stores (or replaces) the deferred vision analysis for a frame (`03 §5`).

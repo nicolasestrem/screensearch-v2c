@@ -278,15 +278,17 @@ impl Kernel {
     /// when capture isn't running (the next `start_capture` reads the new settings anyway)
     /// — it never *starts* capture the user had stopped.
     ///
-    /// The stop+start releases the `capture` lock between the two halves, so in principle
-    /// a user-initiated `stop_capture` landing in that window would be undone by the
-    /// restart. In practice this is unreachable: `reload_capture` is only ever called from
-    /// `set_settings`, and a single user can't interleave a settings save and a Stop click
-    /// within the sub-millisecond restart window through the serialized Tauri command path.
-    /// Both halves are idempotent, so the inverse race (a stop in between) is harmless.
-    /// Making the restart atomic would mean splitting `stop_capture`/`start_capture` into
-    /// lock-held inner variants — deliberately not done: the regression risk on the core
-    /// capture lifecycle outweighs a race the UI cannot trigger.
+    /// The stop+start is **not atomic**: it releases the `capture` lock between the two
+    /// halves, and Tauri 2 async commands run concurrently (there is no global command
+    /// serialization), so a user-initiated `stop_capture` IPC call landing in that gap
+    /// would be undone by the trailing `start_capture` — restarting capture against the
+    /// user's intent. Each half is individually idempotent, which bounds the damage to an
+    /// unwanted restart (never corruption), but it does not make the combined outcome
+    /// neutral. The residual risk is **accepted**: the window is sub-millisecond and the
+    /// only caller is `set_settings`, while the UI surfaces no affordance to fire a save
+    /// and a Stop simultaneously. Closing it would mean splitting
+    /// `stop_capture`/`start_capture` into lock-held inner variants — a refactor of the
+    /// core capture lifecycle judged higher-risk than the race it removes.
     pub async fn reload_capture(&self) -> anyhow::Result<()> {
         if !self.is_capturing().await {
             return Ok(());

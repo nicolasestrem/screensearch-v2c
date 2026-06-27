@@ -51,10 +51,20 @@ Review hardening (PR #41, Codex + Gemini):
 - **Self-capture purge no longer orphans files (Gemini).** A transient JPEG-delete failure now skips
   the row delete (matching the retention sweeper) so the file isn't orphaned; the no-progress guard
   still stops the loop if a batch makes no headway.
+- **Backfill releases the store connection between batches (Codex P2, 2nd pass).** The whole backfill
+  no longer runs under a single `with_conn`, which would hold the store's one DB connection for the
+  entire pass and block search / settings / capture inserts on a large upgraded DB. It now snapshots
+  the catalog once up front and processes each batch in its own short-lived `with_conn`, so other DB
+  work interleaves during the background startup backfill.
+- **Self-purge watermark only on full drain (Codex P2, 2nd pass).** The one-time purge records its
+  `maintenance.self_capture_purged` watermark only after every own-window frame is actually gone — so
+  a transient failure that leaves frames behind retries on the next launch instead of permanently
+  skipping the purge (this matters more now that the orphan fix above can leave a locked frame behind).
 - **Accepted, documented as-is:** the lower `chrome_suppress_min_seen` default (12→4) reaches new
-  installs only — existing users keep their persisted value (no settings migration, by choice); and
-  the `reload_capture` stop→start window is left non-atomic (the race needs two near-simultaneous user
-  actions through the serialized UI; documented in the method).
+  installs only — existing users keep their persisted value (no settings migration, and the
+  backfill-clamp alternative was also declined, by choice); and the `reload_capture` stop→start window
+  is left non-atomic — its doc comment was corrected (Tauri 2 async commands are *not* serialized, so
+  the race is real but accepted: sub-millisecond window, no UI affordance to fire both paths at once).
 
 ### Docs — 0.2.0 PR6 audit checkpoint
 Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
