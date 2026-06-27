@@ -11,6 +11,23 @@
 
 ---
 
+## 2026-06-27 — PR7 audit follow-ups: Ask label + docs reconciliation (`codex/pr7-audit-followups`)
+- **Change:** Relabeled Ask source-frame tiles from `Cited frames` to `Frames checked`, and updated
+  nearby comments to describe the current stream as reviewed context/provenance rather than
+  claim-level evidence. Reconciled PR7 audit docs: `07` #41/#63 now resolve via the relabel approach,
+  `07` #62 resolves through the later PR3 self-exclude/backfill fix (#66), `07` #65 is narrowed as a
+  docs cleanup, and the duplicate PR8 gap id was renumbered to #69. Updated `docs/ARCHITECTURE.md`
+  search-limit/status wording, `docs/TESTING.md` PR7 manual expectations, `06`, `05`, and the human
+  changelog.
+- **Why:** The PR7 audit found that no-evidence Ask answers refused honestly but still rendered
+  unrelated retrieved context under `CITED FRAMES`. The user chose the low-risk relabel fix, with no
+  schema, migration, typed IPC, or model-output heuristic change. The stale PR7 static-chrome rows
+  also needed to reflect the later PR3 audit fix instead of leaving a resolved release blocker open.
+- **Verification:** Pending in this branch; raw output will be recorded after the planned UI/Rust
+  gates and `npm run tauri dev` manual checks complete.
+
+---
+
 ## 2026-06-26 — 0.2.0 PR8 parallel download audit (`codex/0.2.0-pr8-audit`)
 - **Change:** Recorded the PR8 audit in tracked release/build-loop docs while keeping the detailed
   audit artifact `docs/AUDIT_0.2.0_PR8_2026-06-26.md` local-only per `.gitignore`. Updated
@@ -203,9 +220,10 @@
   Weekly-only helper line. `ui/src/routes/Recall.tsx` now uses range-neutral bounded-pass copy.
 - **Why:** `docs/0.2.0.md` PR7 requires a real integration audit over default content search,
   opt-in raw/app-chrome search, Ask, Reports, and a bounded live capture tick. The audit found two
-  open acceptance/product-semantics gaps: strict static/app-chrome suppression is not fully closed
-  on the populated corpus or fresh ScreenSearch UI captures (#62), and no-evidence Ask refusals
-  still render retrieved context under `CITED FRAMES` (#63).
+  acceptance/product-semantics gaps at the time: strict static/app-chrome suppression was not fully
+  closed on the populated corpus or fresh ScreenSearch UI captures (#62, later resolved by #66 with
+  residual #58), and no-evidence Ask refusals still rendered retrieved context under `CITED FRAMES`
+  (#63, later relabeled as `Frames checked`).
 - **Verification:** final PR7 verification command output is recorded in the session response.
 
 ---
@@ -1482,9 +1500,11 @@
   `attach_embedder` and `attach_inference` both call the same idempotent `start_workers`, so the first
   available provider starts the pool and the other can attach later without restart. The first pool
   start still runs startup stale-running recovery before spawning workers.
-- **Search hardening:** `store::search` now normalizes `SearchQuery.limit` to `1..=100` and caps the
-  candidate pool at 500 (`MAX_SEARCH_LIMIT * 5`), with zero-limit normalization still returning one
-  result. This is deliberately backend-local: no IPC, schema, `ts-rs`, or trait signature changes.
+- **Search hardening:** `store::search` initially normalized `SearchQuery.limit` to `1..=100` and
+  capped the candidate pool at 500 (`MAX_SEARCH_LIMIT * 5`), with zero-limit normalization still
+  returning one result. PR6 report retrieval later widened the backend cap to `1..=2,000` with a
+  2,000-row candidate pool. This remains backend-local: no schema, migration, `ts-rs`, or trait
+  signature changes.
 - **Docs:** `CHANGELOG.md`, `docs/ARCHITECTURE.md`, `specs/05_BUILD_REVIEW.md`, `07_KNOWN_GAPS.md`,
   this file, `src-tauri` module docs, and the `useLiveEvents` `job_progress` comment now match the
   current implementation. Known gap #8 remains open by design.

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — PR7 Ask source-frame labels
+Followed up on the PR7 no-evidence Ask audit finding: source-frame tiles that represent retrieved
+context are now labeled **Frames checked** instead of **Cited frames**. This keeps the existing typed
+IPC stream and local-model prompt unchanged while avoiding the misleading implication that unrelated
+context frames support an honest no-evidence refusal.
+
+### Docs — PR7 audit status reconciliation
+Reconciled tracked docs after the later PR3 audit fix: the old PR7 static-chrome finding is now
+recorded as resolved by the self-exclude/backfill work, with the real residual kept in the
+multi-monitor / rect-None gap. Also updated the Architecture search-limit wording to the current
+`1..=2,000` backend cap and clarified that detailed `docs/AUDIT*.md` / `.playwright-mcp/` artifacts
+are local-only ignored evidence.
+
 ### Docs — 0.2.0 PR8 audit checkpoint
 Recorded the PR8 parallel model download audit on `codex/0.2.0-pr8-audit`. The audit used the real
 dev executable launched by `npm run tauri dev` from a reset app-data state, downloaded the default
@@ -18,6 +31,7 @@ restarting from zero. Static review found no PR8 schema/IPC/binding drift beyond
 `sha2` dependency and downloader env overrides. The existing PR3 static-chrome release blocker
 remains separate; one narrow accepted PR8 follow-up around a pre-existing truncated `.part` plus
 stale bitmap is tracked in `specs/07_KNOWN_GAPS.md`.
+
 ### Fixed — 0.2.0 PR3 attention-filter release blocker + Privacy/Excluded-Apps hot-apply
 Addressed the 2026-06-26 PR3 audit (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`): default content search
 no longer ranks frames because of static/app chrome.
@@ -185,12 +199,11 @@ locally under ignored `.playwright-mcp/pr7-2026-06-25/` storage and are not trac
 - **Search audit:** content searches for real work terms (`Calendar-Grid`, `cargo test`, etc.) worked
   and the `include app chrome + raw text` toggle recovered raw/static labels. Default content search
   still surfaced static/app-chrome-heavy results for terms like `Firefox`, `Steam`, and especially
-  `Deck` in the populated corpus, so PR7's strict static-chrome acceptance is documented as not fully
-  closed rather than hidden by a DB rewrite.
+  `Deck` in the populated corpus; that finding was later addressed by the PR3 self-capture/backfill
+  fix, with residual rect-None / secondary-monitor chrome tracked separately.
 - **Ask audit:** a Calendar-Grid Coverage Map-Reduce question grounded on content text and showed
-  cited frames. A unique-token no-evidence question refused honestly, but still displayed retrieved
-  context frames under `CITED FRAMES`, leaving citation semantics for refusals as an open audit
-  finding.
+  source frames. A unique-token no-evidence question refused honestly, but still displayed retrieved
+  context frames under `CITED FRAMES`; the PR7 follow-up relabels those tiles as `Frames checked`.
 - **Reports audit:** Daily and Weekly reports generated through the UI, cited source frames, and
   reported honest pass/frame footer metadata. Fixed one small UI copy bug where the progress helper
   said "Weekly reports..." even while generating Daily; it now uses range-neutral bounded-pass copy.
@@ -722,9 +735,10 @@ The schema, types, and OCR geometry the attention-first retrieval pipeline needs
   provider slot: embedding jobs are claimed only when an embedder is attached and enabled, while
   `vision_tag` jobs drain as soon as inference attaches. This fixes stalled vision backlogs when text
   and image embeddings are disabled or unavailable.
-- **Backend search limits are clamped.** `SearchQuery.limit` is normalized to `1..=100` and the
-  hybrid-search candidate pool is capped at 500, matching the Recall UI and protecting direct IPC
-  callers from oversized hydration work.
+- **Backend search limits are clamped.** `SearchQuery.limit` was initially normalized to `1..=100`
+  with a 500-row candidate pool, matching the Recall UI and protecting direct IPC callers from
+  oversized hydration work. PR6 report retrieval later widened the backend cap to `1..=2,000` with a
+  2,000-row candidate pool so larger bounded reports can collect enough evidence.
 - Added regression coverage for vision jobs draining without an embedder, excessive search limits,
   and zero-limit normalization. Updated P3 architecture/spec notes and the live-event comment to
   match the current worker/event behavior. No schema, IPC, `ts-rs`, or trait signature changes.

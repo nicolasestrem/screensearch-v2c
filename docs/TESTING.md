@@ -70,15 +70,18 @@ npm run tauri dev
 ```
 
 Use the existing `%APPDATA%\app.screensearchv2c.desktop` DB. Do not reset or backfill it. Store local
-evidence under an ignored folder such as `.playwright-mcp/pr7-YYYY-MM-DD/`; do not put PR7 images in
-`screenshots/` or commit them.
+evidence under ignored paths such as `.playwright-mcp/pr7-YYYY-MM-DD/` and, if needed,
+`docs/AUDIT_0.2.0_PR7_YYYY-MM-DD.md`; do not put PR7 images in `screenshots/` or commit audit
+artifacts.
 
 Audit coverage:
 
 - Recall Search default content text vs. `include app chrome + raw text`.
 - Real content terms from the corpus.
-- Ask positive grounding and no-evidence behavior.
+- Ask positive grounding and no-evidence behavior. For no-evidence refusals, source-frame tiles may
+  appear only as reviewed context labeled `Frames checked`, not as `Cited frames`.
 - Daily and Weekly reports, including pass/frame footer metadata.
 - A short start/stop capture tick.
 
-The 2026-06-25 run is documented in `docs/AUDIT_0.2.0_PR7_2026-06-25.md`.
+The 2026-06-25 run is a local ignored artifact at `docs/AUDIT_0.2.0_PR7_2026-06-25.md`; tracked
+summaries live in `CHANGELOG.md` and `specs/05_BUILD_REVIEW.md` / `07_KNOWN_GAPS.md`.

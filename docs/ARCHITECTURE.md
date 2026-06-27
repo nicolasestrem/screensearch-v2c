@@ -14,9 +14,10 @@ Where they ever disagree, the specs win — open an issue.
   storage telemetry, typed operational events, cancellable ask streams, adaptive charts, monitor
   enumeration, and advanced sidecar device selection.
 - Implemented for 0.2.0: `frame_text` / `text_spans` / raw-vs-content retrieval, PR3's
-  attention-first classifier, the Recall Search/Ask/Reports UI, and Calendar-Grid Coverage
-  Map-Reduce reports. PR7 manual audit evidence is recorded in
-  [`AUDIT_0.2.0_PR7_2026-06-25.md`](AUDIT_0.2.0_PR7_2026-06-25.md).
+  attention-first classifier plus the later self-capture/backfill audit fix, the Recall
+  Search/Ask/Reports UI, and Calendar-Grid Coverage Map-Reduce reports. PR7 manual audit
+  evidence is local-only under ignored `docs/AUDIT*.md` / `.playwright-mcp/`; tracked summaries
+  live in the build-loop docs and changelog.
 - Still open: code signing and some 0.2.x follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
@@ -199,12 +200,14 @@ upsert/analyze errors → **retry** with backoff `1 s · 2^attempts` (cap 60 s).
   cosine KNN over `embedding_vectors`, de-duped by frame. Active only once an embedder is attached;
   before that, search degrades to FTS-only.
 
-`SearchQuery.limit` is normalized at the backend to `1..=100` (matching the Recall UI). Both arms
-over-fetch a candidate pool (`max(limit·5, 50)`, capped at 500) and filter to the half-open time
+`SearchQuery.limit` is normalized at the backend to `1..=2,000`: the Recall search UI still asks for
+a smaller interactive page, while report retrieval can request larger bounded pools. Both arms
+over-fetch a candidate pool (`max(limit·5, 50)`, capped at 2,000) and filter to the half-open time
 range `[start, end)`. Results hydrate in two bulk `IN` queries (frame context + fallback snippets).
-Ask, embeddings, and reports read `content_text`; raw/app chrome is opt-in. The PR7 audit found that
-static/app chrome can still appear in `content_text` for the populated corpus and for captures of the
-app's own UI/recents, so the acceptance is not treated as fully closed.
+Ask, embeddings, and reports read `content_text`; raw/app chrome is opt-in. The PR7 audit's dominant
+static-chrome failure was later traced to ScreenSearch capturing its own window and a cold-start
+filter window; the PR3 audit fix self-excludes own-window captures and backfills older frames. The
+remaining known limitation is rect-None / secondary-monitor chrome from other apps (`07` #58).
 
 The embedder is **runtime-settable** (`SqliteStore.embedder` is `Arc<RwLock<Option<…>>>` +
 `set_embedder`), so the composition root can attach the model *after* the off-thread load without
