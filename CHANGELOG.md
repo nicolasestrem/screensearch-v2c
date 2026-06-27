@@ -40,6 +40,22 @@ content FTS hits before→after): `Deck` 68→26, `Recall` 42→15, `Firefox` 24
 intact (`cargo test`=41, `embeddings`=13). Honest residual: rect-None / multi-monitor secondary
 captures of *other* apps' desktop chrome remain (gap #58 — needs `target_rect` for those frames).
 
+Review hardening (PR #41, Codex + Gemini):
+- **Stale embeddings invalidated during backfill (Codex P1).** When the backfill rewrites a frame's
+  `content_text`, it now deletes that frame's stale text embedding (`source = 'ocr'`) in the same
+  transaction (the `embeddings_ad` trigger cascades to the vec0 shadow). Otherwise the dropped chrome
+  terms could keep surfacing the frame through `hybrid_search`'s vector arm — which fuses even with
+  `include_chrome=false` — until the async re-embed ran, or *indefinitely* if text embedding is off.
+- **Backfill no longer re-queries the catalog per frame (Gemini).** The read-only chrome catalog is
+  cached by `app_hint` across the whole backfill instead of one `chrome_text_catalog` query per frame.
+- **Self-capture purge no longer orphans files (Gemini).** A transient JPEG-delete failure now skips
+  the row delete (matching the retention sweeper) so the file isn't orphaned; the no-progress guard
+  still stops the loop if a batch makes no headway.
+- **Accepted, documented as-is:** the lower `chrome_suppress_min_seen` default (12→4) reaches new
+  installs only — existing users keep their persisted value (no settings migration, by choice); and
+  the `reload_capture` stop→start window is left non-atomic (the race needs two near-simultaneous user
+  actions through the serialized UI; documented in the method).
+
 ### Docs — 0.2.0 PR6 audit checkpoint
 Recorded a scoped PR6 audit checkpoint for Recall reports and Ask shortcuts. The audit created a
 local-only ignored artifact at `docs/AUDIT_0.2.0_PR6_2026-06-26.md` plus evidence under

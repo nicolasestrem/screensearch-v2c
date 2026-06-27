@@ -44,6 +44,30 @@
   before→after: `Deck` 68→26, `Recall` 42→15, `Firefox`/`Steam` 24→15, `GPU Memory` 19→15; raw FTS
   still recovers all; `cargo test`=41 / `embeddings`=13 content hits preserved.
 
+## 2026-06-27 — PR #41 review hardening (Codex + Gemini) (`fix/0.2.0-pr3-chrome-backfill`)
+- **Change:** Acted on the PR #41 review of the gap-#64/#66 fix (gap #67). Three code fixes:
+  1. **Invalidate stale embeddings during backfill (Codex P1).** When `backfill_filter_version`
+     rewrites a frame's `content_text` it now `DELETE`s that frame's stale `source='ocr'` row from
+     `embeddings` inside the same transaction (the `embeddings_ad` trigger cascades to the vec0
+     shadow). Added the `backfill_filter_version_invalidates_stale_text_embedding` store test.
+  2. **Catalog cache in backfill (Gemini).** The read-only chrome catalog is loaded once per
+     `app_hint` into a `HashMap` cache instead of one `chrome_text_catalog` query per frame (N+1).
+  3. **No file orphaning on purge (Gemini).** `purge_self_captures` `continue`s past a transient
+     JPEG-delete failure instead of deleting the row (mirrors the retention sweeper); the
+     no-progress guard still bounds the loop.
+- **Why:** (1) is correctness — without it, dropped chrome keeps surfacing the frame via
+  `hybrid_search`'s vector arm (fused even with `include_chrome=false`) until the async re-embed
+  runs, or indefinitely if text embedding is off, undermining the PR's whole point. (2) is startup
+  perf on large DBs. (3) prevents orphaned JPEGs, consistent with `01 §5`/the existing retention
+  pattern. Two findings were accepted as-is by user decision and documented (gap #67, method/CHANGELOG
+  comments): the 12→4 `chrome_suppress_min_seen` default reaches new installs only (no settings
+  migration — Codex P2), and `reload_capture`'s stop→start is left non-atomic (unreachable UI race —
+  Gemini).
+- **Verification:** `cargo fmt --all -- --check` (clean), `cargo clippy --workspace --all-targets --
+  -D warnings` (clean), `cargo build --workspace` (ok), `cargo test --workspace` (all suites pass;
+  `store` integration suite 48→49 with the new P1 test; 0 failures), `git diff --exit-code --
+  ui/src/bindings` (clean — no ts-rs type changed).
+
 ## 2026-06-26 — 0.2.0 PR6 audit checkpoint (`codex/0.2.0-pr6-audit`)
 - **Change:** Created a PR6 audit checkpoint on `codex/0.2.0-pr6-audit` using the existing app DB.
   The ignored local audit file `docs/AUDIT_0.2.0_PR6_2026-06-26.md` and evidence directory

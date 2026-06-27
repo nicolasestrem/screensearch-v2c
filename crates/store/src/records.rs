@@ -410,6 +410,10 @@ impl SqliteStore {
                 ids
             };
 
+            // The chrome catalog is read-only during the backfill and most frames share
+            // an app_hint, so load each app's catalog once and reuse it across every
+            // frame/batch instead of re-querying chrome_text_catalog per frame.
+            let mut catalog_cache: HashMap<Option<String>, HashMap<String, u32>> = HashMap::new();
             let mut changed_total: u64 = 0;
             for batch in frame_ids.chunks(BACKFILL_BATCH) {
                 let tx = conn.unchecked_transaction()?;
@@ -419,9 +423,13 @@ impl SqliteStore {
                         params![fid],
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )?;
-                    let catalog = load_chrome_catalog(&tx, app_hint.as_deref())?;
+                    if !catalog_cache.contains_key(&app_hint) {
+                        let cat = load_chrome_catalog(&tx, app_hint.as_deref())?;
+                        catalog_cache.insert(app_hint.clone(), cat);
+                    }
+                    let catalog = &catalog_cache[&app_hint];
                     let spans = read_text_spans(&tx, fid)?;
-                    let out = reconcile(&spans, app_hint.as_deref(), &catalog, &config);
+                    let out = reconcile(&spans, app_hint.as_deref(), catalog, &config);
 
                     if out.content_text != old_content {
                         tx.execute(
@@ -431,6 +439,16 @@ impl SqliteStore {
                             params![fid, out.content_text, out.suppressed_count as i64, current],
                         )?;
                         replace_text_spans(&tx, fid, &out.spans)?;
+                        // Invalidate the now-stale text embedding so the dropped chrome
+                        // terms can't keep surfacing the frame through hybrid_search's
+                        // vector arm (which fuses even when include_chrome=false) before
+                        // the re-embed runs — or indefinitely if text embedding is off.
+                        // The embeddings_ad trigger cascades to the vec0 shadow; the
+                        // embed_text job (when reembed) rebuilds it from the new content.
+                        tx.execute(
+                            "DELETE FROM embeddings WHERE frame_id = ?1 AND source = 'ocr'",
+                            params![fid],
+                        )?;
                         changed_total += 1;
                         if reembed {
                             tx.execute(

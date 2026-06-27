@@ -1737,6 +1737,84 @@ async fn backfill_filter_version_recleans_old_frames_against_warm_catalog() {
 }
 
 #[tokio::test]
+async fn backfill_filter_version_invalidates_stale_text_embedding() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+
+    // An older frame whose content_text still carries the toolbar (filter_version 0),
+    // plus a text embedding built from that stale, chrome-laden content.
+    let old_id = store.insert_frame(editor_frame(1000)).await.unwrap();
+    store
+        .insert_ocr(
+            old_id,
+            editor_ocr(
+                "ALPHAUNIQUEBODY the annual planning doc lists each milestone owner and date",
+            ),
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_text_embedding(
+            old_id,
+            0,
+            "ZTOOLBARZ ...",
+            ChunkSource::Ocr,
+            &one_hot(0),
+            "gemma",
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.text_embedding_count().await.unwrap(), 1);
+    assert!(store
+        .nearest_text_frames(&one_hot(0), 5)
+        .await
+        .unwrap()
+        .contains(&old_id));
+
+    // Two later captures warm the catalog so the toolbar signature is suppressible.
+    for (i, body) in [
+        "meeting notes capture the decisions and the owners for the next sprint here",
+        "the migration checklist enumerates each table and its forward only change set",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let id = store
+            .insert_frame(editor_frame(2000 + i as i64))
+            .await
+            .unwrap();
+        store
+            .insert_ocr_filtered(id, editor_ocr(body), filter_ctx(2))
+            .await
+            .unwrap();
+    }
+
+    // Backfill re-cleans the stale frame — and must drop its now-stale text embedding so
+    // the dropped chrome can't keep surfacing the frame via hybrid_search's vector arm
+    // before the re-embed runs (Codex PR3 review, P1).
+    let changed = store
+        .backfill_filter_version(FILTER_VERSION, 2, 48, 8, true)
+        .await
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    // The stale embedding (and its vec0 shadow, via the embeddings_ad trigger) is gone;
+    // nothing surfaces old_id by the old vector anymore.
+    assert_eq!(store.text_embedding_count().await.unwrap(), 0);
+    assert!(!store
+        .nearest_text_frames(&one_hot(0), 5)
+        .await
+        .unwrap()
+        .contains(&old_id));
+
+    // A re-embed job was enqueued to rebuild it from the cleaned content_text.
+    let jobs = store
+        .claim_jobs(&[JobKind::EmbedText], 10, 10_000_000)
+        .await
+        .unwrap();
+    assert!(jobs.iter().any(|j| j.frame_id == Some(old_id)));
+}
+
+#[tokio::test]
 async fn frames_with_app_hint_matches_case_insensitively() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let mk = |at: i64, app: &str| NewFrame {

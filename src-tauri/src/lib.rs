@@ -1389,7 +1389,13 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
             if let Some(path) = safe_frame_path(&data_dir, &frame.image_path) {
                 if let Err(e) = std::fs::remove_file(&path) {
                     if e.kind() != std::io::ErrorKind::NotFound {
+                        // Skip the row delete so the JPEG isn't orphaned on a transient
+                        // failure (e.g. an AV/indexer sharing violation), mirroring the
+                        // retention sweeper. The no-progress guard below stops the loop
+                        // if every delete in a batch keeps failing; the row stays linked
+                        // to its file and the backfill still chrome-cleans its text.
                         tracing::warn!(path = %path.display(), error = %e, "self-capture purge: file delete failed");
+                        continue;
                     }
                 }
             }

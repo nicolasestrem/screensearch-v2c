@@ -276,8 +276,17 @@ impl Kernel {
     /// calls this whenever the derived [`CaptureConfig`] changes so a newly excluded app,
     /// changed monitor set, interval, or pause-on-lock takes effect immediately. A no-op
     /// when capture isn't running (the next `start_capture` reads the new settings anyway)
-    /// — it never *starts* capture the user had stopped. `stop_capture`/`start_capture`
-    /// are both idempotent, so a race that stops capture in between is harmless.
+    /// — it never *starts* capture the user had stopped.
+    ///
+    /// The stop+start releases the `capture` lock between the two halves, so in principle
+    /// a user-initiated `stop_capture` landing in that window would be undone by the
+    /// restart. In practice this is unreachable: `reload_capture` is only ever called from
+    /// `set_settings`, and a single user can't interleave a settings save and a Stop click
+    /// within the sub-millisecond restart window through the serialized Tauri command path.
+    /// Both halves are idempotent, so the inverse race (a stop in between) is harmless.
+    /// Making the restart atomic would mean splitting `stop_capture`/`start_capture` into
+    /// lock-held inner variants — deliberately not done: the regression risk on the core
+    /// capture lifecycle outweighs a race the UI cannot trigger.
     pub async fn reload_capture(&self) -> anyhow::Result<()> {
         if !self.is_capturing().await {
             return Ok(());
