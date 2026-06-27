@@ -12,7 +12,8 @@
 ---
 
 ## 2026-06-26 — 0.2.0 PR8 parallel download audit (`codex/0.2.0-pr8-audit`)
-- **Change:** Added the PR8 audit record `docs/AUDIT_0.2.0_PR8_2026-06-26.md`, updated
+- **Change:** Recorded the PR8 audit in tracked release/build-loop docs while keeping the detailed
+  audit artifact `docs/AUDIT_0.2.0_PR8_2026-06-26.md` local-only per `.gitignore`. Updated
   `docs/0.2.0.md` to mark PR8 accepted while preserving the separate PR3 release blocker, updated
   `CHANGELOG.md`, and recorded this build-loop entry plus the new narrow PR8 hardening gap in `07`.
   Evidence is preserved under `.playwright-mcp/pr8-2026-06-26/`.

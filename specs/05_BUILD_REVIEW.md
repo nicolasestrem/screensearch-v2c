@@ -2516,10 +2516,10 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
 - **Scope:** audited PR8 (parallel model downloader) on current `main` after PR1/PR2/PR3/PR6/PR7/PR8
   had merged, including follow-up commit `d85331f` for stale partial manifests. PR3 static-chrome
   failure stayed out of scope except for release-status cross-reference.
-- **Local evidence:** `docs/AUDIT_0.2.0_PR8_2026-06-26.md` plus ignored evidence under
-  `.playwright-mcp/pr8-2026-06-26/`. The evidence directory contains static `rg`/commit captures,
-  the `npm run tauri dev` logs, resume state files, final model file inventory, and raw verification
-  outputs.
+- **Local evidence:** ignored local audit artifact `docs/AUDIT_0.2.0_PR8_2026-06-26.md` plus ignored
+  evidence under `.playwright-mcp/pr8-2026-06-26/`. The evidence directory contains static
+  `rg`/commit captures, the `npm run tauri dev` logs, resume state files, final model file inventory,
+  and raw verification outputs.
 - **Static review:** `crates/inference/src/download.rs` contains the PR8 chunked path: redirect-less
   HF resolve probe, `Range` planning, per-chunk resolve, positioned writes into one preallocated
   `.part`, bitmap manifest, aggregate progress/stall detection, `X-Linked-ETag` sha256 integrity,
