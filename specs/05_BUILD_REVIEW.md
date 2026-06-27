@@ -2539,9 +2539,10 @@ git diff --exit-code -- ui/src/bindings             → bindings clean (exit 0)
   vision result. The user's Beta warning was honored: Vision Beta was used only for download/resume,
   not as a tag-quality assertion.
 - **Resume:** with `SSV2C_DOWNLOAD_CONNECTIONS=1`, Vision Beta was interrupted after a manifest
-  showed `Chunks: 170`, `Done: 73`, `Pending: 97`. Restarting normal `npm run tauri dev` resumed at
-  `86%` rather than zero and finalized both `Qwen3.5-9B-Q4_K_M.gguf` and `mmproj-F16.gguf`; partial
-  artifacts were gone afterward.
+  showed `Chunks: 170`, `Done: 73`, `Pending: 97`. Restarting normal `npm run tauri dev` did not
+  return to zero: it resumed from those 73 completed chunks (about 43% of the GGUF) and showed `86%`
+  at the next sampled UI state before finalizing both `Qwen3.5-9B-Q4_K_M.gguf` and `mmproj-F16.gguf`;
+  partial artifacts were gone afterward.
 - **Process cleanup:** after stopping the dev app, no `screensearch.exe` or `llama-server.exe`
   process remained.
 - **Findings:** no PR8 release blocker. Gap #46 remains only for the hf-hub range-less fallback

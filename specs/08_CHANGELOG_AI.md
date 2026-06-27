@@ -29,7 +29,8 @@
   `cargo build --workspace`; `cargo test -p inference --lib` (88 passed); `cargo test --workspace`;
   and `git diff --exit-code -- ui/src/bindings`. The live dev-exe pass downloaded the default answer
   model, Vision Quality GGUF + mmproj, and Vision Beta GGUF + mmproj; the Beta interruption captured
-  `Chunks: 170`, `Done: 73`, `Pending: 97`, and the restart resumed at `86%` before finalizing.
+  `Chunks: 170`, `Done: 73`, `Pending: 97`, and the restart resumed from those completed chunks
+  (about 43% of the GGUF), later showing `86%` at the next sampled UI state before finalizing.
 
 ---
 
