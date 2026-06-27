@@ -238,8 +238,8 @@ async fn enqueue_vision(target: VisionTarget, state: State<'_, AppState>) -> Res
 
 /// Ask a grounded question about the screen history (`ask`, `03 §7/§13.5`). Returns
 /// immediately; the answer streams back as `answer_delta` events. Retrieves the top-K
-/// chunks via hybrid search, grounds the answer in their full OCR text, and runs the
-/// answer provider on a background task that forwards each delta to the UI.
+/// chunks via hybrid search, supplies their full OCR text as reviewed context, and runs
+/// the answer provider on a background task that forwards each delta to the UI.
 #[tauri::command]
 async fn ask(
     request: AskRequest,
@@ -264,7 +264,7 @@ async fn ask(
         .await
         .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
 
-    // Retrieve grounding context: top-K hybrid hits, each with its full OCR text
+    // Retrieve model context: top-K hybrid hits, each with its full OCR text
     // (falling back to the search snippet if the text isn't available). Depth is the
     // configured `retrieval.default_top_k` (`03 §8`, replacing the former hardcoded
     // ASK_TOP_K), overridable per request via `AskRequest.top_k`.
@@ -280,7 +280,7 @@ async fn ask(
         })
         .await
         .map_err(|e| e.to_string())?;
-    // Hydrate grounding text in a single bulk query (avoid an N+1 over the hits),
+    // Hydrate context text in a single bulk query (avoid an N+1 over the hits),
     // falling back to each hit's snippet when a frame has no OCR text.
     let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
     let ocr = store.ocr_texts(&frame_ids).await.unwrap_or_default();

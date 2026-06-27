@@ -1,7 +1,7 @@
 //! [`AnswerProvider`] over the llama.cpp sidecar (`03 §3/§6/§13.5`). Builds a grounded
 //! RAG prompt from retrieved chunks, streams the model's reply, and maps it to the
 //! typed [`AnswerDelta`] flow: reasoning → `Thinking`, answer text → `Token`, one
-//! `Citation` per grounding frame, then `Done` (or `Error`).
+//! reviewed source-frame id, then `Done` (or `Error`).
 //!
 //! Reasoning is surfaced two ways depending on the build: a `reasoning_content` SSE
 //! field (handled by the client as [`StreamPiece::Reasoning`]) or inline `<think>…
@@ -147,9 +147,10 @@ impl AnswerSidecar {
             return Ok(());
         }
 
-        // Grounding citations: one per included context frame (already deduped, in order).
-        // Only frames that fit the context budget are cited, so a citation always
-        // corresponds to text the model actually saw.
+        // Source-frame provenance: one per included context frame (already deduped, in
+        // order). Only frames that fit the context budget are emitted, so each id
+        // corresponds to text the model actually saw; the UI labels these as checked
+        // context rather than proof of a positive claim.
         for frame_id in &cited {
             let _ = tx
                 .send(AnswerDelta::Citation {
