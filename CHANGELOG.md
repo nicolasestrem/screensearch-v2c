@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.2.0 PR8 audit checkpoint
+Recorded the PR8 parallel model download audit on `codex/0.2.0-pr8-audit`. The audit used the real
+dev executable launched by `npm run tauri dev` from a reset app-data state, downloaded the default
+answer model, exercised the Vision Quality 8B GGUF + mmproj path through Moment -> Tag with vision,
+and verified an interrupted Vision Beta download resumed from its `.parts` bitmap instead of
+restarting from zero. Static review found no PR8 schema/IPC/binding drift beyond the documented
+`sha2` dependency and downloader env overrides. The existing PR3 static-chrome release blocker
+remains separate; one narrow accepted PR8 follow-up around a pre-existing truncated `.part` plus
+stale bitmap is tracked in `specs/07_KNOWN_GAPS.md`.
 ### Fixed — 0.2.0 PR3 attention-filter release blocker + Privacy/Excluded-Apps hot-apply
 Addressed the 2026-06-26 PR3 audit (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`): default content search
 no longer ranks frames because of static/app chrome.
