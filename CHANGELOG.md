@@ -27,6 +27,12 @@ to `git HEAD`) into sibling archives:
 Total: ~355 KB trimmed from the live docs. Verified: every archive split diffs empty against `git HEAD`;
 row counts reconcile (06: 7+4=11, 07: 31+38=69); `cargo check --workspace` green.
 
+Review follow-ups (PR #43): since `docs/audits/` is git-ignored, the README now references those
+audits as plain-text local-only artifacts instead of active links (which would 404 on GitHub). The
+`docs/ARCHITECTURE.md` schema pointer now names `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 4`)
+as the authoritative as-built DDL — `03 §4` is the design contract and has drifted behind the 0.2.x
+text-signal migrations (v3 drops `ocr_text`, v4 adds `text_spans.line_index`).
+
 ### Fixed — PR7 Ask source-frame labels
 Followed up on the PR7 no-evidence Ask audit finding: source-frame tiles that represent retrieved
 context are now labeled **Frames checked** instead of **Cited frames**. This keeps the existing typed

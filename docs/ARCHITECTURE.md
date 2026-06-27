@@ -61,7 +61,11 @@ per-crate file-level guide to where each concern lives is the rest of this docum
 
 Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
 Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
-`busy_timeout=5000`. **Authoritative DDL (every table, column, index, and trigger): `03 §4`.**
+`busy_timeout=5000`. **Authoritative as-built DDL (every table, column, index, trigger, and the full
+v1→v4 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 4`)** — this is code,
+so it never drifts. `03 §4` is the design contract for the schema; where the 0.2.x text-signal
+migrations have moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`), the
+code in `store::schema` wins.
 
 Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
 vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
