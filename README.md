@@ -14,7 +14,8 @@ on-device, no cloud.
 > 2026-06-23 evidence-driven audit exercised the **live app on real hardware** — GPU `llama-server`
 > runtime, real vision tagging, grounded `ask`, and ~33 ms p95 search on 10 000 frames — and tracks
 > the open UI gaps (the keyboard/state/a11y matrix, and a no-evidence answer still rendering
-> cited-frame tiles) in [`docs/AUDIT_V2C_2026-06-23.md`](./docs/AUDIT_V2C_2026-06-23.md). **Packaging**
+> cited-frame tiles) in the point-in-time PR audits — local-only evidence artifacts under
+> `docs/audits/` (e.g. `AUDIT_0.2.0_PR7_2026-06-25.md`), git-ignored and not pushed. **Packaging**
 > (installer + portable ZIP, code signing — DoD §13.9) remains beyond that. The design lives in
 > [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project (not linked to,
@@ -51,7 +52,8 @@ omitted). Nothing here touches the network: every frame, query, and answer stays
 | **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; UI verification in progress |
 | **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
 
-> **P5 verification** (per the [2026-06-23 audit](./docs/AUDIT_V2C_2026-06-23.md)): all six screens
+> **P5 verification** (per the point-in-time PR audits — local-only artifacts under `docs/audits/`,
+> git-ignored): all six screens
 > are built and the P5 review hardening landed, but the full keyboard/state/a11y matrix is not yet
 > verified and a no-evidence answer can still render cited-frame tiles. P0–P4 verified clean (with a
 > minor P2 OCR caveat noted in the audit).
@@ -115,7 +117,7 @@ CHANGELOG.md       human-facing changelog (Keep a Changelog)
 Cargo.toml         Cargo workspace (centralized dependency versions)
 docs/
   ARCHITECTURE.md          as-built system design + data flow
-  AUDIT_V2C_2026-06-23.md  live-runtime verification pass (evidence + known gaps)
+  audits/                  point-in-time PR audit evidence (local-only, git-ignored)
 screenshots/       Command-Deck UI screenshots (used by this README)
 crates/
   traits/          module contracts + shared domain/IPC/job types (no impls)
