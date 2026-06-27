@@ -101,6 +101,11 @@ Never guess a product decision to keep momentum. A blocked build is cheaper than
 - `07_KNOWN_GAPS.md` — silent-spec gaps + manual interventions still required (owner, deadline).
 - `08_CHANGELOG_AI.md` — what the agent changed, with reasons (append-only).
 
+**Archive on release.** On each version tag, move that version's shipped entries from the live
+build-loop logs (`05`/`06`/`07`/`08`) and `CHANGELOG.md` into `specs/archive/` and
+`CHANGELOG-ARCHIVE.md`. Live logs hold only the current arc; archives in `specs/archive/` preserve
+full history.
+
 ## 8. Definition of done
 The build is "done" for v1.0 when every item in `03 §13` is satisfied and demonstrated with
 verbatim verification output, and `05`–`08` are current.

@@ -1,7 +1,8 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together as of **v0.1.0 plus the 0.2.0 attention-first /
-Recall work and PR7 audit** (capture -> OCR -> content-text store -> embeddings -> hybrid search ->
+How ScreenSearch V2c is actually put together **as of 2026-06-27** — reflecting the 0.2.x arc
+through the PR3/PR7 fixes (v0.1.0 plus the 0.2.0 attention-first / Recall work and the PR3/PR7
+audit follow-ups) (capture -> OCR -> content-text store -> embeddings -> hybrid search ->
 **inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI). This describes the
 **implemented** system and how to navigate the code; the design intent and the *why* live in
 [`specs/`](../specs) (`03_MASTER_PRODUCTION_SPEC.md` is authoritative for schema/traits/protocols).
@@ -44,57 +45,33 @@ Where they ever disagree, the specs win — open an issue.
 
 ## 2. Crate map
 
-```
-                 ┌────────────── src-tauri (composition root) ──────────────┐
-                 │  opens store · spawns OCR · capture factory · builds      │
-                 │  Kernel · loads embedder + inference off-thread · commands │
-                 └───────────────┬───────────────────────┬──────────────────┘
-                                 │ wires impls            │ forwards events
-                          ┌──────▼───────┐                │
-                          │    kernel    │  event bus, capture loop, worker pool,
-                          └──┬─┬─┬─┬──────┘  vision scheduler, readiness
-       depends on traits │  │ │ │ │   (never on concrete impls)
-     ┌────────────────────┘ │ │ │ └──────────────────┬───────────────┐
-┌────▼────┐ ┌──────┐ ┌──────▼─┐ ┌──────────┐ ┌────────▼─────────────────────┐
-│ capture │ │ ocr  │ │ store  │ │embeddings│ │          inference           │
-│  (WGC)  │ │(WinRT)│ │SQLite… │ │(fastembed)│ │  ModelSupervisor → llama-server
-│ + idle  │ └──────┘ └────────┘ └──────────┘ │  (Job-Object-bound, OpenAI HTTP)
-└─────────┘                                   │  VisionProvider + AnswerProvider
-                  ▲                           └──────────────────────────────┘
-            traits (contracts + domain/IPC/job types — no impls)
-```
+A 9-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
+the store, spawns OCR, builds the `kernel`, loads the embedder + inference off-thread, and registers
+commands. `kernel` orchestrates (event bus, capture loop, worker pool, vision scheduler, readiness);
+the module crates — `capture` (WGC), `ocr` (WinRT), `store` (SQLite + sqlite-vec + FTS5),
+`embeddings` (fastembed), `inference` (Job-Object-bound `llama-server` sidecar), `doctor` — each
+depend only on the contracts in `traits`, never on one another's concrete impls.
 
-| Crate | Role | Key files |
-|---|---|---|
-| `traits` | Contracts (`CaptureSource`, `OcrProvider`, `EmbeddingProvider`, `VisionProvider`, `AnswerProvider`, `Store`) + domain/IPC/job types. No impls. | `contracts.rs`, `domain.rs`, `ipc.rs`, `jobs.rs` |
-| `store` | Data spine: SQLite (WAL) + sqlite-vec + FTS5, job queue, hybrid search, untagged-frame query. | `lib.rs`, `schema.rs`, `records.rs`, `embeddings.rs`, `jobs.rs`, `search.rs`, `settings.rs` |
-| `kernel` | Orchestrator: typed event bus, capture loop, enrichment + **vision** worker pool, **vision scheduler**, settings loader, readiness, **inference attach**. | `lib.rs`, `capture_loop.rs`, `worker_pool.rs`, `vision_scheduler.rs`, `events.rs`, `settings.rs` |
-| `capture` | `CaptureSource` via Windows.Graphics.Capture + diff/privacy gates; **`user_idle_ms`** idle probe. | `lib.rs`, `wgc.rs`, `diff.rs`, `privacy.rs`, `monitors.rs`, `idle.rs` |
-| `ocr` | `OcrProvider` via WinRT `Media.Ocr` on a dedicated COM STA thread. | `lib.rs` |
-| `embeddings` | `EmbeddingProvider` via `fastembed` (in-process ONNX). | `lib.rs` |
-| `inference` | **(P4)** `ModelSupervisor` (Job-Object sidecar lifecycle) + `VisionSidecar`/`AnswerSidecar` providers + sidecar HTTP client + runtime model/binary downloaders. | `job_object.rs`, `process.rs`, `supervisor.rs`, `client.rs`, `models.rs`, `download.rs`, `vision.rs`, `answer.rs` |
-| `doctor` | WebView2 / Vulkan / llama-server smoke-check (library + thin CLI). | `lib.rs` |
-| `src-tauri` | Tauri 2 shell + composition root + command handlers. | `src/lib.rs`, `src/main.rs` |
+**Authoritative crate map & dependency rule: `specs/03_MASTER_PRODUCTION_SPEC.md` §2.** The
+per-crate file-level guide to where each concern lives is the rest of this document (§4–§11).
 
 ---
 
 ## 3. Data model (SQLite, WAL)
 
-Single file `screensearch.db`; forward-only migrations tracked in `schema_version`
-(`store::schema`, authoritative DDL in `03 §4`). Per-connection pragmas: `journal_mode=WAL`,
-`foreign_keys=ON`, `recursive_triggers=ON`, `busy_timeout=5000`.
+Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
+Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
+`busy_timeout=5000`. **Authoritative DDL (every table, column, index, and trigger): `03 §4`.**
 
-Core tables: `frames` (one row per stored changed capture), `frame_text` (preserved `raw_text`,
-filtered `content_text`, source/filter metadata, foreground app/window metadata), `text_spans`
-(OCR/UIA spans with role/suppression metadata), `chrome_text_catalog` (static-chrome signature
-counts), `frame_text_fts` (content-text FTS), `frame_text_raw_fts` (raw-text FTS for
-`include_chrome`), `embeddings` + `embedding_vectors` (vec0 `FLOAT[768]` cosine shadow),
-`image_embeddings` + `image_embedding_vectors`, `vision_analysis` (P4), `jobs` (the durable queue),
-`tags`/`frame_tags`, and `settings`.
+Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
+vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
+FTS mirrors), the embedding lanes (text + optional image), vision analysis (P4), the durable `jobs`
+queue, tags, and `settings`. The notes below capture the two as-built decisions that the DDL alone
+doesn't convey.
 
-Each embedding lives in **two** lock-step places — a metadata row and its `vec0` shadow keyed by
-the same id. Upserts do both in one transaction; deletes are handled by `AFTER DELETE` triggers +
-the `frames` FK cascade (`store::embeddings`).
+Each embedding lives in **two** lock-step places — a metadata row and its `vec0` `FLOAT[768]` cosine
+shadow keyed by the same id. Upserts do both in one transaction; deletes are handled by
+`AFTER DELETE` triggers + the `frames` FK cascade (`store::embeddings`).
 
 **Concurrency:** one `rusqlite::Connection` behind a `Mutex` for the store's lifetime; every async
 `Store` method runs its SQL inside `spawn_blocking`, and the guard is never held across an `.await`

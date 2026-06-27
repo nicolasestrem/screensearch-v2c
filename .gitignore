@@ -26,6 +26,7 @@ src-tauri/gen/
 *.log
 captures/
 docs/AUDIT*.md
+docs/audits/
 
 # Environment / secrets
 .env
