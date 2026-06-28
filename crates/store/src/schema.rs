@@ -283,8 +283,9 @@ ALTER TABLE frames ADD COLUMN capture_trigger TEXT
 /// wipes every child row. The migration runner ([`crate::bootstrap_and_migrate`]) disables
 /// foreign keys around the whole migration phase and runs `foreign_key_check` afterward
 /// (PRAGMA foreign_keys is a no-op inside the per-migration transaction). The `frames_new`
-/// column list and order match v1 + v5 exactly so `INSERT … SELECT *` lines up; only the
-/// CHECK token set changes. Index `idx_frames_captured_at` is dropped with the old table
+/// copy lists every column **explicitly** (not `SELECT *`) so it stays correct regardless of
+/// any future column reordering; only the CHECK token set changes here. The `frames_new`
+/// column list and order still match v1 + v5. Index `idx_frames_captured_at` is dropped with the old table
 /// and recreated. No other object references `frames` by name except the children's FK
 /// clauses, which rebind to the renamed table.
 const MIGRATION_V6: &str = r#"
@@ -304,7 +305,13 @@ CREATE TABLE frames_new (
            OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change',
                                   'typing_pause','click','scroll_stop','manual'))
 );
-INSERT INTO frames_new SELECT * FROM frames;
+INSERT INTO frames_new
+  (id, captured_at, monitor_index, width, height, image_path, content_hash,
+   app_hint, window_title, browser_url, activity_type, created_at, capture_trigger)
+SELECT
+   id, captured_at, monitor_index, width, height, image_path, content_hash,
+   app_hint, window_title, browser_url, activity_type, created_at, capture_trigger
+FROM frames;
 DROP INDEX IF EXISTS idx_frames_captured_at;
 DROP TABLE frames;
 ALTER TABLE frames_new RENAME TO frames;

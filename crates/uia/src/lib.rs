@@ -37,6 +37,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::oneshot;
 use traits::{CapturedFrame, OcrProvider, OcrResult, Result};
 
 /// Sentinel `mean_confidence`: UI Automation, like WinRT OCR, exposes no confidence, so we
@@ -98,23 +99,22 @@ impl OcrProvider for UiaTextProvider {
         // Hard ceiling against a wedged worker, on top of the worker's own soft budget.
         let timeout = Duration::from_millis(self.budget.latency_ms.saturating_mul(2).max(1));
 
-        let join = tokio::task::spawn_blocking(move || -> Result<OcrResult> {
-            let (resp_tx, resp_rx) = mpsc::channel();
-            tx.send(worker::Request {
-                width,
-                height,
-                target_rect,
-                monitor_index,
-                resp: resp_tx,
-            })
-            .map_err(|_| anyhow::anyhow!("UIA worker thread is gone"))?;
-            resp_rx
-                .recv()
-                .map_err(|_| anyhow::anyhow!("UIA worker dropped the response"))?
-        });
+        // The request send is non-blocking (unbounded channel) and the reply is a `tokio`
+        // oneshot, so we await it directly — no `spawn_blocking` task is parked per frame.
+        // On a hard timeout the receiver is dropped here and the worker's later `send`
+        // simply no-ops, so a wedged worker can never grow the blocking pool.
+        let (resp_tx, resp_rx) = oneshot::channel();
+        tx.send(worker::Request {
+            width,
+            height,
+            target_rect,
+            monitor_index,
+            resp: resp_tx,
+        })
+        .map_err(|_| anyhow::anyhow!("UIA worker thread is gone"))?;
 
-        match tokio::time::timeout(timeout, join).await {
-            Ok(joined) => joined?,
+        match tokio::time::timeout(timeout, resp_rx).await {
+            Ok(joined) => joined.map_err(|_| anyhow::anyhow!("UIA worker dropped the response"))?,
             Err(_) => Err(anyhow::anyhow!(
                 "UIA recognize exceeded {} ms hard timeout",
                 timeout.as_millis()
@@ -140,7 +140,10 @@ mod tests {
             content_hash: "test".to_string(),
             app_hint: None,
             window_title: None,
-            target_rect: None,
+            // Full-screen target rect: UIA only runs when this frame's monitor holds the
+            // foreground window (a `None` rect now falls back to OCR), so the live test must
+            // supply one to exercise the real UIA path.
+            target_rect: Some([0.0, 0.0, 1.0, 1.0]),
             trigger: CaptureTrigger::Timer,
         }
     }

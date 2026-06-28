@@ -8,6 +8,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use tokio::sync::oneshot;
 use traits::{normalize_text, OcrResult, TextRole, TextSource, TextSpan};
 
 use windows::core::Interface;
@@ -15,7 +16,7 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern,
     IUIAutomationValuePattern, UIA_TextPatternId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic};
@@ -32,7 +33,9 @@ pub(crate) struct Request {
     /// drop spans that fall outside the foreground window. `None` ⇒ no containment filter.
     pub target_rect: Option<[f32; 4]>,
     pub monitor_index: u32,
-    pub resp: mpsc::Sender<Result<OcrResult>>,
+    /// A `tokio` oneshot so the async caller awaits the reply directly (no `spawn_blocking`):
+    /// on a caller-side timeout the receiver is dropped and `send` below simply fails.
+    pub resp: oneshot::Sender<Result<OcrResult>>,
 }
 
 /// Hard caps so a pathological accessibility tree can't blow the latency budget or memory.
@@ -58,41 +61,74 @@ pub(crate) fn worker_main(
         let _ = ready.send(Err(anyhow::anyhow!("CoInitializeEx(MTA) failed: {e}")));
         return;
     }
+    // RAII: pair the successful `CoInitializeEx` with `CoUninitialize` on *every* exit path —
+    // the `CoCreateInstance` failure return, the normal channel-closed exit, and an
+    // unexpected panic in `read_foreground` (which would otherwise skip a manual call).
+    struct ComApartment;
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            // SAFETY: balances the CoInitializeEx above; runs once on thread teardown.
+            unsafe { CoUninitialize() };
+        }
+    }
+    let _com = ComApartment;
+
     // SAFETY: standard COM object creation; `CUIAutomation` is the documented CLSID.
     let automation: IUIAutomation =
         match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) } {
-            Ok(a) => {
-                let _ = ready.send(Ok(()));
-                a
-            }
+            Ok(a) => a,
             Err(e) => {
                 let _ = ready.send(Err(anyhow::anyhow!(
                     "CoCreateInstance(CUIAutomation) failed: {e}"
                 )));
-                // SAFETY: pair every successful CoInitializeEx with CoUninitialize.
-                unsafe { CoUninitialize() };
-                return;
+                return; // `_com` drops → CoUninitialize.
             }
         };
+
+    // Best-effort per-call timeouts (IUIAutomation2, Windows 8+, so always present on our
+    // Win11 target). A single cross-process UIA call to an unresponsive/hung provider would
+    // otherwise block the worker indefinitely — the in-walk deadline only fires *between*
+    // calls, not during one. Bounding both to the (clamped) latency budget keeps one hung
+    // call from wedging the worker; the call just errors and that element is skipped.
+    if let Ok(a2) = automation.cast::<IUIAutomation2>() {
+        let ms = budget.latency_ms.clamp(1, u32::MAX as u64) as u32;
+        // SAFETY: setters on the live automation object on the COM thread; failure is benign.
+        unsafe {
+            let _ = a2.SetConnectionTimeout(ms);
+            let _ = a2.SetTransactionTimeout(ms);
+        }
+    }
+    let _ = ready.send(Ok(()));
 
     while let Ok(req) = rx.recv() {
         let result = read_foreground(&automation, &req, &budget);
         let _ = req.resp.send(result);
     }
 
-    // SAFETY: channel closed (provider dropped) — tear down the apartment.
-    unsafe { CoUninitialize() };
+    // `_com` drops here (channel closed, provider gone) → CoUninitialize.
 }
 
 /// Reads the foreground window's accessibility text into an [`OcrResult`] tagged
 /// `engine = "uia"` with `source = TextSource::Uia` spans. Returns `Err` (so the composite
-/// falls back to OCR) when there is no usable foreground element, the latency budget is
+/// falls back to OCR) when this frame's monitor doesn't hold the foreground window
+/// (`target_rect` is `None`), there is no usable foreground element, the latency budget is
 /// exceeded, or the yield is below `min_text_chars`.
 fn read_foreground(
     automation: &IUIAutomation,
     req: &Request,
     budget: &UiaBudget,
 ) -> Result<OcrResult> {
+    // On a multi-monitor capture, `target_rect` is `Some` only for the frame whose monitor
+    // holds the foreground window (capture's `normalize_window_rect` returns `None` for every
+    // other monitor — only the display whose region contains the window's centre gets a rect).
+    // UIA always reads `GetForegroundWindow`, so with no target rect we cannot confirm the
+    // foreground window is even on *this* frame's monitor; proceeding would tag a background
+    // monitor's frame with the foreground window's text — silent data corruption, and UIA is
+    // default-ON. Treat `None` as a UIA miss → OCR fallback, which reads this monitor's pixels.
+    let Some(target_rect) = req.target_rect else {
+        bail!("no target_rect (foreground window not on this monitor) — fall back to OCR");
+    };
+
     // The foreground window "now"; capture→recognize are sequential, so this is the
     // captured one. Skip our own window class of failures the same way capture's gate does.
     // SAFETY: plain Win32 queries on this thread.
@@ -156,7 +192,7 @@ fn read_foreground(
                         ),
                         Err(_) => (0.0, 0.0, 0.0, 0.0),
                     };
-                    if within_target(req.target_rect, x, y, w, h) {
+                    if within_target(target_rect, x, y, w, h) {
                         let (words, next) = classify::split_words(trimmed, line_index);
                         for (li, word) in words {
                             spans.push(TextSpan {
@@ -264,16 +300,13 @@ fn extract_text(elem: &IUIAutomationElement) -> Option<String> {
     None
 }
 
-/// Whether a normalized span box is within the target-window rect (by center). With no
-/// known target rect (`None`) every span is kept — the safe default (PR3 then classifies).
-fn within_target(target: Option<[f32; 4]>, x: f32, y: f32, w: f32, h: f32) -> bool {
-    match target {
-        None => true,
-        Some([tx, ty, tw, th]) => {
-            let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-            cx >= tx && cx <= tx + tw && cy >= ty && cy <= ty + th
-        }
-    }
+/// Whether a normalized span box is within the target-window rect (by center). The caller
+/// (`read_foreground`) has already bailed when the rect is unknown, so this always receives a
+/// concrete rect — a span whose centre falls outside the foreground window is dropped.
+fn within_target(target: [f32; 4], x: f32, y: f32, w: f32, h: f32) -> bool {
+    let [tx, ty, tw, th] = target;
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    cx >= tx && cx <= tx + tw && cy >= ty && cy <= ty + th
 }
 
 #[cfg(test)]
@@ -281,13 +314,8 @@ mod tests {
     use super::within_target;
 
     #[test]
-    fn within_target_keeps_everything_when_rect_unknown() {
-        assert!(within_target(None, 0.9, 0.9, 0.05, 0.05));
-    }
-
-    #[test]
     fn within_target_filters_by_center() {
-        let target = Some([0.25, 0.25, 0.5, 0.5]); // centered half-screen window
+        let target = [0.25, 0.25, 0.5, 0.5]; // centered half-screen window
         assert!(within_target(target, 0.4, 0.4, 0.1, 0.1), "center inside");
         assert!(!within_target(target, 0.8, 0.8, 0.1, 0.1), "center outside");
     }

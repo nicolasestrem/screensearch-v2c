@@ -150,6 +150,37 @@ but the per-frame source is durably persisted in `frame_text.primary_source`, so
 queryable, and no spec mandates a live fallback-rate metric. All gates re-run green after the fixes
 (fmt, clippy `-D warnings`, `cargo test --workspace`, UI lint + build, bindings guard).
 
+### Review follow-up — PR #45 automated review (5 comments addressed)
+The opened PR's bot reviewers (gemini-code-assist, chatgpt-codex-connector) raised 5 inline comments;
+all were confirmed relevant against the actual code and fixed:
+1. **(codex P1, `crates/uia/src/worker.rs`) Data corruption on multi-monitor when `target_rect` is
+   `None`.** Capture's `normalize_window_rect` returns `Some` only for the monitor whose region holds
+   the foreground window's centre; the UIA worker always reads `GetForegroundWindow`, and
+   `within_target(None, …)` kept every span — so a *background* monitor's frame was being tagged with
+   the foreground window's text (and UIA is default-ON). Fixed: `read_foreground` now bails when
+   `req.target_rect` is `None` → OCR fallback for that frame (OCR reads that monitor's real pixels);
+   `within_target` now takes a concrete `[f32;4]` (the `None` branch + its test are gone, the live
+   test's frame now carries a full-screen rect).
+2. **(gemini high, `crates/uia/src/worker.rs`) COM teardown + hung-provider bound.** Replaced the two
+   manual `CoUninitialize` calls with an RAII `ComApartment` guard (fires on every exit path incl. a
+   panic), and set `IUIAutomation2::SetConnectionTimeout`/`SetTransactionTimeout` to the clamped
+   latency budget so a single cross-process call to a hung provider can't wedge the worker (the in-walk
+   deadline only fires *between* calls).
+3. **(gemini medium + codex P2, `crates/uia/src/lib.rs`) `spawn_blocking` parked a pool thread per
+   frame.** `recognize` now sends the request over the (non-blocking) channel and awaits a `tokio`
+   **oneshot** reply directly — no `spawn_blocking`. On a hard timeout the receiver drops and the
+   worker's later `send` no-ops, so a wedged worker can never grow the blocking pool (codex P2). The
+   per-call transaction timeout from (2) keeps the worker itself responsive.
+4. **(gemini medium, `crates/store/src/schema.rs`) `SELECT *` in the v6 rebuild.** The `frames`→
+   `frames_new` copy now lists all 13 columns explicitly, so the migration stays correct under any
+   future column reordering.
+
+All gates green after the fixes: `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo build --workspace`, `cargo test --workspace` (uia 9 + 1 ignored,
+store 10 + 49, traits 50), UI lint + build, `git diff --exit-code -- ui/src/bindings` clean (no IPC
+change this round). Per the maintainer's instruction, the bot threads were addressed in code, not
+replied to.
+
 ---
 
 ## Pass — 2026-06-28 — 0.2.1 PR4 part 1: event-driven capture
