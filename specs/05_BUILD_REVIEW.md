@@ -110,6 +110,16 @@ All gates re-run green: fmt, clippy `-D warnings`, `cargo test --workspace` (cap
 bindings guard clean, UI lint + build. The events.rs lifecycle leak test (`-- --ignored`, 50× start/
 drop with both hooks) passed on real hardware.
 
+### Review follow-up — PR #44 second pass (degraded state now persisted)
+The second-pass review confirmed all three fixes above landed and flagged one follow-on: the busy-wait
+fix cleared only the **local** `events` handle, so `self.events` still held the dead source — the next
+`next_event_trigger` call re-armed the closed channel, costing one extra immediate wake and a repeated
+`warn!` every fallback interval (~30 s) forever (log spam, not a correctness bug). Fixed by tracking a
+`hook_died` flag through the (now `break`-valued) select loop and retiring the source on `self`
+(`self.events = None`) after the loop — dropping it joins the already-exited thread (instant) and makes
+later cycles see no source, so the wake + warning fire exactly once. fmt, clippy `-D warnings`, and
+`cargo test -p capture` (24 passed) green.
+
 ---
 
 ## Pass — 2026-06-27 — PR7 audit follow-ups

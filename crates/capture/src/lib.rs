@@ -159,7 +159,7 @@ impl WgcCapture {
     async fn next_event_trigger(&mut self) -> CaptureTrigger {
         let fallback_ms = u64::from(self.config.event_fallback_interval_ms.max(1));
         // Disjoint field borrows: the machine mutably, the hook source shared. `events`
-        // is a `Copy` `Option<&_>` we may locally clear if the hook channel closes.
+        // is a `Copy` `Option<&_>` we clear locally the moment the hook channel closes.
         let machine = &mut self.machine;
         let mut events = self.events.as_ref();
 
@@ -168,7 +168,8 @@ impl WgcCapture {
         let fallback = tokio::time::sleep(Duration::from_millis(fallback_ms));
         tokio::pin!(fallback);
 
-        loop {
+        let mut hook_died = false;
+        let trigger = loop {
             // Not `biased`: a continuous event stream must not starve the fallback/poll
             // arms (tokio picks a ready arm pseudo-randomly).
             tokio::select! {
@@ -176,25 +177,35 @@ impl WgcCapture {
                     match kind {
                         Some(kind) => machine.on_input_event(kind, now_ms()),
                         // `recv()` also returns `None` when the channel closes — i.e. the
-                        // hook thread exited after startup (e.g. `GetMessageW` error). Drop
-                        // the dead source so `recv_event(None)` is `pending` forever and
-                        // this arm stops hot-looping; fallback + idle polling carry on.
+                        // hook thread exited after startup (e.g. `GetMessageW` error). Stop
+                        // using the dead source so this arm goes `pending` instead of
+                        // hot-looping; fallback + idle polling carry on. `hook_died` then
+                        // retires it on `self` after the loop so later cycles don't re-arm.
                         None => {
                             if events.is_some() {
                                 tracing::warn!("event-driven capture: hook thread exited; degrading to fallback timer + idle polling");
                                 events = None;
+                                hook_died = true;
                             }
                         }
                     }
                 }
                 _ = poll.tick() => {
                     if let Some(trigger) = machine.poll(now_ms(), idle_ms_now()) {
-                        return trigger;
+                        break trigger;
                     }
                 }
-                _ = &mut fallback => return CaptureTrigger::Timer,
+                _ = &mut fallback => break CaptureTrigger::Timer,
             }
+        };
+
+        // Permanently retire a source whose hook thread has died: dropping it joins the
+        // already-exited thread (instant) and makes future cycles see no source, so the
+        // closed-channel wake + warning don't repeat every fallback interval.
+        if hook_died {
+            self.events = None;
         }
+        trigger
     }
 
     /// Asks the worker for one capture cycle and returns the changed frames.
