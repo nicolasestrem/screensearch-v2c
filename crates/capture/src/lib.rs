@@ -127,7 +127,10 @@ impl WgcCapture {
         let events = if config.event_driven_enabled
             && (config.event_on_foreground || config.event_on_clipboard)
         {
-            match events::InputEventSource::start() {
+            match events::InputEventSource::start(
+                config.event_on_foreground,
+                config.event_on_clipboard,
+            ) {
                 Ok(source) => Some(source),
                 Err(e) => {
                     tracing::warn!(error = %e, "event-driven capture: input hooks unavailable; using fallback timer + idle only");
@@ -155,9 +158,10 @@ impl WgcCapture {
     /// reason. Coexists with — does not replace — the timer path used in timer mode.
     async fn next_event_trigger(&mut self) -> CaptureTrigger {
         let fallback_ms = u64::from(self.config.event_fallback_interval_ms.max(1));
-        // Disjoint field borrows: the machine mutably, the hook source shared.
+        // Disjoint field borrows: the machine mutably, the hook source shared. `events`
+        // is a `Copy` `Option<&_>` we may locally clear if the hook channel closes.
         let machine = &mut self.machine;
-        let events = self.events.as_ref();
+        let mut events = self.events.as_ref();
 
         let mut poll = tokio::time::interval(Duration::from_millis(EVENT_POLL_INTERVAL_MS));
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -169,11 +173,19 @@ impl WgcCapture {
             // arms (tokio picks a ready arm pseudo-randomly).
             tokio::select! {
                 kind = recv_event(events) => {
-                    if let Some(kind) = kind {
-                        machine.on_input_event(kind, now_ms());
+                    match kind {
+                        Some(kind) => machine.on_input_event(kind, now_ms()),
+                        // `recv()` also returns `None` when the channel closes — i.e. the
+                        // hook thread exited after startup (e.g. `GetMessageW` error). Drop
+                        // the dead source so `recv_event(None)` is `pending` forever and
+                        // this arm stops hot-looping; fallback + idle polling carry on.
+                        None => {
+                            if events.is_some() {
+                                tracing::warn!("event-driven capture: hook thread exited; degrading to fallback timer + idle polling");
+                                events = None;
+                            }
+                        }
                     }
-                    // `None` only when there is no hook source, in which case
-                    // `recv_event` is `pending` forever and this arm never fires.
                 }
                 _ = poll.tick() => {
                     if let Some(trigger) = machine.poll(now_ms(), idle_ms_now()) {

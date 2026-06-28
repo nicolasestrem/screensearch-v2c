@@ -262,6 +262,13 @@ ALTER TABLE text_spans ADD COLUMN line_index INTEGER NOT NULL DEFAULT 0;
 /// `docs/0.2.0.md`, `07` #47/#57). Nullable: frames captured before this column
 /// existed read back as `NULL` ("unknown/legacy"); new captures always write a token
 /// from [`traits::CaptureTrigger::as_db_str`] (`timer` in the 0.2.0 timer/idle path).
+/// The `CHECK` mirrors the other closed-set TEXT columns (`primary_source`, `role`,
+/// `suppress_reason`): an invalid token from a future bug fails loudly at write time
+/// instead of silently degrading to `NULL` via `from_db_str` and losing provenance.
+/// SQLite enforces the constraint on new inserts/updates only, so existing `NULL`
+/// rows added by this `ADD COLUMN` need no data migration.
 const MIGRATION_V5: &str = r#"
-ALTER TABLE frames ADD COLUMN capture_trigger TEXT;
+ALTER TABLE frames ADD COLUMN capture_trigger TEXT
+  CHECK (capture_trigger IS NULL
+         OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change','typing_pause','manual'));
 "#;

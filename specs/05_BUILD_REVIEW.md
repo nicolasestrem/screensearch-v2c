@@ -85,6 +85,31 @@ now **delays** a capture (retried on the next poll) instead of consuming it. Two
 added (`pending_event_retries_after_min_interval_block`, `idle_retries_after_min_interval_block`);
 `trigger.rs` now has 11 unit tests, `cargo test -p capture` → 24 passed, fmt + clippy clean.
 
+### Review follow-up — PR #44 automated review (3 fixes)
+Three findings from the PR #44 bot reviewers (Claude / Gemini / Codex) were confirmed real and applied
+(v5 is unreleased, so the migration could still be corrected without schema drift):
+1. **CHECK constraint on `frames.capture_trigger`** (`store/src/schema.rs` `MIGRATION_V5`). It was the
+   only closed-set TEXT column without a `CHECK`, unlike `primary_source`/`role`/`suppress_reason`.
+   Added `CHECK (capture_trigger IS NULL OR capture_trigger IN (…six tokens…))` so an invalid token
+   from a future bug fails loudly at write time instead of silently mapping to `None` (lost
+   provenance). SQLite enforces it on new writes only, so existing `NULL` rows need no data migration.
+2. **Busy-wait spin on a closed hook channel** (`capture/src/lib.rs` `next_event_trigger`). The old
+   comment claimed `recv()` returns `None` *only* when there is no hook source; in fact a `tokio` mpsc
+   `recv()` also returns `None` when all senders drop — i.e. the hook thread exits post-startup
+   (`GetMessageW` error). That made the `select!` event arm ready every iteration, hot-looping until
+   the fallback. Fixed by clearing the local `events` handle (→ `recv_event(None)` is `pending`
+   forever) and `tracing::warn!`-ing once, matching the documented "degrade to fallback timer + idle".
+3. **Honor disabled event sources before installing them** (`capture/src/events.rs`). The Win32 layer
+   installed *both* the foreground hook and the clipboard listener unconditionally. Now `start` takes
+   the per-trigger flags and installs only the enabled source(s): a disabled clipboard no longer pushes
+   `WM_CLIPBOARDUPDATE` into the 64-slot queue (where churn could crowd out an enabled foreground
+   event), and a clipboard-listener setup failure no longer disables the foreground hook. Teardown
+   releases only what was registered. The `#[ignore]` lifecycle test passes both flags.
+
+All gates re-run green: fmt, clippy `-D warnings`, `cargo test --workspace` (capture 24, store 49+7),
+bindings guard clean, UI lint + build. The events.rs lifecycle leak test (`-- --ignored`, 50× start/
+drop with both hooks) passed on real hardware.
+
 ---
 
 ## Pass — 2026-06-27 — PR7 audit follow-ups
