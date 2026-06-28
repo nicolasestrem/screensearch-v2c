@@ -103,28 +103,34 @@ impl TriggerMachine {
         }
 
         // Idle (higher threshold) takes priority over typing-pause; emitting Idle also
-        // marks typing-pause fired so a single growing-idle poll can't double-fire.
+        // marks typing-pause fired so a single growing-idle poll can't double-fire. The
+        // `fired_*` flags are set only on a SUCCESSFUL emit — if the min-interval rate
+        // ceiling blocks it, the edge stays armed and retries on the next poll, so the
+        // ceiling delays rather than consuming the once-per-quiet-period firing.
         if self.cfg.on_idle && idle_ms >= self.cfg.idle_threshold_ms && !self.fired_idle {
-            self.fired_idle = true;
-            self.fired_typing_pause = true;
             if let Some(t) = self.try_emit(CaptureTrigger::Idle, now_ms) {
+                self.fired_idle = true;
+                self.fired_typing_pause = true;
                 return Some(t);
             }
         } else if self.cfg.on_typing_pause
             && idle_ms >= self.cfg.typing_pause_ms
             && !self.fired_typing_pause
         {
-            self.fired_typing_pause = true;
             if let Some(t) = self.try_emit(CaptureTrigger::TypingPause, now_ms) {
+                self.fired_typing_pause = true;
                 return Some(t);
             }
         }
 
-        // Flush a discrete event once its debounce window has settled.
+        // Flush a discrete event once its debounce window has settled. Clear `pending`
+        // only on a successful emit — a min-interval block keeps the (single) pending
+        // slot so the event is retried next poll, not dropped (a newer event of either
+        // kind still overwrites it, so no unbounded backlog builds up).
         if let Some((trigger, latest_event_ms)) = self.pending {
             if now_ms - latest_event_ms >= self.cfg.debounce_ms {
-                self.pending = None;
                 if let Some(t) = self.try_emit(trigger, now_ms) {
+                    self.pending = None;
                     return Some(t);
                 }
             }
@@ -132,9 +138,10 @@ impl TriggerMachine {
         None
     }
 
-    /// Emit `trigger` unless the global min-interval rate ceiling blocks it. On a block
-    /// the capture is dropped (the next event or the loop's fallback timer covers it),
-    /// never queued, so a backlog can't build up.
+    /// Emit `trigger` unless the global min-interval rate ceiling blocks it. The caller
+    /// keeps the trigger armed on a block and retries on the next poll, so the rate
+    /// ceiling **delays** a capture rather than dropping it; only a single discrete
+    /// event is ever pending (a newer event overwrites it), so no backlog can build up.
     fn try_emit(&mut self, trigger: CaptureTrigger, now_ms: i64) -> Option<CaptureTrigger> {
         if let Some(last) = self.last_emit_ms {
             if now_ms - last < self.cfg.min_interval_ms {
@@ -290,5 +297,59 @@ mod tests {
         let mut m = TriggerMachine::new(cfg());
         assert_eq!(m.poll(0, 0), None);
         assert_eq!(m.poll(1000, 50), None, "tiny idle, nothing pending");
+    }
+
+    #[test]
+    fn pending_event_retries_after_min_interval_block() {
+        // The rate ceiling must DELAY a settled discrete event, not drop it: a window
+        // switch within the min-interval window is still captured once the window opens,
+        // rather than lost until the fallback timer.
+        let mut m = TriggerMachine::new(TriggerConfig {
+            debounce_ms: 100,
+            min_interval_ms: 1000,
+            ..cfg()
+        });
+        m.on_input_event(InputEventKind::Foreground, 0);
+        assert_eq!(
+            m.poll(100, 0),
+            Some(CaptureTrigger::ForegroundChange),
+            "first capture sets the rate-ceiling clock"
+        );
+        m.on_input_event(InputEventKind::Clipboard, 200);
+        assert_eq!(
+            m.poll(400, 0),
+            None,
+            "debounce settled (400-200>=100) but min_interval blocks (400-100<1000)"
+        );
+        assert_eq!(
+            m.poll(1200, 0),
+            Some(CaptureTrigger::ClipboardChange),
+            "the blocked event is retried once min_interval allows, not silently dropped"
+        );
+    }
+
+    #[test]
+    fn idle_retries_after_min_interval_block() {
+        // Same contract for the idle edge: a min-interval block must not consume the
+        // once-per-quiet-period firing — it retries until it actually emits.
+        let mut m = TriggerMachine::new(TriggerConfig {
+            on_typing_pause: false,
+            debounce_ms: 100,
+            min_interval_ms: 1000,
+            idle_threshold_ms: 5000,
+            ..cfg()
+        });
+        m.on_input_event(InputEventKind::Foreground, 0);
+        assert_eq!(m.poll(100, 0), Some(CaptureTrigger::ForegroundChange));
+        assert_eq!(
+            m.poll(500, 5000),
+            None,
+            "idle crossed the threshold but min_interval blocks"
+        );
+        assert_eq!(
+            m.poll(1200, 6000),
+            Some(CaptureTrigger::Idle),
+            "the blocked idle edge retries once min_interval allows"
+        );
     }
 }

@@ -27,7 +27,7 @@ For each build pass, append an entry:
   `WINEVENT_OUTOFCONTEXT`), **clipboard change** (`AddClipboardFormatListener`, change event only),
   **idle**, and **typing-pause** (both derived from `GetLastInputInfo` timing only).
 - **Two new capture modules.** `crates/capture/src/trigger.rs` — a pure, `traits`-only debounce /
-  rate-ceiling / idle-edge state machine (no Win32), with 9 unit tests. `crates/capture/src/events.rs`
+  rate-ceiling / idle-edge state machine (no Win32), with 11 unit tests. `crates/capture/src/events.rs`
   — the only new `unsafe`: a dedicated message-pump thread owning a message-only `HWND_MESSAGE`
   window + the foreground hook + clipboard listener, with clean `WM_QUIT` / unhook / destroy / join
   teardown on drop. The event source lives inside `WgcCapture`, which stamps each frame's trigger;
@@ -70,10 +70,20 @@ For each build pass, append an entry:
 
 ### Verification
 Full suite green: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -D warnings`,
-`cargo build --workspace`, `cargo test --workspace` (9 new `trigger.rs` unit tests, extended settings
+`cargo build --workspace`, `cargo test --workspace` (11 `trigger.rs` unit tests, extended settings
 round-trip + sanitize tests), the UI lint + build, and the `git diff --exit-code -- ui/src/bindings`
 binding guard. Raw command output is pasted in the session response. (Docs-only pass does not re-run
 the gates.)
+
+### Review follow-up — rate ceiling delays rather than drops
+An adversarial review of the trigger machine confirmed one real defect: when a discrete event's
+debounce window settled but the global `min_interval_ms` rate ceiling blocked the emit, `poll`
+cleared `pending` (and set `fired_idle`/`fired_typing_pause`) **before** checking the emit result, so
+the trigger was silently dropped until the next event or the fallback timer. Fixed by clearing
+`pending` / setting the `fired_*` edge flags **only on a successful `try_emit`**, so the rate ceiling
+now **delays** a capture (retried on the next poll) instead of consuming it. Two TDD regression tests
+added (`pending_event_retries_after_min_interval_block`, `idle_retries_after_min_interval_block`);
+`trigger.rs` now has 11 unit tests, `cargo test -p capture` → 24 passed, fmt + clippy clean.
 
 ---
 
