@@ -86,6 +86,9 @@ function sanitizeSettings(s: Settings): Settings {
       1_000,
       3_600_000,
     ),
+    // UIA text knobs — mirror the backend clamps (docs/0.2.0.md #48).
+    capture_uia_latency_budget_ms: clampInt(s.capture_uia_latency_budget_ms, 20, 2_000),
+    capture_uia_min_text_chars: clampInt(s.capture_uia_min_text_chars, 0, 10_000),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
     storage_max_width: clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
@@ -482,6 +485,35 @@ export function Component() {
               />
             </div>
           )}
+        </div>
+      </Panel>
+
+      <Panel title="Text source">
+        <div className="flex flex-col gap-4">
+          <Toggle
+            label="Use UI Automation text (with OCR fallback)"
+            checked={draft.capture_uia_text_enabled}
+            onChange={(v) => set("capture_uia_text_enabled", v)}
+            hint={`Read the active window's text via Windows UI Automation — often cleaner than OCR — falling back to OCR when it's unavailable or yields too little. ${APPLY_NOW}`}
+          />
+          <Field
+            label="UIA latency budget (ms)"
+            type="number"
+            min={20}
+            max={2000}
+            value={draft.capture_uia_latency_budget_ms}
+            onChange={intHandler("capture_uia_latency_budget_ms")}
+            hint={`Give up on the UIA read past this and fall back to OCR for that frame. ${APPLY_RESTART}`}
+          />
+          <Field
+            label="UIA minimum text (chars)"
+            type="number"
+            min={0}
+            max={10000}
+            value={draft.capture_uia_min_text_chars}
+            onChange={intHandler("capture_uia_min_text_chars")}
+            hint={`If UIA returns fewer characters than this, use OCR for that frame instead (0 disables). ${APPLY_RESTART}`}
+          />
         </div>
       </Panel>
 

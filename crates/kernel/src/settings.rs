@@ -171,6 +171,24 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_event_fallback_interval_ms,
         )
         .await,
+        capture_uia_text_enabled: boolean(
+            store,
+            "capture.uia_text_enabled",
+            d.capture_uia_text_enabled,
+        )
+        .await,
+        capture_uia_latency_budget_ms: num(
+            store,
+            "capture.uia_latency_budget_ms",
+            d.capture_uia_latency_budget_ms,
+        )
+        .await,
+        capture_uia_min_text_chars: num(
+            store,
+            "capture.uia_min_text_chars",
+            d.capture_uia_min_text_chars,
+        )
+        .await,
     })
 }
 
@@ -361,6 +379,18 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "capture.event_fallback_interval_ms".into(),
             s.capture_event_fallback_interval_ms.to_string(),
         ),
+        (
+            "capture.uia_text_enabled".into(),
+            bool_str(s.capture_uia_text_enabled).into(),
+        ),
+        (
+            "capture.uia_latency_budget_ms".into(),
+            s.capture_uia_latency_budget_ms.to_string(),
+        ),
+        (
+            "capture.uia_min_text_chars".into(),
+            s.capture_uia_min_text_chars.to_string(),
+        ),
     ];
     store.set_settings_batch(&kvs).await
 }
@@ -412,6 +442,11 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.capture_event_idle_threshold_ms = clamp_u32(s.capture_event_idle_threshold_ms, 1_000, 60_000);
     s.capture_event_fallback_interval_ms =
         clamp_u32(s.capture_event_fallback_interval_ms, 1_000, 3_600_000);
+    // UIA text (docs/0.2.0.md #48). Latency budget floored well above a trivial walk and
+    // ceilinged so a hand-edited extreme can't stall capture; min-text-chars is a free
+    // count (0 disables the thin-yield fallback). Thresholds, not hardcoded.
+    s.capture_uia_latency_budget_ms = clamp_u32(s.capture_uia_latency_budget_ms, 20, 2_000);
+    s.capture_uia_min_text_chars = clamp_u32(s.capture_uia_min_text_chars, 0, 10_000);
     s
 }
 

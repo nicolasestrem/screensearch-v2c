@@ -523,6 +523,19 @@ pub struct Settings {
     /// Fallback capture interval in event mode, ms — a static screen is still sampled
     /// at least this often (`capture.event_fallback_interval_ms`).
     pub capture_event_fallback_interval_ms: u32,
+    /// Use Windows UI Automation for the target window's text, with OCR fallback
+    /// (`capture.uia_text_enabled`, `docs/0.2.0.md` #48). Default ON: UIA yields more
+    /// structured text than OCR; on any failure/timeout/thin-yield the frame falls back to
+    /// OCR. Hot-applies per frame (no capture restart).
+    pub capture_uia_text_enabled: bool,
+    /// Per-frame UIA latency budget, ms (`capture.uia_latency_budget_ms`). The tree walk
+    /// abandons past this and a 2× hard timeout guards a wedged worker; over budget → OCR
+    /// fallback. A threshold, never hardcoded. Applied on next capture start.
+    pub capture_uia_latency_budget_ms: u32,
+    /// Minimum UIA text length, chars, below which the read is a thin yield → OCR fallback
+    /// (`capture.uia_min_text_chars`). Catches GPU/canvas/custom-drawn windows where OCR is
+    /// strictly better. Applied on next capture start.
+    pub capture_uia_min_text_chars: u32,
 }
 
 impl Default for Settings {
@@ -603,6 +616,12 @@ impl Default for Settings {
             capture_event_typing_pause_ms: 1500,
             capture_event_idle_threshold_ms: 5000,
             capture_event_fallback_interval_ms: 30_000,
+            // UIA text (docs/0.2.0.md #48): default ON with OCR fallback. 150 ms keeps the
+            // walk well under the capture cadence; 16 chars is the thin-yield floor below
+            // which OCR is preferred. Thresholds, never hardcoded (mirrors the PR3 stance).
+            capture_uia_text_enabled: true,
+            capture_uia_latency_budget_ms: 150,
+            capture_uia_min_text_chars: 16,
         }
     }
 }

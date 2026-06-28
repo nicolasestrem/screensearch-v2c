@@ -12,6 +12,7 @@ members = [
     "crates/store",
     "crates/capture",
     "crates/ocr",
+    "crates/uia",
     "crates/embeddings",
     "crates/inference",
     "crates/textfilter",
@@ -104,6 +105,7 @@ kernel = { path = "crates/kernel" }
 store = { path = "crates/store" }
 capture = { path = "crates/capture" }
 ocr = { path = "crates/ocr" }
+uia = { path = "crates/uia" }
 embeddings = { path = "crates/embeddings" }
 inference = { path = "crates/inference" }
 textfilter = { path = "crates/textfilter" }

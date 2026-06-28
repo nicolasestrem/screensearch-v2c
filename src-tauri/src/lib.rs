@@ -102,6 +102,10 @@ struct AppState {
     report_tasks: ReportTasks,
     /// Whether the currently attached FastEmbed provider loaded the optional image lane.
     embedder_with_image: Arc<StdMutex<bool>>,
+    /// Shared toggle for the UIA-text composite provider (`docs/0.2.0.md` #48). The
+    /// composite reads it per frame; `set_settings` flips it so the user can switch UIA on/
+    /// off live without restarting capture.
+    uia_enabled: Arc<std::sync::atomic::AtomicBool>,
     embed_models_dir: PathBuf,
     db_path: PathBuf,
     frames_dir: PathBuf,
@@ -703,6 +707,14 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         .await
         .map_err(|e| e.to_string())?;
 
+    // Hot-apply the UIA enable toggle: the composite OcrProvider reads this per frame, so
+    // switching UIA text on/off takes effect immediately with no capture restart
+    // (`docs/0.2.0.md` #48). The latency/min-chars budget is baked in at spawn (restart).
+    state.uia_enabled.store(
+        settings.capture_uia_text_enabled,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
     // Hot-apply sidecar lane settings; embedding workers are handled below. The launch
     // params (ngl/device/ctx/KV/flash) are all launch args, so they take effect when the
     // supervisor relaunches on the next request (a changed param makes `needs_restart`
@@ -836,11 +848,16 @@ pub fn run() {
                 ..Default::default()
             };
 
+            // Shared UIA enable flag: the composite OcrProvider reads it per frame and
+            // `set_settings` flips it live, so toggling UIA needs no capture restart
+            // (`docs/0.2.0.md` #48). Seeded from settings inside `spawn_ocr`; default true.
+            let uia_enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
             // Build the kernel only if the spine opened. It owns the live readiness
             // (capture starts Disabled) and the event bus.
             let kernel = store.as_ref().map(|store| {
                 let dyn_store: Arc<dyn Store> = store.clone();
-                let (ocr, ocr_unavailable) = spawn_ocr();
+                let (ocr, ocr_unavailable) = spawn_ocr(store, &uia_enabled);
                 match ocr_unavailable {
                     Some(reason) => Arc::new(Kernel::new_with_ocr_unavailable(
                         dyn_store,
@@ -920,6 +937,7 @@ pub fn run() {
                 ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 report_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 embedder_with_image,
+                uia_enabled,
                 embed_models_dir,
                 db_path,
                 frames_dir,
@@ -1457,24 +1475,97 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Spawns the WinRT OCR worker and records an unavailable reason if OCR cannot
-/// be initialized. Capture start is blocked in that state.
-fn spawn_ocr() -> (Arc<dyn OcrProvider>, Option<String>) {
-    match ocr::WinRtOcr::spawn() {
-        Ok(engine) => {
-            tracing::info!("WinRT OCR ready");
-            (Arc::new(engine), None)
+/// Spawns the text recognizer and records an unavailable reason if OCR cannot be
+/// initialized (capture start is blocked in that state). The recognizer is a composite:
+/// **UI Automation primary, OCR fallback** (`docs/0.2.0.md` #48). OCR is the mandatory
+/// floor, so if WinRT OCR is unavailable we return it alone (capture stays blocked) and do
+/// not attempt UIA. Otherwise we read the UIA settings, seed the shared enable flag, and —
+/// if `UiaTextProvider::spawn` succeeds (its own capability probe) — wrap UIA over OCR.
+/// On any UIA spawn failure, fall back to OCR-only. The capture loop is unchanged: it still
+/// calls a single `Arc<dyn OcrProvider>`.
+fn spawn_ocr(
+    store: &Arc<SqliteStore>,
+    uia_enabled: &Arc<std::sync::atomic::AtomicBool>,
+) -> (Arc<dyn OcrProvider>, Option<String>) {
+    let (ocr, ocr_unavailable): (Arc<dyn OcrProvider>, Option<String>) =
+        match ocr::WinRtOcr::spawn() {
+            Ok(engine) => {
+                tracing::info!("WinRT OCR ready");
+                (Arc::new(engine), None)
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                tracing::error!(error = %reason, "OCR unavailable; capture cannot start");
+                (
+                    Arc::new(UnavailableOcr {
+                        reason: reason.clone(),
+                    }),
+                    Some(reason),
+                )
+            }
+        };
+
+    // No OCR floor → capture is blocked regardless; skip UIA entirely.
+    if ocr_unavailable.is_some() {
+        return (ocr, ocr_unavailable);
+    }
+
+    // Read the UIA settings (sync setup context → block on the async load) and seed the
+    // shared enable flag. Budget/min-chars are baked into the provider at spawn (changing
+    // them applies on restart); the enable toggle hot-applies via the flag.
+    let settings = kernel::settings::sanitize_settings(tauri::async_runtime::block_on(
+        kernel::settings::load_settings(store.as_ref()),
+    ));
+    uia_enabled.store(
+        settings.capture_uia_text_enabled,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let budget = uia::UiaBudget {
+        latency_ms: u64::from(settings.capture_uia_latency_budget_ms),
+        min_text_chars: settings.capture_uia_min_text_chars as usize,
+    };
+
+    match uia::UiaTextProvider::spawn(budget) {
+        Ok(provider) => {
+            tracing::info!(
+                enabled = settings.capture_uia_text_enabled,
+                "UI Automation text ready (OCR fallback)"
+            );
+            let composite: Arc<dyn OcrProvider> = Arc::new(UiaWithOcrFallback {
+                uia: Arc::new(provider),
+                ocr,
+                uia_enabled: uia_enabled.clone(),
+            });
+            (composite, None)
         }
         Err(e) => {
-            let reason = e.to_string();
-            tracing::error!(error = %reason, "OCR unavailable; capture cannot start");
-            (
-                Arc::new(UnavailableOcr {
-                    reason: reason.clone(),
-                }),
-                Some(reason),
-            )
+            tracing::warn!(error = %e, "UI Automation unavailable; using OCR only");
+            (ocr, None)
         }
+    }
+}
+
+/// Composite [`OcrProvider`]: UI Automation primary, OCR fallback (`docs/0.2.0.md` #48).
+/// It lives in the composition root because it is the one place allowed to wire two
+/// concrete impls (`03 §2`). Per frame: when UIA is enabled, try it and on any `Err`
+/// (error / latency-timeout / thin yield) fall back to OCR; when disabled, go straight to
+/// OCR. The enable flag is shared with [`AppState`] so `set_settings` toggles it live.
+struct UiaWithOcrFallback {
+    uia: Arc<dyn OcrProvider>,
+    ocr: Arc<dyn OcrProvider>,
+    uia_enabled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl OcrProvider for UiaWithOcrFallback {
+    async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
+        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            match self.uia.recognize(frame).await {
+                Ok(result) => return Ok(result),
+                Err(e) => tracing::debug!(error = %e, "UIA recognize failed; falling back to OCR"),
+            }
+        }
+        self.ocr.recognize(frame).await
     }
 }
 

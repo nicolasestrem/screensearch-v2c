@@ -34,5 +34,6 @@ store.workspace = true
 kernel.workspace = true
 capture.workspace = true
 ocr.workspace = true
+uia.workspace = true
 embeddings.workspace = true
 inference.workspace = true
