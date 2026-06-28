@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::domain::{TextSource, VisionAnalysis};
+use crate::domain::{CaptureTrigger, TextSource, VisionAnalysis};
 use crate::jobs::{JobKind, JobStats};
 
 /// Half-open `[start, end)` time window (start inclusive, end exclusive), unix
@@ -265,6 +265,10 @@ pub struct FrameDetail {
     pub window_title: Option<String>,
     pub browser_url: Option<String>,
     pub activity_type: Option<String>,
+    /// Why the frame was captured (`frames.capture_trigger`, 0.2.1 event-driven
+    /// capture). `None` for legacy frames or an unrecognized token; the Moment view
+    /// shows it as "why captured".
+    pub capture_trigger: Option<CaptureTrigger>,
     /// Full, unfiltered OCR/UIA text — always preserved (`03 §3b`). `None` when no
     /// `frame_text` row exists yet.
     pub raw_text: Option<String>,
@@ -484,6 +488,35 @@ pub struct Settings {
     /// Frame count at/below which a report uses a single pass; above it, map-reduce
     /// (`03 §8` `reports.map_reduce_min_frames`, `§8b`).
     pub reports_map_reduce_min_frames: u32,
+    /// Event-driven capture master switch (`capture.event_driven_enabled`,
+    /// `docs/0.2.0.md`). Opt-in, default `false`: capture stays the 0.2.0 timer/idle
+    /// cadence and no input hooks are installed unless this is on.
+    pub capture_event_driven_enabled: bool,
+    /// Capture on foreground/app switch when event-driven capture is on
+    /// (`capture.event_on_foreground`).
+    pub capture_event_on_foreground: bool,
+    /// Capture on clipboard change — change event only, never contents
+    /// (`capture.event_on_clipboard`).
+    pub capture_event_on_clipboard: bool,
+    /// Capture when the user goes idle past the threshold (`capture.event_on_idle`).
+    pub capture_event_on_idle: bool,
+    /// Capture when typing/input pauses for the quiet period
+    /// (`capture.event_on_typing_pause`).
+    pub capture_event_on_typing_pause: bool,
+    /// Collapse a burst of triggers within this window into one capture, ms
+    /// (`capture.event_debounce_ms`). A threshold, never hardcoded.
+    pub capture_event_debounce_ms: u32,
+    /// Minimum gap between any two event-driven captures, ms — the rate ceiling
+    /// (`capture.event_min_interval_ms`).
+    pub capture_event_min_interval_ms: u32,
+    /// Quiet period after the last input that counts as a typing pause, ms
+    /// (`capture.event_typing_pause_ms`).
+    pub capture_event_typing_pause_ms: u32,
+    /// Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
+    pub capture_event_idle_threshold_ms: u32,
+    /// Fallback capture interval in event mode, ms — a static screen is still sampled
+    /// at least this often (`capture.event_fallback_interval_ms`).
+    pub capture_event_fallback_interval_ms: u32,
 }
 
 impl Default for Settings {
@@ -544,6 +577,21 @@ impl Default for Settings {
             reports_daily_top_k: 40,
             reports_weekly_top_k: 200,
             reports_map_reduce_min_frames: 20,
+            // 0.2.1 event-driven capture (docs/0.2.0.md, 07 #47). Opt-in master OFF:
+            // flipping it on gives a sane out-of-box set (foreground + clipboard on;
+            // idle + typing-pause off as the noisier triggers), 500 ms debounce, a 1 s
+            // rate ceiling, and a 30 s fallback so a static screen is still sampled.
+            // Every threshold is a setting, never hardcoded (mirrors the PR3 stance).
+            capture_event_driven_enabled: false,
+            capture_event_on_foreground: true,
+            capture_event_on_clipboard: true,
+            capture_event_on_idle: false,
+            capture_event_on_typing_pause: false,
+            capture_event_debounce_ms: 500,
+            capture_event_min_interval_ms: 1000,
+            capture_event_typing_pause_ms: 1500,
+            capture_event_idle_threshold_ms: 5000,
+            capture_event_fallback_interval_ms: 30_000,
         }
     }
 }

@@ -22,6 +22,59 @@ pub struct MonitorInfo {
     pub is_primary: bool,
 }
 
+/// Why a frame was captured (`docs/0.2.0.md` event-driven capture; `07` #47/#57).
+///
+/// [`CaptureTrigger::Timer`] is the always-present 0.2.0 baseline cadence (and the
+/// event-mode fallback); the other variants arrive only when the opt-in event-driven
+/// capture mode is enabled. Persisted to `frames.capture_trigger` (`03 §4`) and
+/// surfaced in [`crate::ipc::FrameDetail`] so the Moment view can show why a frame was
+/// captured. It is a **label, never input content** — no keystrokes or clipboard text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum CaptureTrigger {
+    /// Fixed-interval timer cadence (the 0.2.0 baseline; also the event-mode fallback).
+    Timer,
+    /// The user went idle past the configured threshold.
+    Idle,
+    /// The foreground window / app changed (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`).
+    ForegroundChange,
+    /// The clipboard contents changed (`AddClipboardFormatListener`) — change event only.
+    ClipboardChange,
+    /// Typing/input paused for the configured quiet period (`GetLastInputInfo` timing).
+    TypingPause,
+    /// An explicit user-initiated "capture now" (reserved; no UI affordance yet).
+    Manual,
+}
+
+impl CaptureTrigger {
+    /// The DB token for the `frames.capture_trigger` column (`03 §4`).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            CaptureTrigger::Timer => "timer",
+            CaptureTrigger::Idle => "idle",
+            CaptureTrigger::ForegroundChange => "foreground_change",
+            CaptureTrigger::ClipboardChange => "clipboard_change",
+            CaptureTrigger::TypingPause => "typing_pause",
+            CaptureTrigger::Manual => "manual",
+        }
+    }
+
+    /// Parses the DB token back into a [`CaptureTrigger`]; `None` on an unknown token
+    /// (including the SQL `NULL` → "unknown/legacy frame" case the caller handles).
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "timer" => Some(CaptureTrigger::Timer),
+            "idle" => Some(CaptureTrigger::Idle),
+            "foreground_change" => Some(CaptureTrigger::ForegroundChange),
+            "clipboard_change" => Some(CaptureTrigger::ClipboardChange),
+            "typing_pause" => Some(CaptureTrigger::TypingPause),
+            "manual" => Some(CaptureTrigger::Manual),
+            _ => None,
+        }
+    }
+}
+
 /// A single captured (already diff-gated as *changed*) frame.
 ///
 /// Internal: holds the full-resolution RGBA pixels behind an [`Arc`] and never
@@ -54,6 +107,10 @@ pub struct CapturedFrame {
     /// Normalized `[0,1]` foreground-window rect within this monitor's frame, or
     /// `None` (other monitor / minimized / unresolved). `[x, y, w, h]`.
     pub target_rect: Option<[f32; 4]>,
+    /// Why this frame was captured. The capture source stamps it at the moment it
+    /// decides to capture; the kernel copies it onto the stored [`NewFrame`]. Always
+    /// [`CaptureTrigger::Timer`] in the 0.2.0 timer/idle path.
+    pub trigger: CaptureTrigger,
 }
 
 /// Origin of a text span / the primary text of a frame (`03 §3b`). Serializes to
@@ -260,6 +317,9 @@ pub struct NewFrame {
     pub app_hint: Option<String>,
     pub window_title: Option<String>,
     pub browser_url: Option<String>,
+    /// Why the frame was captured (`frames.capture_trigger`, `03 §4`). `None` for
+    /// legacy frames captured before this column existed; new captures always set it.
+    pub capture_trigger: Option<CaptureTrigger>,
 }
 
 /// The minimal frame inputs an enrichment worker needs to embed a frame: the
@@ -291,6 +351,36 @@ pub struct CaptureConfig {
     /// Pause capture entirely while the workstation is locked
     /// (`privacy.pause_on_lock`).
     pub pause_on_lock: bool,
+    /// Event-driven capture master switch (`capture.event_driven_enabled`). When
+    /// `false` (default), capture is the 0.2.0 timer/idle cadence only and **no input
+    /// hooks are installed**. When `true`, the capture source also fires on the enabled
+    /// user-activity triggers below, with a long fallback timer so a static screen is
+    /// still sampled (`docs/0.2.0.md` event-driven capture; `07` #47).
+    pub event_driven_enabled: bool,
+    /// Capture on foreground/app switch (`capture.event_on_foreground`).
+    pub event_on_foreground: bool,
+    /// Capture on clipboard change — change event only, never contents
+    /// (`capture.event_on_clipboard`).
+    pub event_on_clipboard: bool,
+    /// Capture when the user goes idle past the threshold (`capture.event_on_idle`).
+    pub event_on_idle: bool,
+    /// Capture when typing/input pauses for the quiet period
+    /// (`capture.event_on_typing_pause`).
+    pub event_on_typing_pause: bool,
+    /// Collapse a burst of triggers within this window into one capture, ms
+    /// (`capture.event_debounce_ms`).
+    pub event_debounce_ms: u32,
+    /// Minimum gap between any two event-driven captures, ms — the rate ceiling that
+    /// stops a trigger storm (`capture.event_min_interval_ms`).
+    pub event_min_interval_ms: u32,
+    /// Quiet period after the last input that counts as a typing pause, ms
+    /// (`capture.event_typing_pause_ms`).
+    pub event_typing_pause_ms: u32,
+    /// Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
+    pub event_idle_threshold_ms: u32,
+    /// Fallback capture interval in event mode, ms — guarantees a static screen is
+    /// still sampled even with no input activity (`capture.event_fallback_interval_ms`).
+    pub event_fallback_interval_ms: u32,
 }
 
 /// Per-frame inputs for PR3's attention filter that aren't already on the stored
@@ -399,4 +489,33 @@ pub struct ReportOutput {
     pub passes: u32,
     /// A structural bound forced coarser sampling than requested (honest framing).
     pub truncated: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CaptureTrigger;
+
+    #[test]
+    fn capture_trigger_db_str_round_trips() {
+        for t in [
+            CaptureTrigger::Timer,
+            CaptureTrigger::Idle,
+            CaptureTrigger::ForegroundChange,
+            CaptureTrigger::ClipboardChange,
+            CaptureTrigger::TypingPause,
+            CaptureTrigger::Manual,
+        ] {
+            assert_eq!(
+                CaptureTrigger::from_db_str(t.as_db_str()),
+                Some(t),
+                "round-trip failed for {t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_trigger_from_unknown_db_str_is_none() {
+        assert_eq!(CaptureTrigger::from_db_str("nope"), None);
+        assert_eq!(CaptureTrigger::from_db_str(""), None);
+    }
 }

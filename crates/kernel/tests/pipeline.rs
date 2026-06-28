@@ -112,6 +112,7 @@ fn frame(captured_at: i64) -> CapturedFrame {
         app_hint: Some("Firefox".to_string()),
         window_title: Some("Inbox".to_string()),
         target_rect: None,
+        trigger: traits::CaptureTrigger::Timer,
     }
 }
 

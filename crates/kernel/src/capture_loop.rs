@@ -117,6 +117,7 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
             app_hint: frame.app_hint.clone(),
             window_title: frame.window_title.clone(),
             browser_url: None, // needs UI Automation — deferred past P2
+            capture_trigger: Some(frame.trigger), // why this frame was captured (03 §4)
         })
         .await?;
 

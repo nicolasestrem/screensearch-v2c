@@ -7,10 +7,21 @@
 // (03 §3b). Purely presentational: the route owns data fetching and wires
 // `onQueueVision` to the enqueue_vision mutation. Tokens only.
 import type { FrameDetail } from "../../bindings/FrameDetail";
+import type { CaptureTrigger } from "../../bindings/CaptureTrigger";
 import { Button, Chip, Panel } from "../primitives";
 import { FrameImage } from "./FrameImage";
 import { IconSparkle, IconTag } from "../icons";
 import { absoluteTime } from "../../lib/time";
+
+/** Human-readable label for why a frame was captured (the capture trigger). */
+const TRIGGER_LABEL: Record<CaptureTrigger, string> = {
+  timer: "Timer",
+  idle: "Idle",
+  foreground_change: "App switch",
+  clipboard_change: "Clipboard change",
+  typing_pause: "Typing pause",
+  manual: "Manual",
+};
 
 export interface MomentDetailProps {
   detail: FrameDetail;
@@ -80,6 +91,10 @@ export function MomentDetail({ detail, onQueueVision, queueing }: MomentDetailPr
         <Panel title="Context">
           <div className="flex flex-col gap-3">
             <Meta label="Captured" value={absoluteTime(detail.captured_at)} />
+            <Meta
+              label="Captured via"
+              value={detail.capture_trigger ? TRIGGER_LABEL[detail.capture_trigger] : null}
+            />
             <Meta label="App" value={detail.app_hint} />
             <Meta label="Window" value={detail.window_title} />
             <Meta label="URL" value={detail.browser_url} />

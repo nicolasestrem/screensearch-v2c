@@ -16,6 +16,16 @@ async fn wgc_captures_a_frame_from_the_primary_monitor() {
         diff_threshold: 0.0, // first frame always passes anyway
         excluded_apps: Vec::new(),
         pause_on_lock: false,
+        event_driven_enabled: false,
+        event_on_foreground: true,
+        event_on_clipboard: true,
+        event_on_idle: false,
+        event_on_typing_pause: false,
+        event_debounce_ms: 500,
+        event_min_interval_ms: 1000,
+        event_typing_pause_ms: 1500,
+        event_idle_threshold_ms: 5000,
+        event_fallback_interval_ms: 30_000,
     };
 
     let mut cap = WgcCapture::new(config).expect("create WgcCapture");

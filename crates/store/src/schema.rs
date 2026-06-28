@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 4;
+pub const LATEST_SCHEMA_VERSION: i32 = 5;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -36,6 +36,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (2, MIGRATION_V2),
     (3, MIGRATION_V3),
     (4, MIGRATION_V4),
+    (5, MIGRATION_V5),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -255,4 +256,19 @@ CREATE TABLE chrome_text_catalog (
 /// PK already covers the per-frame read PR3's filter does.
 const MIGRATION_V4: &str = r#"
 ALTER TABLE text_spans ADD COLUMN line_index INTEGER NOT NULL DEFAULT 0;
+"#;
+
+/// v5 — record **why** a frame was captured (0.2.1 event-driven capture,
+/// `docs/0.2.0.md`, `07` #47/#57). Nullable: frames captured before this column
+/// existed read back as `NULL` ("unknown/legacy"); new captures always write a token
+/// from [`traits::CaptureTrigger::as_db_str`] (`timer` in the 0.2.0 timer/idle path).
+/// The `CHECK` mirrors the other closed-set TEXT columns (`primary_source`, `role`,
+/// `suppress_reason`): an invalid token from a future bug fails loudly at write time
+/// instead of silently degrading to `NULL` via `from_db_str` and losing provenance.
+/// SQLite enforces the constraint on new inserts/updates only, so existing `NULL`
+/// rows added by this `ADD COLUMN` need no data migration.
+const MIGRATION_V5: &str = r#"
+ALTER TABLE frames ADD COLUMN capture_trigger TEXT
+  CHECK (capture_trigger IS NULL
+         OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change','typing_pause','manual'));
 "#;

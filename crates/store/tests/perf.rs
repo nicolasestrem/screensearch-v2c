@@ -138,6 +138,7 @@ async fn hybrid_search_under_200ms_on_realistic_db() {
                 app_hint: None,
                 window_title: None,
                 browser_url: None,
+                capture_trigger: None,
             })
             .await
             .unwrap();

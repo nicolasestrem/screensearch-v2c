@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.1 — Event-driven capture (opt-in)
+Adds an **opt-in, default-off** event-driven capture mode so capture can fire on real user activity
+instead of only a fixed timer. 0.2.0's timer/idle capture is unchanged and remains the default; this
+lands on the 0.2.1 line (`docs/0.2.0.md` deferred work; `07` #47).
+
+- **Capture-mode switch.** A new master setting **Event-driven capture** (`capture.event_driven_enabled`,
+  default off) selects Timer vs Event-driven. In event mode, capture fires on the enabled triggers
+  plus a long **fallback interval** (so a static screen is still sampled), a **debounce** (collapses a
+  burst of triggers into one capture), and a **min-interval rate ceiling** (prevents capture storms).
+- **Four triggers.** **Foreground / app-switch** (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`),
+  **clipboard change** (`AddClipboardFormatListener`, change event only), **idle**, and
+  **typing-pause** (both derived from `GetLastInputInfo` timing). Foreground + clipboard are on by
+  default when event mode is enabled; idle + typing-pause (the noisier triggers) are off by default.
+- **Privacy-safe by design.** **No keystrokes and no clipboard contents are ever read or stored** —
+  only change/idle-timing signals. The mode is opt-in and off by default, and every existing privacy
+  gate still applies (self-exclude own window, excluded apps, pause-on-lock, the diff gate). The
+  feature is implemented over a pure, unit-tested trigger state machine plus a single dedicated
+  message-pump thread (message-only window + foreground hook + clipboard listener) that tears down
+  cleanly; a failed hook install is non-fatal and falls back to the fallback timer + idle polling.
+- **"Captured via" provenance.** Each frame now records *why* it was captured (timer, idle,
+  foreground change, clipboard change, typing pause, or manual), shown in the Moment view. Stored via
+  a forward-only migration (`schema_version` 4→5, a new nullable `frames.capture_trigger` column);
+  frames captured before this read as "unknown".
+- **All thresholds are settings, never hardcoded.** Debounce, min-interval, typing-pause, idle, and
+  fallback durations are clamped settings, alongside per-trigger on/off toggles.
+- **Deferred to ≥0.2.2.** Click and scroll-stop triggers are not included — they would require a
+  low-level mouse hook (`WH_MOUSE_LL`) the roadmap deliberately avoids.
+
 ### Docs — Token-bloat optimization (archive v0.1.0 history, de-duplicate, fix drift)
 Reorganized the documentation so an LLM reads only the current 0.2.x arc instead of wading through
 shipped v0.1.0 history. No content was lost — pre-0.2.x entries were moved **verbatim** (byte-identical

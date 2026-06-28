@@ -92,6 +92,7 @@ fn frame_at(captured_at: i64) -> NewFrame {
         app_hint: Some("Firefox".to_string()),
         window_title: Some("Inbox".to_string()),
         browser_url: Some("https://mail.example.com".to_string()),
+        capture_trigger: None,
     }
 }
 
@@ -1506,6 +1507,7 @@ fn editor_frame(captured_at: i64) -> NewFrame {
         app_hint: Some("editor".to_string()),
         window_title: Some("Doc".to_string()),
         browser_url: None,
+        capture_trigger: None,
     }
 }
 
@@ -1827,6 +1829,7 @@ async fn frames_with_app_hint_matches_case_insensitively() {
         app_hint: Some(app.to_string()),
         window_title: Some("w".to_string()),
         browser_url: None,
+        capture_trigger: None,
     };
     let a = store.insert_frame(mk(1000, "ScreenSearch")).await.unwrap();
     let _b = store.insert_frame(mk(1001, "firefox")).await.unwrap();

@@ -107,6 +107,62 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.reports_map_reduce_min_frames,
         )
         .await,
+        capture_event_driven_enabled: boolean(
+            store,
+            "capture.event_driven_enabled",
+            d.capture_event_driven_enabled,
+        )
+        .await,
+        capture_event_on_foreground: boolean(
+            store,
+            "capture.event_on_foreground",
+            d.capture_event_on_foreground,
+        )
+        .await,
+        capture_event_on_clipboard: boolean(
+            store,
+            "capture.event_on_clipboard",
+            d.capture_event_on_clipboard,
+        )
+        .await,
+        capture_event_on_idle: boolean(store, "capture.event_on_idle", d.capture_event_on_idle)
+            .await,
+        capture_event_on_typing_pause: boolean(
+            store,
+            "capture.event_on_typing_pause",
+            d.capture_event_on_typing_pause,
+        )
+        .await,
+        capture_event_debounce_ms: num(
+            store,
+            "capture.event_debounce_ms",
+            d.capture_event_debounce_ms,
+        )
+        .await,
+        capture_event_min_interval_ms: num(
+            store,
+            "capture.event_min_interval_ms",
+            d.capture_event_min_interval_ms,
+        )
+        .await,
+        capture_event_typing_pause_ms: num(
+            store,
+            "capture.event_typing_pause_ms",
+            d.capture_event_typing_pause_ms,
+        )
+        .await,
+        capture_event_idle_threshold_ms: num(
+            store,
+            "capture.event_idle_threshold_ms",
+            d.capture_event_idle_threshold_ms,
+        )
+        .await,
+        capture_event_fallback_interval_ms: num(
+            store,
+            "capture.event_fallback_interval_ms",
+            d.capture_event_fallback_interval_ms,
+        )
+        .await,
     })
 }
 
@@ -249,6 +305,46 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "reports.map_reduce_min_frames".into(),
             s.reports_map_reduce_min_frames.to_string(),
         ),
+        (
+            "capture.event_driven_enabled".into(),
+            bool_str(s.capture_event_driven_enabled).into(),
+        ),
+        (
+            "capture.event_on_foreground".into(),
+            bool_str(s.capture_event_on_foreground).into(),
+        ),
+        (
+            "capture.event_on_clipboard".into(),
+            bool_str(s.capture_event_on_clipboard).into(),
+        ),
+        (
+            "capture.event_on_idle".into(),
+            bool_str(s.capture_event_on_idle).into(),
+        ),
+        (
+            "capture.event_on_typing_pause".into(),
+            bool_str(s.capture_event_on_typing_pause).into(),
+        ),
+        (
+            "capture.event_debounce_ms".into(),
+            s.capture_event_debounce_ms.to_string(),
+        ),
+        (
+            "capture.event_min_interval_ms".into(),
+            s.capture_event_min_interval_ms.to_string(),
+        ),
+        (
+            "capture.event_typing_pause_ms".into(),
+            s.capture_event_typing_pause_ms.to_string(),
+        ),
+        (
+            "capture.event_idle_threshold_ms".into(),
+            s.capture_event_idle_threshold_ms.to_string(),
+        ),
+        (
+            "capture.event_fallback_interval_ms".into(),
+            s.capture_event_fallback_interval_ms.to_string(),
+        ),
     ];
     store.set_settings_batch(&kvs).await
 }
@@ -291,6 +387,15 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.reports_daily_top_k = clamp_u32(s.reports_daily_top_k, 1, 1_000);
     s.reports_weekly_top_k = clamp_u32(s.reports_weekly_top_k, 1, 2_000);
     s.reports_map_reduce_min_frames = clamp_u32(s.reports_map_reduce_min_frames, 1, 1_000);
+    // 0.2.1 event-driven capture (docs/0.2.0.md, 07 #47). Thresholds are settings, not
+    // hardcoded; floors keep the trigger machine sane (a positive debounce/quiet window,
+    // a real rate ceiling) and ceilings guard hand-edited extremes.
+    s.capture_event_debounce_ms = clamp_u32(s.capture_event_debounce_ms, 100, 10_000);
+    s.capture_event_min_interval_ms = clamp_u32(s.capture_event_min_interval_ms, 250, 60_000);
+    s.capture_event_typing_pause_ms = clamp_u32(s.capture_event_typing_pause_ms, 500, 10_000);
+    s.capture_event_idle_threshold_ms = clamp_u32(s.capture_event_idle_threshold_ms, 1_000, 60_000);
+    s.capture_event_fallback_interval_ms =
+        clamp_u32(s.capture_event_fallback_interval_ms, 1_000, 3_600_000);
     s
 }
 
@@ -327,6 +432,16 @@ pub fn capture_config(s: &Settings) -> CaptureConfig {
         diff_threshold: s.capture_diff_threshold,
         excluded_apps: s.privacy_excluded_apps.clone(),
         pause_on_lock: s.privacy_pause_on_lock,
+        event_driven_enabled: s.capture_event_driven_enabled,
+        event_on_foreground: s.capture_event_on_foreground,
+        event_on_clipboard: s.capture_event_on_clipboard,
+        event_on_idle: s.capture_event_on_idle,
+        event_on_typing_pause: s.capture_event_on_typing_pause,
+        event_debounce_ms: s.capture_event_debounce_ms,
+        event_min_interval_ms: s.capture_event_min_interval_ms,
+        event_typing_pause_ms: s.capture_event_typing_pause_ms,
+        event_idle_threshold_ms: s.capture_event_idle_threshold_ms,
+        event_fallback_interval_ms: s.capture_event_fallback_interval_ms,
     }
 }
 

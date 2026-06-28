@@ -94,4 +94,53 @@ reports_weekly_top_k: number,
  * Frame count at/below which a report uses a single pass; above it, map-reduce
  * (`03 §8` `reports.map_reduce_min_frames`, `§8b`).
  */
-reports_map_reduce_min_frames: number, };
+reports_map_reduce_min_frames: number, 
+/**
+ * Event-driven capture master switch (`capture.event_driven_enabled`,
+ * `docs/0.2.0.md`). Opt-in, default `false`: capture stays the 0.2.0 timer/idle
+ * cadence and no input hooks are installed unless this is on.
+ */
+capture_event_driven_enabled: boolean, 
+/**
+ * Capture on foreground/app switch when event-driven capture is on
+ * (`capture.event_on_foreground`).
+ */
+capture_event_on_foreground: boolean, 
+/**
+ * Capture on clipboard change — change event only, never contents
+ * (`capture.event_on_clipboard`).
+ */
+capture_event_on_clipboard: boolean, 
+/**
+ * Capture when the user goes idle past the threshold (`capture.event_on_idle`).
+ */
+capture_event_on_idle: boolean, 
+/**
+ * Capture when typing/input pauses for the quiet period
+ * (`capture.event_on_typing_pause`).
+ */
+capture_event_on_typing_pause: boolean, 
+/**
+ * Collapse a burst of triggers within this window into one capture, ms
+ * (`capture.event_debounce_ms`). A threshold, never hardcoded.
+ */
+capture_event_debounce_ms: number, 
+/**
+ * Minimum gap between any two event-driven captures, ms — the rate ceiling
+ * (`capture.event_min_interval_ms`).
+ */
+capture_event_min_interval_ms: number, 
+/**
+ * Quiet period after the last input that counts as a typing pause, ms
+ * (`capture.event_typing_pause_ms`).
+ */
+capture_event_typing_pause_ms: number, 
+/**
+ * Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
+ */
+capture_event_idle_threshold_ms: number, 
+/**
+ * Fallback capture interval in event mode, ms — a static screen is still sampled
+ * at least this often (`capture.event_fallback_interval_ms`).
+ */
+capture_event_fallback_interval_ms: number, };

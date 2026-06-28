@@ -61,6 +61,18 @@ async fn round_trips_non_default_values() {
         reports_daily_top_k: 60,
         reports_weekly_top_k: 300,
         reports_map_reduce_min_frames: 30,
+        // Event-driven capture — every field away from its default, within the
+        // sanitize clamps, so the round-trip exercises the new load/save encodings.
+        capture_event_driven_enabled: true,
+        capture_event_on_foreground: false,
+        capture_event_on_clipboard: false,
+        capture_event_on_idle: true,
+        capture_event_on_typing_pause: true,
+        capture_event_debounce_ms: 750,
+        capture_event_min_interval_ms: 2000,
+        capture_event_typing_pause_ms: 2000,
+        capture_event_idle_threshold_ms: 8000,
+        capture_event_fallback_interval_ms: 60_000,
     };
 
     save_settings(dyn_store, &original)
@@ -161,6 +173,9 @@ async fn save_settings_persists_sanitized_numeric_values() {
         sidecar_idle_ttl_secs: 999_999,
         sidecar_ngl: 10_000,
         sidecar_ctx_size: 999_999,
+        capture_event_debounce_ms: 1,           // below floor 100
+        capture_event_min_interval_ms: 999_999, // above ceiling 60_000
+        capture_event_fallback_interval_ms: 1,  // below floor 1_000
         ..Settings::default()
     };
 
@@ -180,6 +195,9 @@ async fn save_settings_persists_sanitized_numeric_values() {
     assert_eq!(loaded.sidecar_idle_ttl_secs, 86_400);
     assert_eq!(loaded.sidecar_ngl, 999);
     assert_eq!(loaded.sidecar_ctx_size, 32_768);
+    assert_eq!(loaded.capture_event_debounce_ms, 100);
+    assert_eq!(loaded.capture_event_min_interval_ms, 60_000);
+    assert_eq!(loaded.capture_event_fallback_interval_ms, 1_000);
 
     assert_eq!(
         store
