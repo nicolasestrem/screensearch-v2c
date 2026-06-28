@@ -11,6 +11,51 @@
 
 ---
 
+## 2026-06-28 — 0.2.1 PR4 part 2: UIA text + click/scroll-stop triggers (`feat/0.2.1-pr4p2-uia-and-mouse-triggers`)
+- **Change:** Two workstreams on one branch (two commits, one PR).
+  - **A — UIA target-window text, default ON, OCR fallback (`07` #48).** New `crates/uia`
+    (`traits`-only, peer of `crates/ocr`): `UiaTextProvider` implements `traits::OcrProvider`, so the
+    kernel capture loop is unchanged. The composite `UiaWithOcrFallback` lives in `src-tauri/src/lib.rs`
+    (the only place that wires impls) and per frame tries UIA, falling back to OCR on any
+    `Err`/timeout/thin-yield; OCR stays the mandatory floor. A dedicated **MTA** worker thread owns one
+    `IUIAutomation`; `recognize()` `spawn_blocking`s and sends only `Send` data over a channel (no
+    HWND/COM pointer crosses threads). Bounded iterative RawView DFS (node/depth/span caps + latency
+    deadline); text via `TextPattern → ValuePattern → Name`. Pure CI-tested helpers: `normalize_screen_rect`
+    (subtracts the captured monitor origin — UIA rects are virtual-desktop pixels), `should_emit`,
+    `split_words`. Spans `source=Uia`, `role=Unknown` (PR3 classifies). `crates/store/records.rs`
+    derives `frames.primary_source` from `ocr.engine` (`uia`/`ocr`) instead of hardcoding `'ocr'`.
+    Settings (clamped, plumbed through `ipc`/`kernel`/UI): `capture.uia_text_enabled` (default ON, hot
+    per-frame `AtomicBool` in `AppState`, set by `set_settings`), `capture.uia_latency_budget_ms` (150,
+    20–2000), `capture.uia_min_text_chars` (16, 0–10000). UI: a "Text source" Settings panel + a
+    `UIA`/`OCR` chip in `MomentDetail`. Privacy: never reads password fields (`CurrentIsPassword`) or
+    offscreen/occluded elements (`CurrentIsOffscreen`); `target_rect` containment preserves OCR parity.
+  - **B — click + scroll-stop triggers (`07` #47 remainder).** `CaptureTrigger::Click`/`ScrollStop`
+    (+ db tokens); `trigger.rs` adds `InputEventKind::Click`/`Scroll` (scroll burst → one trailing-edge
+    `ScrollStop`), 3 new unit tests. `events.rs` installs a global `SetWindowsHookExW(WH_MOUSE_LL, …)`
+    on the existing message-pump thread **only when** click/scroll-stop is enabled; `mouse_proc` reads
+    **only the message id** (never `MSLLHOOKSTRUCT.pt`), `try_send`s, always `CallNextHookEx`. Migration
+    `schema_version` 5→6 widens the `frames.capture_trigger` `CHECK` via an FK-safe parent-table rebuild
+    (the migration runner now toggles `foreign_keys` OFF around the loop + a post-loop `foreign_key_check`
+    bail), proven by a populated-DB migration test. Settings `capture.event_on_click` /
+    `capture.event_on_scroll_stop` (default off) + two Settings toggles + `MomentDetail` labels.
+- **Why:** Implements the two remaining `docs/0.2.0.md` "Deferred work (0.2.1)" items from the former
+  PR4 — UIA text (`07` #48) and the click/scroll-stop trigger remainder (`07` #47). UIA yields more
+  structured `content_text` than full-screen OCR while OCR remains a guaranteed fallback; click/scroll
+  complete the event-driven trigger set. **Two roadmap deviations, both explicitly authorized by the
+  user and recorded:** UIA ships **default ON** (not opt-in) — `07` #48; and click/scroll-stop use
+  `WH_MOUSE_LL`, which the roadmap steers away from — `06` #12. Both risks are mitigated structurally
+  (UIA: capability probe + per-frame latency budget + thin-yield/timeout → OCR fallback; the mouse
+  hook: default-off, installed only when enabled, id-only `try_send` callback). Windows-native APIs
+  only; no cross-platform stubs; module crates depend on `traits` only (`03 §2`); no hardcoded
+  thresholds.
+- **Verification:** Full suite green — `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo build --workspace`, `cargo test --workspace` (uia 9 + 1
+  ignored; store 49 + 10 incl. the v6 FK-integrity migration test; traits 50; settings round-trip),
+  `cd ui && npm run lint && npm run build`, and `git diff --exit-code -- ui/src/bindings` (regenerated
+  `Settings.ts` committed). Live `#[ignore]` items (`cargo test -p uia -- --ignored`,
+  `cargo test -p capture -- --ignored`) are local-hardware acceptance gates. Raw output pasted in the
+  session response.
+
 ## 2026-06-28 — 0.2.1 PR4 part 1: event-driven capture (`feat/0.2.1-pr4p1-event-capture`)
 - **Change:** Added opt-in, default-OFF event-driven capture on the 0.2.1 line (0.2.0 keeps
   timer/idle). A new master setting `capture.event_driven_enabled` selects Timer vs Event-driven

@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.1 — UIA target-window text, with OCR fallback (PR4 part 2)
+Adds a higher-fidelity text source: when capturing, the app now reads the **foreground window's text
+via Windows UI Automation (UIA)** — more structured than full-screen OCR — and falls back to OCR
+whenever UIA yields nothing useful. This lands on the 0.2.1 line (`docs/0.2.0.md` deferred work; `07`
+#48).
+
+- **UIA text with automatic OCR fallback.** A new `uia` crate reads the foreground window through UI
+  Automation and feeds the *same* text pipeline OCR already uses (per-word spans, normalized
+  geometry), so search/Ask/embeddings consume it unchanged. Per frame: try UIA; on any failure,
+  latency-budget overrun, or a too-short ("thin") result, fall back to OCR. **OCR remains the
+  guaranteed floor** — capture still only refuses to start when OCR itself is unavailable.
+- **Default ON.** UIA is enabled by default (`capture.uia_text_enabled`, hot-applied per frame, no
+  capture restart). Two clamped knobs tune it: `capture.uia_latency_budget_ms` (150, 20–2000) bounds
+  the per-frame tree walk, and `capture.uia_min_text_chars` (16, 0–10000) is the thin-yield floor
+  below which the frame falls back to OCR (so GPU/canvas/custom-drawn windows, where OCR is strictly
+  better, still get OCR). A new **Text source** panel in Settings exposes all three; the Moment view
+  shows a **UIA**/**OCR** chip for how each frame's text was read.
+- **Privacy.** UIA can surface text OCR can't, so two hard rules apply: **password fields are never
+  read**, and **offscreen/occluded elements are skipped** (preserving OCR's "only what was visible"
+  parity); spans outside the foreground window's rect are dropped. As with OCR, every existing capture
+  gate (excluded apps, self-window, lock, diff) runs *before* any text is read.
+- **Provenance is now truthful.** Each frame records whether its text came from `uia` or `ocr`
+  (previously hardcoded to `ocr`), surfaced in the Moment view.
+- **Roadmap deviation (authorized).** The roadmap framed UIA as opt-in; shipping it **default ON** was
+  the user's explicit choice, which raises the bar on the capability probe, the per-frame latency
+  budget, and the OCR fallback (all load-bearing on every frame). Recorded in `07` #48.
+
+### 0.2.1 — Event-driven capture: click + scroll-stop triggers (PR4 remainder)
+Completes the event-driven trigger set begun in the entry below with the two remaining triggers
+(`07` #47).
+
+- **Two new triggers, default off.** **Click** (a mouse button press) and **scroll-stop** (a scroll
+  burst collapsed to a single capture at its trailing edge) join the existing event triggers, behind
+  `capture.event_on_click` and `capture.event_on_scroll_stop` (both default off, shown in the
+  event-driven Settings panel). They reuse the existing debounce + rate-ceiling machinery, so a scroll
+  burst becomes one "scroll-stop" capture and clicks can't storm.
+- **Low-level mouse hook — roadmap deviation (authorized).** These require a global low-level mouse
+  hook (`WH_MOUSE_LL`), which the roadmap **deliberately steers away from** (a slow hook callback adds
+  system-wide input latency). Enabled at the user's explicit request; the hook is installed **only**
+  when click or scroll-stop is on, the callback does nothing but a non-blocking signal, and it
+  **never reads cursor coordinates** — only *which* mouse message fired. Recorded in `06` and `07` #47.
+- **"Captured via" extended.** Frames captured by these triggers record `click` / `scroll stop`,
+  shown in the Moment view. Stored via a forward-only migration (`schema_version` 5→6) that widens the
+  `frames.capture_trigger` constraint; the parent-table rebuild is FK-safe and proven by a populated-DB
+  migration test (children survive, cascade intact, new tokens accepted, bogus tokens rejected).
+
 ### 0.2.1 — Event-driven capture (opt-in)
 Adds an **opt-in, default-off** event-driven capture mode so capture can fire on real user activity
 instead of only a fixed timer. 0.2.0's timer/idle capture is unchanged and remains the default; this
@@ -34,8 +80,9 @@ lands on the 0.2.1 line (`docs/0.2.0.md` deferred work; `07` #47).
   frames captured before this read as "unknown".
 - **All thresholds are settings, never hardcoded.** Debounce, min-interval, typing-pause, idle, and
   fallback durations are clamped settings, alongside per-trigger on/off toggles.
-- **Deferred to ≥0.2.2.** Click and scroll-stop triggers are not included — they would require a
-  low-level mouse hook (`WH_MOUSE_LL`) the roadmap deliberately avoids.
+- **Click and scroll-stop** were initially deferred (they need a low-level mouse hook, `WH_MOUSE_LL`,
+  the roadmap deliberately avoids) — they have since **landed** at the user's explicit request; see the
+  *click + scroll-stop triggers* entry above.
 
 ### Docs — Token-bloat optimization (archive v0.1.0 history, de-duplicate, fix drift)
 Reorganized the documentation so an LLM reads only the current 0.2.x arc instead of wading through
