@@ -530,11 +530,13 @@ pub struct Settings {
     pub capture_uia_text_enabled: bool,
     /// Per-frame UIA latency budget, ms (`capture.uia_latency_budget_ms`). The tree walk
     /// abandons past this and a 2× hard timeout guards a wedged worker; over budget → OCR
-    /// fallback. A threshold, never hardcoded. Applied on next capture start.
+    /// fallback. A threshold, never hardcoded. Baked into the provider at startup — applied
+    /// on app restart (a capture stop/start reuses the existing provider).
     pub capture_uia_latency_budget_ms: u32,
     /// Minimum UIA text length, chars, below which the read is a thin yield → OCR fallback
     /// (`capture.uia_min_text_chars`). Catches GPU/canvas/custom-drawn windows where OCR is
-    /// strictly better. Applied on next capture start.
+    /// strictly better. Baked into the provider at startup — applied on app restart (a
+    /// capture stop/start reuses the existing provider).
     pub capture_uia_min_text_chars: u32,
 }
 

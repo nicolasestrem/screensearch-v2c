@@ -39,6 +39,12 @@ pub(crate) struct Request {
 const MAX_NODES: u32 = 4000;
 const MAX_DEPTH: u32 = 40;
 const MAX_SPANS: usize = 10_000;
+/// Upper bound on *pending* (pushed-but-not-yet-visited) elements. `MAX_NODES` only bounds
+/// nodes popped; without this a single node with a huge sibling fan-out (virtualized
+/// lists/grids commonly expose tens of thousands) — or a malformed provider returning a
+/// *cyclic* sibling chain — could push unboundedly. Paired with the per-descent deadline
+/// check below, this keeps the walk inside its latency + memory budget for any tree shape.
+const MAX_STACK: usize = 16_000;
 
 /// Worker entry point: init COM (MTA), create the automation object once, then service
 /// requests until the channel closes (the provider was dropped).
@@ -178,12 +184,19 @@ fn read_foreground(
         }
 
         // Descend: push every child (bounded depth). Compute each next sibling before
-        // moving the current child onto the stack so no element is cloned.
+        // moving the current child onto the stack so no element is cloned. The caps are
+        // re-checked *inside* this loop: a single node can have a massive sibling fan-out,
+        // and a malformed provider can return a cyclic sibling chain (`GetNextSiblingElement`
+        // never yielding `None`), so the once-per-pop outer checks alone don't bound it. The
+        // deadline check here is what stops a cycle from spinning the COM thread forever.
         if depth < MAX_DEPTH {
             // SAFETY: tree-walk accessors; Err just means "no (further) child".
             if let Ok(first) = unsafe { walker.GetFirstChildElement(&elem) } {
                 let mut child = first;
                 loop {
+                    if stack.len() >= MAX_STACK || Instant::now() >= deadline {
+                        break;
+                    }
                     let next = unsafe { walker.GetNextSiblingElement(&child) }.ok();
                     stack.push((child, depth + 1));
                     match next {

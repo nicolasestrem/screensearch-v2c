@@ -51,7 +51,8 @@ note and `07` #47/#48).
   (never hardcoded): `capture.uia_text_enabled` (default **ON**, hot per-frame `AtomicBool` in
   `AppState`, set by `set_settings` — no `reload_capture`), `capture.uia_latency_budget_ms` (150,
   20–2000), `capture.uia_min_text_chars` (16, 0–10000, the thin-yield floor). Budget/min-chars bake
-  into the provider at spawn (apply on next capture start).
+  into the provider at startup — they apply on **app restart** (a capture stop/start reuses the
+  existing provider; the UI hint and the regenerated binding doc both say "restart" to match).
 - **Privacy.** Worker skips `CurrentIsPassword` (never read masked fields) and `CurrentIsOffscreen`
   (preserve OCR's "only what was visible" parity); `target_rect` containment drops out-of-window spans.
   All capture gates already run before `recognize`.
@@ -109,10 +110,45 @@ note and `07` #47/#48).
 
 ### Verification
 Full suite green: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo build --workspace`, `cargo test --workspace` (uia 9 + 1 ignored; store 49 job-queue + 10 lib
+`cargo build --workspace`, `cargo test --workspace` (uia 10 + 1 ignored; store 49 job-queue + 10 lib
 incl. the v6 migration test; traits 50; textfilter 12; settings round-trip), the UI `npm run lint` +
 `npm run build`, and the `git diff --exit-code -- ui/src/bindings` guard (the regenerated `Settings.ts`
 with the three UIA fields is committed). Raw command output is pasted in the session response.
+
+### Review follow-up — adversarial multi-agent review (3 fixes, 3 refuted)
+Ran a whole-branch adversarial review (5 dimension reviewers — UIA COM/lifetime, mouse hook, migration,
+composition/fallback, UI/privacy/spec — each finding then independently verified by a skeptic prompted
+to refute it). 6 findings raised, **3 confirmed real and fixed**, 3 refuted and accepted as
+non-defects:
+1. **(Important, `crates/uia/src/worker.rs`)** The bounded DFS re-checked its caps only once per
+   `stack.pop()`; the inner sibling-descent loop pushed *every* child of a node with no cap/deadline
+   check. A node with a massive sibling fan-out blew the latency/memory bound, and a malformed provider
+   returning a **cyclic** sibling chain (`GetNextSiblingElement` never `None`) could spin the MTA
+   worker forever (the `recognize()` 2× timeout abandons the *future* but can't cancel the blocking
+   closure), permanently wedging the UIA arm for the session (OCR fallback keeps capture alive). Fixed:
+   a documented `MAX_STACK` (16 000) bound on pending elements **and** a `deadline` re-check **inside**
+   the descent loop, so any tree shape — cyclic included — terminates within the latency budget.
+2. **(Minor, `crates/uia/src/geometry.rs`)** `normalize_screen_rect` measured width/height from the
+   element's full extent `(r-l)`, so an element straddling the monitor's left/top edge over-reported
+   its on-frame width and shifted the center used by the `target_rect` containment filter —
+   inconsistent with capture's own `normalize_window_rect`, which clips. Fixed by clipping the
+   left/top edge to the monitor (`l.max(mon_left)` / `t.max(mon_top)`) before measuring; TDD
+   regression test `left_top_straddling_box_reports_only_on_frame_extent` (RED→GREEN).
+3. **(Minor, `crates/traits/src/ipc.rs` → binding + this file)** The two UIA budget doc comments said
+   "Applied on next capture start," but the budget bakes into the provider at startup and a capture
+   stop/start reuses it — only an app restart re-reads it (the Settings.tsx hint already said
+   "restart"). Corrected the doc comments, regenerated `ui/src/bindings/Settings.ts`, and fixed the
+   note above to say **app restart**.
+
+**Refuted (accepted as non-defects):** (a) the migration runner's `foreign_key_check` bail leaves
+`foreign_keys` OFF before the `ON` restore — but every error path drops the connection by RAII
+(`bootstrap_and_migrate` returns the conn only on `Ok`), so no FK-disabled connection is ever observed;
+(b) the v6 migration test exercises one of seven child tables — but the FK-off rebuild is a single
+uniform mechanism (`frame_text` is representative; no per-table code path), so it isn't tautological
+and proves the invariant; (c) the UIA→OCR fallback logs at `debug` (below the default `info` floor) —
+but the per-frame source is durably persisted in `frame_text.primary_source`, so over-fallback is
+queryable, and no spec mandates a live fallback-rate metric. All gates re-run green after the fixes
+(fmt, clippy `-D warnings`, `cargo test --workspace`, UI lint + build, bindings guard).
 
 ---
 

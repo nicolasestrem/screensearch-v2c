@@ -29,11 +29,17 @@ pub(crate) fn normalize_screen_rect(
     }
     let (fw, fh) = (frame_w as f32, frame_h as f32);
     // Subtract the captured monitor's origin: UIA rects are virtual-desktop coordinates,
-    // not frame-relative.
-    let x = ((l - mon_left) as f32 / fw).clamp(0.0, 1.0);
-    let y = ((t - mon_top) as f32 / fh).clamp(0.0, 1.0);
-    let w = ((r - l) as f32 / fw).clamp(0.0, 1.0 - x);
-    let h = ((b - t) as f32 / fh).clamp(0.0, 1.0 - y);
+    // not frame-relative. Clip the left/top edge to the monitor *before* measuring, so an
+    // element straddling the left/top edge reports only its on-frame extent (mirrors
+    // capture's `normalize_window_rect`, which feeds the very `target_rect` this is compared
+    // against) — otherwise the off-frame portion inflates the width/height and shifts the
+    // span's center used by the containment filter.
+    let vis_left = l.max(mon_left);
+    let vis_top = t.max(mon_top);
+    let x = ((vis_left - mon_left) as f32 / fw).clamp(0.0, 1.0);
+    let y = ((vis_top - mon_top) as f32 / fh).clamp(0.0, 1.0);
+    let w = ((r - vis_left) as f32 / fw).clamp(0.0, 1.0 - x);
+    let h = ((b - vis_top) as f32 / fh).clamp(0.0, 1.0 - y);
     (x, y, w, h)
 }
 
@@ -63,6 +69,18 @@ mod tests {
         );
         assert!((w - 0.5).abs() < 1e-5, "half width, got {w}");
         assert!((h - 0.5).abs() < 1e-5, "half height, got {h}");
+    }
+
+    #[test]
+    fn left_top_straddling_box_reports_only_on_frame_extent() {
+        // An element from x=-100..300, y=-40..60 on the primary monitor (origin 0,0): only
+        // 0..300 / 0..60 is on-frame, so the normalized box must start at (0,0) and measure
+        // the *visible* extent (0.3 × 0.06), not the full off-frame extent (0.4 × 0.1).
+        let (x, y, w, h) = normalize_screen_rect(-100, -40, 300, 60, (0, 0), (1000, 1000));
+        assert!(x.abs() < 1e-5, "x clamps to 0, got {x}");
+        assert!(y.abs() < 1e-5, "y clamps to 0, got {y}");
+        assert!((w - 0.3).abs() < 1e-5, "on-frame width 0.3, got {w}");
+        assert!((h - 0.06).abs() < 1e-5, "on-frame height 0.06, got {h}");
     }
 
     #[test]
