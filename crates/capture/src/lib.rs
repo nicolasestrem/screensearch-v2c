@@ -286,6 +286,9 @@ impl CaptureSource for WgcCapture {
             // Foreground-window rect, read at the same instant as the app/title so the
             // target window is consistent with the frame's context (PR3 `target_rect`).
             let fg_rect = privacy::foreground_window_rect();
+            // Foreground window handle, so a live-window text provider (UIA) can detect a
+            // focus change between capture and recognition and fall back to OCR (`07` #48).
+            let fg_hwnd = privacy::foreground_hwnd();
 
             let Some(frames) = self.capture_cycle().await else {
                 return Ok(None); // worker gone
@@ -314,6 +317,7 @@ impl CaptureSource for WgcCapture {
                     app_hint: app_hint.clone(),
                     window_title: window_title.clone(),
                     target_rect,
+                    foreground_hwnd: fg_hwnd,
                     trigger,
                 });
             }

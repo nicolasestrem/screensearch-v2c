@@ -119,6 +119,12 @@ pub struct CapturedFrame {
     /// Normalized `[0,1]` foreground-window rect within this monitor's frame, or
     /// `None` (other monitor / minimized / unresolved). `[x, y, w, h]`.
     pub target_rect: Option<[f32; 4]>,
+    /// Raw handle (as `i64`) of the foreground window at capture time, or `None` when
+    /// unresolved/minimized. A text provider that reads the *live* foreground window
+    /// (UIA) compares it against `GetForegroundWindow` at recognition time and bails to
+    /// OCR if focus changed in between — otherwise a different window's text could be
+    /// attributed to this frame (`07` #48). Plain integer so the frame stays `Send`.
+    pub foreground_hwnd: Option<i64>,
     /// Why this frame was captured. The capture source stamps it at the moment it
     /// decides to capture; the kernel copies it onto the stored [`NewFrame`]. Always
     /// [`CaptureTrigger::Timer`] in the 0.2.0 timer/idle path.

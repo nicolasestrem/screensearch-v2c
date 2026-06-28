@@ -33,6 +33,11 @@ pub(crate) struct Request {
     /// drop spans that fall outside the foreground window. `None` ⇒ no containment filter.
     pub target_rect: Option<[f32; 4]>,
     pub monitor_index: u32,
+    /// Foreground window handle (as `i64`) at capture time, or `None` if capture couldn't
+    /// resolve it. The worker compares it to `GetForegroundWindow` at recognition time and
+    /// bails (→ OCR) on a mismatch, so a focus change between capture and recognize can't
+    /// attribute another window's text to this frame (`07` #48).
+    pub foreground_hwnd: Option<i64>,
     /// A `tokio` oneshot so the async caller awaits the reply directly (no `spawn_blocking`):
     /// on a caller-side timeout the receiver is dropped and `send` below simply fails.
     pub resp: oneshot::Sender<Result<OcrResult>>,
@@ -139,6 +144,16 @@ fn read_foreground(
     // SAFETY: IsIconic on a valid HWND.
     if unsafe { IsIconic(hwnd) }.as_bool() {
         bail!("foreground window minimized");
+    }
+    // Confirm the foreground window is still the one capture saw. A focus change between the
+    // WGC frame and this recognize call would otherwise read a *different* window's text into
+    // this frame — and `within_target` can't catch it when the new window overlaps the old
+    // (captured) rect. Mismatch → bail → OCR for this frame. (`None` ⇒ capture couldn't record
+    // a handle; the rect-containment check below remains the guard.)
+    if let Some(captured) = req.foreground_hwnd {
+        if hwnd.0 as isize as i64 != captured {
+            bail!("foreground window changed since capture — fall back to OCR");
+        }
     }
 
     // SAFETY: ElementFromHandle on the foreground HWND; returns Err if it has no element.
@@ -260,9 +275,10 @@ fn read_foreground(
     })
 }
 
-/// Extracts an element's text via the priority ladder: `TextPattern` document range
-/// (documents/editors) → `ValuePattern` current value (inputs) → `Name` (labels, buttons,
-/// list items). Returns `None` when the element exposes no non-empty text.
+/// Extracts an element's text via the priority ladder: `TextPattern` **visible** ranges
+/// (documents/editors — viewport text only, never the scrolled-off document) → `ValuePattern`
+/// current value (inputs) → `Name` (labels, buttons, list items). Returns `None` when the
+/// element exposes no non-empty text.
 fn extract_text(elem: &IUIAutomationElement) -> Option<String> {
     // GetCurrentPattern returns Err when the pattern is unsupported (windows-rs maps the
     // documented S_OK+NULL result to E_POINTER), so each `if let Ok` cleanly skips.
@@ -270,11 +286,29 @@ fn extract_text(elem: &IUIAutomationElement) -> Option<String> {
     unsafe {
         if let Ok(unknown) = elem.GetCurrentPattern(UIA_TextPatternId) {
             if let Ok(text_pattern) = unknown.cast::<IUIAutomationTextPattern>() {
-                if let Ok(range) = text_pattern.DocumentRange() {
-                    if let Ok(bstr) = range.GetText(-1) {
-                        let s = bstr.to_string();
-                        if !s.trim().is_empty() {
-                            return Some(s);
+                // Only the *visible* ranges, not `DocumentRange().GetText(-1)`: the document
+                // range returns the provider's whole document including scrolled-off text that
+                // was never in the captured frame, which both breaks OCR's "only what was
+                // visible" parity and (being a large yield) would wrongly suppress the OCR
+                // fallback. `GetVisibleRanges` returns just what's in the viewport (`07` #48).
+                if let Ok(ranges) = text_pattern.GetVisibleRanges() {
+                    if let Ok(len) = ranges.Length() {
+                        let mut acc = String::new();
+                        for i in 0..len {
+                            if let Ok(range) = ranges.GetElement(i) {
+                                if let Ok(bstr) = range.GetText(-1) {
+                                    let part = bstr.to_string();
+                                    if !part.trim().is_empty() {
+                                        if !acc.is_empty() {
+                                            acc.push('\n');
+                                        }
+                                        acc.push_str(&part);
+                                    }
+                                }
+                            }
+                        }
+                        if !acc.trim().is_empty() {
+                            return Some(acc);
                         }
                     }
                 }

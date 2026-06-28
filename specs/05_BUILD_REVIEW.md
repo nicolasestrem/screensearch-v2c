@@ -181,6 +181,30 @@ store 10 + 49, traits 50), UI lint + build, `git diff --exit-code -- ui/src/bind
 change this round). Per the maintainer's instruction, the bot threads were addressed in code, not
 replied to.
 
+### Review follow-up — PR #45 second review round (2 new P1s addressed)
+After the first round's push, codex's re-review raised two further P1s — both real, default-ON
+correctness/privacy gaps that the first round's `target_rect` fix did **not** cover:
+1. **Foreground race (`crates/uia/src/worker.rs`).** A focus change between the WGC frame and the
+   recognize call meant the worker read whatever window was foreground *at recognition time*. The
+   `within_target` containment can't catch this when the new window overlaps the old (captured) rect,
+   so a different window's text could be stored against the captured screenshot. Fixed by recording
+   the foreground window handle at capture time and verifying it: new `CapturedFrame.foreground_hwnd`
+   (`Option<i64>`, plain integer to stay `Send`) populated by capture via a new
+   `privacy::foreground_hwnd()`, threaded to the worker, and compared against `GetForegroundWindow`
+   in `read_foreground` — a mismatch bails → OCR. (`None` ⇒ unrecorded; the rect-containment guard
+   remains.)
+2. **Offscreen TextPattern reads (`crates/uia/src/worker.rs`).** `DocumentRange().GetText(-1)` returns
+   a scrollable provider's **whole** document, including text scrolled off-screen that was never in
+   the captured frame — breaking OCR's "only what was visible" parity, and (being a large yield)
+   wrongly suppressing the OCR fallback. Fixed by reading only `GetVisibleRanges()` (viewport text),
+   concatenating each visible range's text instead of the full document range.
+   (The two extra codex threads from the first batch were duplicates of the already-fixed P1/P2.)
+
+`CapturedFrame` gained a field, so its three other construction sites (capture, plus the `ocr`/`kernel`
+/`uia` test fixtures) were updated. All gates green: fmt, clippy `-D warnings`, `cargo build
+--workspace`, `cargo test --workspace` (uia 9 + 1 ignored, store 10 + 49, traits 50), UI lint + build,
+bindings guard clean (no IPC change). Threads addressed in code, not replied to.
+
 ---
 
 ## Pass — 2026-06-28 — 0.2.1 PR4 part 1: event-driven capture

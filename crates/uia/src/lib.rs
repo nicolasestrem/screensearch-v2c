@@ -95,6 +95,7 @@ impl OcrProvider for UiaTextProvider {
         let height = frame.height;
         let target_rect = frame.target_rect;
         let monitor_index = frame.monitor_index;
+        let foreground_hwnd = frame.foreground_hwnd;
         let tx = self.tx.lock().expect("uia sender poisoned").clone();
         // Hard ceiling against a wedged worker, on top of the worker's own soft budget.
         let timeout = Duration::from_millis(self.budget.latency_ms.saturating_mul(2).max(1));
@@ -109,6 +110,7 @@ impl OcrProvider for UiaTextProvider {
             height,
             target_rect,
             monitor_index,
+            foreground_hwnd,
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("UIA worker thread is gone"))?;
@@ -144,6 +146,8 @@ mod tests {
             // foreground window (a `None` rect now falls back to OCR), so the live test must
             // supply one to exercise the real UIA path.
             target_rect: Some([0.0, 0.0, 1.0, 1.0]),
+            // `None` ⇒ the worker skips the focus-change check (it can't know the live HWND).
+            foreground_hwnd: None,
             trigger: CaptureTrigger::Timer,
         }
     }
