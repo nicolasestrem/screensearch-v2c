@@ -45,3 +45,4 @@ desktop.ini
 .vscode/*
 !.vscode/extensions.json
 /.codex
+custom-llm-training.md
