@@ -133,6 +133,14 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_event_on_typing_pause,
         )
         .await,
+        capture_event_on_click: boolean(store, "capture.event_on_click", d.capture_event_on_click)
+            .await,
+        capture_event_on_scroll_stop: boolean(
+            store,
+            "capture.event_on_scroll_stop",
+            d.capture_event_on_scroll_stop,
+        )
+        .await,
         capture_event_debounce_ms: num(
             store,
             "capture.event_debounce_ms",
@@ -161,6 +169,24 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             store,
             "capture.event_fallback_interval_ms",
             d.capture_event_fallback_interval_ms,
+        )
+        .await,
+        capture_uia_text_enabled: boolean(
+            store,
+            "capture.uia_text_enabled",
+            d.capture_uia_text_enabled,
+        )
+        .await,
+        capture_uia_latency_budget_ms: num(
+            store,
+            "capture.uia_latency_budget_ms",
+            d.capture_uia_latency_budget_ms,
+        )
+        .await,
+        capture_uia_min_text_chars: num(
+            store,
+            "capture.uia_min_text_chars",
+            d.capture_uia_min_text_chars,
         )
         .await,
     })
@@ -326,6 +352,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             bool_str(s.capture_event_on_typing_pause).into(),
         ),
         (
+            "capture.event_on_click".into(),
+            bool_str(s.capture_event_on_click).into(),
+        ),
+        (
+            "capture.event_on_scroll_stop".into(),
+            bool_str(s.capture_event_on_scroll_stop).into(),
+        ),
+        (
             "capture.event_debounce_ms".into(),
             s.capture_event_debounce_ms.to_string(),
         ),
@@ -344,6 +378,18 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         (
             "capture.event_fallback_interval_ms".into(),
             s.capture_event_fallback_interval_ms.to_string(),
+        ),
+        (
+            "capture.uia_text_enabled".into(),
+            bool_str(s.capture_uia_text_enabled).into(),
+        ),
+        (
+            "capture.uia_latency_budget_ms".into(),
+            s.capture_uia_latency_budget_ms.to_string(),
+        ),
+        (
+            "capture.uia_min_text_chars".into(),
+            s.capture_uia_min_text_chars.to_string(),
         ),
     ];
     store.set_settings_batch(&kvs).await
@@ -396,6 +442,11 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.capture_event_idle_threshold_ms = clamp_u32(s.capture_event_idle_threshold_ms, 1_000, 60_000);
     s.capture_event_fallback_interval_ms =
         clamp_u32(s.capture_event_fallback_interval_ms, 1_000, 3_600_000);
+    // UIA text (docs/0.2.0.md #48). Latency budget floored well above a trivial walk and
+    // ceilinged so a hand-edited extreme can't stall capture; min-text-chars is a free
+    // count (0 disables the thin-yield fallback). Thresholds, not hardcoded.
+    s.capture_uia_latency_budget_ms = clamp_u32(s.capture_uia_latency_budget_ms, 20, 2_000);
+    s.capture_uia_min_text_chars = clamp_u32(s.capture_uia_min_text_chars, 0, 10_000);
     s
 }
 
@@ -437,6 +488,8 @@ pub fn capture_config(s: &Settings) -> CaptureConfig {
         event_on_clipboard: s.capture_event_on_clipboard,
         event_on_idle: s.capture_event_on_idle,
         event_on_typing_pause: s.capture_event_on_typing_pause,
+        event_on_click: s.capture_event_on_click,
+        event_on_scroll_stop: s.capture_event_on_scroll_stop,
         event_debounce_ms: s.capture_event_debounce_ms,
         event_min_interval_ms: s.capture_event_min_interval_ms,
         event_typing_pause_ms: s.capture_event_typing_pause_ms,

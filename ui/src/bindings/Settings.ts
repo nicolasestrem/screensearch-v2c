@@ -121,6 +121,16 @@ capture_event_on_idle: boolean,
  */
 capture_event_on_typing_pause: boolean, 
 /**
+ * Capture on a mouse click — the *fact* of a click only, never position/button/
+ * content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+ */
+capture_event_on_click: boolean, 
+/**
+ * Capture when scrolling stops after a wheel burst settles
+ * (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+ */
+capture_event_on_scroll_stop: boolean, 
+/**
  * Collapse a burst of triggers within this window into one capture, ms
  * (`capture.event_debounce_ms`). A threshold, never hardcoded.
  */
@@ -143,4 +153,25 @@ capture_event_idle_threshold_ms: number,
  * Fallback capture interval in event mode, ms — a static screen is still sampled
  * at least this often (`capture.event_fallback_interval_ms`).
  */
-capture_event_fallback_interval_ms: number, };
+capture_event_fallback_interval_ms: number, 
+/**
+ * Use Windows UI Automation for the target window's text, with OCR fallback
+ * (`capture.uia_text_enabled`, `docs/0.2.0.md` #48). Default ON: UIA yields more
+ * structured text than OCR; on any failure/timeout/thin-yield the frame falls back to
+ * OCR. Hot-applies per frame (no capture restart).
+ */
+capture_uia_text_enabled: boolean, 
+/**
+ * Per-frame UIA latency budget, ms (`capture.uia_latency_budget_ms`). The tree walk
+ * abandons past this and a 2× hard timeout guards a wedged worker; over budget → OCR
+ * fallback. A threshold, never hardcoded. Baked into the provider at startup — applied
+ * on app restart (a capture stop/start reuses the existing provider).
+ */
+capture_uia_latency_budget_ms: number, 
+/**
+ * Minimum UIA text length, chars, below which the read is a thin yield → OCR fallback
+ * (`capture.uia_min_text_chars`). Catches GPU/canvas/custom-drawn windows where OCR is
+ * strictly better. Baked into the provider at startup — applied on app restart (a
+ * capture stop/start reuses the existing provider).
+ */
+capture_uia_min_text_chars: number, };

@@ -503,6 +503,12 @@ pub struct Settings {
     /// Capture when typing/input pauses for the quiet period
     /// (`capture.event_on_typing_pause`).
     pub capture_event_on_typing_pause: bool,
+    /// Capture on a mouse click — the *fact* of a click only, never position/button/
+    /// content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+    pub capture_event_on_click: bool,
+    /// Capture when scrolling stops after a wheel burst settles
+    /// (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+    pub capture_event_on_scroll_stop: bool,
     /// Collapse a burst of triggers within this window into one capture, ms
     /// (`capture.event_debounce_ms`). A threshold, never hardcoded.
     pub capture_event_debounce_ms: u32,
@@ -517,6 +523,21 @@ pub struct Settings {
     /// Fallback capture interval in event mode, ms — a static screen is still sampled
     /// at least this often (`capture.event_fallback_interval_ms`).
     pub capture_event_fallback_interval_ms: u32,
+    /// Use Windows UI Automation for the target window's text, with OCR fallback
+    /// (`capture.uia_text_enabled`, `docs/0.2.0.md` #48). Default ON: UIA yields more
+    /// structured text than OCR; on any failure/timeout/thin-yield the frame falls back to
+    /// OCR. Hot-applies per frame (no capture restart).
+    pub capture_uia_text_enabled: bool,
+    /// Per-frame UIA latency budget, ms (`capture.uia_latency_budget_ms`). The tree walk
+    /// abandons past this and a 2× hard timeout guards a wedged worker; over budget → OCR
+    /// fallback. A threshold, never hardcoded. Baked into the provider at startup — applied
+    /// on app restart (a capture stop/start reuses the existing provider).
+    pub capture_uia_latency_budget_ms: u32,
+    /// Minimum UIA text length, chars, below which the read is a thin yield → OCR fallback
+    /// (`capture.uia_min_text_chars`). Catches GPU/canvas/custom-drawn windows where OCR is
+    /// strictly better. Baked into the provider at startup — applied on app restart (a
+    /// capture stop/start reuses the existing provider).
+    pub capture_uia_min_text_chars: u32,
 }
 
 impl Default for Settings {
@@ -587,11 +608,22 @@ impl Default for Settings {
             capture_event_on_clipboard: true,
             capture_event_on_idle: false,
             capture_event_on_typing_pause: false,
+            // Click / scroll-stop default OFF even within event mode: they rely on the
+            // global WH_MOUSE_LL low-level mouse hook (heavier than the out-of-context
+            // foreground/clipboard listeners), so they stay opt-in (`07` #47).
+            capture_event_on_click: false,
+            capture_event_on_scroll_stop: false,
             capture_event_debounce_ms: 500,
             capture_event_min_interval_ms: 1000,
             capture_event_typing_pause_ms: 1500,
             capture_event_idle_threshold_ms: 5000,
             capture_event_fallback_interval_ms: 30_000,
+            // UIA text (docs/0.2.0.md #48): default ON with OCR fallback. 150 ms keeps the
+            // walk well under the capture cadence; 16 chars is the thin-yield floor below
+            // which OCR is preferred. Thresholds, never hardcoded (mirrors the PR3 stance).
+            capture_uia_text_enabled: true,
+            capture_uia_latency_budget_ms: 150,
+            capture_uia_min_text_chars: 16,
         }
     }
 }

@@ -50,9 +50,10 @@ pub struct WgcCapture {
     /// Event-driven capture state machine (debounce / rate-ceiling / idle edges).
     /// Driven only when `config.event_driven_enabled`; inert otherwise.
     machine: trigger::TriggerMachine,
-    /// The Win32 input-hook thread, present only in event mode **and** when a discrete
-    /// trigger (foreground / clipboard) is enabled. Idle / typing-pause need no hook
-    /// (they poll [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
+    /// The Win32 input-hook thread, present only in event mode **and** when a hook-backed
+    /// trigger (foreground / clipboard via the WinEvent + clipboard listeners, or click /
+    /// scroll via the `WH_MOUSE_LL` mouse hook) is enabled. Idle / typing-pause need no
+    /// hook (they poll [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
     events: Option<events::InputEventSource>,
 }
 
@@ -69,6 +70,8 @@ fn trigger_config(c: &CaptureConfig) -> trigger::TriggerConfig {
         on_clipboard: c.event_on_clipboard,
         on_idle: c.event_on_idle,
         on_typing_pause: c.event_on_typing_pause,
+        on_click: c.event_on_click,
+        on_scroll_stop: c.event_on_scroll_stop,
         debounce_ms: i64::from(c.event_debounce_ms),
         min_interval_ms: i64::from(c.event_min_interval_ms),
         typing_pause_ms: i64::from(c.event_typing_pause_ms),
@@ -125,11 +128,16 @@ impl WgcCapture {
         // trigger is enabled. A failure to install hooks is non-fatal: capture falls
         // back to the event-mode fallback timer + idle polling (the machine still runs).
         let events = if config.event_driven_enabled
-            && (config.event_on_foreground || config.event_on_clipboard)
+            && (config.event_on_foreground
+                || config.event_on_clipboard
+                || config.event_on_click
+                || config.event_on_scroll_stop)
         {
             match events::InputEventSource::start(
                 config.event_on_foreground,
                 config.event_on_clipboard,
+                config.event_on_click,
+                config.event_on_scroll_stop,
             ) {
                 Ok(source) => Some(source),
                 Err(e) => {
@@ -278,6 +286,9 @@ impl CaptureSource for WgcCapture {
             // Foreground-window rect, read at the same instant as the app/title so the
             // target window is consistent with the frame's context (PR3 `target_rect`).
             let fg_rect = privacy::foreground_window_rect();
+            // Foreground window handle, so a live-window text provider (UIA) can detect a
+            // focus change between capture and recognition and fall back to OCR (`07` #48).
+            let fg_hwnd = privacy::foreground_hwnd();
 
             let Some(frames) = self.capture_cycle().await else {
                 return Ok(None); // worker gone
@@ -306,6 +317,7 @@ impl CaptureSource for WgcCapture {
                     app_hint: app_hint.clone(),
                     window_title: window_title.clone(),
                     target_rect,
+                    foreground_hwnd: fg_hwnd,
                     trigger,
                 });
             }

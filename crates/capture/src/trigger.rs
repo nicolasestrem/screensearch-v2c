@@ -28,6 +28,11 @@ pub(crate) enum InputEventKind {
     Foreground,
     /// The clipboard changed (`WM_CLIPBOARDUPDATE`) — change event only, no contents.
     Clipboard,
+    /// A mouse button was pressed (`WH_MOUSE_LL` button-down) — the fact only.
+    Click,
+    /// The mouse wheel moved (`WH_MOUSE_LL` wheel). A burst debounces into one
+    /// [`CaptureTrigger::ScrollStop`] once scrolling settles.
+    Scroll,
 }
 
 /// Which triggers are enabled and the timing thresholds, in milliseconds. Built from
@@ -38,6 +43,10 @@ pub(crate) struct TriggerConfig {
     pub on_clipboard: bool,
     pub on_idle: bool,
     pub on_typing_pause: bool,
+    /// Capture on a mouse click (`WH_MOUSE_LL` button-down).
+    pub on_click: bool,
+    /// Capture when a mouse-wheel burst settles (`WH_MOUSE_LL` wheel + debounce).
+    pub on_scroll_stop: bool,
     /// Trailing-edge quiet window that collapses a discrete-event burst into one
     /// capture (`event_debounce_ms`).
     pub debounce_ms: i64,
@@ -84,6 +93,9 @@ impl TriggerMachine {
                 CaptureTrigger::ForegroundChange
             }
             InputEventKind::Clipboard if self.cfg.on_clipboard => CaptureTrigger::ClipboardChange,
+            InputEventKind::Click if self.cfg.on_click => CaptureTrigger::Click,
+            // A wheel burst collapses to one ScrollStop via the trailing-edge debounce.
+            InputEventKind::Scroll if self.cfg.on_scroll_stop => CaptureTrigger::ScrollStop,
             // Disabled kind → ignored entirely (never even arms the debounce).
             _ => return,
         };
@@ -163,6 +175,8 @@ mod tests {
             on_clipboard: true,
             on_idle: true,
             on_typing_pause: true,
+            on_click: true,
+            on_scroll_stop: true,
             debounce_ms: 500,
             min_interval_ms: 1000,
             typing_pause_ms: 1500,
@@ -214,6 +228,52 @@ mod tests {
         let mut m = TriggerMachine::new(cfg());
         m.on_input_event(InputEventKind::Clipboard, 0);
         assert_eq!(m.poll(500, 0), Some(CaptureTrigger::ClipboardChange));
+    }
+
+    #[test]
+    fn click_event_emits_after_debounce() {
+        let mut m = TriggerMachine::new(cfg());
+        m.on_input_event(InputEventKind::Click, 0);
+        assert_eq!(m.poll(100, 0), None, "still inside the debounce window");
+        assert_eq!(
+            m.poll(500, 0),
+            Some(CaptureTrigger::Click),
+            "debounce elapsed → one Click capture"
+        );
+    }
+
+    #[test]
+    fn scroll_burst_collapses_to_one_scroll_stop() {
+        // A wheel burst is many Scroll events; they collapse to a single ScrollStop once
+        // scrolling settles past the debounce window — "scroll-stop", not per-notch.
+        let mut m = TriggerMachine::new(cfg());
+        m.on_input_event(InputEventKind::Scroll, 0);
+        m.on_input_event(InputEventKind::Scroll, 200);
+        m.on_input_event(InputEventKind::Scroll, 400); // each refreshes the debounce
+        assert_eq!(
+            m.poll(450, 0),
+            None,
+            "450-400=50 < debounce; still scrolling"
+        );
+        assert_eq!(
+            m.poll(900, 0),
+            Some(CaptureTrigger::ScrollStop),
+            "900-400=500 → exactly one ScrollStop for the whole burst"
+        );
+        assert_eq!(m.poll(1000, 0), None, "burst already collapsed");
+    }
+
+    #[test]
+    fn disabled_click_and_scroll_never_emit() {
+        let mut m = TriggerMachine::new(TriggerConfig {
+            on_click: false,
+            on_scroll_stop: false,
+            ..cfg()
+        });
+        m.on_input_event(InputEventKind::Click, 0);
+        m.on_input_event(InputEventKind::Scroll, 100);
+        assert_eq!(m.poll(1000, 0), None);
+        assert_eq!(m.poll(5000, 0), None);
     }
 
     #[test]

@@ -4508,6 +4508,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "traits",
+ "uia",
 ]
 
 [[package]]
@@ -5918,6 +5919,19 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "uia"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "image",
+ "tokio",
+ "tracing",
+ "traits",
+ "windows 0.62.2",
 ]
 
 [[package]]

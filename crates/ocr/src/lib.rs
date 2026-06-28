@@ -245,6 +245,7 @@ mod tests {
             app_hint: None,
             window_title: None,
             target_rect: None,
+            foreground_hwnd: None,
             trigger: traits::CaptureTrigger::Timer,
         }
     }

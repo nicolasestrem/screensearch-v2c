@@ -121,6 +121,17 @@ fn bootstrap_and_migrate(conn: &mut Connection) -> Result<()> {
             "database has newer schema_version {current}; this build supports up to {max_version}"
         );
     }
+    // A migration may rebuild a table that has inbound foreign keys (v6 widens the
+    // `frames.capture_trigger` CHECK, which SQLite can only do by recreating `frames`).
+    // Such a rebuild is only safe with foreign keys OFF — otherwise `DROP TABLE frames`
+    // fires an implicit cascade DELETE that wipes every child row. `PRAGMA foreign_keys`
+    // is a no-op inside a transaction, so toggle it here, around the whole loop, per
+    // SQLite's documented schema-change recipe. Only when there is work to do (the common
+    // already-migrated open keeps foreign keys ON untouched).
+    let had_pending = current < max_version;
+    if had_pending {
+        conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    }
     for (version, sql) in schema::MIGRATIONS {
         if *version > current {
             let tx = conn.transaction()?;
@@ -130,6 +141,18 @@ fn bootstrap_and_migrate(conn: &mut Connection) -> Result<()> {
             current = *version;
             tracing::info!(schema_version = current, "applied store migration");
         }
+    }
+    if had_pending {
+        // Surface any integrity breakage loudly rather than silently shipping a corrupt
+        // DB, then re-enable enforcement for the connection's lifetime.
+        {
+            let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+            let mut rows = stmt.query([])?;
+            if rows.next()?.is_some() {
+                anyhow::bail!("post-migration foreign_key_check found integrity violations");
+            }
+        }
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     }
     Ok(())
 }
@@ -322,5 +345,139 @@ impl Store for SqliteStore {
     }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::{bootstrap_and_migrate, register_vec_extension, schema};
+    use rusqlite::Connection;
+
+    /// Applies migrations `v1..=through` to a fresh connection exactly as an older build
+    /// would (each in its own transaction, foreign keys ON), leaving the DB at
+    /// `schema_version = through` so the production runner can be exercised across the
+    /// next upgrade with realistic pre-existing data.
+    fn open_at_version(through: i32) -> Connection {
+        register_vec_extension();
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA recursive_triggers=ON;")
+            .expect("pragmas");
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")
+            .expect("schema_version table");
+        conn.execute("INSERT INTO schema_version (version) VALUES (0)", [])
+            .expect("seed version row");
+        for (version, sql) in schema::MIGRATIONS.iter().filter(|(v, _)| *v <= through) {
+            let tx = conn.transaction().expect("begin");
+            tx.execute_batch(sql).expect("apply migration");
+            tx.execute("UPDATE schema_version SET version = ?1", [version])
+                .expect("bump version");
+            tx.commit().expect("commit");
+        }
+        conn
+    }
+
+    fn fk_violation_count(conn: &Connection) -> i64 {
+        let mut stmt = conn
+            .prepare("PRAGMA foreign_key_check")
+            .expect("prepare check");
+        let mut rows = stmt.query([]).expect("run check");
+        let mut n = 0;
+        while rows.next().expect("row").is_some() {
+            n += 1;
+        }
+        n
+    }
+
+    /// v6 rebuilds the `frames` table to widen the `capture_trigger` CHECK (adding the
+    /// `click` / `scroll_stop` tokens). A naive rebuild with foreign keys ON would fire an
+    /// implicit cascade DELETE on every child row when the old `frames` is dropped — so
+    /// this proves the runner disables foreign keys around the migration: child rows must
+    /// survive, the new tokens must be accepted, a bogus token must still be rejected, FK
+    /// integrity must hold, and ON DELETE CASCADE must still be wired afterward.
+    #[test]
+    fn migration_v6_widens_capture_trigger_check_without_dropping_children() {
+        let mut conn = open_at_version(5);
+        // A frame at v5 plus a child row (frame_text CASCADEs on frames).
+        conn.execute(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, capture_trigger)
+             VALUES (1, 100, 0, 10, 10, 'p', 'h', 'timer')",
+            [],
+        )
+        .expect("insert frame");
+        conn.execute(
+            "INSERT INTO frame_text (frame_id, raw_text, content_text, primary_source, filter_version, suppressed_count)
+             VALUES (1, 'r', 'c', 'ocr', 0, 0)",
+            [],
+        )
+        .expect("insert child frame_text");
+
+        // Upgrade to LATEST via the real runner.
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+        assert_eq!(
+            version, 6,
+            "v6 is the event-driven click/scroll-stop migration"
+        );
+
+        let frame_rows: i64 = conn
+            .query_row("SELECT count(*) FROM frames WHERE id = 1", [], |r| r.get(0))
+            .expect("count frames");
+        assert_eq!(frame_rows, 1, "the frame row must survive the rebuild");
+        let child_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM frame_text WHERE frame_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count children");
+        assert_eq!(
+            child_rows, 1,
+            "child rows must NOT be cascade-deleted by the frames rebuild"
+        );
+
+        // New tokens accepted.
+        conn.execute(
+            "UPDATE frames SET capture_trigger = 'click' WHERE id = 1",
+            [],
+        )
+        .expect("'click' must satisfy the widened CHECK");
+        conn.execute(
+            "UPDATE frames SET capture_trigger = 'scroll_stop' WHERE id = 1",
+            [],
+        )
+        .expect("'scroll_stop' must satisfy the widened CHECK");
+        // A bogus token is still rejected loudly.
+        assert!(
+            conn.execute(
+                "UPDATE frames SET capture_trigger = 'bogus' WHERE id = 1",
+                []
+            )
+            .is_err(),
+            "an unknown token must still violate the CHECK"
+        );
+
+        // FK integrity intact, and ON DELETE CASCADE still wired post-rebuild.
+        assert_eq!(
+            fk_violation_count(&conn),
+            0,
+            "no FK violations after rebuild"
+        );
+        conn.execute("DELETE FROM frames WHERE id = 1", [])
+            .expect("delete frame");
+        let child_after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM frame_text WHERE frame_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count children after delete");
+        assert_eq!(
+            child_after, 0,
+            "ON DELETE CASCADE must still fire after rebuild"
+        );
     }
 }

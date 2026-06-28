@@ -20,6 +20,8 @@ const TRIGGER_LABEL: Record<CaptureTrigger, string> = {
   foreground_change: "App switch",
   clipboard_change: "Clipboard change",
   typing_pause: "Typing pause",
+  click: "Click",
+  scroll_stop: "Scroll stop",
   manual: "Manual",
 };
 
@@ -65,7 +67,12 @@ export function MomentDetail({ detail, onQueueVision, queueing }: MomentDetailPr
           alt={`Capture from ${absoluteTime(detail.captured_at)}`}
           className="h-auto w-full rounded-panel border border-line bg-overlay object-contain"
         />
-        <Panel title="Recognized text">
+        <Panel
+          title="Recognized text"
+          action={
+            <Chip tone="neutral">{detail.text_source === "uia" ? "UIA" : "OCR"}</Chip>
+          }
+        >
           {detail.content_text ? (
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
               {detail.content_text}

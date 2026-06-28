@@ -14,6 +14,17 @@ use traits::{
 use crate::schema::{FILTER_VERSION, UNFILTERED_FILTER_VERSION};
 use crate::SqliteStore;
 
+/// Derives `frame_text.primary_source` from the recognizer's engine tag: the UIA provider
+/// reports `engine = "uia"`; every OCR engine (`"winrt"`) maps to `ocr`. A frame that fell
+/// back from UIA to OCR thus records `'ocr'`, so `FrameDetail.text_source` always reflects
+/// what actually produced the text. (UIA spans separately carry `TextSource::Uia`.)
+fn primary_source_for(engine: &str) -> &'static str {
+    match engine {
+        "uia" => TextSource::Uia.as_db_str(),
+        _ => TextSource::Ocr.as_db_str(),
+    }
+}
+
 /// The `settings` key holding the active attention `filter_version` watermark, used by
 /// [`SqliteStore::backfill_filter_version`]. Internal bookkeeping — deliberately not a
 /// user-facing [`traits::Settings`] field.
@@ -203,7 +214,7 @@ impl SqliteStore {
                 params![
                     frame_id,
                     ocr.text,
-                    TextSource::Ocr.as_db_str(),
+                    primary_source_for(&ocr.engine),
                     UNFILTERED_FILTER_VERSION,
                     target_window_title,
                     target_app_hint,
@@ -270,7 +281,7 @@ impl SqliteStore {
                     frame_id,
                     ocr.text,
                     out.content_text,
-                    TextSource::Ocr.as_db_str(),
+                    primary_source_for(&ocr.engine),
                     FILTER_VERSION,
                     out.suppressed_count as i64,
                     window_title,
@@ -768,5 +779,83 @@ impl SqliteStore {
     pub async fn frame_spans(&self, frame_id: i64) -> Result<Vec<TextSpan>> {
         self.with_conn(move |conn| Ok(read_text_spans(conn, frame_id)?))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SqliteStore;
+
+    #[test]
+    fn primary_source_for_maps_engine_to_db_token() {
+        assert_eq!(primary_source_for("uia"), "uia");
+        assert_eq!(primary_source_for("winrt"), "ocr");
+        assert_eq!(primary_source_for("anything-else"), "ocr");
+    }
+
+    fn new_frame() -> NewFrame {
+        NewFrame {
+            captured_at: 1,
+            monitor_index: 0,
+            width: 10,
+            height: 10,
+            image_path: "p.jpg".to_string(),
+            content_hash: "h".to_string(),
+            app_hint: None,
+            window_title: None,
+            browser_url: None,
+            capture_trigger: Some(CaptureTrigger::Timer),
+        }
+    }
+
+    fn ctx() -> TextFilterContext {
+        TextFilterContext {
+            target_rect: None,
+            chrome_suppress_min_seen: 4,
+            chrome_protect_min_chars: 48,
+            chrome_region_buckets: 8,
+        }
+    }
+
+    fn result(engine: &str) -> OcrResult {
+        OcrResult {
+            text: "hello world".to_string(),
+            mean_confidence: -1.0,
+            engine: engine.to_string(),
+            spans: Vec::new(),
+        }
+    }
+
+    /// `insert_ocr_filtered` must record `frame_text.primary_source` from the recognizer's
+    /// engine, so `FrameDetail.text_source` tells the user whether UIA or OCR produced the
+    /// text (a frame that fell back to OCR reports `ocr`).
+    #[tokio::test]
+    async fn filtered_insert_records_text_source_from_engine() {
+        let store = SqliteStore::open_in_memory().expect("open store");
+
+        let uia_id = store.insert_frame(new_frame()).await.expect("insert frame");
+        store
+            .insert_ocr_filtered(uia_id, result("uia"), ctx())
+            .await
+            .expect("insert uia text");
+        let uia = store
+            .get_frame(uia_id)
+            .await
+            .expect("get_frame")
+            .expect("frame exists");
+        assert_eq!(uia.text_source, TextSource::Uia);
+
+        let ocr_id = store.insert_frame(new_frame()).await.expect("insert frame");
+        store
+            .insert_ocr_filtered(ocr_id, result("winrt"), ctx())
+            .await
+            .expect("insert ocr text");
+        let ocr = store
+            .get_frame(ocr_id)
+            .await
+            .expect("get_frame")
+            .expect("frame exists");
+        assert_eq!(ocr.text_source, TextSource::Ocr);
     }
 }

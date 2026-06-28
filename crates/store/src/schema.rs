@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 5;
+pub const LATEST_SCHEMA_VERSION: i32 = 6;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -37,6 +37,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (3, MIGRATION_V3),
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
+    (6, MIGRATION_V6),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -271,4 +272,48 @@ const MIGRATION_V5: &str = r#"
 ALTER TABLE frames ADD COLUMN capture_trigger TEXT
   CHECK (capture_trigger IS NULL
          OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change','typing_pause','manual'));
+"#;
+
+/// v6 — widen `frames.capture_trigger`'s CHECK to admit the `click` / `scroll_stop`
+/// tokens of the event-driven remainder (`docs/0.2.0.md`, `07` #47). SQLite can't alter a
+/// column's CHECK in place, so this rebuilds `frames` via the documented recipe
+/// (create-new → copy → drop-old → rename → recreate index). `frames` is a **parent**
+/// table with many `ON DELETE CASCADE` children, so the rebuild is only safe with foreign
+/// keys disabled — otherwise `DROP TABLE frames` fires an implicit cascade DELETE that
+/// wipes every child row. The migration runner ([`crate::bootstrap_and_migrate`]) disables
+/// foreign keys around the whole migration phase and runs `foreign_key_check` afterward
+/// (PRAGMA foreign_keys is a no-op inside the per-migration transaction). The `frames_new`
+/// copy lists every column **explicitly** (not `SELECT *`) so it stays correct regardless of
+/// any future column reordering; only the CHECK token set changes here. The `frames_new`
+/// column list and order still match v1 + v5. Index `idx_frames_captured_at` is dropped with the old table
+/// and recreated. No other object references `frames` by name except the children's FK
+/// clauses, which rebind to the renamed table.
+const MIGRATION_V6: &str = r#"
+CREATE TABLE frames_new (
+  id            INTEGER PRIMARY KEY,
+  captured_at   INTEGER NOT NULL,
+  monitor_index INTEGER NOT NULL,
+  width         INTEGER NOT NULL,
+  height        INTEGER NOT NULL,
+  image_path    TEXT    NOT NULL,
+  content_hash  TEXT    NOT NULL,
+  app_hint      TEXT, window_title TEXT, browser_url TEXT,
+  activity_type TEXT,
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000),
+  capture_trigger TEXT
+    CHECK (capture_trigger IS NULL
+           OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change',
+                                  'typing_pause','click','scroll_stop','manual'))
+);
+INSERT INTO frames_new
+  (id, captured_at, monitor_index, width, height, image_path, content_hash,
+   app_hint, window_title, browser_url, activity_type, created_at, capture_trigger)
+SELECT
+   id, captured_at, monitor_index, width, height, image_path, content_hash,
+   app_hint, window_title, browser_url, activity_type, created_at, capture_trigger
+FROM frames;
+DROP INDEX IF EXISTS idx_frames_captured_at;
+DROP TABLE frames;
+ALTER TABLE frames_new RENAME TO frames;
+CREATE INDEX idx_frames_captured_at ON frames(captured_at);
 "#;

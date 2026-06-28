@@ -43,6 +43,14 @@ pub enum CaptureTrigger {
     ClipboardChange,
     /// Typing/input paused for the configured quiet period (`GetLastInputInfo` timing).
     TypingPause,
+    /// A mouse button was pressed (`WH_MOUSE_LL`, button-down). The *fact* of a click
+    /// only — never the cursor position, button, or any content (`docs/0.2.0.md`; `07`
+    /// #47).
+    Click,
+    /// Scrolling stopped: a mouse-wheel burst settled past the debounce window
+    /// (`WH_MOUSE_LL` wheel + the trailing-edge debounce). Never the scroll position or
+    /// amount — only that scrolling paused (`docs/0.2.0.md`; `07` #47).
+    ScrollStop,
     /// An explicit user-initiated "capture now" (reserved; no UI affordance yet).
     Manual,
 }
@@ -56,6 +64,8 @@ impl CaptureTrigger {
             CaptureTrigger::ForegroundChange => "foreground_change",
             CaptureTrigger::ClipboardChange => "clipboard_change",
             CaptureTrigger::TypingPause => "typing_pause",
+            CaptureTrigger::Click => "click",
+            CaptureTrigger::ScrollStop => "scroll_stop",
             CaptureTrigger::Manual => "manual",
         }
     }
@@ -69,6 +79,8 @@ impl CaptureTrigger {
             "foreground_change" => Some(CaptureTrigger::ForegroundChange),
             "clipboard_change" => Some(CaptureTrigger::ClipboardChange),
             "typing_pause" => Some(CaptureTrigger::TypingPause),
+            "click" => Some(CaptureTrigger::Click),
+            "scroll_stop" => Some(CaptureTrigger::ScrollStop),
             "manual" => Some(CaptureTrigger::Manual),
             _ => None,
         }
@@ -107,6 +119,12 @@ pub struct CapturedFrame {
     /// Normalized `[0,1]` foreground-window rect within this monitor's frame, or
     /// `None` (other monitor / minimized / unresolved). `[x, y, w, h]`.
     pub target_rect: Option<[f32; 4]>,
+    /// Raw handle (as `i64`) of the foreground window at capture time, or `None` when
+    /// unresolved/minimized. A text provider that reads the *live* foreground window
+    /// (UIA) compares it against `GetForegroundWindow` at recognition time and bails to
+    /// OCR if focus changed in between — otherwise a different window's text could be
+    /// attributed to this frame (`07` #48). Plain integer so the frame stays `Send`.
+    pub foreground_hwnd: Option<i64>,
     /// Why this frame was captured. The capture source stamps it at the moment it
     /// decides to capture; the kernel copies it onto the stored [`NewFrame`]. Always
     /// [`CaptureTrigger::Timer`] in the 0.2.0 timer/idle path.
@@ -367,6 +385,13 @@ pub struct CaptureConfig {
     /// Capture when typing/input pauses for the quiet period
     /// (`capture.event_on_typing_pause`).
     pub event_on_typing_pause: bool,
+    /// Capture on a mouse click — the *fact* of a click only, never position/button/
+    /// content (`capture.event_on_click`). Requires the `WH_MOUSE_LL` low-level mouse
+    /// hook (`docs/0.2.0.md`; `07` #47).
+    pub event_on_click: bool,
+    /// Capture when scrolling stops after a wheel burst settles
+    /// (`capture.event_on_scroll_stop`). Requires the `WH_MOUSE_LL` low-level mouse hook.
+    pub event_on_scroll_stop: bool,
     /// Collapse a burst of triggers within this window into one capture, ms
     /// (`capture.event_debounce_ms`).
     pub event_debounce_ms: u32,

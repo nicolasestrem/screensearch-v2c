@@ -68,11 +68,17 @@ async fn round_trips_non_default_values() {
         capture_event_on_clipboard: false,
         capture_event_on_idle: true,
         capture_event_on_typing_pause: true,
+        capture_event_on_click: true,
+        capture_event_on_scroll_stop: true,
         capture_event_debounce_ms: 750,
         capture_event_min_interval_ms: 2000,
         capture_event_typing_pause_ms: 2000,
         capture_event_idle_threshold_ms: 8000,
         capture_event_fallback_interval_ms: 60_000,
+        // UIA text — every field away from its default, within the sanitize clamps.
+        capture_uia_text_enabled: false,
+        capture_uia_latency_budget_ms: 300,
+        capture_uia_min_text_chars: 32,
     };
 
     save_settings(dyn_store, &original)

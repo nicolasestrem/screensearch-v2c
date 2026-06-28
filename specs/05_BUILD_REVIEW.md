@@ -14,6 +14,199 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-28 — 0.2.1 PR4 part 2: UIA text + click/scroll-stop triggers
+
+**Branch:** `feat/0.2.1-pr4p2-uia-and-mouse-triggers`. The 0.2.1 line. Two workstreams, one branch,
+two commits (B = `c9104a5` event triggers; A = `6b41f5d` UIA), one PR. Both deviate from the roadmap;
+both deviations were surfaced to and **explicitly authorized by the user** (see `06` #12 / its 2026-06-28
+note and `07` #47/#48).
+
+### Implemented — Workstream A: UIA target-window text, default ON, OCR fallback (`07` #48)
+- **New `crates/uia`** (peer of `crates/ocr`, depends on `traits` only — `03 §2`). `UiaTextProvider`
+  implements `traits::OcrProvider`, so the kernel capture loop is unchanged. The composite
+  `UiaWithOcrFallback` lives in the composition root (`src-tauri/src/lib.rs`, the only place allowed to
+  wire impls): per frame, when enabled, try UIA and on any `Err`/timeout/thin-yield fall back to OCR.
+  **OCR stays the mandatory floor** — capture still refuses to start only when *OCR* is unavailable.
+- **COM / thread-affinity.** One dedicated long-lived **MTA** worker thread owns the `IUIAutomation`
+  (UIA is free-threaded; MTA is Microsoft's recommendation), paired `CoInitializeEx`/`CoUninitialize`.
+  `recognize()` is async and does **no** COM work on the executor — it `spawn_blocking`s and sends only
+  `Send` plain data (`width`, `height`, `target_rect`, `monitor_index`) over an `mpsc` channel; **no
+  HWND or COM pointer ever crosses a thread boundary**. The worker calls `GetForegroundWindow` itself
+  and scopes UIA via `ElementFromHandle` (capture→recognize are sequential, so the foreground is the
+  captured one), with self-window/minimized rechecks.
+- **Bounded walk.** Iterative RawView DFS (explicit stack, no recursion, no `.await`), capped by node
+  count (4000), depth (40), span count (10000), and a soft per-frame latency deadline checked every
+  node. Text via the ladder `TextPattern.DocumentRange().GetText()` → `ValuePattern.CurrentValue` →
+  `Name`. The async side also wraps the round-trip in a 2× hard timeout as a wedged-worker net.
+- **Geometry (the one genuinely new concern).** UIA `CurrentBoundingRectangle` is virtual-desktop
+  screen pixels, so the pure, CI-tested `normalize_screen_rect` **subtracts the captured monitor
+  origin** before normalizing to `[0,1]` (unlike OCR's frame-relative normalizer). Spans are emitted
+  `source = Uia`, `role = Unknown` (PR3's `textfilter` classifies downstream — `uia` never classifies),
+  `mean_confidence = CONFIDENCE_UNKNOWN`, `engine = "uia"`.
+- **`primary_source` fix (the only store change).** `records.rs` derived `frames.primary_source` from
+  `ocr.engine` (`primary_source_for`: `"uia"`→`uia`, else `ocr`) instead of hardcoding `'ocr'`, so
+  `FrameDetail.text_source` reflects reality. Two store tests added.
+- **Capability probe + budgets.** `UiaTextProvider::spawn` (MTA init → `CoCreateInstance(CUIAutomation)`)
+  is the probe; on failure the composite is OCR-only and logs the reason. Three clamped settings
+  (never hardcoded): `capture.uia_text_enabled` (default **ON**, hot per-frame `AtomicBool` in
+  `AppState`, set by `set_settings` — no `reload_capture`), `capture.uia_latency_budget_ms` (150,
+  20–2000), `capture.uia_min_text_chars` (16, 0–10000, the thin-yield floor). Budget/min-chars bake
+  into the provider at startup — they apply on **app restart** (a capture stop/start reuses the
+  existing provider; the UI hint and the regenerated binding doc both say "restart" to match).
+- **Privacy.** Worker skips `CurrentIsPassword` (never read masked fields) and `CurrentIsOffscreen`
+  (preserve OCR's "only what was visible" parity); `target_rect` containment drops out-of-window spans.
+  All capture gates already run before `recognize`.
+- **UI.** A "Text source" panel in `Settings.tsx` (UIA toggle hot-applies; latency / min-chars apply on
+  restart) with mirrored clamps; a `UIA`/`OCR` chip in `MomentDetail.tsx` from `detail.text_source`.
+
+### Implemented — Workstream B: click + scroll-stop triggers (`07` #47 remainder)
+- **Triggers (pure, no Win32).** `CaptureTrigger::Click` (`"click"`) / `ScrollStop` (`"scroll_stop"`)
+  added to the enum (+ `as_db_str`/`from_db_str`); `trigger.rs` adds `InputEventKind::Click`/`Scroll`
+  and emits `Click` on a button press and `ScrollStop` at a scroll burst's trailing edge (reusing the
+  existing debounce + min-interval ceiling — a scroll burst collapses to one capture). Three new unit
+  tests (click-after-debounce, scroll-burst→one ScrollStop, disabled-kinds-never-emit).
+- **`WH_MOUSE_LL` hook (the only new `unsafe`).** `events.rs` installs a global
+  `SetWindowsHookExW(WH_MOUSE_LL, mouse_proc, hinstance, 0)` on the existing message-pump thread
+  **iff** `on_click || on_scroll_stop`. `mouse_proc` dispatches Click on `WM_*BUTTONDOWN` and Scroll on
+  `WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL`, **always `CallNextHookEx`**, **never reads `MSLLHOOKSTRUCT.pt`**,
+  and does only a `try_send`. Teardown unhooks the mouse hook first (reverse order). **Roadmap
+  deviation** (`06` #12).
+- **Migration `schema_version` 5→6.** Widening `frames.capture_trigger`'s `CHECK` requires a parent-
+  table rebuild. The migration runner now wraps the migration loop with `PRAGMA foreign_keys=OFF` +
+  a post-loop `foreign_key_check` bail + `PRAGMA foreign_keys=ON` (the standard recipe is unavailable
+  inside the per-migration transaction otherwise). `MIGRATION_V6` rebuilds `frames` (create-new with
+  the widened CHECK incl. `click`/`scroll_stop` → `INSERT … SELECT *` → drop index → drop → rename →
+  recreate index). A dedicated populated-DB migration test proves children survive, the new tokens
+  insert, a bogus token is rejected, `foreign_key_check` is empty, and cascade still works.
+- **Settings/UI.** `capture.event_on_click` / `capture.event_on_scroll_stop` (bool, default off)
+  plumbed through `Settings`/load/save/sanitize/`capture_config`; two toggles in the event-driven
+  Settings panel; `click`/`scroll stop` added to `MomentDetail`'s trigger labels.
+
+### Hallucinated / corrected
+- **Plan claimed a FK-on `DROP TABLE frames` rebuild was safe** — it is **not**: with
+  `foreign_keys=ON` the drop cascade-deletes children. Caught before writing the migration; fixed by
+  the FK-off wrapper + `foreign_key_check` in the runner, and proven by the populated-DB test (children
+  survive). The single heaviest/riskiest piece of either workstream.
+- **Wrong UIA control-type IDs** in `classify.rs` first draft (SCROLLBAR/TAB) — corrected to the
+  verified windows-rs 0.62 values (SCROLLBAR=50014, TAB=50018) before tests.
+- **`normalize_screen_rect` had 8 args** (clippy `too_many_arguments`, limit 7) — refactored to group
+  the monitor origin and frame size into tuples (which also reads cleaner: `monitors::monitor_origin`
+  already returns a tuple), bringing it to 6 args. Not suppressed with an `#[allow]`.
+
+### Skipped / deferred
+- **Smart enrichment throttle** (the other 0.2.1 deferral, `07` #49) — out of scope for this PR.
+- **Live UIA app-matrix + click/scroll feel check** are `#[ignore]` local-hardware items
+  (`cargo test -p uia -- --ignored`, `cargo test -p capture -- --ignored`), not CI.
+
+### Still risky
+- **Default-ON UIA** means the greenfield path runs on every frame from first launch, so OCR-fallback
+  correctness (thin-yield + timeout) is load-bearing — covered by the composite's per-frame `Err`→OCR
+  path; the real quality gate is the live app matrix (Electron/Chromium/custom Win32).
+- **`WH_MOUSE_LL` latency** — mitigated structurally (id-only, `try_send`, immediate `CallNextHookEx`);
+  the "is there perceptible lag?" confirmation is a local dev-session item.
+- **UIA foreground race** — a foreground change between capture and recognize; mitigated by
+  self-window/minimized recheck + `target_rect` containment + thin-yield fallback; residual accepted
+  for 0.2.1 (`07` #48).
+
+### Verification
+Full suite green: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo build --workspace`, `cargo test --workspace` (uia 10 + 1 ignored; store 49 job-queue + 10 lib
+incl. the v6 migration test; traits 50; textfilter 12; settings round-trip), the UI `npm run lint` +
+`npm run build`, and the `git diff --exit-code -- ui/src/bindings` guard (the regenerated `Settings.ts`
+with the three UIA fields is committed). Raw command output is pasted in the session response.
+
+### Review follow-up — adversarial multi-agent review (3 fixes, 3 refuted)
+Ran a whole-branch adversarial review (5 dimension reviewers — UIA COM/lifetime, mouse hook, migration,
+composition/fallback, UI/privacy/spec — each finding then independently verified by a skeptic prompted
+to refute it). 6 findings raised, **3 confirmed real and fixed**, 3 refuted and accepted as
+non-defects:
+1. **(Important, `crates/uia/src/worker.rs`)** The bounded DFS re-checked its caps only once per
+   `stack.pop()`; the inner sibling-descent loop pushed *every* child of a node with no cap/deadline
+   check. A node with a massive sibling fan-out blew the latency/memory bound, and a malformed provider
+   returning a **cyclic** sibling chain (`GetNextSiblingElement` never `None`) could spin the MTA
+   worker forever (the `recognize()` 2× timeout abandons the *future* but can't cancel the blocking
+   closure), permanently wedging the UIA arm for the session (OCR fallback keeps capture alive). Fixed:
+   a documented `MAX_STACK` (16 000) bound on pending elements **and** a `deadline` re-check **inside**
+   the descent loop, so any tree shape — cyclic included — terminates within the latency budget.
+2. **(Minor, `crates/uia/src/geometry.rs`)** `normalize_screen_rect` measured width/height from the
+   element's full extent `(r-l)`, so an element straddling the monitor's left/top edge over-reported
+   its on-frame width and shifted the center used by the `target_rect` containment filter —
+   inconsistent with capture's own `normalize_window_rect`, which clips. Fixed by clipping the
+   left/top edge to the monitor (`l.max(mon_left)` / `t.max(mon_top)`) before measuring; TDD
+   regression test `left_top_straddling_box_reports_only_on_frame_extent` (RED→GREEN).
+3. **(Minor, `crates/traits/src/ipc.rs` → binding + this file)** The two UIA budget doc comments said
+   "Applied on next capture start," but the budget bakes into the provider at startup and a capture
+   stop/start reuses it — only an app restart re-reads it (the Settings.tsx hint already said
+   "restart"). Corrected the doc comments, regenerated `ui/src/bindings/Settings.ts`, and fixed the
+   note above to say **app restart**.
+
+**Refuted (accepted as non-defects):** (a) the migration runner's `foreign_key_check` bail leaves
+`foreign_keys` OFF before the `ON` restore — but every error path drops the connection by RAII
+(`bootstrap_and_migrate` returns the conn only on `Ok`), so no FK-disabled connection is ever observed;
+(b) the v6 migration test exercises one of seven child tables — but the FK-off rebuild is a single
+uniform mechanism (`frame_text` is representative; no per-table code path), so it isn't tautological
+and proves the invariant; (c) the UIA→OCR fallback logs at `debug` (below the default `info` floor) —
+but the per-frame source is durably persisted in `frame_text.primary_source`, so over-fallback is
+queryable, and no spec mandates a live fallback-rate metric. All gates re-run green after the fixes
+(fmt, clippy `-D warnings`, `cargo test --workspace`, UI lint + build, bindings guard).
+
+### Review follow-up — PR #45 automated review (5 comments addressed)
+The opened PR's bot reviewers (gemini-code-assist, chatgpt-codex-connector) raised 5 inline comments;
+all were confirmed relevant against the actual code and fixed:
+1. **(codex P1, `crates/uia/src/worker.rs`) Data corruption on multi-monitor when `target_rect` is
+   `None`.** Capture's `normalize_window_rect` returns `Some` only for the monitor whose region holds
+   the foreground window's centre; the UIA worker always reads `GetForegroundWindow`, and
+   `within_target(None, …)` kept every span — so a *background* monitor's frame was being tagged with
+   the foreground window's text (and UIA is default-ON). Fixed: `read_foreground` now bails when
+   `req.target_rect` is `None` → OCR fallback for that frame (OCR reads that monitor's real pixels);
+   `within_target` now takes a concrete `[f32;4]` (the `None` branch + its test are gone, the live
+   test's frame now carries a full-screen rect).
+2. **(gemini high, `crates/uia/src/worker.rs`) COM teardown + hung-provider bound.** Replaced the two
+   manual `CoUninitialize` calls with an RAII `ComApartment` guard (fires on every exit path incl. a
+   panic), and set `IUIAutomation2::SetConnectionTimeout`/`SetTransactionTimeout` to the clamped
+   latency budget so a single cross-process call to a hung provider can't wedge the worker (the in-walk
+   deadline only fires *between* calls).
+3. **(gemini medium + codex P2, `crates/uia/src/lib.rs`) `spawn_blocking` parked a pool thread per
+   frame.** `recognize` now sends the request over the (non-blocking) channel and awaits a `tokio`
+   **oneshot** reply directly — no `spawn_blocking`. On a hard timeout the receiver drops and the
+   worker's later `send` no-ops, so a wedged worker can never grow the blocking pool (codex P2). The
+   per-call transaction timeout from (2) keeps the worker itself responsive.
+4. **(gemini medium, `crates/store/src/schema.rs`) `SELECT *` in the v6 rebuild.** The `frames`→
+   `frames_new` copy now lists all 13 columns explicitly, so the migration stays correct under any
+   future column reordering.
+
+All gates green after the fixes: `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo build --workspace`, `cargo test --workspace` (uia 9 + 1 ignored,
+store 10 + 49, traits 50), UI lint + build, `git diff --exit-code -- ui/src/bindings` clean (no IPC
+change this round). Per the maintainer's instruction, the bot threads were addressed in code, not
+replied to.
+
+### Review follow-up — PR #45 second review round (2 new P1s addressed)
+After the first round's push, codex's re-review raised two further P1s — both real, default-ON
+correctness/privacy gaps that the first round's `target_rect` fix did **not** cover:
+1. **Foreground race (`crates/uia/src/worker.rs`).** A focus change between the WGC frame and the
+   recognize call meant the worker read whatever window was foreground *at recognition time*. The
+   `within_target` containment can't catch this when the new window overlaps the old (captured) rect,
+   so a different window's text could be stored against the captured screenshot. Fixed by recording
+   the foreground window handle at capture time and verifying it: new `CapturedFrame.foreground_hwnd`
+   (`Option<i64>`, plain integer to stay `Send`) populated by capture via a new
+   `privacy::foreground_hwnd()`, threaded to the worker, and compared against `GetForegroundWindow`
+   in `read_foreground` — a mismatch bails → OCR. (`None` ⇒ unrecorded; the rect-containment guard
+   remains.)
+2. **Offscreen TextPattern reads (`crates/uia/src/worker.rs`).** `DocumentRange().GetText(-1)` returns
+   a scrollable provider's **whole** document, including text scrolled off-screen that was never in
+   the captured frame — breaking OCR's "only what was visible" parity, and (being a large yield)
+   wrongly suppressing the OCR fallback. Fixed by reading only `GetVisibleRanges()` (viewport text),
+   concatenating each visible range's text instead of the full document range.
+   (The two extra codex threads from the first batch were duplicates of the already-fixed P1/P2.)
+
+`CapturedFrame` gained a field, so its three other construction sites (capture, plus the `ocr`/`kernel`
+/`uia` test fixtures) were updated. All gates green: fmt, clippy `-D warnings`, `cargo build
+--workspace`, `cargo test --workspace` (uia 9 + 1 ignored, store 10 + 49, traits 50), UI lint + build,
+bindings guard clean (no IPC change). Threads addressed in code, not replied to.
+
+---
+
 ## Pass — 2026-06-28 — 0.2.1 PR4 part 1: event-driven capture
 
 **Branch:** `feat/0.2.1-pr4p1-event-capture`. The 0.2.1 line; 0.2.0 keeps timer/idle capture.

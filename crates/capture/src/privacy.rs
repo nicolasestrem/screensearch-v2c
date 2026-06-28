@@ -77,6 +77,21 @@ mod win {
         }
     }
 
+    /// Raw handle of the current foreground window as an `i64` (`None` when there is no
+    /// foreground window or it is minimized). Recorded on each [`traits::CapturedFrame`]
+    /// so a live-window text provider (UIA) can confirm focus hasn't moved between capture
+    /// and recognition (`07` #48). A plain integer keeps the frame `Send`.
+    pub fn foreground_hwnd() -> Option<i64> {
+        // SAFETY: plain Win32 query on the calling thread.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() || IsIconic(hwnd).as_bool() {
+                return None;
+            }
+            Some(hwnd.0 as isize as i64)
+        }
+    }
+
     unsafe fn window_title(hwnd: HWND) -> Option<String> {
         let mut buf = [0u16; 512];
         let len = GetWindowTextW(hwnd, &mut buf);
@@ -148,7 +163,8 @@ mod win {
 
 #[cfg(windows)]
 pub use win::{
-    foreground_context, foreground_window_rect, is_own_foreground_window, is_workstation_locked,
+    foreground_context, foreground_hwnd, foreground_window_rect, is_own_foreground_window,
+    is_workstation_locked,
 };
 
 #[cfg(test)]
