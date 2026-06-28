@@ -423,6 +423,18 @@ export function Component() {
                 onChange={(v) => set("capture_event_on_typing_pause", v)}
                 hint={`Capture when typing pauses; keystrokes are never recorded. ${APPLY_CAPTURE}`}
               />
+              <Toggle
+                label="Capture on click"
+                checked={draft.capture_event_on_click}
+                onChange={(v) => set("capture_event_on_click", v)}
+                hint={`Capture when you click. Uses a system-wide low-level mouse hook; only the fact of a click is used — never the position, button, or any content. ${APPLY_CAPTURE}`}
+              />
+              <Toggle
+                label="Capture when scrolling stops"
+                checked={draft.capture_event_on_scroll_stop}
+                onChange={(v) => set("capture_event_on_scroll_stop", v)}
+                hint={`Capture once after a scroll burst settles. Uses the same low-level mouse hook; only that scrolling happened is used — never the amount or position. ${APPLY_CAPTURE}`}
+              />
               <Field
                 label="Debounce (ms)"
                 type="number"

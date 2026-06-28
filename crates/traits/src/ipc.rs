@@ -503,6 +503,12 @@ pub struct Settings {
     /// Capture when typing/input pauses for the quiet period
     /// (`capture.event_on_typing_pause`).
     pub capture_event_on_typing_pause: bool,
+    /// Capture on a mouse click — the *fact* of a click only, never position/button/
+    /// content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+    pub capture_event_on_click: bool,
+    /// Capture when scrolling stops after a wheel burst settles
+    /// (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+    pub capture_event_on_scroll_stop: bool,
     /// Collapse a burst of triggers within this window into one capture, ms
     /// (`capture.event_debounce_ms`). A threshold, never hardcoded.
     pub capture_event_debounce_ms: u32,
@@ -587,6 +593,11 @@ impl Default for Settings {
             capture_event_on_clipboard: true,
             capture_event_on_idle: false,
             capture_event_on_typing_pause: false,
+            // Click / scroll-stop default OFF even within event mode: they rely on the
+            // global WH_MOUSE_LL low-level mouse hook (heavier than the out-of-context
+            // foreground/clipboard listeners), so they stay opt-in (`07` #47).
+            capture_event_on_click: false,
+            capture_event_on_scroll_stop: false,
             capture_event_debounce_ms: 500,
             capture_event_min_interval_ms: 1000,
             capture_event_typing_pause_ms: 1500,

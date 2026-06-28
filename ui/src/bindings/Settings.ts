@@ -121,6 +121,16 @@ capture_event_on_idle: boolean,
  */
 capture_event_on_typing_pause: boolean, 
 /**
+ * Capture on a mouse click — the *fact* of a click only, never position/button/
+ * content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+ */
+capture_event_on_click: boolean, 
+/**
+ * Capture when scrolling stops after a wheel burst settles
+ * (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
+ */
+capture_event_on_scroll_stop: boolean, 
+/**
  * Collapse a burst of triggers within this window into one capture, ms
  * (`capture.event_debounce_ms`). A threshold, never hardcoded.
  */

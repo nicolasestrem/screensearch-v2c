@@ -21,6 +21,8 @@ async fn wgc_captures_a_frame_from_the_primary_monitor() {
         event_on_clipboard: true,
         event_on_idle: false,
         event_on_typing_pause: false,
+        event_on_click: false,
+        event_on_scroll_stop: false,
         event_debounce_ms: 500,
         event_min_interval_ms: 1000,
         event_typing_pause_ms: 1500,

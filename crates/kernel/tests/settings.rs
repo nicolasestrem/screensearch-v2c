@@ -68,6 +68,8 @@ async fn round_trips_non_default_values() {
         capture_event_on_clipboard: false,
         capture_event_on_idle: true,
         capture_event_on_typing_pause: true,
+        capture_event_on_click: true,
+        capture_event_on_scroll_stop: true,
         capture_event_debounce_ms: 750,
         capture_event_min_interval_ms: 2000,
         capture_event_typing_pause_ms: 2000,

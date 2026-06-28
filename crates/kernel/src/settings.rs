@@ -133,6 +133,14 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_event_on_typing_pause,
         )
         .await,
+        capture_event_on_click: boolean(store, "capture.event_on_click", d.capture_event_on_click)
+            .await,
+        capture_event_on_scroll_stop: boolean(
+            store,
+            "capture.event_on_scroll_stop",
+            d.capture_event_on_scroll_stop,
+        )
+        .await,
         capture_event_debounce_ms: num(
             store,
             "capture.event_debounce_ms",
@@ -326,6 +334,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             bool_str(s.capture_event_on_typing_pause).into(),
         ),
         (
+            "capture.event_on_click".into(),
+            bool_str(s.capture_event_on_click).into(),
+        ),
+        (
+            "capture.event_on_scroll_stop".into(),
+            bool_str(s.capture_event_on_scroll_stop).into(),
+        ),
+        (
             "capture.event_debounce_ms".into(),
             s.capture_event_debounce_ms.to_string(),
         ),
@@ -437,6 +453,8 @@ pub fn capture_config(s: &Settings) -> CaptureConfig {
         event_on_clipboard: s.capture_event_on_clipboard,
         event_on_idle: s.capture_event_on_idle,
         event_on_typing_pause: s.capture_event_on_typing_pause,
+        event_on_click: s.capture_event_on_click,
+        event_on_scroll_stop: s.capture_event_on_scroll_stop,
         event_debounce_ms: s.capture_event_debounce_ms,
         event_min_interval_ms: s.capture_event_min_interval_ms,
         event_typing_pause_ms: s.capture_event_typing_pause_ms,

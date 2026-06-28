@@ -20,6 +20,8 @@ const TRIGGER_LABEL: Record<CaptureTrigger, string> = {
   foreground_change: "App switch",
   clipboard_change: "Clipboard change",
   typing_pause: "Typing pause",
+  click: "Click",
+  scroll_stop: "Scroll stop",
   manual: "Manual",
 };
 
