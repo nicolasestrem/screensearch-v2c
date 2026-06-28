@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use rusqlite::{params, OptionalExtension};
 use textfilter::{classify, reconcile, ClassifyInput, FilterConfig};
 use traits::{
-    AppSuppression, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result, SuppressReason,
-    TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
+    AppSuppression, CaptureTrigger, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result,
+    SuppressReason, TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
 };
 
 use crate::schema::{FILTER_VERSION, UNFILTERED_FILTER_VERSION};
@@ -147,8 +147,8 @@ impl SqliteStore {
             conn.execute(
                 "INSERT INTO frames
                    (captured_at, monitor_index, width, height, image_path, content_hash,
-                    app_hint, window_title, browser_url)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    app_hint, window_title, browser_url, capture_trigger)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     f.captured_at,
                     f.monitor_index,
@@ -159,6 +159,7 @@ impl SqliteStore {
                     f.app_hint,
                     f.window_title,
                     f.browser_url,
+                    f.capture_trigger.map(|t| t.as_db_str()),
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -672,7 +673,7 @@ impl SqliteStore {
             let base = conn
                 .query_row(
                     "SELECT captured_at, monitor_index, width, height, image_path,
-                            app_hint, window_title, browser_url, activity_type
+                            app_hint, window_title, browser_url, activity_type, capture_trigger
                      FROM frames WHERE id = ?1",
                     params![frame_id],
                     |r| {
@@ -687,6 +688,11 @@ impl SqliteStore {
                             window_title: r.get(6)?,
                             browser_url: r.get(7)?,
                             activity_type: r.get(8)?,
+                            // NULL (legacy frame) or an unknown token → None.
+                            capture_trigger: r
+                                .get::<_, Option<String>>(9)?
+                                .as_deref()
+                                .and_then(CaptureTrigger::from_db_str),
                             raw_text: None,
                             content_text: None,
                             text_source: TextSource::Ocr,

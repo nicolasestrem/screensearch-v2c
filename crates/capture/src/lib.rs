@@ -18,12 +18,14 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use traits::{CaptureConfig, CaptureSource, CapturedFrame, MonitorInfo, Result};
+use traits::{CaptureConfig, CaptureSource, CaptureTrigger, CapturedFrame, MonitorInfo, Result};
 
 mod diff;
+mod events;
 mod idle;
 mod monitors;
 mod privacy;
+mod trigger;
 mod wgc;
 
 pub use idle::user_idle_ms;
@@ -45,6 +47,33 @@ pub struct WgcCapture {
     config: CaptureConfig,
     req_tx: Mutex<mpsc::Sender<CaptureRequest>>,
     queue: VecDeque<CapturedFrame>,
+    /// Event-driven capture state machine (debounce / rate-ceiling / idle edges).
+    /// Driven only when `config.event_driven_enabled`; inert otherwise.
+    machine: trigger::TriggerMachine,
+    /// The Win32 input-hook thread, present only in event mode **and** when a discrete
+    /// trigger (foreground / clipboard) is enabled. Idle / typing-pause need no hook
+    /// (they poll [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
+    events: Option<events::InputEventSource>,
+}
+
+/// How often (ms) the event-mode loop polls the trigger machine for idle/typing-pause
+/// edges and to flush a settled debounce window. An internal responsiveness constant
+/// (like the WGC cold-start sleep), not a user-facing threshold — the *durations* it
+/// observes (debounce/idle/typing/min-interval) are all configurable settings.
+const EVENT_POLL_INTERVAL_MS: u64 = 250;
+
+/// Builds the pure trigger config from the capture config.
+fn trigger_config(c: &CaptureConfig) -> trigger::TriggerConfig {
+    trigger::TriggerConfig {
+        on_foreground: c.event_on_foreground,
+        on_clipboard: c.event_on_clipboard,
+        on_idle: c.event_on_idle,
+        on_typing_pause: c.event_on_typing_pause,
+        debounce_ms: i64::from(c.event_debounce_ms),
+        min_interval_ms: i64::from(c.event_min_interval_ms),
+        typing_pause_ms: i64::from(c.event_typing_pause_ms),
+        idle_threshold_ms: i64::from(c.event_idle_threshold_ms),
+    }
 }
 
 /// Maps a foreground-window screen rect `(left, top, right, bottom)` into a monitor's
@@ -91,6 +120,24 @@ impl WgcCapture {
             Err(e) => return Err(anyhow::anyhow!("capture worker exited during init: {e}")),
         };
 
+        let machine = trigger::TriggerMachine::new(trigger_config(&config));
+        // Start the Win32 hook thread only when event mode is on and a hook-backed
+        // trigger is enabled. A failure to install hooks is non-fatal: capture falls
+        // back to the event-mode fallback timer + idle polling (the machine still runs).
+        let events = if config.event_driven_enabled
+            && (config.event_on_foreground || config.event_on_clipboard)
+        {
+            match events::InputEventSource::start() {
+                Ok(source) => Some(source),
+                Err(e) => {
+                    tracing::warn!(error = %e, "event-driven capture: input hooks unavailable; using fallback timer + idle only");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             monitors,
             // Same enumeration order as the worker → indices align with monitor_index.
@@ -98,7 +145,44 @@ impl WgcCapture {
             config,
             req_tx: Mutex::new(req_tx),
             queue: VecDeque::new(),
+            machine,
+            events,
         })
+    }
+
+    /// Event mode's pacing: wait until the trigger machine decides to capture (a settled
+    /// debounce, an idle/typing edge) or the fallback interval elapses, and return the
+    /// reason. Coexists with — does not replace — the timer path used in timer mode.
+    async fn next_event_trigger(&mut self) -> CaptureTrigger {
+        let fallback_ms = u64::from(self.config.event_fallback_interval_ms.max(1));
+        // Disjoint field borrows: the machine mutably, the hook source shared.
+        let machine = &mut self.machine;
+        let events = self.events.as_ref();
+
+        let mut poll = tokio::time::interval(Duration::from_millis(EVENT_POLL_INTERVAL_MS));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let fallback = tokio::time::sleep(Duration::from_millis(fallback_ms));
+        tokio::pin!(fallback);
+
+        loop {
+            // Not `biased`: a continuous event stream must not starve the fallback/poll
+            // arms (tokio picks a ready arm pseudo-randomly).
+            tokio::select! {
+                kind = recv_event(events) => {
+                    if let Some(kind) = kind {
+                        machine.on_input_event(kind, now_ms());
+                    }
+                    // `None` only when there is no hook source, in which case
+                    // `recv_event` is `pending` forever and this arm never fires.
+                }
+                _ = poll.tick() => {
+                    if let Some(trigger) = machine.poll(now_ms(), idle_ms_now()) {
+                        return trigger;
+                    }
+                }
+                _ = &mut fallback => return CaptureTrigger::Timer,
+            }
+        }
     }
 
     /// Asks the worker for one capture cycle and returns the changed frames.
@@ -134,11 +218,18 @@ impl CaptureSource for WgcCapture {
                 return Ok(Some(frame));
             }
 
-            // Pace to the capture interval (the timer lives inside the source).
-            tokio::time::sleep(Duration::from_millis(u64::from(
-                self.config.interval_ms.max(1),
-            )))
-            .await;
+            // Decide when to capture and why. Timer mode keeps the 0.2.0 interval
+            // cadence; event mode waits for a user-activity trigger (with a fallback
+            // interval) so the trigger is known before the privacy gate + capture run.
+            let trigger = if self.config.event_driven_enabled {
+                self.next_event_trigger().await
+            } else {
+                tokio::time::sleep(Duration::from_millis(u64::from(
+                    self.config.interval_ms.max(1),
+                )))
+                .await;
+                CaptureTrigger::Timer
+            };
 
             // Privacy gate (03 §8): pause while locked, skip while an excluded app
             // is focused. The foreground read also yields the frame context.
@@ -192,6 +283,7 @@ impl CaptureSource for WgcCapture {
                     app_hint: app_hint.clone(),
                     window_title: window_title.clone(),
                     target_rect,
+                    trigger,
                 });
             }
             // Loop: drain the queue, or sleep and try again if nothing changed.
@@ -205,6 +297,22 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Awaits the next hook event, or never resolves when there is no hook source — so the
+/// event `select!` arm is simply inert (idle/typing-pause + fallback still drive).
+async fn recv_event(events: Option<&events::InputEventSource>) -> Option<trigger::InputEventKind> {
+    match events {
+        Some(source) => source.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Current user idle time in ms (since last keyboard/mouse input), `0` if unreadable
+/// (treated as active). Privacy-safe: `GetLastInputInfo` exposes only a timestamp,
+/// never key content.
+fn idle_ms_now() -> i64 {
+    user_idle_ms().unwrap_or(0) as i64
 }
 
 #[cfg(test)]

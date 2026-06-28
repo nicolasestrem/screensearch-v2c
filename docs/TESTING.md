@@ -41,7 +41,15 @@ Tests marked `ignored` need a GPU, a downloaded model, or hardware. They are **n
 ```sh
 # real llama-server: downloads models + uses the GPU (slow, big)
 cargo test -p inference --test smoke -- --ignored --nocapture
+
+# event-driven capture hooks: start/drop the Win32 hook source 50× — no leak/hang (real desktop)
+cargo test -p capture -- --ignored
 ```
+
+The 0.2.1 event-driven trigger logic itself runs in plain CI: the 9 `crates/capture/src/trigger.rs`
+unit tests cover debounce / rate-ceiling / idle-edge behavior (pure, no Win32), and the kernel
+settings round-trip + sanitize tests are extended for the new `capture.event_*` keys. Only the
+hardware hook lifecycle test in `events.rs` is `#[ignore]`d.
 
 ## 🎯 Just one crate (faster)
 
@@ -85,3 +93,21 @@ Audit coverage:
 
 The 2026-06-25 run is a local ignored artifact at `docs/AUDIT_0.2.0_PR7_2026-06-25.md`; tracked
 summaries live in `CHANGELOG.md` and `specs/05_BUILD_REVIEW.md` / `07_KNOWN_GAPS.md`.
+
+## 🎛️ Manual acceptance — event-driven capture (0.2.1)
+
+Opt-in event-driven capture (`07` #47) needs a quick live check on a real Windows desktop with
+`npm run tauri dev`:
+
+- **Default off.** On a fresh profile, Settings shows event-driven capture **off** and capture uses
+  the timer cadence (no input hooks installed).
+- **Event mode fires on activity.** Turn **Event-driven capture** on, start capture, then **alt-tab**
+  to another app and **copy** some text → new frames appear (foreground-change and clipboard-change
+  triggers); the Moment view's **"Captured via"** row shows the matching trigger.
+- **Timer mode unchanged.** Turn event mode back off → capture returns to the fixed-interval cadence,
+  with no behavior regression.
+- **Privacy.** Nothing typed or copied is stored — only the timing/change signal. Existing gates
+  (self-exclude own window, excluded apps, pause-on-lock) still apply in event mode.
+
+Click + scroll-stop triggers are out of scope (deferred ≥0.2.2; `07` #47), so there is nothing to
+verify for them.

@@ -15,4 +15,14 @@
 
 > Resolved v0.1.0-era rows (#1–#4, 2026-06-21..2026-06-24) archived to `specs/archive/06_PATCH_PLAN.v0.1.0.md` (original ids preserved).
 
+**2026-06-28 — 0.2.1 event-driven capture (`feat/0.2.1-pr4p1-event-capture`): no spec contradictions
+found.** The work implements the `docs/0.2.0.md` "Deferred work (0.2.1)" event-driven-capture item
+and resolves `07` #47 as specified — opt-in, default off, `SetWinEventHook` + `AddClipboardFormatListener`
+over low-level keyboard hooks, no stored keystrokes/clipboard contents. Two pre-existing decisions
+the spec left open were honored, not contradicted: (a) **click + scroll-stop deferred ≥0.2.2** because
+they need `WH_MOUSE_LL`, which the roadmap steers away from (the kickoff listed them but the
+hook-strategy guidance disfavors them — recorded in `07` #47, not a contradiction); (b) the
+`CaptureTrigger` field now exists and is persisted, but the attention filter stays trigger-agnostic
+by design (`07` #57). No new patch rows required.
+
 When the spec contradicts itself, stop, ask the user, and log the resolution here before coding.

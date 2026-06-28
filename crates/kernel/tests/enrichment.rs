@@ -98,6 +98,7 @@ fn new_frame(captured_at: i64) -> NewFrame {
         app_hint: None,
         window_title: None,
         browser_url: None,
+        capture_trigger: None,
     }
 }
 

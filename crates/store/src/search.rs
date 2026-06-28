@@ -325,6 +325,7 @@ mod tests {
             app_hint: None,
             window_title: None,
             browser_url: None,
+            capture_trigger: None,
         }
     }
 

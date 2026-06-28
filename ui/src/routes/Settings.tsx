@@ -76,6 +76,16 @@ function sanitizeSettings(s: Settings): Settings {
     ...s,
     capture_interval_ms: clampInt(s.capture_interval_ms, 250, 3_600_000),
     capture_diff_threshold: clampNum(s.capture_diff_threshold, 0, 1),
+    // Event-driven capture timing knobs — mirror the backend clamps exactly.
+    capture_event_debounce_ms: clampInt(s.capture_event_debounce_ms, 100, 10_000),
+    capture_event_min_interval_ms: clampInt(s.capture_event_min_interval_ms, 250, 60_000),
+    capture_event_typing_pause_ms: clampInt(s.capture_event_typing_pause_ms, 500, 10_000),
+    capture_event_idle_threshold_ms: clampInt(s.capture_event_idle_threshold_ms, 1_000, 60_000),
+    capture_event_fallback_interval_ms: clampInt(
+      s.capture_event_fallback_interval_ms,
+      1_000,
+      3_600_000,
+    ),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
     storage_max_width: clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
@@ -374,6 +384,90 @@ export function Component() {
                   </button>
                 );
               })}
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Event-driven capture">
+        <div className="flex flex-col gap-4">
+          <Toggle
+            label="Enable event-driven capture"
+            checked={draft.capture_event_driven_enabled}
+            onChange={(v) => set("capture_event_driven_enabled", v)}
+            hint={`Also capture on app-switch / clipboard change / idle, not just the timer. Your keystrokes and clipboard text are never recorded. ${APPLY_CAPTURE}`}
+          />
+          {draft.capture_event_driven_enabled && (
+            <div className="flex flex-col gap-4 border-t border-line pt-3">
+              <Toggle
+                label="Capture on app switch"
+                checked={draft.capture_event_on_foreground}
+                onChange={(v) => set("capture_event_on_foreground", v)}
+                hint={`Capture when the foreground app or window changes. ${APPLY_CAPTURE}`}
+              />
+              <Toggle
+                label="Capture on clipboard change"
+                checked={draft.capture_event_on_clipboard}
+                onChange={(v) => set("capture_event_on_clipboard", v)}
+                hint={`Reacts to clipboard changes; contents are never read. ${APPLY_CAPTURE}`}
+              />
+              <Toggle
+                label="Capture when idle"
+                checked={draft.capture_event_on_idle}
+                onChange={(v) => set("capture_event_on_idle", v)}
+                hint={`Capture once after you stop interacting for the idle threshold. ${APPLY_CAPTURE}`}
+              />
+              <Toggle
+                label="Capture on typing pause"
+                checked={draft.capture_event_on_typing_pause}
+                onChange={(v) => set("capture_event_on_typing_pause", v)}
+                hint={`Capture when typing pauses; keystrokes are never recorded. ${APPLY_CAPTURE}`}
+              />
+              <Field
+                label="Debounce (ms)"
+                type="number"
+                min={100}
+                max={10000}
+                value={draft.capture_event_debounce_ms}
+                onChange={intHandler("capture_event_debounce_ms")}
+                hint={`Wait this long after an event settles before capturing. ${APPLY_CAPTURE}`}
+              />
+              <Field
+                label="Min interval between captures (ms)"
+                type="number"
+                min={250}
+                max={60000}
+                value={draft.capture_event_min_interval_ms}
+                onChange={intHandler("capture_event_min_interval_ms")}
+                hint={`Minimum time between event-triggered captures (rate limit). ${APPLY_CAPTURE}`}
+              />
+              <Field
+                label="Typing-pause threshold (ms)"
+                type="number"
+                min={500}
+                max={10000}
+                value={draft.capture_event_typing_pause_ms}
+                onChange={intHandler("capture_event_typing_pause_ms")}
+                hint={`How long typing must pause to count as a typing-pause event. ${APPLY_CAPTURE}`}
+              />
+              <Field
+                label="Idle threshold (ms)"
+                type="number"
+                min={1000}
+                max={60000}
+                value={draft.capture_event_idle_threshold_ms}
+                onChange={intHandler("capture_event_idle_threshold_ms")}
+                hint={`How long without input before you count as idle. ${APPLY_CAPTURE}`}
+              />
+              <Field
+                label="Fallback interval (ms)"
+                type="number"
+                min={1000}
+                max={3600000}
+                value={draft.capture_event_fallback_interval_ms}
+                onChange={intHandler("capture_event_fallback_interval_ms")}
+                hint={`Capture at least this often when no events fire (safety net). ${APPLY_CAPTURE}`}
+              />
             </div>
           )}
         </div>

@@ -11,6 +11,51 @@
 
 ---
 
+## 2026-06-28 — 0.2.1 PR4 part 1: event-driven capture (`feat/0.2.1-pr4p1-event-capture`)
+- **Change:** Added opt-in, default-OFF event-driven capture on the 0.2.1 line (0.2.0 keeps
+  timer/idle). A new master setting `capture.event_driven_enabled` selects Timer vs Event-driven
+  capture; event mode fires on four triggers — **foreground/app-switch** (`SetWinEventHook`
+  `EVENT_SYSTEM_FOREGROUND`, `WINEVENT_OUTOFCONTEXT`), **clipboard change** (`AddClipboardFormatListener`,
+  change event only), **idle**, and **typing-pause** (both from `GetLastInputInfo` timing) — over a
+  long fallback interval (a static screen is still sampled), a debounce (collapse bursts), and a
+  min-interval rate ceiling (no storms).
+  - **`crates/capture/src/trigger.rs` (new):** a pure, `traits`-only debounce / rate-ceiling /
+    idle-edge state machine (no Win32), 9 unit tests.
+  - **`crates/capture/src/events.rs` (new):** the only new `unsafe` — a dedicated message-pump thread
+    owning a message-only `HWND_MESSAGE` window + the foreground hook + clipboard listener, with clean
+    `WM_QUIT` / unhook / destroy / join teardown on drop; plus a `#[ignore]` 50× start/drop lifecycle
+    test.
+  - **`crates/capture/src/lib.rs`:** the event source lives inside `WgcCapture`, which stamps each
+    frame's `CaptureTrigger`; hook-install failure is non-fatal (falls back to the event-mode timer +
+    idle polling, logged via `tracing::warn!`). New `windows` features
+    (`Win32_UI_Accessibility`, `Win32_System_DataExchange`, `Win32_System_LibraryLoader`).
+  - **`crates/traits`:** new `CaptureTrigger` enum
+    (`Timer|Idle|ForegroundChange|ClipboardChange|TypingPause|Manual`, ts-rs exported, with
+    `as_db_str`/`from_db_str`); `CapturedFrame.trigger`, `NewFrame.capture_trigger`, `FrameDetail.capture_trigger`,
+    and the ten `event_*` fields on `CaptureConfig` + `Settings`. `CaptureConfig` `PartialEq` now
+    includes the event fields.
+  - **`crates/store`:** migration **`schema_version` 4→5** adds the nullable `frames.capture_trigger`
+    TEXT column; insert/read write/parse the token (NULL or unknown → `None`).
+  - **`crates/kernel`:** `settings.rs` load/save/sanitize the ten clamped `capture.event_*` keys;
+    `capture_loop.rs` copies `frame.trigger` onto the stored `NewFrame`.
+  - **UI:** the Moment view shows a "Captured via" row; Settings exposes the event-capture toggles +
+    thresholds; ts-rs bindings regenerated.
+- **Why:** Implements the `docs/0.2.0.md` "Deferred work (0.2.1)" event-driven-capture item and
+  resolves `07` #47 — capture should fire on real user activity, not only a fixed timer, while staying
+  opt-in and privacy-safe. `SetWinEventHook` + `AddClipboardFormatListener` were chosen over low-level
+  keyboard hooks per the spec; **no keystrokes and no clipboard contents are ever read or stored** —
+  only change/idle-timing signals (a cross-PR rule). Click + scroll-stop are deferred ≥0.2.2 because
+  they need `WH_MOUSE_LL` (`07` #47). The `CaptureTrigger` field now exists but the attention filter
+  stays trigger-agnostic by design (`07` #57). The kernel loop + `CaptureSource` trait and `src-tauri`
+  are unchanged; hot-apply rides the existing `set_settings`→`reload_capture` path. Windows-only
+  honored; no cross-platform stubs.
+- **Verification:** Full suite green — `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo build --workspace`, `cargo test --workspace` (9 new
+  `trigger.rs` unit tests; extended settings round-trip + sanitize tests), `cd ui && npm ci && npm run
+  lint && npm run build`, and `git diff --exit-code -- ui/src/bindings`. The `#[ignore]` events
+  lifecycle test runs via `cargo test -p capture -- --ignored` (start/drop the hook source 50×, no
+  leak/hang). Raw command output is pasted in the session response.
+
 ## 2026-06-27 — Docs token-bloat optimization (archive v0.1.0 history, de-dup, drift fix) (`docs/optimize-doc-token-bloat`)
 - **Change:** Split shipped v0.1.0 history out of the append-only logs into `specs/archive/`
   (`05_BUILD_REVIEW`, `06_PATCH_PLAN`, `07_KNOWN_GAPS`, `08_CHANGELOG_AI`) and the human `[0.1.0]`

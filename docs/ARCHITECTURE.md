@@ -19,6 +19,10 @@ Where they ever disagree, the specs win — open an issue.
   Search/Ask/Reports UI, and Calendar-Grid Coverage Map-Reduce reports. PR7 manual audit
   evidence is local-only under ignored `docs/AUDIT*.md` / `.playwright-mcp/`; tracked summaries
   live in the build-loop docs and changelog.
+- Implemented for 0.2.1: opt-in, default-off **event-driven capture** (foreground / clipboard /
+  idle / typing-pause triggers over a debounce/rate-ceiling/idle-edge state machine + a dedicated
+  Win32 message-pump thread), with the per-frame `CaptureTrigger` persisted (schema v5). Timer/idle
+  capture is unchanged. Click + scroll-stop triggers remain deferred (`07` #47).
 - Still open: code signing and some 0.2.x follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
@@ -62,10 +66,10 @@ per-crate file-level guide to where each concern lives is the rest of this docum
 Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
 Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
 `busy_timeout=5000`. **Authoritative as-built DDL (every table, column, index, trigger, and the full
-v1→v4 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 4`)** — this is code,
-so it never drifts. `03 §4` is the design contract for the schema; where the 0.2.x text-signal
-migrations have moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`), the
-code in `store::schema` wins.
+v1→v5 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 5`)** — this is code,
+so it never drifts. `03 §4` is the design contract for the schema; where the 0.2.x migrations have
+moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`, v5 adds the nullable
+`frames.capture_trigger` for 0.2.1 event-driven capture), the code in `store::schema` wins.
 
 Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
 vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
@@ -97,6 +101,24 @@ WgcCapture.next_frame()           # diff-gated + privacy-gated; only *changed* f
   → enqueue embed_text job        # if enrich.embed_text  (+ embed_image if enabled)
   → emit KernelEvent::CaptureTick # drives the live timeline
 ```
+
+**Capture cadence — timer OR (opt-in) event-driven (0.2.1).** By default capture paces to
+`capture.interval_ms` (the 0.2.0 timer cadence). When `capture.event_driven_enabled` is on (default
+off), `WgcCapture` instead captures on real user activity: a pure debounce / rate-ceiling / idle-edge
+**trigger state machine** (`capture::trigger`, no Win32, unit-tested) is fed by a dedicated
+**input-events thread** (`capture::events`) that owns a message-only `HWND_MESSAGE` window plus a
+foreground hook (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`) and a clipboard listener
+(`AddClipboardFormatListener`), and is torn down cleanly on drop (`WM_QUIT`/unhook/destroy/join).
+Idle and typing-pause triggers need no hook — they poll `user_idle_ms` (`GetLastInputInfo`). A long
+fallback interval still samples a static screen, a debounce collapses bursts, and a min-interval
+ceiling caps the rate. **No keystrokes or clipboard contents are ever read or stored** — only
+change/idle-timing signals; a failed hook install is non-fatal (falls back to the fallback timer +
+idle polling). The kernel loop and the `CaptureSource` trait are unchanged; the event source lives
+inside `WgcCapture`, which stamps each frame with a `CaptureTrigger` (`Timer`/`Idle`/
+`ForegroundChange`/`ClipboardChange`/`TypingPause`/`Manual`) persisted to `frames.capture_trigger`
+(schema v5) and surfaced as the Moment "Captured via" row. Event settings hot-apply through the
+existing `set_settings`→`reload_capture` path (`CaptureConfig` is `PartialEq`). Click + scroll-stop
+triggers are deferred (would need `WH_MOUSE_LL`; `07` #47).
 
 Capture is **off until the user starts it** (privacy-first). If WinRT OCR cannot be created, the app
 still boots but capture start fails with `capture = Unavailable` rather than storing empty OCR rows.
