@@ -1595,7 +1595,13 @@ struct UiaWithOcrFallback {
 #[async_trait]
 impl OcrProvider for UiaWithOcrFallback {
     async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        // Gate UIA off high-frequency interactive triggers (scroll/click): each runs a fresh
+        // full-tree walk against the foreground app, and on a large Chromium/Electron a11y tree
+        // that freezes the target's UI thread ("Not responding"). Those frames go straight to
+        // OCR (the captured bitmap), which never touches the target app (`07` #48 hang fix).
+        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed)
+            && uia::classify::trigger_runs_uia(frame.trigger)
+        {
             match self.uia.recognize(frame).await {
                 Ok(result) => return Ok(result),
                 Err(e) => tracing::debug!(error = %e, "UIA recognize failed; falling back to OCR"),

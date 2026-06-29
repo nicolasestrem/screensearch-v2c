@@ -44,6 +44,24 @@ pub(crate) fn should_emit(control_type: i32, is_password: bool, is_offscreen: bo
     !is_password && !is_offscreen && !is_container(control_type)
 }
 
+/// Whether a capture trigger should run the (expensive) UIA tree walk. High-frequency
+/// interactive triggers — `ScrollStop` and `Click` — must NOT: each fires a fresh
+/// full-subtree walk against the foreground app, and on a large Chromium/Electron a11y tree
+/// that storm of synchronous cross-process calls freezes the target's UI thread ("Not
+/// responding"; scrolling is the exact reproducer). Those frames fall back to OCR (the
+/// captured bitmap), which never touches the target app. Every other trigger is
+/// low-frequency enough that one bounded walk is safe and benefits from UIA's higher
+/// fidelity. The match is exhaustive so a new `CaptureTrigger` forces a deliberate decision.
+pub fn trigger_runs_uia(trigger: traits::CaptureTrigger) -> bool {
+    use traits::CaptureTrigger::{
+        Click, ClipboardChange, ForegroundChange, Idle, Manual, ScrollStop, Timer, TypingPause,
+    };
+    match trigger {
+        ScrollStop | Click => false,
+        Timer | Idle | TypingPause | ForegroundChange | ClipboardChange | Manual => true,
+    }
+}
+
 /// Splits a (possibly multi-line) text block into `(line_index, word)` pairs starting at
 /// `first_line`, returning the pairs and the next free line index. Mirrors OCR's
 /// `Lines()`→`Words()` grouping: each `\n`-separated line that has any words is one
@@ -67,6 +85,28 @@ pub(crate) fn split_words(text: &str, first_line: u32) -> (Vec<(u32, String)>, u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use traits::CaptureTrigger;
+
+    #[test]
+    fn high_frequency_interactive_triggers_skip_uia() {
+        // Scroll and click are the exact triggers that reproduce the Chromium hang: each
+        // fires a fresh full-tree walk against the target app. They must NOT run UIA; OCR
+        // (the captured bitmap) carries those frames instead.
+        assert!(!trigger_runs_uia(CaptureTrigger::ScrollStop));
+        assert!(!trigger_runs_uia(CaptureTrigger::Click));
+    }
+
+    #[test]
+    fn low_frequency_triggers_run_uia() {
+        // Everything else is low-frequency enough that one bounded walk is safe, and these
+        // frames benefit most from UIA's higher-fidelity text.
+        assert!(trigger_runs_uia(CaptureTrigger::Timer));
+        assert!(trigger_runs_uia(CaptureTrigger::Idle));
+        assert!(trigger_runs_uia(CaptureTrigger::TypingPause));
+        assert!(trigger_runs_uia(CaptureTrigger::ForegroundChange));
+        assert!(trigger_runs_uia(CaptureTrigger::ClipboardChange));
+        assert!(trigger_runs_uia(CaptureTrigger::Manual));
+    }
 
     #[test]
     fn containers_are_skipped_but_content_controls_emit() {

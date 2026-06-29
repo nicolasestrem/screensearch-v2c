@@ -11,6 +11,39 @@
 
 ---
 
+## 2026-06-29 — Fix: UIA freezes Chromium/Electron apps — mitigation (`fix/uia-chromium-hang`)
+- **Change:** Stop UI Automation text extraction from hanging Chromium-based apps (Chrome, Edge,
+  Claude Desktop/Electron) when scrolling large content. Mitigation subset (a cache-request rewrite
+  is the planned follow-up):
+  - `crates/uia/src/classify.rs`: new pure, CI-tested `trigger_runs_uia(CaptureTrigger) -> bool` —
+    `false` for `ScrollStop`/`Click`, `true` otherwise (exhaustive match). `mod classify` →
+    `pub mod` so the composition root can call it.
+  - `src-tauri/src/lib.rs` `UiaWithOcrFallback::recognize`: gate the UIA branch with
+    `uia::classify::trigger_runs_uia(frame.trigger)` — scroll/click frames go straight to OCR.
+  - `crates/uia/src/lib.rs`: bounded `sync_channel(1)` + a worker-owned `Arc<AtomicBool> in_flight`;
+    `recognize` skips to OCR (rate-limited warn) when a walk is already running, and `try_send`s so
+    a queued slot never blocks. Kills the unbounded-backlog amplifier.
+  - `crates/uia/src/worker.rs`: `RawViewWalker` → `ControlViewWalker` (collapses Chromium's
+    per-text-run node explosion); RAII `in_flight` clear on every walk exit path; per-walk
+    `debug!(nodes, spans, elapsed_ms)` + rate-limited `warn!` when a walk hits its latency budget.
+  - `CHANGELOG.md`, `05`, `07` updated.
+- **Why:** Every capture trigger ran a live, uncached, raw-view walk of the foreground window's
+  entire a11y subtree — thousands of synchronous cross-process COM calls the *target* app's UI
+  thread had to service, freezing Chromium/Electron on large trees. The latency budget can't
+  interrupt an in-flight call and the unbounded queue let every scroll/click pile another walk on, so
+  the target never recovered. Scroll/click is the reproducer, so those frames now use OCR; the guard
+  + bounded channel + control view cut the per-trigger and total load. (`03 §5` vision-on-demand
+  stance; `07` #48 follow-up.) Decisions confirmed with the user: don't run UIA on scroll/click;
+  mitigation first, then the cache-request rewrite.
+- **Verification (verbatim):**
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...] in 41.45s` (no warnings).
+  - `cargo fmt --all -- --check` → clean after `cargo fmt --all`.
+  - `cargo test --workspace` → all green; `uia` lib: `running 12 tests` → `test result: ok. 11 passed; 0 failed; 1 ignored` (incl. the 2 new `trigger_runs_uia` tests + the `#[ignore]`d live-desktop walk); no `FAILED`/`error[`/`panicked` anywhere.
+  - `git diff --exit-code -- ui/src/bindings` → `BINDINGS CLEAN` (no `Settings` change in this PR).
+  - Live acceptance (browser stays responsive while scrolling a large Chromium/Electron page) is the desktop check via `npm run tauri dev`; run before merge.
+
+---
+
 ## 2026-06-29 — Event-driven capture review follow-up (`codex/event-capture-review-followups`)
 - **Change:** Addressed the review findings from the implemented event-driven capture work:
   - `docs/ARCHITECTURE.md` now documents the full landed trigger set, schema v6, and the default-off

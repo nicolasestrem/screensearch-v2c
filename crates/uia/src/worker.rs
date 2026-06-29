@@ -4,7 +4,9 @@
 //! here; the async side ([`crate::UiaTextProvider::recognize`]) only sends plain `Send`
 //! data over a channel, so no COM pointer ever crosses a thread boundary.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
@@ -54,12 +56,21 @@ const MAX_SPANS: usize = 10_000;
 /// check below, this keeps the walk inside its latency + memory budget for any tree shape.
 const MAX_STACK: usize = 16_000;
 
+/// Rate-limit the "walk exceeded budget" warning: only every Nth occurrence is logged so a
+/// sustained-pressure session doesn't spam the log one line per frame.
+static OVER_BUDGET_WARNS: AtomicU64 = AtomicU64::new(0);
+const WARN_EVERY: u64 = 64;
+
 /// Worker entry point: init COM (MTA), create the automation object once, then service
-/// requests until the channel closes (the provider was dropped).
+/// requests until the channel closes (the provider was dropped). `in_flight` is shared with
+/// the async provider: this worker — the sole authority — sets it on receiving a request and
+/// clears it (RAII) when the walk returns, so `recognize` can skip a frame to OCR whenever a
+/// walk is already running, even after the caller's hard timeout abandoned the future.
 pub(crate) fn worker_main(
     rx: mpsc::Receiver<Request>,
     ready: mpsc::Sender<Result<()>>,
     budget: UiaBudget,
+    in_flight: Arc<AtomicBool>,
 ) {
     // SAFETY: COM apartment init for the dedicated UIA worker thread. UIA prefers MTA.
     if let Err(e) = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
@@ -105,9 +116,22 @@ pub(crate) fn worker_main(
     }
     let _ = ready.send(Ok(()));
 
+    // RAII flag-clearer so `in_flight` is reset on every exit path of a walk — including a
+    // panic in `read_foreground` — never leaving the guard stuck "busy" (which would wedge
+    // every future frame onto the OCR fallback).
+    struct InFlight<'a>(&'a AtomicBool);
+    impl Drop for InFlight<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+
     while let Ok(req) = rx.recv() {
+        in_flight.store(true, Ordering::Release);
+        let _guard = InFlight(&in_flight);
         let result = read_foreground(&automation, &req, &budget);
         let _ = req.resp.send(result);
+        // `_guard` drops → in_flight = false, admitting the next frame.
     }
 
     // `_com` drops here (channel closed, provider gone) → CoUninitialize.
@@ -158,11 +182,18 @@ fn read_foreground(
 
     // SAFETY: ElementFromHandle on the foreground HWND; returns Err if it has no element.
     let root = unsafe { automation.ElementFromHandle(hwnd) }?;
-    // SAFETY: RawViewWalker is a property accessor returning the shared raw-view walker.
-    let walker = unsafe { automation.RawViewWalker() }?;
+    // SAFETY: ControlViewWalker is a property accessor returning the shared control-view
+    // walker. Control view (not raw view) is the load fix: a Chromium/Electron raw tree
+    // exposes one element per inline text-run, so a long page or a large grid (e.g. the
+    // qBittorrent web UI) explodes into tens of thousands of nodes — each a synchronous
+    // cross-process call that freezes the target's UI thread. Control view collapses those
+    // to the content/control elements that actually carry text, slashing node count while
+    // preserving the text we extract (Name / TextPattern visible ranges live on them).
+    let walker = unsafe { automation.ControlViewWalker() }?;
 
     let mon_origin = monitors::monitor_origin(req.monitor_index).unwrap_or((0, 0));
-    let deadline = Instant::now() + Duration::from_millis(budget.latency_ms.max(1));
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(budget.latency_ms.max(1));
 
     let mut spans: Vec<TextSpan> = Vec::new();
     let mut text = String::new();
@@ -257,6 +288,23 @@ fn read_foreground(
                 }
             }
         }
+    }
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    tracing::debug!(nodes, spans = spans.len(), elapsed_ms, "uia walk complete");
+    // A walk that consumed its full latency budget was almost certainly truncated mid-tree
+    // (the soft deadline only fires between calls), i.e. the target app is heavy. Surface it
+    // — rate-limited — so sustained pressure is visible in the log without per-frame spam.
+    if elapsed_ms >= budget.latency_ms
+        && OVER_BUDGET_WARNS.fetch_add(1, Ordering::Relaxed) % WARN_EVERY == 0
+    {
+        tracing::warn!(
+            nodes,
+            elapsed_ms,
+            budget_ms = budget.latency_ms,
+            warn_every = WARN_EVERY,
+            "uia walk hit its latency budget; target app under load (rate-limited)"
+        );
     }
 
     let text = text.trim_end().to_string();
