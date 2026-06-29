@@ -74,12 +74,21 @@ pub struct UiaTriggerPolicy {
 /// captured bitmap), which never touches the target app. `policy.run_on_interactive` opts
 /// back into the legacy behavior. Every other trigger is low-frequency enough that one
 /// bounded walk is safe. The match is exhaustive so a new `CaptureTrigger` forces a decision.
+///
+/// Residual at the `Timer` arm: the default timer-only capture path (event-driven capture
+/// off) tags *every* frame `Timer`, so this gate alone would still walk the tree on a timer
+/// tick that lands mid-scroll — bounded now (control view + node/`TextPattern` caps + the
+/// latency budget) but still synchronous cross-process COM against the foreground app. That
+/// residual is handled separately by [`input_gate_skips_uia`], which routes `Timer` frames
+/// captured during active input to OCR; the deeper single-round-trip `FindAllBuildCache`
+/// rewrite that would remove the per-node cost entirely is tracked in `07` #71.
 pub fn trigger_runs_uia(trigger: traits::CaptureTrigger, policy: UiaTriggerPolicy) -> bool {
     use traits::CaptureTrigger::{
         Click, ClipboardChange, ForegroundChange, Idle, Manual, ScrollStop, Timer, TypingPause,
     };
     match trigger {
         ScrollStop | Click => policy.run_on_interactive,
+        // `Timer` is additionally input-gated by `input_gate_skips_uia` (`07` #71) — see above.
         Timer | Idle | TypingPause | ForegroundChange | ClipboardChange | Manual => true,
     }
 }

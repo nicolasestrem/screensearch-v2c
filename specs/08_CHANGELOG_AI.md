@@ -92,6 +92,10 @@
     - `src-tauri/src/lib.rs` `UiaWithOcrFallback`: new `suppress_during_input_ms` field + private
       `input_gate_skips` helper; `recognize` runs UIA only when `trigger_runs_uia(..) &&
       !input_gate_skips(..)`. Startup info log gained `suppress_during_input_ms`.
+  - *Call-site cross-reference* (claude bot review, classify.rs:83): `trigger_runs_uia`'s `Timer`
+    arm now documents the residual and points to `input_gate_skips_uia` + `07` #71, so a future
+    reader at the `Timer => true` arm sees that the Timer-during-scroll residual is handled (doc
+    comment only — no behaviour change).
 - **Why:** Review hygiene (`04 §7`) — the lock was dead weight and `§8` is the settings
   source-of-truth that QA/future work reads; the input-activity gate closes the one real residual the
   trigger gate left (the user picked "implement" over document/defer). Version bump per the user's
