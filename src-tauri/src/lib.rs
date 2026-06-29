@@ -279,12 +279,17 @@ async fn ask_context<S: Store + ?Sized>(
     // If the bulk read fails, return before spawning the answer stream so grounded
     // Ask does not silently answer from low-quality snippets only.
     let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
-    let ocr = store.ocr_texts(&frame_ids).await.map_err(|e| {
-        format!(
-            "failed to hydrate Ask OCR context for {} frames: {e}",
-            frame_ids.len()
-        )
-    })?;
+    let ocr = store.ocr_texts(&frame_ids).await.map_err(|e| e.to_string());
+    hydrate_ask_context(hits, frame_ids.len(), ocr)
+}
+
+fn hydrate_ask_context(
+    hits: Vec<SearchHit>,
+    frame_count: usize,
+    ocr: Result<std::collections::HashMap<i64, String>, String>,
+) -> Result<Vec<RetrievedChunk>, String> {
+    let ocr = ocr
+        .map_err(|e| format!("failed to hydrate Ask OCR context for {frame_count} frames: {e}"))?;
     Ok(hits
         .into_iter()
         .map(|hit| {
@@ -1820,130 +1825,18 @@ Available devices:
         );
     }
 
-    struct FailingOcrContextStore;
+    #[test]
+    fn hydrate_ask_context_returns_clear_error_when_ocr_texts_fails() {
+        let hits = vec![SearchHit {
+            frame_id: 42,
+            captured_at: 1_234,
+            snippet: "snippet fallback".to_string(),
+            score: 0.75,
+            image_path: "frames/42.jpg".to_string(),
+            app_hint: Some("Editor".to_string()),
+        }];
 
-    #[async_trait]
-    impl Store for FailingOcrContextStore {
-        async fn insert_frame(&self, _f: traits::domain::NewFrame) -> traits::Result<i64> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn insert_ocr(
-            &self,
-            _frame_id: i64,
-            _ocr: traits::domain::OcrResult,
-        ) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn insert_vision(
-            &self,
-            _frame_id: i64,
-            _v: traits::domain::VisionAnalysis,
-        ) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn upsert_text_embedding(
-            &self,
-            _frame_id: i64,
-            _chunk_index: i32,
-            _chunk_text: &str,
-            _source: traits::domain::ChunkSource,
-            _emb: &traits::domain::Embedding,
-            _model: &str,
-        ) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn upsert_image_embedding(
-            &self,
-            _frame_id: i64,
-            _emb: &traits::domain::Embedding,
-            _model: &str,
-        ) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn hybrid_search(&self, q: &SearchQuery) -> traits::Result<Vec<SearchHit>> {
-            assert_eq!(q.text, "where was rust mentioned?");
-            assert_eq!(q.limit, 2);
-            assert!(!q.include_chrome);
-            Ok(vec![SearchHit {
-                frame_id: 42,
-                captured_at: 1_234,
-                snippet: "snippet fallback".to_string(),
-                score: 0.75,
-                image_path: "frames/42.jpg".to_string(),
-                app_hint: Some("Editor".to_string()),
-            }])
-        }
-
-        async fn get_enrichment_input(
-            &self,
-            _frame_id: i64,
-        ) -> traits::Result<Option<traits::domain::FrameEnrichmentInput>> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn ocr_texts(
-            &self,
-            frame_ids: &[i64],
-        ) -> traits::Result<std::collections::HashMap<i64, String>> {
-            assert_eq!(frame_ids, &[42]);
-            Err(
-                std::io::Error::new(std::io::ErrorKind::Other, "simulated ocr_texts failure")
-                    .into(),
-            )
-        }
-
-        async fn enqueue_job(&self, _job: traits::jobs::NewJob) -> traits::Result<i64> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn claim_jobs(
-            &self,
-            _kinds: &[traits::jobs::JobKind],
-            _limit: u32,
-            _now: i64,
-        ) -> traits::Result<Vec<traits::jobs::Job>> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn complete_job(&self, _id: i64) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn fail_job(
-            &self,
-            _id: i64,
-            _err: &str,
-            _retry_at: Option<i64>,
-        ) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn job_stats(&self) -> traits::Result<JobStats> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn reset_stale_running_jobs(&self, _older_than_ms: i64) -> traits::Result<u64> {
-            unreachable!("not used by ask_context")
-        }
-
-        async fn get_setting(&self, _key: &str) -> traits::Result<Option<String>> {
-            Ok(None)
-        }
-
-        async fn set_setting(&self, _key: &str, _value: &str) -> traits::Result<()> {
-            unreachable!("not used by ask_context")
-        }
-    }
-
-    #[tokio::test]
-    async fn ask_context_returns_clear_error_when_ocr_hydration_fails() {
-        let err = ask_context(&FailingOcrContextStore, "where was rust mentioned?", 2)
-            .await
+        let err = hydrate_ask_context(hits, 1, Err("simulated ocr_texts failure".to_string()))
             .unwrap_err();
 
         assert_eq!(

@@ -787,7 +787,8 @@
 ## 2026-06-29 — Ask OCR hydration failure handling (`fix-ask-ocr-texts-error`)
 - **Change:** Extracted Ask retrieval hydration into `ask_context` and made `ocr_texts` failures fatal before answer streaming starts, instead of silently replacing the full grounded context with search snippets through `unwrap_or_default()`.
 - **Why:** Grounded Ask quality depends on full content-text hydration; a storage/query failure should be visible to the UI and user rather than producing a lower-quality answer from fallback snippets with no warning.
-- **Test:** Added `ask_context_returns_clear_error_when_ocr_hydration_fails`, which simulates an `ocr_texts` failure and verifies the exact clear error path.
+- **Review follow-up:** Removed the large `Store` fake from the regression test and split the pure hydration/error mapping into `hydrate_ask_context`, so the test simulates the `ocr_texts` failure result without placeholder trait methods.
+- **Test:** Added `hydrate_ask_context_returns_clear_error_when_ocr_texts_fails`, which simulates an `ocr_texts` failure and verifies the exact clear error path.
 - **Verification:** `cargo fmt --all -- --check`; targeted Rust test attempted but blocked by missing Linux `glib-2.0` pkg-config dependency in the container before compilation reached the crate test.
 
 ---

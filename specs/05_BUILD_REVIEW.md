@@ -596,11 +596,12 @@ the exact evidence paths. All required commands exited 0:
 
 ### Implemented
 - Replaced the `ask` command's silent `ocr_texts(...).unwrap_or_default()` fallback with explicit pre-stream error handling. Ask now hydrates retrieval hits through `ask_context`; if the bulk OCR/content-text read fails, the command returns a clear error before spawning the answer stream. Missing text for individual frames still falls back to that hit's snippet after a successful bulk read.
-- Added a unit test that simulates an `ocr_texts` failure and asserts the exact command-side error message includes the hydrated frame count and original store error.
+- Added a focused unit test that simulates the `ocr_texts` failure result and asserts the exact command-side error message includes the hydrated frame count and original store error.
+- PR review follow-up: removed the large `Store` fake from the test and split the pure hydration/error mapping into `hydrate_ask_context`, so the regression remains covered without unrelated trait-method placeholders.
 - Updated `CHANGELOG.md` and this build-loop record.
 
 ### Verification
 - `cargo fmt --all -- --check`
-- `cargo test -p screensearch ask_context_returns_clear_error_when_ocr_hydration_fails -- --nocapture` *(blocked in this Linux container by missing `glib-2.0` system package required by Tauri/WebKit GTK dependencies before the test binary could compile).*
+- `cargo test -p screensearch hydrate_ask_context_returns_clear_error_when_ocr_texts_fails -- --nocapture` *(blocked in this Linux container by missing `glib-2.0` system package required by Tauri/WebKit GTK dependencies before the test binary could compile).*
 
 ---
