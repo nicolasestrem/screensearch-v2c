@@ -42,6 +42,9 @@ pub use download::ModelDownloader;
 #[cfg(windows)]
 pub use answer::AnswerSidecar;
 #[cfg(windows)]
-pub use supervisor::{ModelSupervisor, SupervisorConfig};
+pub use supervisor::{
+    auto_recycle_ceiling, resolve_recycle_ceiling, should_recycle, ModelSupervisor,
+    SupervisorConfig,
+};
 #[cfg(windows)]
 pub use vision::VisionSidecar;

@@ -572,6 +572,40 @@ pub fn should_evict(
     in_flight == 0 && !backfill_active && idle_expired(elapsed, ttl)
 }
 
+/// Pure recycle predicate (extracted for testing, like `should_evict`): recycle once the
+/// sidecar's committed RAM reaches the ceiling. `ceiling_bytes == 0` disables recycling.
+pub fn should_recycle(rss_bytes: u64, ceiling_bytes: u64) -> bool {
+    ceiling_bytes != 0 && rss_bytes >= ceiling_bytes
+}
+
+/// Auto recycle ceiling from total physical RAM: half of RAM, clamped to
+/// `[8 GiB, RAM − 6 GiB]` so it sits above the vision model's ~6.8 GB load baseline yet
+/// leaves headroom. Below ~14 GiB the band inverts, so fall back to the headroom bound
+/// (floored at 3 GiB) — the 8B vision model wants the Default 4B tier on such machines.
+pub fn auto_recycle_ceiling(total_ram_bytes: u64) -> u64 {
+    const GIB: u64 = 1 << 30;
+    let half = total_ram_bytes / 2;
+    let lo = 8 * GIB;
+    let hi = total_ram_bytes.saturating_sub(6 * GIB);
+    if hi <= lo {
+        hi.max(3 * GIB)
+    } else {
+        half.clamp(lo, hi)
+    }
+}
+
+/// Resolve the configured recycle settings to a byte ceiling for `SupervisorConfig`:
+/// `0` when disabled; an explicit MiB value; otherwise auto-derived from total RAM.
+pub fn resolve_recycle_ceiling(enabled: bool, rss_mb: u32) -> u64 {
+    if !enabled {
+        return 0;
+    }
+    if rss_mb > 0 {
+        return (rss_mb as u64) * 1024 * 1024;
+    }
+    auto_recycle_ceiling(process::total_physical_ram())
+}
+
 impl traits::BackfillControl for ModelSupervisor {
     fn set_backfill_active(&self, active: bool) {
         self.backfill_active.store(active, Ordering::SeqCst);
@@ -1088,5 +1122,38 @@ mod tests {
         let args = build_args(&s, 8080, &caps_full());
         assert!(!args.iter().any(|a| a == "--cache-type-k"));
         assert!(!args.iter().any(|a| a == "--cache-type-v"));
+    }
+
+    const GIB: u64 = 1 << 30;
+
+    #[test]
+    fn should_recycle_only_at_or_above_ceiling() {
+        assert!(!super::should_recycle(9 * GIB, 10 * GIB));
+        assert!(super::should_recycle(10 * GIB, 10 * GIB));
+        assert!(super::should_recycle(11 * GIB, 10 * GIB));
+    }
+
+    #[test]
+    fn should_recycle_disabled_when_ceiling_zero() {
+        assert!(!super::should_recycle(64 * GIB, 0));
+    }
+
+    #[test]
+    fn auto_ceiling_is_half_ram_within_band() {
+        assert_eq!(super::auto_recycle_ceiling(32 * GIB), 16 * GIB); // big box: RAM/2
+        assert_eq!(super::auto_recycle_ceiling(16 * GIB), 8 * GIB); // RAM/2 == floor
+        assert_eq!(super::auto_recycle_ceiling(12 * GIB), 6 * GIB); // constrained: RAM-6
+        assert_eq!(super::auto_recycle_ceiling(8 * GIB), 3 * GIB); // tiny: floored, no panic
+    }
+
+    #[test]
+    fn resolve_ceiling_branches() {
+        assert_eq!(super::resolve_recycle_ceiling(false, 0), 0); // disabled
+        assert_eq!(super::resolve_recycle_ceiling(false, 9000), 0); // disabled wins
+        assert_eq!(
+            super::resolve_recycle_ceiling(true, 9000),
+            9000 * 1024 * 1024
+        ); // explicit MiB
+        assert!(super::resolve_recycle_ceiling(true, 0) > 0); // auto from real RAM
     }
 }
