@@ -460,6 +460,13 @@ pub struct Settings {
     /// Flash-attention mode (`--flash-attn`). Reduces attention memory and unlocks KV
     /// quantization; `Auto` enables it when the bundled binary supports it.
     pub sidecar_flash_attn: FlashAttnSetting,
+    /// Recycle (restart) the sidecar when its committed host RAM crosses the ceiling,
+    /// reclaiming the upstream llama.cpp multimodal leak that otherwise grows the vision
+    /// sidecar ~150 MB per frame during long tagging. On by default.
+    pub sidecar_recycle_enabled: bool,
+    /// Committed-RAM ceiling in MiB that triggers a sidecar recycle. `0` = automatic
+    /// (derived from total system RAM). Ignored when `sidecar_recycle_enabled` is false.
+    pub sidecar_recycle_rss_mb: u32,
     pub privacy_excluded_apps: Vec<String>,
     pub privacy_pause_on_lock: bool,
     /// Default value of the Recall search "include app chrome / raw text" toggle
@@ -635,6 +642,8 @@ impl Default for Settings {
             sidecar_ctx_size: 0,
             sidecar_kv_cache_type: KvCacheType::Q8_0,
             sidecar_flash_attn: FlashAttnSetting::Auto,
+            sidecar_recycle_enabled: true,
+            sidecar_recycle_rss_mb: 0,
             privacy_excluded_apps: vec![
                 "1Password".to_string(),
                 "KeePass".to_string(),

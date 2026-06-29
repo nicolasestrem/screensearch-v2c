@@ -51,6 +51,8 @@ async fn round_trips_non_default_values() {
         sidecar_ctx_size: 4096,
         sidecar_kv_cache_type: KvCacheType::F16,
         sidecar_flash_attn: FlashAttnSetting::Off,
+        sidecar_recycle_enabled: false,
+        sidecar_recycle_rss_mb: 8192,
         privacy_excluded_apps: vec!["Signal".to_string(), "Element".to_string()],
         privacy_pause_on_lock: false,
         text_include_chrome_default: true,
