@@ -539,11 +539,14 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
         clamp_u32(s.sidecar_ctx_size, 512, 32_768)
     };
     // 0 = automatic (derived from RAM); any explicit value is a real MiB ceiling clamped
-    // to a sane band (4 GiB floor so it clears the model's load baseline).
+    // to a sane band. The 8 GiB floor matches `auto_recycle_ceiling`'s `lo`: the vision model
+    // loads to ~6.8 GB *before* the first inference, so any ceiling below that would fire
+    // `over_recycle_ceiling` immediately after every warmup → recycle → reload → over again,
+    // a silent continuous loop. 8 GiB clears the baseline with headroom to accumulate.
     s.sidecar_recycle_rss_mb = if s.sidecar_recycle_rss_mb == 0 {
         0
     } else {
-        clamp_u32(s.sidecar_recycle_rss_mb, 4096, 131_072)
+        clamp_u32(s.sidecar_recycle_rss_mb, 8192, 131_072)
     };
     s.sidecar_device = s
         .sidecar_device
@@ -716,12 +719,13 @@ mod tests {
         });
         assert_eq!(s.sidecar_recycle_rss_mb, 0, "0 stays auto");
 
-        // Below 4096 floor: clamped up.
+        // Below the 8 GiB floor: clamped up (8192 = auto_recycle_ceiling's lo; clears the
+        // ~6.8 GB vision warmup baseline so an explicit value can't cause a recycle loop).
         let s = sanitize_settings(Settings {
             sidecar_recycle_rss_mb: 100,
             ..Settings::default()
         });
-        assert_eq!(s.sidecar_recycle_rss_mb, 4096);
+        assert_eq!(s.sidecar_recycle_rss_mb, 8192);
 
         // Above 131_072 ceiling: clamped down.
         let s = sanitize_settings(Settings {

@@ -11,6 +11,26 @@
 
 ---
 
+## 2026-06-29 — PR #50 review fixes: recycle floor + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Address two PR-review findings on the recycle valve.
+  1. **Recycle-loop footgun (Claude bot).** Raised the explicit `sidecar.recycle_rss_mb` floor from
+     `4096` to `8192` MiB in `crates/kernel/src/settings.rs` (+ unit test `100 → 8192`),
+     `ui/src/routes/Settings.tsx`, and `specs/03 §8`. An explicit ceiling in `[4096, ~6963]` MiB sat
+     *below* the vision model's ~6.8 GB warmup baseline, so `over_recycle_ceiling` fired immediately
+     after every reload → silent continuous recycle loop. `8192` matches `auto_recycle_ceiling`'s
+     `lo`, guaranteeing an explicit ceiling clears the baseline.
+  2. **Misleading apply-timing (Codex P2).** The two recycle Settings controls were labelled
+     `APPLY_SIDECAR` ("next sidecar launch"), but the ceiling is resolved once at supervisor
+     construction (like `idle_ttl`), so it only takes effect on app restart. Relabelled both to
+     `APPLY_RESTART` (matching the sibling `Idle TTL` control) and documented "applies on app
+     restart" in `specs/03 §8` + `CHANGELOG.md`.
+- **Why:** Both are real correctness/UX defects on the open PR; the floor one could silently break
+  vision tagging for a manually-set ceiling.
+- **Verification:** full CI gate (UI lint+build, `cargo fmt`/`clippy`/`build`/`test --workspace`,
+  binding guard) — see below.
+
+---
+
 ## 2026-06-29 — Live proof: recycle valve fires at the committed-RAM ceiling (`fix/vision-sidecar-rss-recycle`)
 - **Change:** Runtime verification only (no code change) — confirms the shipped recycle valve
   actually recycles the live vision sidecar when committed RAM crosses the configured ceiling.
