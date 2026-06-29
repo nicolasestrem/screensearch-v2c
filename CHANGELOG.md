@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### UI — Scanline timeline thumbnail lookup
+Optimized the Scanline Timeline hover-preview lookup by sorting thumbnail metadata once per
+`thumbnails` change and using binary search to find the nearest frame. Empty thumbnail lists,
+single-frame lists, exact timestamp matches, and edge-of-range cursor positions preserve the
+previous preview behavior.
+
 ### 0.2.1 — Sidecar recycle valve
 Sidecar recycle valve: recycle llama-server at a committed-RAM ceiling to bound the upstream
 multimodal memory leak (~149 MB committed host RAM per vision inference, VRAM flat, confirmed
