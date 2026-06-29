@@ -10,7 +10,7 @@
 //! `unsafe`, no real clock** — the [`PressureSample`] and `now_ms` are passed in. The
 //! [`PressureProbe`] (Win32 in `sysmon`) and the timer live in the governor loop.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -175,16 +175,26 @@ impl Drop for ThrottleHandle {
 
 /// Spawns the governor loop: sample the probe on the configured cadence, drive the
 /// machine, publish the level into `level` (read by the worker pool) and the latest
-/// status into `status` (read by the IPC query), and broadcast `ThrottleChanged`.
+/// status into `status` (read by the IPC query), keep `embed_text_floor` current from
+/// settings, and broadcast `ThrottleChanged`.
 pub(crate) fn spawn(
     store: Arc<dyn Store>,
     probe: Arc<dyn PressureProbe>,
     level: Arc<AtomicU8>,
+    embed_text_floor: Arc<AtomicUsize>,
     status: Arc<RwLock<ThrottleStatus>>,
     events: broadcast::Sender<KernelEvent>,
 ) -> ThrottleHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
-    let join = tokio::spawn(governor_loop(store, probe, level, status, events, stop_rx));
+    let join = tokio::spawn(governor_loop(
+        store,
+        probe,
+        level,
+        embed_text_floor,
+        status,
+        events,
+        stop_rx,
+    ));
     ThrottleHandle {
         stop: stop_tx,
         join: Some(join),
@@ -199,20 +209,27 @@ async fn governor_loop(
     store: Arc<dyn Store>,
     probe: Arc<dyn PressureProbe>,
     level: Arc<AtomicU8>,
+    embed_text_floor: Arc<AtomicUsize>,
     status: Arc<RwLock<ThrottleStatus>>,
     events: broadcast::Sender<KernelEvent>,
     mut stop: watch::Receiver<bool>,
 ) {
     let mut machine: Option<ThrottleMachine> = None;
     loop {
-        // Re-read settings each tick so threshold + cadence edits hot-apply (mirrors the
-        // vision scheduler's timer_loop).
+        // Re-read settings each tick so threshold + cadence + floor edits hot-apply (mirrors
+        // the vision scheduler's timer_loop).
         let s = settings::load_settings(store.as_ref()).await;
         let interval =
             Duration::from_millis(s.throttle_sample_interval_ms as u64).max(MIN_SAMPLE_INTERVAL);
         if wait_or_stop(&mut stop, interval).await {
             break;
         }
+        // Keep the worker pool's level-2 floor current with edits (clamp mirrors
+        // `settings::sanitize_settings`), seamlessly — no pool restart.
+        embed_text_floor.store(
+            s.throttle_embed_text_floor.max(1) as usize,
+            Ordering::Relaxed,
+        );
         let cfg = config_from_settings(&s);
         let m = machine.get_or_insert_with(|| ThrottleMachine::new(cfg));
         m.set_config(cfg);

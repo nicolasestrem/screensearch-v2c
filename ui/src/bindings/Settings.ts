@@ -220,5 +220,7 @@ throttle_sample_interval_ms: number,
 /**
  * Minimum concurrent `embed_text` jobs at the Sustained level
  * (`throttle.embed_text_floor`). Clamped ≥ 1 so text indexing never fully stalls.
+ * Hot-applied by the governor each sample tick, like the other `throttle.*` knobs —
+ * no worker-pool restart.
  */
 throttle_embed_text_floor: number, };

@@ -97,6 +97,10 @@ pub struct Kernel {
     /// the worker pool so a level change reaches running workers without a pool restart.
     /// Stays `0` whenever the throttle is disabled.
     throttle_level: Arc<AtomicU8>,
+    /// The level-2 `embed_text` concurrency floor (clamped `>= 1`), shared live with both
+    /// the worker pool (which reads it) and the governor (which rewrites it from settings
+    /// each tick) so a floor edit hot-applies seamlessly, like the thresholds/dwells.
+    throttle_embed_text_floor: Arc<AtomicUsize>,
     /// Latest throttle status (level + last pressure sample), cached for the
     /// `get_throttle_status` command and the `throttle_changed` event.
     throttle_status: Arc<RwLock<ThrottleStatus>>,
@@ -176,6 +180,9 @@ impl Kernel {
             scheduler: Mutex::new(None),
             pressure_probe: RwLock::new(None),
             throttle_level: Arc::new(AtomicU8::new(0)),
+            // Min clamp; the real value is written from settings by `start_workers` and the
+            // governor before it's ever consulted (only at level 2).
+            throttle_embed_text_floor: Arc::new(AtomicUsize::new(1)),
             throttle_status: Arc::new(RwLock::new(ThrottleStatus {
                 enabled: false,
                 level: 0,
@@ -376,7 +383,14 @@ impl Kernel {
             events: self.events.clone(),
             concurrency: settings.enrich_worker_concurrency.max(1) as usize,
             throttle_level: self.throttle_level.clone(),
-            embed_text_floor: settings.throttle_embed_text_floor.max(1) as usize,
+            embed_text_floor: {
+                // Seed the shared floor from settings; the governor keeps it current per tick.
+                self.throttle_embed_text_floor.store(
+                    settings.throttle_embed_text_floor.max(1) as usize,
+                    Ordering::Relaxed,
+                );
+                self.throttle_embed_text_floor.clone()
+            },
             active_embed_text: Arc::new(AtomicUsize::new(0)),
         });
         *guard = Some(pool);
@@ -579,6 +593,7 @@ impl Kernel {
                         self.store.clone(),
                         probe,
                         self.throttle_level.clone(),
+                        self.throttle_embed_text_floor.clone(),
                         self.throttle_status.clone(),
                         self.events.clone(),
                     ));

@@ -26,9 +26,10 @@ while **capture, OCR, and storage never pause**, so nothing is lost. This lands 
   to before). When on, nine clamped knobs tune it (CPU/GPU enter+exit %, enter/exit dwell ms, sample
   interval, and the text-embed floor) in a new **Performance throttle** panel in Settings.
 - **Truthful status.** The Settings panel shows live CPU/GPU pressure and the current throttle level,
-  and a subtle **Throttling** chip appears in the status rail only while it's actually engaged. If the
-  GPU exposes no Windows performance counters (some VMs / older drivers), it says **"GPU not
-  monitored"** plainly and throttles on CPU pressure alone — never a misleading 0%.
+  and a subtle **Throttling** chip appears in the status rail only while it's actually engaged — its
+  tooltip surfaces the live CPU/GPU reading. If the GPU exposes no Windows performance counters (some
+  VMs / older drivers), both the panel and the chip tooltip say **"GPU not monitored"** plainly and the
+  throttle runs on CPU pressure alone — never a misleading 0%.
 - **Privacy & safety.** Reads only aggregate system performance counters — no per-app or per-process
   inspection. The throttle only ever narrows what the background enrichment workers claim; it cannot
   touch capture, OCR, storage, or the sidecar lifecycle.

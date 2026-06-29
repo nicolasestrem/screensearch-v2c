@@ -73,6 +73,26 @@ under sustained CPU/GPU pressure while capture/OCR/storage never pause.
 - `GetSystemTimes` is whole-machine (not per-process), so a heavy *other* app can engage the throttle —
   intended ("is the machine struggling?"), smoothed by the exit dwell + hysteresis, documented honestly.
 
+### Review follow-ups (PR #46, applied 2026-06-29 — all green re-verified)
+Three bot findings on the open PR, all accepted as correct improvements (Gemini had none):
+- **Codex P3 — StatusRail tooltip now surfaces "GPU not monitored."** The always-visible chip tooltip
+  previously showed only CPU% on a box with no GPU counters, silently omitting the GPU state that
+  `UI_REFERENCE.md` requires. Now it reads `… · GPU 92%` or `… · GPU not monitored` (the Settings panel
+  already handled this) — `ui/src/components/shell/StatusRail.tsx`.
+- **`embed_text` floor is now hot-reloaded per tick** (Claude bot). It was baked into `Shared` as a
+  plain `usize` at pool spawn, so a floor edit only applied on the next pool restart — inconsistent in
+  *kind* with the other `throttle.*` knobs (and a direct DB edit wouldn't apply). Promoted to a shared
+  `Arc<AtomicUsize>` (same pattern as `throttle_level`) the governor rewrites from settings each tick;
+  the worker pool reads it live. Seamless, no restart. Field doc + the `Settings.ts` binding doc updated
+  to match — `kernel/src/{lib,throttle,worker_pool}.rs`, `traits/src/ipc.rs`.
+- **`EmbedTextGuard` uses `Relaxed`, not `SeqCst`** (Claude bot). The reader loads the in-flight count
+  with `Relaxed` and the floor is a documented soft cap, so the guard's `SeqCst` add/sub was a
+  superfluous full fence the reader couldn't observe; lowered to `Relaxed` for consistency.
+- **Re-verification:** `cargo fmt --all -- --check` OK · `cargo clippy --workspace --all-targets -D
+  warnings` clean · `cargo test --workspace` zero failures (kernel lib 22, throttle integration 2,
+  settings 6, traits 52, sysmon 11, all suites green) · `ui` lint + build clean · bindings regenerated
+  (`Settings.ts` floor-doc, committed).
+
 ## Pass — 2026-06-28 — 0.2.1 PR4 part 2: UIA text + click/scroll-stop triggers
 
 **Branch:** `feat/0.2.1-pr4p2-uia-and-mouse-triggers`. The 0.2.1 line. Two workstreams, one branch,

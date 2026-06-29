@@ -106,8 +106,10 @@ pub(crate) struct Shared {
     /// off, so behavior is unchanged. Read on every claim — no pool restart on a change.
     pub throttle_level: Arc<AtomicU8>,
     /// Minimum concurrent `embed_text` jobs at level 2 (clamped `>= 1`), so text indexing
-    /// never fully stalls under sustained pressure.
-    pub embed_text_floor: usize,
+    /// never fully stalls under sustained pressure. Shared live with the governor, which
+    /// rewrites it from settings each tick — so a floor edit hot-applies seamlessly, the
+    /// same way the thresholds/dwells do, with no pool restart (`03 §5`).
+    pub embed_text_floor: Arc<AtomicUsize>,
     /// Live count of in-flight `embed_text` jobs across the pool — the level-2 floor gate.
     /// Fresh per pool (an in-flight count is meaningless across a restart).
     pub active_embed_text: Arc<AtomicUsize>,
@@ -198,14 +200,17 @@ struct EmbedTextGuard {
 
 impl EmbedTextGuard {
     fn new(count: Arc<AtomicUsize>) -> Self {
-        count.fetch_add(1, Ordering::SeqCst);
+        // Relaxed is sufficient: the floor is a soft cap (`worker_loop` reads this count
+        // with `Relaxed` and an accepted one-job race), so a stronger ordering here would
+        // be a superfluous full fence the reader can't observe anyway.
+        count.fetch_add(1, Ordering::Relaxed);
         Self { count }
     }
 }
 
 impl Drop for EmbedTextGuard {
     fn drop(&mut self) {
-        self.count.fetch_sub(1, Ordering::SeqCst);
+        self.count.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -253,8 +258,9 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         // reflects a single consistent view (the floor is a soft cap; a rare race just
         // lets one extra embed_text run, self-correcting next iteration).
         let level = shared.throttle_level.load(Ordering::Relaxed);
-        let allow_embed_text =
-            level < 2 || shared.active_embed_text.load(Ordering::Relaxed) < shared.embed_text_floor;
+        let allow_embed_text = level < 2
+            || shared.active_embed_text.load(Ordering::Relaxed)
+                < shared.embed_text_floor.load(Ordering::Relaxed);
         let (kinds_arr, len) = claim_kinds(&shared, level, allow_embed_text);
         let kinds = &kinds_arr[..len];
         let claimed = if kinds.is_empty() {

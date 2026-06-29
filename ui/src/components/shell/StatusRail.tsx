@@ -67,10 +67,10 @@ export function StatusRail() {
           <Tooltip
             label={`Throttling enrichment (${throttling.level >= 2 ? "Sustained" : "High"})${
               throttling.sample
-                ? ` · CPU ${Math.round(throttling.sample.cpu_pct)}%${
+                ? ` · CPU ${Math.round(throttling.sample.cpu_pct)}% · ${
                     throttling.gpu_monitored && throttling.sample.gpu_pct != null
-                      ? ` · GPU ${Math.round(throttling.sample.gpu_pct)}%`
-                      : ""
+                      ? `GPU ${Math.round(throttling.sample.gpu_pct)}%`
+                      : "GPU not monitored"
                   }`
                 : ""
             }`}
