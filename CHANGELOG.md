@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — README refresh to 0.2.1
+Rewrote the top of `README.md` to match the live app (docs-only; no runtime or code change).
+- Replaced the stale, run-on 0.2.0-era status blockquote with a short prose status line for 0.2.1.
+- Refreshed **Build progress** and **Working today** to reflect shipped 0.2.x work, and added a
+  compact **0.2.x arc** table (attention-first text, Recall reports, event-driven capture, UIA text
+  source, smart enrichment throttle).
+- Added the three missing crates to the repository-layout map (`textfilter`, `uia`, `sysmon`) so it
+  lists all 11 workspace crates, and noted the UIA text source + pressure throttle in the
+  architecture summary.
+
 ### 0.2.1 — Fix: UI Automation freezes Chromium/Electron apps (mitigation)
 Fixes a bug where enabling **UI Automation text** (`capture.uia_text_enabled`, default on) made
 Chromium-based apps — **Chrome, Edge, and Claude Desktop (Electron)** — go "Not responding" once a
