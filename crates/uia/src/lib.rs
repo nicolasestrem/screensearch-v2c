@@ -27,18 +27,24 @@
 //!
 //! Windows-only by design — no cross-platform fallback (`04` guardrails).
 
-mod classify;
+pub mod classify;
 mod geometry;
+pub mod input;
 mod monitors;
 mod worker;
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 use traits::{CapturedFrame, OcrProvider, OcrResult, Result};
+
+/// Only every Nth busy-skip is warned, so a target app under sustained load (many frames
+/// falling back to OCR) shows up in the log without one warn line per frame.
+const SKIP_WARN_EVERY: u64 = 64;
 
 /// Sentinel `mean_confidence`: UI Automation, like WinRT OCR, exposes no confidence, so we
 /// record "unknown" rather than inventing a number (mirrors [`ocr::CONFIDENCE_UNKNOWN`]).
@@ -53,14 +59,30 @@ pub struct UiaBudget {
     /// Minimum gathered text length below which the read is treated as a thin yield
     /// (`capture.uia_min_text_chars`) → `Err` → OCR fallback for that frame.
     pub min_text_chars: usize,
+    /// Hard cap on accessibility nodes visited per walk (`capture.uia_max_nodes`, `07` #71).
+    pub max_nodes: u32,
+    /// Max live `TextPattern` visible-range reads per walk
+    /// (`capture.uia_max_textpattern_calls`, `07` #71) — the one uncacheable cross-process cost.
+    pub max_textpattern_calls: u32,
+    /// Walk the control view (`true`) rather than the raw view (`capture.uia_view_control_only`,
+    /// `07` #71). Control view collapses a Chromium page's per-text-run node explosion.
+    pub control_view: bool,
 }
 
 /// UI Automation text provider backed by a dedicated COM MTA worker thread.
 ///
-/// `Mutex<Sender>` makes the provider `Sync` (the trait requires it); the lock is only held
-/// to clone the sender, never across the UIA call.
+/// `SyncSender` is itself `Sync` (when the message is `Send`), so the provider is `Sync` —
+/// which the `OcrProvider` trait requires — with no lock needed; `try_send` takes `&self`.
+/// The channel is bounded (capacity 1) and paired with `in_flight` so at most one walk runs
+/// and at most one is queued — a slow walk can no longer let triggers pile up an unbounded
+/// backlog against the target app.
 pub struct UiaTextProvider {
-    tx: Mutex<mpsc::Sender<worker::Request>>,
+    tx: mpsc::SyncSender<worker::Request>,
+    /// Set by the worker for the duration of a walk; `recognize` reads it to skip a frame to
+    /// OCR instead of queueing behind an in-progress walk.
+    in_flight: Arc<AtomicBool>,
+    /// Monotonic count of frames skipped because a walk was already running (rate-limited warn).
+    skipped: AtomicU64,
     budget: UiaBudget,
 }
 
@@ -69,17 +91,23 @@ impl UiaTextProvider {
     /// capability probe: it returns `Err` when UI Automation cannot be initialized on this
     /// session, so the caller can compose without a UIA arm (OCR carries every frame).
     pub fn spawn(budget: UiaBudget) -> Result<Self> {
-        let (tx, rx) = mpsc::channel::<worker::Request>();
+        // Bounded (capacity 1): combined with the worker-owned `in_flight` flag, the worker
+        // can have at most one walk running and one queued, never an unbounded backlog.
+        let (tx, rx) = mpsc::sync_channel::<worker::Request>(1);
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let worker_in_flight = in_flight.clone();
 
         std::thread::Builder::new()
             .name("uia-mta".to_string())
-            .spawn(move || worker::worker_main(rx, ready_tx, budget))
+            .spawn(move || worker::worker_main(rx, ready_tx, budget, worker_in_flight))
             .map_err(|e| anyhow::anyhow!("failed to spawn UIA MTA thread: {e}"))?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
-                tx: Mutex::new(tx),
+                tx,
+                in_flight,
+                skipped: AtomicU64::new(0),
                 budget,
             }),
             Ok(Err(e)) => Err(e),
@@ -91,29 +119,44 @@ impl UiaTextProvider {
 #[async_trait]
 impl OcrProvider for UiaTextProvider {
     async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult> {
+        // A walk is already running: skip this frame to OCR rather than queue behind it. This
+        // is the core backlog guard — without it, every trigger that fired during a slow walk
+        // (and after the hard timeout below abandoned its future) piled another walk onto the
+        // worker, so the target app was hammered continuously and never recovered.
+        if self.in_flight.load(Ordering::Acquire) {
+            let n = self.skipped.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % SKIP_WARN_EVERY == 0 {
+                tracing::warn!(
+                    skipped = n,
+                    "UIA busy; frames falling back to OCR (target app under load, rate-limited)"
+                );
+            }
+            return Err(anyhow::anyhow!("UIA worker busy — fall back to OCR"));
+        }
+
         let width = frame.width;
         let height = frame.height;
         let target_rect = frame.target_rect;
         let monitor_index = frame.monitor_index;
         let foreground_hwnd = frame.foreground_hwnd;
-        let tx = self.tx.lock().expect("uia sender poisoned").clone();
         // Hard ceiling against a wedged worker, on top of the worker's own soft budget.
         let timeout = Duration::from_millis(self.budget.latency_ms.saturating_mul(2).max(1));
 
-        // The request send is non-blocking (unbounded channel) and the reply is a `tokio`
-        // oneshot, so we await it directly — no `spawn_blocking` task is parked per frame.
-        // On a hard timeout the receiver is dropped here and the worker's later `send`
-        // simply no-ops, so a wedged worker can never grow the blocking pool.
+        // `try_send` on the bounded channel never blocks the executor: if the single slot is
+        // already occupied (a request is queued) it errors → OCR fallback for this frame. The
+        // reply is a `tokio` oneshot awaited directly — no `spawn_blocking` task per frame. On
+        // a hard timeout the receiver is dropped here and the worker's later `send` no-ops.
         let (resp_tx, resp_rx) = oneshot::channel();
-        tx.send(worker::Request {
-            width,
-            height,
-            target_rect,
-            monitor_index,
-            foreground_hwnd,
-            resp: resp_tx,
-        })
-        .map_err(|_| anyhow::anyhow!("UIA worker thread is gone"))?;
+        self.tx
+            .try_send(worker::Request {
+                width,
+                height,
+                target_rect,
+                monitor_index,
+                foreground_hwnd,
+                resp: resp_tx,
+            })
+            .map_err(|_| anyhow::anyhow!("UIA worker busy or gone — fall back to OCR"))?;
 
         match tokio::time::timeout(timeout, resp_rx).await {
             Ok(joined) => joined.map_err(|_| anyhow::anyhow!("UIA worker dropped the response"))?,
@@ -162,6 +205,9 @@ mod tests {
         let provider = UiaTextProvider::spawn(UiaBudget {
             latency_ms: 150,
             min_text_chars: 0,
+            max_nodes: 4000,
+            max_textpattern_calls: 64,
+            control_view: true,
         })
         .expect("spawn uia worker");
         let result = provider

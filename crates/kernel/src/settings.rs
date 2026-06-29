@@ -189,6 +189,31 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_min_text_chars,
         )
         .await,
+        capture_uia_run_on_interactive: boolean(
+            store,
+            "capture.uia_run_on_interactive",
+            d.capture_uia_run_on_interactive,
+        )
+        .await,
+        capture_uia_view_control_only: boolean(
+            store,
+            "capture.uia_view_control_only",
+            d.capture_uia_view_control_only,
+        )
+        .await,
+        capture_uia_max_nodes: num(store, "capture.uia_max_nodes", d.capture_uia_max_nodes).await,
+        capture_uia_max_textpattern_calls: num(
+            store,
+            "capture.uia_max_textpattern_calls",
+            d.capture_uia_max_textpattern_calls,
+        )
+        .await,
+        capture_uia_suppress_during_input_ms: num(
+            store,
+            "capture.uia_suppress_during_input_ms",
+            d.capture_uia_suppress_during_input_ms,
+        )
+        .await,
         throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
         throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
             .await,
@@ -415,6 +440,26 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.capture_uia_min_text_chars.to_string(),
         ),
         (
+            "capture.uia_run_on_interactive".into(),
+            bool_str(s.capture_uia_run_on_interactive).into(),
+        ),
+        (
+            "capture.uia_view_control_only".into(),
+            bool_str(s.capture_uia_view_control_only).into(),
+        ),
+        (
+            "capture.uia_max_nodes".into(),
+            s.capture_uia_max_nodes.to_string(),
+        ),
+        (
+            "capture.uia_max_textpattern_calls".into(),
+            s.capture_uia_max_textpattern_calls.to_string(),
+        ),
+        (
+            "capture.uia_suppress_during_input_ms".into(),
+            s.capture_uia_suppress_during_input_ms.to_string(),
+        ),
+        (
             "throttle.enabled".into(),
             bool_str(s.throttle_enabled).into(),
         ),
@@ -506,6 +551,16 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // count (0 disables the thin-yield fallback). Thresholds, not hardcoded.
     s.capture_uia_latency_budget_ms = clamp_u32(s.capture_uia_latency_budget_ms, 20, 2_000);
     s.capture_uia_min_text_chars = clamp_u32(s.capture_uia_min_text_chars, 0, 10_000);
+    // 0.2.1 UIA hang fix (`07` #71). Node cap floored well above a trivial walk and ceilinged
+    // so a hand-edited extreme can't reopen the freeze; live TextPattern reads floored at 1
+    // (a doc page still gets some body text) and ceilinged. `run_on_interactive` /
+    // `view_control_only` are bools (no clamp). Thresholds, not hardcoded (`03 §3b`).
+    s.capture_uia_max_nodes = clamp_u32(s.capture_uia_max_nodes, 100, 20_000);
+    s.capture_uia_max_textpattern_calls = clamp_u32(s.capture_uia_max_textpattern_calls, 1, 4_096);
+    // Input-suppression window: 0 (off) up to 10 s (a hand-edited extreme can't keep UIA off
+    // forever — capture still samples via OCR meanwhile). Threshold, not hardcoded.
+    s.capture_uia_suppress_during_input_ms =
+        clamp_u32(s.capture_uia_suppress_during_input_ms, 0, 10_000);
     // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Thresholds are
     // settings, never hardcoded. Each `*_exit_pct` is clamped strictly below its
     // `*_enter_pct` so the hysteresis invariant holds even against hand-edited DB values

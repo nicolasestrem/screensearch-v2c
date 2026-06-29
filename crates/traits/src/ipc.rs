@@ -538,6 +538,35 @@ pub struct Settings {
     /// strictly better. Baked into the provider at startup — applied on app restart (a
     /// capture stop/start reuses the existing provider).
     pub capture_uia_min_text_chars: u32,
+    /// Run UIA on high-frequency interactive triggers — click and scroll-stop
+    /// (`capture.uia_run_on_interactive`, `07` #71). Default **OFF**: those frames fall back
+    /// to OCR (the captured bitmap, which never touches the target app), because a UIA walk
+    /// during scroll is what froze Chromium/Electron apps. When on, every trigger runs UIA
+    /// (the in-flight guard + bounded queue + control-view walk still bound the load). Baked
+    /// into the provider at startup — applied on app restart (a capture stop/start reuses it).
+    pub capture_uia_run_on_interactive: bool,
+    /// Walk the UIA **control view** rather than the raw view
+    /// (`capture.uia_view_control_only`, `07` #71). Default **ON**: control view collapses a
+    /// Chromium page's per-text-run node explosion to the elements that carry text, slashing
+    /// cross-process calls. Off = raw view (legacy; far heavier on browsers). Baked at startup.
+    pub capture_uia_view_control_only: bool,
+    /// Hard cap on accessibility nodes visited per UIA walk (`capture.uia_max_nodes`, `07`
+    /// #71; replaces the former hardcoded constant). Bounds the walk on a pathological tree.
+    /// A threshold, never hardcoded (`03 §3b`). Baked into the provider at startup.
+    pub capture_uia_max_nodes: u32,
+    /// Max live `TextPattern` visible-range reads per UIA walk
+    /// (`capture.uia_max_textpattern_calls`, `07` #71). TextPattern ranges are the one
+    /// uncacheable cross-process cost; bounding them stops a document-heavy page from
+    /// reopening the call storm. A threshold, never hardcoded. Baked into the provider.
+    pub capture_uia_max_textpattern_calls: u32,
+    /// Skip the UIA walk for periodic `Timer` frames captured within this many ms of the
+    /// last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
+    /// `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
+    /// default timer-only capture path, where every frame is a `Timer` and a tick can land
+    /// mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
+    /// when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
+    /// the provider at startup — applied on app restart.
+    pub capture_uia_suppress_during_input_ms: u32,
     /// Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
     /// former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
     /// never runs and enrichment drains at full configured concurrency, exactly as
@@ -655,6 +684,18 @@ impl Default for Settings {
             capture_uia_text_enabled: true,
             capture_uia_latency_budget_ms: 150,
             capture_uia_min_text_chars: 16,
+            // 0.2.1 UIA hang fix (`07` #71): don't walk on scroll/click (the freeze repro),
+            // use the lighter control view, and bound nodes + live TextPattern reads. These
+            // are settings, never hardcoded (PR3 stance); max_nodes/textpattern replace the
+            // former worker.rs consts.
+            capture_uia_run_on_interactive: false,
+            capture_uia_view_control_only: true,
+            capture_uia_max_nodes: 4000,
+            capture_uia_max_textpattern_calls: 64,
+            // 500 ms: long enough to span the gaps between wheel/scroll events so an active
+            // scroll keeps UIA off the target app, short enough that a paused user's next
+            // timer tick resumes UIA promptly. 0 disables. (`07` #71 residual-gap fix.)
+            capture_uia_suppress_during_input_ms: 500,
             // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
             // master OFF: flipping it on backs enrichment off under sustained load. Enter
             // above 85% CPU / 90% GPU held 5 s; exit below 65% / 70% held 8 s (exit < enter

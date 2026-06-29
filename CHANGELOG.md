@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.1 — Fix: UI Automation freezes Chromium/Electron apps (mitigation)
+Fixes a bug where enabling **UI Automation text** (`capture.uia_text_enabled`, default on) made
+Chromium-based apps — **Chrome, Edge, and Claude Desktop (Electron)** — go "Not responding" once a
+page exceeded ~1.5 pages, with scrolling triggering it immediately (e.g. a large data grid like the
+qBittorrent web UI). Root cause: every capture trigger ran a live, uncached, *raw-view* walk of the
+foreground window's **entire** accessibility subtree, issuing thousands of synchronous cross-process
+calls that the target app's UI thread had to service — so the *browser* froze (no CPU spike; threads
+parked on COM marshalling). Two amplifiers: the latency budget couldn't interrupt an in-flight call,
+and an unbounded request queue let every scroll/click pile another full walk onto the worker so the
+target never recovered. This is the low-risk mitigation; a cache-request rewrite follows.
+
+- **Don't run UIA on scroll/click.** High-frequency interactive triggers (scroll-stop, click) now
+  fall back to OCR (the captured bitmap, which never touches the target app); idle / timer /
+  typing-pause / foreground / clipboard / manual frames still use UIA. Scrolling — the exact
+  reproducer — no longer fires a tree walk.
+- **No more walk backlog.** At most one UIA walk runs at a time (a worker-owned in-flight guard) and
+  the worker's request channel is bounded, so a slow walk can no longer queue further walks against
+  the target app. Busy frames skip straight to OCR.
+- **Lighter walk.** The walk now uses the UIA **control view** instead of the raw view, collapsing a
+  Chromium page's per-text-run node explosion to the elements that actually carry text — far fewer
+  cross-process calls — while preserving the extracted text.
+- **Costliest call gated.** The live `TextPattern` text read (the one UIA call that can't be
+  batched) now runs only on document/editable-text elements and is capped per frame, so a text-heavy
+  page can't reopen the call storm.
+- **Observability.** Per-walk node count + elapsed are logged at debug, and a rate-limited warning
+  fires when a walk hits its latency budget or frames are skipped under load, so the condition is
+  visible in the log (previously the UIA path was silent at `info`).
+- **Tunable.** New Settings (Text source panel): run UIA on click/scroll (default off), use
+  control-view only (default on), max nodes per read, and max text reads per read — all clamped.
+
+A deeper optimization (replacing the per-element reads with a single cached UI Automation
+round-trip) is planned as a follow-up and pending live-desktop verification.
+
+_Review follow-up (PR #48):_ closed the one residual freeze path the scroll/click gate left — with
+event-driven capture **off** (the default), every frame is a timer frame, so a timer tick could
+still walk the tree mid-scroll. A new setting **"Pause UIA after input"**
+(`capture.uia_suppress_during_input_ms`, default 500 ms) now routes timer frames captured shortly
+after you type / click / scroll / move the mouse to OCR instead, so an active scroll never triggers
+a UI Automation walk; `0` disables it, and it's bypassed when "Run UIA on click and scroll" is on.
+Also removed a redundant lock around the UIA worker sender, and documented the full 0.2.1 capture
+key set (event-driven + UIA text-source, including the hang-fix knobs) in the master spec `§8`.
+Project version bumped to **0.2.1** across the workspace, Tauri config, and npm manifests (the
+release tag follows separately).
+
 ### 0.2.1 — Event-driven capture review follow-up
 Tightens the event-driven capture paper trail after review of the implemented PR4/PR5 roadmap items.
 

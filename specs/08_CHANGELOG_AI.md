@@ -11,6 +11,105 @@
 
 ---
 
+## 2026-06-29 — Fix: UIA freezes Chromium/Electron apps — mitigation (`fix/uia-chromium-hang`)
+- **Change:** Stop UI Automation text extraction from hanging Chromium-based apps (Chrome, Edge,
+  Claude Desktop/Electron) when scrolling large content. Mitigation subset (a cache-request rewrite
+  is the planned follow-up):
+  - `crates/uia/src/classify.rs`: new pure, CI-tested `trigger_runs_uia(CaptureTrigger) -> bool` —
+    `false` for `ScrollStop`/`Click`, `true` otherwise (exhaustive match). `mod classify` →
+    `pub mod` so the composition root can call it.
+  - `src-tauri/src/lib.rs` `UiaWithOcrFallback::recognize`: gate the UIA branch with
+    `uia::classify::trigger_runs_uia(frame.trigger)` — scroll/click frames go straight to OCR.
+  - `crates/uia/src/lib.rs`: bounded `sync_channel(1)` + a worker-owned `Arc<AtomicBool> in_flight`;
+    `recognize` skips to OCR (rate-limited warn) when a walk is already running, and `try_send`s so
+    a queued slot never blocks. Kills the unbounded-backlog amplifier.
+  - `crates/uia/src/worker.rs`: `RawViewWalker` → `ControlViewWalker` (collapses Chromium's
+    per-text-run node explosion); RAII `in_flight` clear on every walk exit path; per-walk
+    `debug!(nodes, spans, elapsed_ms)` + rate-limited `warn!` when a walk hits its latency budget.
+  - `CHANGELOG.md`, `05`, `07` updated.
+- **Follow-up commits (same branch):**
+  - *Configurable policy* — promoted the hardcoded choices to clamped Settings
+    (`capture.uia_run_on_interactive` default off, `…_view_control_only` default on,
+    `…_max_nodes` 4000 replacing the `MAX_NODES` const, `…_max_textpattern_calls` 64): `traits`
+    `Settings` + `kernel` load/save/sanitize + `UiaBudget`/`UiaTriggerPolicy` + `spawn_ocr` wiring
+    + Settings UI panel + regenerated `ui/src/bindings/Settings.ts`.
+  - *TextPattern gating* — `classify::control_type_wants_textpattern` (pure, CI-tested); the walk
+    now probes the live `TextPattern` only on Document/Edit/Text controls and only under
+    `max_textpattern_calls`, skipping a cross-process round-trip on every non-text node.
+- **Deferred (explicit, needs live verification):** the `FindAllBuildCache` cached-round-trip
+  rewrite of the per-node reads (the "real lever" in the plan). Held back because its walk path is
+  only exercised by the `#[ignore]`d live-desktop test — a subtle COM/cache bug would silently
+  reduce UIA to always-thin-yield (→ OCR) with no CI signal, so it must be verified on a real
+  desktop. PR1 + the two follow-ups already remove the hang; the cache rewrite is an efficiency/
+  coverage gain. Tracked in `07` #71.
+- **Why:** Every capture trigger ran a live, uncached, raw-view walk of the foreground window's
+  entire a11y subtree — thousands of synchronous cross-process COM calls the *target* app's UI
+  thread had to service, freezing Chromium/Electron on large trees. The latency budget can't
+  interrupt an in-flight call and the unbounded queue let every scroll/click pile another walk on, so
+  the target never recovered. Scroll/click is the reproducer, so those frames now use OCR; the guard
+  + bounded channel + control view cut the per-trigger and total load. (`03 §5` vision-on-demand
+  stance; `07` #48 follow-up.) Decisions confirmed with the user: don't run UIA on scroll/click;
+  mitigation first, then the cache-request rewrite.
+- **Verification (verbatim):**
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...] in 41.45s` (no warnings).
+  - `cargo fmt --all -- --check` → clean after `cargo fmt --all`.
+  - `cargo test --workspace` → all green; `uia` lib: `running 12 tests` → `test result: ok. 11 passed; 0 failed; 1 ignored` (incl. the 2 new `trigger_runs_uia` tests + the `#[ignore]`d live-desktop walk); no `FAILED`/`error[`/`panicked` anywhere.
+  - `git diff --exit-code -- ui/src/bindings` → `BINDINGS CLEAN` (no `Settings` change in this PR).
+  - Live acceptance (browser stays responsive while scrolling a large Chromium/Electron page) is the desktop check via `npm run tauri dev`; run before merge.
+
+---
+
+## 2026-06-29 — PR #48 review follow-up + 0.2.1 version bump (`fix/uia-chromium-hang`)
+- **Change:** Addressed the actionable PR #48 review findings and bumped the project version.
+  - *Redundant lock removed* (Gemini): `crates/uia/src/lib.rs` — `UiaTextProvider.tx` changed from
+    `Mutex<mpsc::SyncSender<…>>` to a bare `mpsc::SyncSender<…>`. `SyncSender<T>` is itself `Sync`
+    when `T: Send`, and `try_send` takes `&self`, so the provider is still `Sync` (the `OcrProvider`
+    trait requirement) with no lock — `recognize` now calls `self.tx.try_send(…)` directly instead
+    of `self.tx.lock().expect(…).clone()`. Removes a per-frame lock/clone; behaviour unchanged.
+  - *Spec §8 made truthful* (Codex P2): `specs/03_MASTER_PRODUCTION_SPEC.md §8` now documents the
+    full 0.2.1 capture key set with defaults + clamp ranges — the event-driven-capture keys (gap
+    from #44/#45) and the UIA text-source keys, including the four new hang-fix knobs
+    (`uia_run_on_interactive`, `uia_view_control_only`, `uia_max_nodes`, `uia_max_textpattern_calls`).
+    Satisfies the repo rule that every setting's default lives in §8.
+  - *Version bump to 0.2.1* (user request; tag deferred): `Cargo.toml` `[workspace.package]`
+    (inherited by all 9 crates + `src-tauri` via `version.workspace = true`), `src-tauri/tauri.conf.json`,
+    `package.json` + `ui/package.json`, and both `package-lock.json` files. `Cargo.lock` regenerated.
+  - *Timer-during-scroll gate* (Codex P2, user chose "implement"): closed the residual gap that the
+    scroll/click trigger gate leaves in the **default** timer-only capture path (event-driven capture
+    off → every frame is `Timer`, so the gate is inert and a tick can land mid-scroll). TDD:
+    - `crates/uia/src/classify.rs`: new pure, CI-tested `input_gate_skips_uia(trigger,
+      ms_since_last_input, suppress_window_ms, policy) -> bool` — true only for `Timer` within the
+      window; `ForegroundChange`/`ClipboardChange`/`Manual` (act *because* of input) and
+      `Idle`/`TypingPause` (input already quiesced) are exempt; bypassed by `run_on_interactive` and
+      by a `0` window. 3 new tests (RED→GREEN verified).
+    - `crates/uia/src/input.rs` (new): `ms_since_last_input() -> Option<u32>` via Win32
+      `GetLastInputInfo` + `GetTickCount` (`wrapping_sub` for the tick rollover); one cheap syscall
+      pair, no input hooks. Added `Win32_UI_Input_KeyboardAndMouse` + `Win32_System_SystemInformation`
+      windows features. `None` → gate stays open (unknown activity never silently disables UIA).
+    - New clamped setting `capture.uia_suppress_during_input_ms` (default 500, clamp 0..=10000):
+      `traits` `Settings` + default, `kernel` load/save/sanitize (+ round-trip & clamp test),
+      Settings UI field + sanitizer, regenerated `ui/src/bindings/Settings.ts`.
+    - `src-tauri/src/lib.rs` `UiaWithOcrFallback`: new `suppress_during_input_ms` field + private
+      `input_gate_skips` helper; `recognize` runs UIA only when `trigger_runs_uia(..) &&
+      !input_gate_skips(..)`. Startup info log gained `suppress_during_input_ms`.
+  - *Call-site cross-reference* (claude bot review, classify.rs:83): `trigger_runs_uia`'s `Timer`
+    arm now documents the residual and points to `input_gate_skips_uia` + `07` #71, so a future
+    reader at the `Timer => true` arm sees that the Timer-during-scroll residual is handled (doc
+    comment only — no behaviour change).
+- **Why:** Review hygiene (`04 §7`) — the lock was dead weight and `§8` is the settings
+  source-of-truth that QA/future work reads; the input-activity gate closes the one real residual the
+  trigger gate left (the user picked "implement" over document/defer). Version bump per the user's
+  explicit request to move the code onto the 0.2.1 line (the GitHub release tag follows separately).
+- **Verification (verbatim):**
+  - `cargo fmt --all -- --check` → `=== FMT CLEAN ===` (no diff).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...]` (no warnings).
+  - `cargo test --workspace` → all green; `uia` lib `running 18 tests` → `test result: ok. 16 passed; 0 failed; 2 ignored` (incl. the 3 new `input_gate_skips_uia` tests + the `#[ignore]`d input probe); no `FAILED`/`error[`/`panicked` across the workspace.
+  - `cargo build --workspace` → `Finished` with `Cargo.lock` showing `screensearch`/`uia` at `version = "0.2.1"`.
+  - `npm run lint` (ui) → `screensearch-ui@0.2.1 lint` clean; `npm run build` → `✓ built in 1.80s`.
+  - `git diff --exit-code -- ui/src/bindings` → clean after committing the regenerated `Settings.ts` (new `capture_uia_suppress_during_input_ms` field).
+
+---
+
 ## 2026-06-29 — Event-driven capture review follow-up (`codex/event-capture-review-followups`)
 - **Change:** Addressed the review findings from the implemented event-driven capture work:
   - `docs/ARCHITECTURE.md` now documents the full landed trigger set, schema v6, and the default-off

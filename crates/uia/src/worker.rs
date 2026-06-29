@@ -4,7 +4,9 @@
 //! here; the async side ([`crate::UiaTextProvider::recognize`]) only sends plain `Send`
 //! data over a channel, so no COM pointer ever crosses a thread boundary.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
@@ -44,7 +46,7 @@ pub(crate) struct Request {
 }
 
 /// Hard caps so a pathological accessibility tree can't blow the latency budget or memory.
-const MAX_NODES: u32 = 4000;
+/// (The node cap is now `budget.max_nodes`, a clamped setting — `07` #71.)
 const MAX_DEPTH: u32 = 40;
 const MAX_SPANS: usize = 10_000;
 /// Upper bound on *pending* (pushed-but-not-yet-visited) elements. `MAX_NODES` only bounds
@@ -54,12 +56,21 @@ const MAX_SPANS: usize = 10_000;
 /// check below, this keeps the walk inside its latency + memory budget for any tree shape.
 const MAX_STACK: usize = 16_000;
 
+/// Rate-limit the "walk exceeded budget" warning: only every Nth occurrence is logged so a
+/// sustained-pressure session doesn't spam the log one line per frame.
+static OVER_BUDGET_WARNS: AtomicU64 = AtomicU64::new(0);
+const WARN_EVERY: u64 = 64;
+
 /// Worker entry point: init COM (MTA), create the automation object once, then service
-/// requests until the channel closes (the provider was dropped).
+/// requests until the channel closes (the provider was dropped). `in_flight` is shared with
+/// the async provider: this worker — the sole authority — sets it on receiving a request and
+/// clears it (RAII) when the walk returns, so `recognize` can skip a frame to OCR whenever a
+/// walk is already running, even after the caller's hard timeout abandoned the future.
 pub(crate) fn worker_main(
     rx: mpsc::Receiver<Request>,
     ready: mpsc::Sender<Result<()>>,
     budget: UiaBudget,
+    in_flight: Arc<AtomicBool>,
 ) {
     // SAFETY: COM apartment init for the dedicated UIA worker thread. UIA prefers MTA.
     if let Err(e) = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
@@ -105,9 +116,22 @@ pub(crate) fn worker_main(
     }
     let _ = ready.send(Ok(()));
 
+    // RAII flag-clearer so `in_flight` is reset on every exit path of a walk — including a
+    // panic in `read_foreground` — never leaving the guard stuck "busy" (which would wedge
+    // every future frame onto the OCR fallback).
+    struct InFlight<'a>(&'a AtomicBool);
+    impl Drop for InFlight<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+
     while let Ok(req) = rx.recv() {
+        in_flight.store(true, Ordering::Release);
+        let _guard = InFlight(&in_flight);
         let result = read_foreground(&automation, &req, &budget);
         let _ = req.resp.send(result);
+        // `_guard` drops → in_flight = false, admitting the next frame.
     }
 
     // `_com` drops here (channel closed, provider gone) → CoUninitialize.
@@ -158,11 +182,24 @@ fn read_foreground(
 
     // SAFETY: ElementFromHandle on the foreground HWND; returns Err if it has no element.
     let root = unsafe { automation.ElementFromHandle(hwnd) }?;
-    // SAFETY: RawViewWalker is a property accessor returning the shared raw-view walker.
-    let walker = unsafe { automation.RawViewWalker() }?;
+    // Control view (not raw view) is the load fix: a Chromium/Electron raw tree exposes one
+    // element per inline text-run, so a long page or a large grid (e.g. the qBittorrent web
+    // UI) explodes into tens of thousands of nodes — each a synchronous cross-process call
+    // that freezes the target's UI thread. Control view collapses those to the content/control
+    // elements that actually carry text, slashing node count while preserving the text we
+    // extract (Name / TextPattern visible ranges live on them). The view is a clamped setting.
+    // SAFETY: *ViewWalker are property accessors returning the shared walker for that view.
+    let walker = unsafe {
+        if budget.control_view {
+            automation.ControlViewWalker()
+        } else {
+            automation.RawViewWalker()
+        }
+    }?;
 
     let mon_origin = monitors::monitor_origin(req.monitor_index).unwrap_or((0, 0));
-    let deadline = Instant::now() + Duration::from_millis(budget.latency_ms.max(1));
+    let start = Instant::now();
+    let deadline = start + Duration::from_millis(budget.latency_ms.max(1));
 
     let mut spans: Vec<TextSpan> = Vec::new();
     let mut text = String::new();
@@ -172,8 +209,11 @@ fn read_foreground(
     // count, depth, span count, and the soft latency deadline checked every node.
     let mut stack: Vec<(IUIAutomationElement, u32)> = vec![(root, 0)];
     let mut nodes: u32 = 0;
+    // Live `TextPattern` reads are the costliest UIA call and the one we can't cache; cap how
+    // many a single walk makes so a document-heavy page can't reopen the call storm (`07` #71).
+    let mut textpattern_calls: u32 = 0;
     while let Some((elem, depth)) = stack.pop() {
-        if nodes >= MAX_NODES || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
+        if nodes >= budget.max_nodes || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
             break;
         }
         nodes += 1;
@@ -192,7 +232,15 @@ fn read_foreground(
             .unwrap_or(false);
 
         if classify::should_emit(control_type, is_password, is_offscreen) {
-            if let Some(raw) = extract_text(&elem) {
+            // Only probe the live TextPattern on document/text controls and only while under
+            // the per-walk cap; everything else uses cached-free Name/Value (one fewer
+            // cross-process round-trip per non-text node — the bulk of a Chromium tree).
+            let allow_textpattern = classify::control_type_wants_textpattern(control_type)
+                && textpattern_calls < budget.max_textpattern_calls;
+            if allow_textpattern {
+                textpattern_calls += 1;
+            }
+            if let Some(raw) = extract_text(&elem, allow_textpattern) {
                 let trimmed = raw.trim();
                 if !trimmed.is_empty() {
                     // SAFETY: bounding rect accessor; on failure the span gets a zero box.
@@ -259,6 +307,23 @@ fn read_foreground(
         }
     }
 
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    tracing::debug!(nodes, spans = spans.len(), elapsed_ms, "uia walk complete");
+    // A walk that consumed its full latency budget was almost certainly truncated mid-tree
+    // (the soft deadline only fires between calls), i.e. the target app is heavy. Surface it
+    // — rate-limited — so sustained pressure is visible in the log without per-frame spam.
+    if elapsed_ms >= budget.latency_ms
+        && OVER_BUDGET_WARNS.fetch_add(1, Ordering::Relaxed) % WARN_EVERY == 0
+    {
+        tracing::warn!(
+            nodes,
+            elapsed_ms,
+            budget_ms = budget.latency_ms,
+            warn_every = WARN_EVERY,
+            "uia walk hit its latency budget; target app under load (rate-limited)"
+        );
+    }
+
     let text = text.trim_end().to_string();
     let chars = text.chars().count();
     if chars < budget.min_text_chars {
@@ -278,37 +343,41 @@ fn read_foreground(
 /// Extracts an element's text via the priority ladder: `TextPattern` **visible** ranges
 /// (documents/editors — viewport text only, never the scrolled-off document) → `ValuePattern`
 /// current value (inputs) → `Name` (labels, buttons, list items). Returns `None` when the
-/// element exposes no non-empty text.
-fn extract_text(elem: &IUIAutomationElement) -> Option<String> {
+/// element exposes no non-empty text. `allow_textpattern` is `false` for non-text controls and
+/// once the per-walk TextPattern cap is hit, so the costly live `TextPattern` probe is skipped
+/// and only `ValuePattern`/`Name` are read (`07` #71).
+fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<String> {
     // GetCurrentPattern returns Err when the pattern is unsupported (windows-rs maps the
     // documented S_OK+NULL result to E_POINTER), so each `if let Ok` cleanly skips.
     // SAFETY: pattern/text accessors on a live element on the COM thread.
     unsafe {
-        if let Ok(unknown) = elem.GetCurrentPattern(UIA_TextPatternId) {
-            if let Ok(text_pattern) = unknown.cast::<IUIAutomationTextPattern>() {
-                // Only the *visible* ranges, not `DocumentRange().GetText(-1)`: the document
-                // range returns the provider's whole document including scrolled-off text that
-                // was never in the captured frame, which both breaks OCR's "only what was
-                // visible" parity and (being a large yield) would wrongly suppress the OCR
-                // fallback. `GetVisibleRanges` returns just what's in the viewport (`07` #48).
-                if let Ok(ranges) = text_pattern.GetVisibleRanges() {
-                    if let Ok(len) = ranges.Length() {
-                        let mut acc = String::new();
-                        for i in 0..len {
-                            if let Ok(range) = ranges.GetElement(i) {
-                                if let Ok(bstr) = range.GetText(-1) {
-                                    let part = bstr.to_string();
-                                    if !part.trim().is_empty() {
-                                        if !acc.is_empty() {
-                                            acc.push('\n');
+        if allow_textpattern {
+            if let Ok(unknown) = elem.GetCurrentPattern(UIA_TextPatternId) {
+                if let Ok(text_pattern) = unknown.cast::<IUIAutomationTextPattern>() {
+                    // Only the *visible* ranges, not `DocumentRange().GetText(-1)`: the document
+                    // range returns the provider's whole document including scrolled-off text that
+                    // was never in the captured frame, which both breaks OCR's "only what was
+                    // visible" parity and (being a large yield) would wrongly suppress the OCR
+                    // fallback. `GetVisibleRanges` returns just what's in the viewport (`07` #48).
+                    if let Ok(ranges) = text_pattern.GetVisibleRanges() {
+                        if let Ok(len) = ranges.Length() {
+                            let mut acc = String::new();
+                            for i in 0..len {
+                                if let Ok(range) = ranges.GetElement(i) {
+                                    if let Ok(bstr) = range.GetText(-1) {
+                                        let part = bstr.to_string();
+                                        if !part.trim().is_empty() {
+                                            if !acc.is_empty() {
+                                                acc.push('\n');
+                                            }
+                                            acc.push_str(&part);
                                         }
-                                        acc.push_str(&part);
                                     }
                                 }
                             }
-                        }
-                        if !acc.trim().is_empty() {
-                            return Some(acc);
+                            if !acc.trim().is_empty() {
+                                return Some(acc);
+                            }
                         }
                     }
                 }

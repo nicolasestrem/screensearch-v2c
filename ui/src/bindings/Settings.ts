@@ -176,6 +176,45 @@ capture_uia_latency_budget_ms: number,
  */
 capture_uia_min_text_chars: number, 
 /**
+ * Run UIA on high-frequency interactive triggers — click and scroll-stop
+ * (`capture.uia_run_on_interactive`, `07` #71). Default **OFF**: those frames fall back
+ * to OCR (the captured bitmap, which never touches the target app), because a UIA walk
+ * during scroll is what froze Chromium/Electron apps. When on, every trigger runs UIA
+ * (the in-flight guard + bounded queue + control-view walk still bound the load). Baked
+ * into the provider at startup — applied on app restart (a capture stop/start reuses it).
+ */
+capture_uia_run_on_interactive: boolean, 
+/**
+ * Walk the UIA **control view** rather than the raw view
+ * (`capture.uia_view_control_only`, `07` #71). Default **ON**: control view collapses a
+ * Chromium page's per-text-run node explosion to the elements that carry text, slashing
+ * cross-process calls. Off = raw view (legacy; far heavier on browsers). Baked at startup.
+ */
+capture_uia_view_control_only: boolean, 
+/**
+ * Hard cap on accessibility nodes visited per UIA walk (`capture.uia_max_nodes`, `07`
+ * #71; replaces the former hardcoded constant). Bounds the walk on a pathological tree.
+ * A threshold, never hardcoded (`03 §3b`). Baked into the provider at startup.
+ */
+capture_uia_max_nodes: number, 
+/**
+ * Max live `TextPattern` visible-range reads per UIA walk
+ * (`capture.uia_max_textpattern_calls`, `07` #71). TextPattern ranges are the one
+ * uncacheable cross-process cost; bounding them stops a document-heavy page from
+ * reopening the call storm. A threshold, never hardcoded. Baked into the provider.
+ */
+capture_uia_max_textpattern_calls: number, 
+/**
+ * Skip the UIA walk for periodic `Timer` frames captured within this many ms of the
+ * last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
+ * `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
+ * default timer-only capture path, where every frame is a `Timer` and a tick can land
+ * mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
+ * when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
+ * the provider at startup — applied on app restart.
+ */
+capture_uia_suppress_during_input_ms: number, 
+/**
  * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
  * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
  * never runs and enrichment drains at full configured concurrency, exactly as

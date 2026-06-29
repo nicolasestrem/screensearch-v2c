@@ -1559,18 +1559,29 @@ fn spawn_ocr(
     let budget = uia::UiaBudget {
         latency_ms: u64::from(settings.capture_uia_latency_budget_ms),
         min_text_chars: settings.capture_uia_min_text_chars as usize,
+        max_nodes: settings.capture_uia_max_nodes,
+        max_textpattern_calls: settings.capture_uia_max_textpattern_calls,
+        control_view: settings.capture_uia_view_control_only,
+    };
+    let trigger_policy = uia::classify::UiaTriggerPolicy {
+        run_on_interactive: settings.capture_uia_run_on_interactive,
     };
 
     match uia::UiaTextProvider::spawn(budget) {
         Ok(provider) => {
             tracing::info!(
                 enabled = settings.capture_uia_text_enabled,
+                run_on_interactive = settings.capture_uia_run_on_interactive,
+                control_view = settings.capture_uia_view_control_only,
+                suppress_during_input_ms = settings.capture_uia_suppress_during_input_ms,
                 "UI Automation text ready (OCR fallback)"
             );
             let composite: Arc<dyn OcrProvider> = Arc::new(UiaWithOcrFallback {
                 uia: Arc::new(provider),
                 ocr,
                 uia_enabled: uia_enabled.clone(),
+                trigger_policy,
+                suppress_during_input_ms: settings.capture_uia_suppress_during_input_ms,
             });
             (composite, None)
         }
@@ -1590,12 +1601,49 @@ struct UiaWithOcrFallback {
     uia: Arc<dyn OcrProvider>,
     ocr: Arc<dyn OcrProvider>,
     uia_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Which capture triggers run UIA (`capture.uia_run_on_interactive`). Baked at spawn,
+    /// like the budget; changing it applies on restart.
+    trigger_policy: uia::classify::UiaTriggerPolicy,
+    /// Skip UIA for `Timer` frames captured within this many ms of the last input
+    /// (`capture.uia_suppress_during_input_ms`, `07` #71); `0` disables. Baked at spawn.
+    suppress_during_input_ms: u32,
+}
+
+impl UiaWithOcrFallback {
+    /// Whether the input-activity gate routes this frame to OCR instead of a UIA walk
+    /// (`07` #71). The scroll/click trigger gate is inert in the default timer-only capture
+    /// path (every frame is a `Timer`), so this reads the live system idle time and skips the
+    /// walk for `Timer` frames captured while the user is actively interacting. If the OS
+    /// can't report idle time the gate stays open (unknown activity must not silently disable
+    /// UIA). Cheap (the decision short-circuits before the syscall when the window is `0`).
+    fn input_gate_skips(&self, trigger: traits::CaptureTrigger) -> bool {
+        if self.suppress_during_input_ms == 0 {
+            return false;
+        }
+        match uia::input::ms_since_last_input() {
+            Some(ms) => uia::classify::input_gate_skips_uia(
+                trigger,
+                ms,
+                self.suppress_during_input_ms,
+                self.trigger_policy,
+            ),
+            None => false,
+        }
+    }
 }
 
 #[async_trait]
 impl OcrProvider for UiaWithOcrFallback {
     async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        // Gate UIA off high-frequency interactive triggers (scroll/click) by default: each
+        // runs a fresh full-tree walk against the foreground app, and on a large
+        // Chromium/Electron a11y tree that freezes the target's UI thread ("Not responding").
+        // Those frames go straight to OCR (the captured bitmap), which never touches the
+        // target app (`07` #71 hang fix; `capture.uia_run_on_interactive` opts back in).
+        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed)
+            && uia::classify::trigger_runs_uia(frame.trigger, self.trigger_policy)
+            && !self.input_gate_skips(frame.trigger)
+        {
             match self.uia.recognize(frame).await {
                 Ok(result) => return Ok(result),
                 Err(e) => tracing::debug!(error = %e, "UIA recognize failed; falling back to OCR"),

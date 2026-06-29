@@ -14,6 +14,49 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-29 — Fix: UIA freezes Chromium/Electron apps (mitigation)
+
+**Branch:** `fix/uia-chromium-hang`. Bug: with UIA text on (default), Chrome/Edge/Claude Desktop
+froze ("Not responding") when scrolling content past ~1.5 pages (repro: the qBittorrent web UI's
+208-row grid). Root cause confirmed in code + runtime evidence: `worker.rs::read_foreground` ran a
+live, uncached **raw-view** DFS of the foreground window's whole a11y subtree (thousands of
+synchronous cross-process COM calls the target app's UI thread must serve), and an unbounded worker
+queue let every scroll/click pile on another walk. `07` #71. This is the agreed low-risk mitigation;
+the cache-request rewrite (`FindAllBuildCache`) is the planned PR2.
+
+### Implemented
+- **Trigger gate.** New pure, CI-tested `uia::classify::trigger_runs_uia` (false for
+  `ScrollStop`/`Click`); the composite (`src-tauri`) routes those frames to OCR.
+- **Backlog killed.** Worker-owned `Arc<AtomicBool> in_flight` (RAII-cleared) + bounded
+  `sync_channel(1)` + `try_send`: ≤1 walk running, ≤1 queued; busy frames → OCR (rate-limited warn).
+- **Lighter walk.** `RawViewWalker → ControlViewWalker`.
+- **Observability.** Per-walk `debug!(nodes, spans, elapsed_ms)` + rate-limited budget-hit `warn!`.
+
+### Verification (verbatim)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished` in 41.45s, no warnings.
+- `cargo fmt --all -- --check` → clean (after `cargo fmt --all`).
+- `cargo test --workspace` → all green; `uia` lib `running 12 tests` → `11 passed; 0 failed; 1
+  ignored` (the 2 new gate tests + the `#[ignore]`d live walk); no `FAILED`/`error[`/`panicked`.
+- `git diff --exit-code -- ui/src/bindings` → clean (no `Settings` change in this PR).
+
+### Follow-up commits (same branch)
+- **Configurable policy** — the choices above are now clamped Settings
+  (`capture.uia_run_on_interactive` off, `…_view_control_only` on, `…_max_nodes`,
+  `…_max_textpattern_calls`) with a Settings UI panel; bindings regenerated.
+- **TextPattern gating** — `classify::control_type_wants_textpattern` (pure, CI-tested); the live
+  `TextPattern` read now runs only on Document/Edit/Text controls, capped per walk.
+
+### Still risky / deferred
+- **Live desktop acceptance is the real gate** — browser must stay responsive while scrolling a
+  large Chromium/Electron page (`npm run tauri dev` + `cargo test -p uia -- --ignored`). Run before
+  merge.
+- **`FindAllBuildCache` cached-round-trip rewrite deferred** — the plan's "real lever", held back
+  because it's only exercisable via the `#[ignore]`d live test; a COM/cache bug would silently
+  thin-yield with no CI signal. Do it with live verification (`07` #71). The hang is already fixed
+  by PR1 + these follow-ups.
+
+---
+
 ## Pass — 2026-06-29 — Event-driven capture review follow-up
 
 **Branch:** `codex/event-capture-review-followups`. Addresses the review findings against the
