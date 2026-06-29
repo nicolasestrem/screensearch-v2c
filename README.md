@@ -4,22 +4,13 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status: feature-complete; P5 UI verification and packaging pending.** Capture → OCR → deferred enrichment → **hybrid
-> search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the
-> full **Command-Deck UI** (Deck, Recall, Timeline, Moment, Insights, Settings) are implemented and
-> exercised on the live app, including the P5 review hardening for bounded IPC, request-scoped ask
-> streams, storage telemetry, retention enforcement, monitor/device selection, adaptive charts, and
-> live enrichment reconfiguration. Phases **P0–P4 are complete and verified**; the **P5 Command-Deck
-> UI is feature-complete**, with its full keyboard / state / a11y matrix still being verified. A
-> 2026-06-23 evidence-driven audit exercised the **live app on real hardware** — GPU `llama-server`
-> runtime, real vision tagging, grounded `ask`, and ~33 ms p95 search on 10 000 frames — and tracks
-> the open UI gaps (the keyboard/state/a11y matrix, and a no-evidence answer still rendering
-> cited-frame tiles) in the point-in-time PR audits — local-only evidence artifacts under
-> `docs/audits/` (e.g. `AUDIT_0.2.0_PR7_2026-06-25.md`), git-ignored and not pushed. **Packaging**
-> (installer + portable ZIP, code signing — DoD §13.9) remains beyond that. The design lives in
-> [`specs/`](./specs); the as-built architecture is in
-> [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project (not linked to,
-> and importing no data from, any prior version).
+> **Status — 0.2.1.** Capture → OCR/UIA text → deferred enrichment → **hybrid search**, the
+> **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the full
+> **Command-Deck UI** all run on the live app. The 0.2.x arc adds attention-first text filtering,
+> Recall reports, opt-in event-driven capture, and a smart enrichment throttle. **Packaging**
+> (installer + portable ZIP, code signing) is the remaining follow-up. Design lives in
+> [`specs/`](./specs); the as-built architecture is in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+> A standalone, clean-slate project — no shared code or data with any prior version.
 
 ## Screenshots
 
@@ -49,23 +40,36 @@ omitted). Nothing here touches the network: every frame, query, and answer stays
 | **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, minimal live timeline | ✅ Complete |
 | **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
 | **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
-| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; UI verification in progress |
+| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; live-verified (full keyboard/state/a11y matrix pending) |
 | **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
 
-> **P5 verification** (per the point-in-time PR audits — local-only artifacts under `docs/audits/`,
-> git-ignored): all six screens
-> are built and the P5 review hardening landed, but the full keyboard/state/a11y matrix is not yet
-> verified and a no-evidence answer can still render cited-frame tiles. P0–P4 verified clean (with a
-> minor P2 OCR caveat noted in the audit).
+The **0.2.x arc** builds on that v1.0 base — an attention-first text signal plus recall and
+capture refinements:
+
+| Feature | What it adds | Status |
+|---|---|---|
+| **Attention-first text** | Span-aware classifier so search/Ask/embeddings rank on content, not chrome (raw text still opt-in) | ✅ Shipped |
+| **Recall reports** | On-device Daily / Weekly / Custom summaries that cite the frames they used | ✅ Shipped |
+| **Event-driven capture** | Opt-in triggers — foreground, clipboard, idle, typing-pause, click, scroll-stop (timer stays the default) | ✅ Shipped |
+| **UIA text source** | Foreground-window text via UI Automation, with automatic OCR fallback | ✅ Shipped |
+| **Smart enrichment throttle** | Opt-in CPU/GPU backpressure that eases off background work under load — capture/OCR/storage never pause | ✅ Shipped |
+
+> Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
+> not pushed).
 
 ### Working today
-Start capture → each changed frame is OCR'd, stored, and JPEG-archived → an `embed_text` job is
-enqueued → a background worker pool embeds it with **fastembed** (EmbeddingGemma-300M, 768-dim) →
-**hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with Reciprocal Rank Fusion) returns
-the right frames in **~33 ms p95 on a 10 000-frame database**. **Vision tagging** (on-demand / timer /
-idle — structured output with an honest confidence, never a fabricated score) and **grounded,
-streaming answers** with citations run on the local **llama.cpp sidecar**; the full Command-Deck UI
-surfaces all of it. Retention purges run at startup and hourly when enabled, and the StatusRail shows
+Start capture → each changed frame's text is read (foreground-window **UIA**, falling back to native
+**WinRT OCR**), stored, and JPEG-archived → an attention-first filter keeps content text over chrome
+→ an `embed_text` job is enqueued → a background worker pool embeds it with **fastembed**
+(EmbeddingGemma-300M, 768-dim) → **hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with
+Reciprocal Rank Fusion) returns the right frames in **~33 ms p95 on a 10 000-frame database**.
+Capture runs on a timer by default, with **opt-in event-driven triggers** (foreground, clipboard,
+idle, typing-pause, click, scroll-stop). **Vision tagging** (on-demand / timer / idle — structured
+output with an honest confidence, never a fabricated score), **grounded streaming answers** with
+citations, and **Recall reports** (Daily / Weekly / Custom, citing their source frames) run on the
+local **llama.cpp sidecar**; the full Command-Deck UI surfaces all of it. An optional **enrichment
+throttle** eases off background work under sustained CPU/GPU pressure without ever pausing capture,
+OCR, or storage. Retention purges run at startup and hourly when enabled, and the StatusRail shows
 real DB/frame storage usage.
 
 ## What it does (v1.0 target)
@@ -86,7 +90,10 @@ real DB/frame storage usage.
 - **Core:** a modular Rust **kernel** — trait-bounded modules over a typed event bus; `src-tauri`
   is the composition root that wires concrete impls in.
 - **Processing:** *capture-cheap, enrich-deferred* — a durable SQLite **job queue** drained by a
-  bounded worker pool (with retry/backoff, dead-lettering, and stale-job recovery).
+  bounded worker pool (with retry/backoff, dead-lettering, and stale-job recovery). An optional
+  CPU/GPU **pressure throttle** reduces background enrichment under load; capture/OCR/storage never pause.
+- **Text source:** foreground-window text via **UI Automation** with automatic fallback to native
+  **WinRT OCR**, then an attention-first filter that keeps content over chrome.
 - **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine); forward-only migrations.
 - **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text, optional
   nomic-embed-vision-v1.5 image. **No Python in the runtime.**
@@ -123,10 +130,13 @@ crates/
   traits/          module contracts + shared domain/IPC/job types (no impls)
   kernel/          orchestrator: event bus, capture loop, worker pool, settings
   store/           data spine: SQLite + sqlite-vec + FTS5, job queue, hybrid search
-  capture/         CaptureSource (WGC) + diff/privacy gates
+  capture/         CaptureSource (WGC) + diff/privacy gates + event-driven triggers
   ocr/             OcrProvider (WinRT Media.Ocr, STA worker)
+  uia/             UI Automation foreground-window text source (OCR fallback)
+  textfilter/      pure, deterministic span-aware text classifier (attention-first filtering)
   embeddings/      EmbeddingProvider (fastembed, in-process ONNX)
   inference/       VisionProvider + AnswerProvider + llama.cpp supervisor (Job-Object lifecycle)
+  sysmon/          CPU/GPU pressure probe driving the enrichment throttle
   doctor/          WebView2 / Vulkan / llama-server environment smoke-check
 src-tauri/         Tauri 2 shell + composition root + command handlers + main()
 ui/                React 18 + TS + Vite — the full "Command Deck" (6 screens, typed IPC)
