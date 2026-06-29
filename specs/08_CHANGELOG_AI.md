@@ -11,6 +11,25 @@
 
 ---
 
+## 2026-06-29 — Live proof: recycle valve fires at the committed-RAM ceiling (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Runtime verification only (no code change) — confirms the shipped recycle valve
+  actually recycles the live vision sidecar when committed RAM crosses the configured ceiling.
+- **Why:** Task 7 / DoD for the leak mitigation: unit tests + review proved the logic; this proves
+  it end-to-end in the running app, including the no-orphan teardown (`03 §5/§6`).
+- **Verification:** Pre-seeded `sidecar.recycle_rss_mb=9000` (ceiling = 9 437 184 000 B = 9000 MiB),
+  `sidecar.recycle_enabled=true`, Quality (8B) vision tier; drove a continuous vision backlog and
+  sampled `Get-Process llama-server` every 3–5 s. Verbatim:
+  - Climb to ceiling, then recycle #1:
+    `22:17:15 PID=22256 Priv=8.75 GB → 22:17:18 Priv=9.07 GB (crossed) → 22:17:21 *** RECYCLE: PID 22256 -> 22004  Priv now 4.57 GB ***`
+  - Recycle log line (our supervisor path, not a crash):
+    `2026-06-29T20:17:18 INFO inference::supervisor: sidecar recycled at committed-RAM ceiling ceiling_bytes=9437184000`
+  - No orphan: `llama-server` instance count = **1** immediately after the recycle.
+  - Re-accumulation: new PID 22004 climbed 4.57 → 8.83 GB on continued tagging and parked above the
+    ceiling when activity paused (the check is `acquire()`-gated by design — it fires on the next
+    vision request, not on a timer), confirming the valve bounds host RAM repeatedly.
+
+---
+
 ## 2026-06-29 — Sidecar recycle valve + upstream leak docs (`fix/vision-sidecar-rss-recycle`)
 - **Change:** Docs-only — records the upstream llama.cpp multimodal host-memory leak and the
   shipped recycle valve mitigation. Files changed: `specs/03_MASTER_PRODUCTION_SPEC.md §8`

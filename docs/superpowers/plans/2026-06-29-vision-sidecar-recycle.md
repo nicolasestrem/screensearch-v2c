@@ -579,7 +579,7 @@ git commit -m "docs: record sidecar recycle valve + upstream multimodal leak (kn
 
 **Files:** none (runtime proof; paste raw output per the verbatim rule).
 
-- [ ] **Step 1: Full gate (matches CI).** From repo root:
+- [x] **Step 1: Full gate (matches CI).** From repo root:
 
 ```bash
 cd ui && npm ci && npm run lint && npm run build && cd ..
@@ -591,16 +591,23 @@ git diff --exit-code -- ui/src/bindings
 ```
 Paste all output. All must pass and the binding diff must be empty.
 
-- [ ] **Step 2: Force a recycle.** Launch the app (`npm run tauri dev`). In Settings set **Recycle memory ceiling** to a low value (e.g. `9000` MiB) and keep the toggle on; select the **Quality (8B)** vision tier; generate/allow a vision backlog so tagging runs continuously.
+- [x] **Step 2: Force a recycle.** Launch the app (`npm run tauri dev`). In Settings set **Recycle memory ceiling** to a low value (e.g. `9000` MiB) and keep the toggle on; select the **Quality (8B)** vision tier; generate/allow a vision backlog so tagging runs continuously. *(Run note: ceiling pre-seeded into `screensearch.db` while closed — it binds at startup like `idle_ttl`, so a UI change needs a restart; Quality tier was already selected.)*
 
-- [ ] **Step 3: Observe + capture.** In PowerShell, watch the sidecar:
+- [x] **Step 3: Observe + capture.** In PowerShell, watch the sidecar:
 
 ```powershell
 1..40 | ForEach-Object { $p = Get-Process -Name llama-server -ErrorAction SilentlyContinue | Select-Object -First 1; if ($p) { "{0} PID={1} Priv={2:N2}GB" -f (Get-Date -Format HH:mm:ss),$p.Id,($p.PrivateMemorySize64/1GB) }; Start-Sleep 5 }
 ```
 Expected and to paste: committed RAM climbs toward ~9 GB, then the **PID changes** (recycle: kill + respawn) and committed RAM drops back to the ~6.8 GB baseline, while tagging continues. The app log shows `sidecar recycled at committed-RAM ceiling`.
 
-- [ ] **Step 4: Record the result** in `specs/08_CHANGELOG_AI.md` (and the plan file) with the pasted before/after PID + RAM, then commit if anything changed.
+- [x] **Step 4: Record the result** in `specs/08_CHANGELOG_AI.md` (and the plan file) with the pasted before/after PID + RAM, then commit if anything changed.
+
+**RESULT (2026-06-29, live, Quality 8B, ceiling 9000 MiB):** climb to ceiling then recycle —
+`22:17:15 PID=22256 Priv=8.75 GB → 22:17:18 Priv=9.07 GB (crossed) → 22:17:21 RECYCLE PID 22256→22004 Priv 4.57 GB`;
+log `20:17:18 INFO inference::supervisor: sidecar recycled at committed-RAM ceiling ceiling_bytes=9437184000`;
+`llama-server` instance count = 1 (no orphan); new PID 22004 re-accumulated 4.57 → 8.83 GB on continued
+tagging. Recycle is `acquire()`-gated (fires on the next vision request after the ceiling is crossed; RAM
+parks above the ceiling while activity is paused). **PASS.**
 
 ---
 
