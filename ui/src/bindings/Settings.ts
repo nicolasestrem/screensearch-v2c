@@ -205,6 +205,16 @@ capture_uia_max_nodes: number,
  */
 capture_uia_max_textpattern_calls: number, 
 /**
+ * Skip the UIA walk for periodic `Timer` frames captured within this many ms of the
+ * last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
+ * `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
+ * default timer-only capture path, where every frame is a `Timer` and a tick can land
+ * mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
+ * when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
+ * the provider at startup — applied on app restart.
+ */
+capture_uia_suppress_during_input_ms: number, 
+/**
  * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
  * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
  * never runs and enrichment drains at full configured concurrency, exactly as

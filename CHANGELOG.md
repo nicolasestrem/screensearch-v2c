@@ -42,9 +42,14 @@ target never recovered. This is the low-risk mitigation; a cache-request rewrite
 A deeper optimization (replacing the per-element reads with a single cached UI Automation
 round-trip) is planned as a follow-up and pending live-desktop verification.
 
-_Review follow-up (PR #48):_ removed a redundant lock around the UIA worker sender (`SyncSender`
-is already `Sync`), and documented the full 0.2.1 capture key set — the event-driven-capture keys
-and the UIA text-source keys (including the four new hang-fix knobs) — in the master spec `§8`.
+_Review follow-up (PR #48):_ closed the one residual freeze path the scroll/click gate left — with
+event-driven capture **off** (the default), every frame is a timer frame, so a timer tick could
+still walk the tree mid-scroll. A new setting **"Pause UIA after input"**
+(`capture.uia_suppress_during_input_ms`, default 500 ms) now routes timer frames captured shortly
+after you type / click / scroll / move the mouse to OCR instead, so an active scroll never triggers
+a UI Automation walk; `0` disables it, and it's bypassed when "Run UIA on click and scroll" is on.
+Also removed a redundant lock around the UIA worker sender, and documented the full 0.2.1 capture
+key set (event-driven + UIA text-source, including the hang-fix knobs) in the master spec `§8`.
 Project version bumped to **0.2.1** across the workspace, Tauri config, and npm manifests (the
 release tag follows separately).
 

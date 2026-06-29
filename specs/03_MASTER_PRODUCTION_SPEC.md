@@ -486,7 +486,10 @@ Chromium/Electron; on = legacy, every trigger walks) · `capture.uia_view_contro
 ON; control view collapses a Chromium page's per-text-run node explosion; off = raw view, far heavier) ·
 `capture.uia_max_nodes` (4000, clamp 100..=20000 — hard cap on nodes visited per walk; replaces the
 former hardcoded constant) · `capture.uia_max_textpattern_calls` (64, clamp 1..=4096 — max live
-`TextPattern` visible-range reads per walk, the one uncacheable cross-process cost).
+`TextPattern` visible-range reads per walk, the one uncacheable cross-process cost) ·
+`capture.uia_suppress_during_input_ms` (500, clamp 0..=10000 — `Timer` frames captured within this
+many ms of the last keyboard/mouse input skip UIA → OCR, closing the freeze gap the trigger gate
+leaves in default timer-only capture; `0` disables, bypassed when `uia_run_on_interactive` is on).
 
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.

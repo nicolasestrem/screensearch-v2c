@@ -559,6 +559,14 @@ pub struct Settings {
     /// uncacheable cross-process cost; bounding them stops a document-heavy page from
     /// reopening the call storm. A threshold, never hardcoded. Baked into the provider.
     pub capture_uia_max_textpattern_calls: u32,
+    /// Skip the UIA walk for periodic `Timer` frames captured within this many ms of the
+    /// last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
+    /// `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
+    /// default timer-only capture path, where every frame is a `Timer` and a tick can land
+    /// mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
+    /// when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
+    /// the provider at startup — applied on app restart.
+    pub capture_uia_suppress_during_input_ms: u32,
     /// Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
     /// former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
     /// never runs and enrichment drains at full configured concurrency, exactly as
@@ -684,6 +692,10 @@ impl Default for Settings {
             capture_uia_view_control_only: true,
             capture_uia_max_nodes: 4000,
             capture_uia_max_textpattern_calls: 64,
+            // 500 ms: long enough to span the gaps between wheel/scroll events so an active
+            // scroll keeps UIA off the target app, short enough that a paused user's next
+            // timer tick resumes UIA promptly. 0 disables. (`07` #71 residual-gap fix.)
+            capture_uia_suppress_during_input_ms: 500,
             // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
             // master OFF: flipping it on backs enrichment off under sustained load. Enter
             // above 85% CPU / 90% GPU held 5 s; exit below 65% / 70% held 8 s (exit < enter

@@ -208,6 +208,12 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_max_textpattern_calls,
         )
         .await,
+        capture_uia_suppress_during_input_ms: num(
+            store,
+            "capture.uia_suppress_during_input_ms",
+            d.capture_uia_suppress_during_input_ms,
+        )
+        .await,
         throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
         throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
             .await,
@@ -450,6 +456,10 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.capture_uia_max_textpattern_calls.to_string(),
         ),
         (
+            "capture.uia_suppress_during_input_ms".into(),
+            s.capture_uia_suppress_during_input_ms.to_string(),
+        ),
+        (
             "throttle.enabled".into(),
             bool_str(s.throttle_enabled).into(),
         ),
@@ -547,6 +557,10 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // `view_control_only` are bools (no clamp). Thresholds, not hardcoded (`03 §3b`).
     s.capture_uia_max_nodes = clamp_u32(s.capture_uia_max_nodes, 100, 20_000);
     s.capture_uia_max_textpattern_calls = clamp_u32(s.capture_uia_max_textpattern_calls, 1, 4_096);
+    // Input-suppression window: 0 (off) up to 10 s (a hand-edited extreme can't keep UIA off
+    // forever — capture still samples via OCR meanwhile). Threshold, not hardcoded.
+    s.capture_uia_suppress_during_input_ms =
+        clamp_u32(s.capture_uia_suppress_during_input_ms, 0, 10_000);
     // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Thresholds are
     // settings, never hardcoded. Each `*_exit_pct` is clamped strictly below its
     // `*_enter_pct` so the hysteresis invariant holds even against hand-edited DB values

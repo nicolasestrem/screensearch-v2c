@@ -84,6 +84,7 @@ async fn round_trips_non_default_values() {
         capture_uia_view_control_only: false,
         capture_uia_max_nodes: 2000,
         capture_uia_max_textpattern_calls: 128,
+        capture_uia_suppress_during_input_ms: 750,
         // Enrichment throttle — every field away from its default, within the sanitize
         // clamps (each exit % kept below its enter %), so the round-trip exercises the
         // new load/save encodings.
@@ -157,12 +158,17 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
         .set_setting("capture.uia_max_textpattern_calls", "0") // below floor 1
         .await
         .unwrap();
+    store
+        .set_setting("capture.uia_suppress_during_input_ms", "99999") // above ceiling 10_000
+        .await
+        .unwrap();
 
     let loaded = load_settings(dyn_store).await;
 
     assert_eq!(loaded.capture_interval_ms, 250);
     assert_eq!(loaded.capture_uia_max_nodes, 100);
     assert_eq!(loaded.capture_uia_max_textpattern_calls, 1);
+    assert_eq!(loaded.capture_uia_suppress_during_input_ms, 10_000);
     assert_eq!(loaded.capture_diff_threshold, 0.0);
     assert_eq!(loaded.storage_jpeg_quality, 1);
     assert_eq!(loaded.storage_max_width, 7680);

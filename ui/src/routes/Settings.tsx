@@ -92,6 +92,7 @@ function sanitizeSettings(s: Settings): Settings {
     capture_uia_min_text_chars: clampInt(s.capture_uia_min_text_chars, 0, 10_000),
     capture_uia_max_nodes: clampInt(s.capture_uia_max_nodes, 100, 20_000),
     capture_uia_max_textpattern_calls: clampInt(s.capture_uia_max_textpattern_calls, 1, 4_096),
+    capture_uia_suppress_during_input_ms: clampInt(s.capture_uia_suppress_during_input_ms, 0, 10_000),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
     storage_max_width: clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
@@ -613,6 +614,15 @@ export function Component() {
             value={draft.capture_uia_max_textpattern_calls}
             onChange={intHandler("capture_uia_max_textpattern_calls")}
             hint={`Upper bound on full-text reads per frame (the costliest UIA call); bounds a text-heavy page. ${APPLY_RESTART}`}
+          />
+          <Field
+            label="Pause UIA after input (ms)"
+            type="number"
+            min={0}
+            max={10000}
+            value={draft.capture_uia_suppress_during_input_ms}
+            onChange={intHandler("capture_uia_suppress_during_input_ms")}
+            hint={`Timer-driven frames skip UI Automation (using OCR) for this long after you type, click, scroll, or move the mouse, so an active scroll never triggers a tree walk against the app. 0 disables. ${APPLY_RESTART}`}
           />
         </div>
       </Panel>

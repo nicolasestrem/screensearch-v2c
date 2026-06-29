@@ -74,21 +74,35 @@
   - *Version bump to 0.2.1* (user request; tag deferred): `Cargo.toml` `[workspace.package]`
     (inherited by all 9 crates + `src-tauri` via `version.workspace = true`), `src-tauri/tauri.conf.json`,
     `package.json` + `ui/package.json`, and both `package-lock.json` files. `Cargo.lock` regenerated.
-  - *Not actioned (flagged to user):* Codex P2 "gate timer captures during interactive scrolling" —
-    default (event-capture-off) `Timer` frames still walk during scroll. A real residual gap, but the
-    fix (input-activity suppression for `Timer`) is a behaviour change needing a product decision;
-    raised with the user rather than silently implemented. The primary hang drivers are already fixed
-    for `Timer` frames (control view + node/TextPattern caps + in-flight guard).
-- **Why:** Review hygiene (`04 §7`) — the lock was dead weight, and `§8` is the settings
-  source-of-truth that QA/future work reads. Version bump per the user's explicit request to move the
-  code onto the 0.2.1 line (the GitHub release tag follows separately, not in this PR).
+  - *Timer-during-scroll gate* (Codex P2, user chose "implement"): closed the residual gap that the
+    scroll/click trigger gate leaves in the **default** timer-only capture path (event-driven capture
+    off → every frame is `Timer`, so the gate is inert and a tick can land mid-scroll). TDD:
+    - `crates/uia/src/classify.rs`: new pure, CI-tested `input_gate_skips_uia(trigger,
+      ms_since_last_input, suppress_window_ms, policy) -> bool` — true only for `Timer` within the
+      window; `ForegroundChange`/`ClipboardChange`/`Manual` (act *because* of input) and
+      `Idle`/`TypingPause` (input already quiesced) are exempt; bypassed by `run_on_interactive` and
+      by a `0` window. 3 new tests (RED→GREEN verified).
+    - `crates/uia/src/input.rs` (new): `ms_since_last_input() -> Option<u32>` via Win32
+      `GetLastInputInfo` + `GetTickCount` (`wrapping_sub` for the tick rollover); one cheap syscall
+      pair, no input hooks. Added `Win32_UI_Input_KeyboardAndMouse` + `Win32_System_SystemInformation`
+      windows features. `None` → gate stays open (unknown activity never silently disables UIA).
+    - New clamped setting `capture.uia_suppress_during_input_ms` (default 500, clamp 0..=10000):
+      `traits` `Settings` + default, `kernel` load/save/sanitize (+ round-trip & clamp test),
+      Settings UI field + sanitizer, regenerated `ui/src/bindings/Settings.ts`.
+    - `src-tauri/src/lib.rs` `UiaWithOcrFallback`: new `suppress_during_input_ms` field + private
+      `input_gate_skips` helper; `recognize` runs UIA only when `trigger_runs_uia(..) &&
+      !input_gate_skips(..)`. Startup info log gained `suppress_during_input_ms`.
+- **Why:** Review hygiene (`04 §7`) — the lock was dead weight and `§8` is the settings
+  source-of-truth that QA/future work reads; the input-activity gate closes the one real residual the
+  trigger gate left (the user picked "implement" over document/defer). Version bump per the user's
+  explicit request to move the code onto the 0.2.1 line (the GitHub release tag follows separately).
 - **Verification (verbatim):**
   - `cargo fmt --all -- --check` → `=== FMT CLEAN ===` (no diff).
-  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...] in 7.24s` (no warnings).
-  - `cargo test --workspace` → all green; `uia` lib `test result: ok. 13 passed; 0 failed; 1 ignored`; no `FAILED`/`error[`/`panicked` across the workspace.
-  - `cargo check --workspace` → `Finished` with `Cargo.lock` showing `screensearch`/`uia` at `version = "0.2.1"`.
-  - `npm run lint` (ui) → `screensearch-ui@0.2.1 lint` clean; `npm run build` → `✓ built in 1.93s`.
-  - `git diff --exit-code -- ui/src/bindings` → `BINDINGS CLEAN`.
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...]` (no warnings).
+  - `cargo test --workspace` → all green; `uia` lib `running 18 tests` → `test result: ok. 16 passed; 0 failed; 2 ignored` (incl. the 3 new `input_gate_skips_uia` tests + the `#[ignore]`d input probe); no `FAILED`/`error[`/`panicked` across the workspace.
+  - `cargo build --workspace` → `Finished` with `Cargo.lock` showing `screensearch`/`uia` at `version = "0.2.1"`.
+  - `npm run lint` (ui) → `screensearch-ui@0.2.1 lint` clean; `npm run build` → `✓ built in 1.80s`.
+  - `git diff --exit-code -- ui/src/bindings` → clean after committing the regenerated `Settings.ts` (new `capture_uia_suppress_during_input_ms` field).
 
 ---
 

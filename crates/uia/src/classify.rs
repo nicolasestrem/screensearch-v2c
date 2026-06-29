@@ -84,6 +84,32 @@ pub fn trigger_runs_uia(trigger: traits::CaptureTrigger, policy: UiaTriggerPolic
     }
 }
 
+/// Whether to skip the UIA walk for this frame because the user is *actively* producing
+/// input. `ms_since_last_input` is the system-wide idle time (Win32 `GetLastInputInfo`);
+/// `suppress_window_ms` is `capture.uia_suppress_during_input_ms` (`0` disables the gate).
+///
+/// This closes the gap [`trigger_runs_uia`] alone leaves: in the default timer-only capture
+/// path (event-driven capture off) *every* frame is tagged `Timer`, so the scroll/click gate
+/// is inert and a `Timer` tick can still land mid-scroll on a heavy Chromium/Electron a11y
+/// tree — the exact freeze (`07` #71). So **only `Timer`** is input-gated: it is the periodic
+/// trigger that fires blind to user activity. Every other trigger is exempt — `ScrollStop`/
+/// `Click` are already handled by [`trigger_runs_uia`]; `ForegroundChange`/`ClipboardChange`/
+/// `Manual` must run UIA *because* the user just acted (capture the new state); `Idle`/
+/// `TypingPause` fire only after input has quiesced. When the user has opted into UIA during
+/// interaction (`policy.run_on_interactive`), the gate is bypassed, so that one knob coherently
+/// governs all "run UIA while interacting" behavior.
+pub fn input_gate_skips_uia(
+    trigger: traits::CaptureTrigger,
+    ms_since_last_input: u32,
+    suppress_window_ms: u32,
+    policy: UiaTriggerPolicy,
+) -> bool {
+    if policy.run_on_interactive || suppress_window_ms == 0 {
+        return false;
+    }
+    matches!(trigger, traits::CaptureTrigger::Timer) && ms_since_last_input < suppress_window_ms
+}
+
 /// Splits a (possibly multi-line) text block into `(line_index, word)` pairs starting at
 /// `first_line`, returning the pairs and the next free line index. Mirrors OCR's
 /// `Lines()`→`Words()` grouping: each `\n`-separated line that has any words is one
@@ -144,6 +170,66 @@ mod tests {
             assert!(trigger_runs_uia(CaptureTrigger::ForegroundChange, policy));
             assert!(trigger_runs_uia(CaptureTrigger::ClipboardChange, policy));
             assert!(trigger_runs_uia(CaptureTrigger::Manual, policy));
+        }
+    }
+
+    #[test]
+    fn input_gate_skips_timer_walks_during_active_input() {
+        // The default (timer-only) capture path tags every frame `Timer`, so the scroll/click
+        // trigger gate is inert there. A `Timer` tick can therefore land mid-scroll on a heavy
+        // Chromium/Electron tree — the exact freeze the hang fix avoids. With a 500 ms window,
+        // a `Timer` frame whose last input was 100 ms ago (the user is actively interacting)
+        // must skip UIA and fall back to OCR.
+        assert!(input_gate_skips_uia(CaptureTrigger::Timer, 100, 500, GATED));
+        // Once input has settled past the window, the periodic walk runs again.
+        assert!(!input_gate_skips_uia(
+            CaptureTrigger::Timer,
+            800,
+            500,
+            GATED
+        ));
+        // Exactly at the window boundary counts as settled (strictly-less-than).
+        assert!(!input_gate_skips_uia(
+            CaptureTrigger::Timer,
+            500,
+            500,
+            GATED
+        ));
+    }
+
+    #[test]
+    fn input_gate_is_disabled_by_zero_window_or_opt_in() {
+        // A zero window turns the gate off entirely (the documented disable value).
+        assert!(!input_gate_skips_uia(CaptureTrigger::Timer, 0, 0, GATED));
+        // Opting into UIA-during-interaction (`run_on_interactive`) bypasses the gate too, so
+        // the one knob coherently governs all "UIA while interacting" behavior.
+        assert!(!input_gate_skips_uia(
+            CaptureTrigger::Timer,
+            50,
+            500,
+            PERMISSIVE
+        ));
+    }
+
+    #[test]
+    fn input_gate_only_touches_timer_triggers() {
+        // Every non-`Timer` trigger is exempt even with input 0 ms ago: scroll/click are
+        // already handled by `trigger_runs_uia`; foreground/clipboard/manual must run UIA
+        // *because* the user just acted (capture the new state); idle/typing-pause fire only
+        // after input has quiesced. Gating them on recent input would wrongly suppress them.
+        for trigger in [
+            CaptureTrigger::ScrollStop,
+            CaptureTrigger::Click,
+            CaptureTrigger::ForegroundChange,
+            CaptureTrigger::ClipboardChange,
+            CaptureTrigger::Manual,
+            CaptureTrigger::Idle,
+            CaptureTrigger::TypingPause,
+        ] {
+            assert!(
+                !input_gate_skips_uia(trigger, 0, 500, GATED),
+                "{trigger:?} must not be input-gated"
+            );
         }
     }
 

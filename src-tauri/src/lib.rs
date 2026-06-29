@@ -1573,6 +1573,7 @@ fn spawn_ocr(
                 enabled = settings.capture_uia_text_enabled,
                 run_on_interactive = settings.capture_uia_run_on_interactive,
                 control_view = settings.capture_uia_view_control_only,
+                suppress_during_input_ms = settings.capture_uia_suppress_during_input_ms,
                 "UI Automation text ready (OCR fallback)"
             );
             let composite: Arc<dyn OcrProvider> = Arc::new(UiaWithOcrFallback {
@@ -1580,6 +1581,7 @@ fn spawn_ocr(
                 ocr,
                 uia_enabled: uia_enabled.clone(),
                 trigger_policy,
+                suppress_during_input_ms: settings.capture_uia_suppress_during_input_ms,
             });
             (composite, None)
         }
@@ -1602,6 +1604,32 @@ struct UiaWithOcrFallback {
     /// Which capture triggers run UIA (`capture.uia_run_on_interactive`). Baked at spawn,
     /// like the budget; changing it applies on restart.
     trigger_policy: uia::classify::UiaTriggerPolicy,
+    /// Skip UIA for `Timer` frames captured within this many ms of the last input
+    /// (`capture.uia_suppress_during_input_ms`, `07` #71); `0` disables. Baked at spawn.
+    suppress_during_input_ms: u32,
+}
+
+impl UiaWithOcrFallback {
+    /// Whether the input-activity gate routes this frame to OCR instead of a UIA walk
+    /// (`07` #71). The scroll/click trigger gate is inert in the default timer-only capture
+    /// path (every frame is a `Timer`), so this reads the live system idle time and skips the
+    /// walk for `Timer` frames captured while the user is actively interacting. If the OS
+    /// can't report idle time the gate stays open (unknown activity must not silently disable
+    /// UIA). Cheap (the decision short-circuits before the syscall when the window is `0`).
+    fn input_gate_skips(&self, trigger: traits::CaptureTrigger) -> bool {
+        if self.suppress_during_input_ms == 0 {
+            return false;
+        }
+        match uia::input::ms_since_last_input() {
+            Some(ms) => uia::classify::input_gate_skips_uia(
+                trigger,
+                ms,
+                self.suppress_during_input_ms,
+                self.trigger_policy,
+            ),
+            None => false,
+        }
+    }
 }
 
 #[async_trait]
@@ -1614,6 +1642,7 @@ impl OcrProvider for UiaWithOcrFallback {
         // target app (`07` #71 hang fix; `capture.uia_run_on_interactive` opts back in).
         if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed)
             && uia::classify::trigger_runs_uia(frame.trigger, self.trigger_policy)
+            && !self.input_gate_skips(frame.trigger)
         {
             match self.uia.recognize(frame).await {
                 Ok(result) => return Ok(result),

@@ -29,6 +29,7 @@
 
 pub mod classify;
 mod geometry;
+pub mod input;
 mod monitors;
 mod worker;
 
