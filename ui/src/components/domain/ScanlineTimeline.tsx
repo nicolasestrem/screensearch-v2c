@@ -6,7 +6,7 @@
 // scan-head and texture are DOM overlays (crisp accent + token glow); only the
 // density is canvas. devicePixelRatio-crisp; ambient drift is gated by
 // prefers-reduced-motion in globals.css.
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { TimelineBucket } from "../../bindings/TimelineBucket";
 import type { TimeRange } from "../../bindings/TimeRange";
@@ -32,6 +32,31 @@ export interface ScanlineTimelineProps {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
+function nearestThumbnailByTime(thumbnails: FrameMeta[], time: number): FrameMeta | null {
+  if (thumbnails.length === 0) return null;
+
+  let lo = 0;
+  let hi = thumbnails.length;
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (thumbnails[mid].captured_at < time) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  if (lo < thumbnails.length && thumbnails[lo].captured_at === time) {
+    return thumbnails[lo];
+  }
+  if (lo === 0) return thumbnails[0];
+  if (lo === thumbnails.length) return thumbnails[thumbnails.length - 1];
+
+  const before = thumbnails[lo - 1];
+  const after = thumbnails[lo];
+  return time - before.captured_at <= after.captured_at - time ? before : after;
+}
+
 export function ScanlineTimeline({
   buckets,
   range,
@@ -48,6 +73,10 @@ export function ScanlineTimeline({
   const [hover, setHover] = useState<{ x: number; time: number } | null>(null);
 
   const span = Math.max(0, range.end - range.start);
+  const sortedThumbnails = useMemo(
+    () => [...thumbnails].sort((a, b) => a.captured_at - b.captured_at),
+    [thumbnails],
+  );
 
   // Track the container's pixel box so the canvas can be redrawn crisply on resize.
   useEffect(() => {
@@ -89,20 +118,6 @@ export function ScanlineTimeline({
   };
 
   const positionPct = span === 0 ? 0 : (clamp(position, range.start, range.end) - range.start) / span;
-
-  // Nearest frame to a given time, for the hover preview.
-  const nearestThumb = (time: number): FrameMeta | null => {
-    let best: FrameMeta | null = null;
-    let bestD = Infinity;
-    for (const f of thumbnails) {
-      const d = Math.abs(f.captured_at - time);
-      if (d < bestD) {
-        bestD = d;
-        best = f;
-      }
-    }
-    return best;
-  };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     dragging.current = true;
@@ -155,7 +170,7 @@ export function ScanlineTimeline({
     if (next !== null) onScrub(next);
   };
 
-  const hoverFrame = hover ? nearestThumb(hover.time) : null;
+  const hoverFrame = hover ? nearestThumbnailByTime(sortedThumbnails, hover.time) : null;
 
   return (
     <div

@@ -569,6 +569,27 @@ Manual dev-exe verification passed with `npm run tauri dev`, launching
 
 ---
 
+## Build review — 2026-06-29 — Scanline timeline thumbnail lookup
+
+**Branch:** `perf/scanline-timeline-binary-search`.
+
+### Implemented
+- Updated `ui/src/components/domain/ScanlineTimeline.tsx` to memoize a sorted copy of hover
+  thumbnail metadata by `captured_at` so pointer movement no longer resorts or mutates caller data.
+- Replaced the per-hover linear nearest-thumbnail scan with a small pure binary-search helper that
+  finds the insertion point, preserves `null` for empty lists, returns exact matches immediately,
+  clamps before-first/after-last times to the nearest edge frame, and compares the two adjacent
+  frames for in-between times.
+
+### Verification
+- `cd ui && npm run lint`
+- `cd ui && npm run build`
+
+Full Rust workspace verification was not rerun because this is an isolated UI-only performance
+change with no generated bindings, Rust code, schema, or Tauri context contract changes.
+
+---
+
 ## Audit — 2026-06-26 — 0.2.0 PR3 attention-first filtering
 
 **Branch:** `codex/0.2.0-pr3-audit`. Runtime: `npm run tauri dev` launching
