@@ -15,7 +15,8 @@ use crate::domain::{
     RetrievedChunk, TextFilterContext, VisionAnalysis,
 };
 use crate::ipc::{
-    AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, SearchHit, SearchQuery, TimelineBucket,
+    AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, PressureSample, SearchHit,
+    SearchQuery, TimelineBucket,
 };
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::{MonitorInfo, Result};
@@ -314,4 +315,22 @@ pub trait Store: Send + Sync {
 pub trait BackfillControl: Send + Sync {
     /// `true` suppresses idle-TTL eviction (keep warm); `false` resumes it.
     fn set_backfill_active(&self, active: bool);
+}
+
+/// Reads instantaneous system CPU/GPU pressure for the smart enrichment throttle
+/// (`03 §5/§8`). Windows-native impl in `sysmon` (`GetSystemTimes` + PDH GPU-Engine
+/// counters). The kernel forbids `unsafe`, so the composition root injects this as
+/// `dyn PressureProbe` — the same seam as [`BackfillControl`] and the capture
+/// `IdleSource`, keeping the kernel dependent only on `traits` (`03 §2`).
+///
+/// **Infallible by contract:** a failed or absent reading degrades to a truthful sample
+/// (best-effort CPU, `gpu_pct = None`, `gpu_monitored = false`), never an error —
+/// mirroring the sidecar flag probe's "degrade, don't fail" stance (`inference::flags`).
+/// So the throttle loop can sample on a hot path without error handling.
+pub trait PressureProbe: Send + Sync {
+    /// Samples CPU (always) and GPU (when monitored) at this instant.
+    fn sample(&self) -> PressureSample;
+    /// Whether GPU monitoring is live — lets the UI show the honest "GPU not monitored"
+    /// state without taking a full sample. Cheap.
+    fn gpu_monitored(&self) -> bool;
 }

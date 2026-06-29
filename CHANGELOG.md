@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.1 — Smart enrichment throttle (former PR5)
+Adds an optional, off-by-default **performance throttle** that keeps the app responsive under load:
+when the machine is under sustained CPU/GPU pressure, ScreenSearch eases off the heavy background
+work (vision tagging, image embeds) and, at the deepest level, reduces text-embedding concurrency —
+while **capture, OCR, and storage never pause**, so nothing is lost. This lands on the 0.2.1 line
+(`docs/0.2.0.md` deferred work; `07` #49).
+
+- **Pressure-aware backpressure.** A lightweight monitor samples whole-machine CPU (via
+  `GetSystemTimes`) and GPU utilization (via Windows performance counters — works for **any** GPU:
+  NVIDIA, AMD, or Intel integrated). Under sustained pressure the enrichment queue pauses
+  `vision_tag` + `embed_image`; under deeper/longer pressure it also floors `embed_text` concurrency
+  to a configurable minimum so search indexing never fully stalls. It engages and releases with
+  hysteresis (separate enter/exit thresholds + dwell times) so it never flaps.
+- **Off by default, opt-in.** Master switch `throttle.enabled` (default off → behavior is byte-identical
+  to before). When on, nine clamped knobs tune it (CPU/GPU enter+exit %, enter/exit dwell ms, sample
+  interval, and the text-embed floor) in a new **Performance throttle** panel in Settings.
+- **Truthful status.** The Settings panel shows live CPU/GPU pressure and the current throttle level,
+  and a subtle **Throttling** chip appears in the status rail only while it's actually engaged. If the
+  GPU exposes no Windows performance counters (some VMs / older drivers), it says **"GPU not
+  monitored"** plainly and throttles on CPU pressure alone — never a misleading 0%.
+- **Privacy & safety.** Reads only aggregate system performance counters — no per-app or per-process
+  inspection. The throttle only ever narrows what the background enrichment workers claim; it cannot
+  touch capture, OCR, storage, or the sidecar lifecycle.
+
 ### 0.2.1 — UIA target-window text, with OCR fallback (PR4 part 2)
 Adds a higher-fidelity text source: when capturing, the app now reads the **foreground window's text
 via Windows UI Automation (UIA)** — more structured than full-screen OCR — and falls back to OCR

@@ -37,3 +37,4 @@ ocr.workspace = true
 uia.workspace = true
 embeddings.workspace = true
 inference.workspace = true
+sysmon.workspace = true

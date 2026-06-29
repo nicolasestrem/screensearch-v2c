@@ -538,6 +538,35 @@ pub struct Settings {
     /// strictly better. Baked into the provider at startup — applied on app restart (a
     /// capture stop/start reuses the existing provider).
     pub capture_uia_min_text_chars: u32,
+    /// Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
+    /// former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
+    /// never runs and enrichment drains at full configured concurrency, exactly as
+    /// before. When on, sustained CPU/GPU pressure pauses `vision_tag`/`embed_image` and
+    /// floors `embed_text` concurrency; capture/OCR/storage never throttle (`03 §5`).
+    pub throttle_enabled: bool,
+    /// CPU busy % at/above which pressure counts toward raising a throttle level
+    /// (`throttle.cpu_enter_pct`). A threshold, never hardcoded (`03 §3b` stance).
+    pub throttle_cpu_enter_pct: f32,
+    /// CPU busy % below which pressure counts toward lowering a level
+    /// (`throttle.cpu_exit_pct`). Kept strictly below the enter % for hysteresis.
+    pub throttle_cpu_exit_pct: f32,
+    /// GPU utilization % enter threshold (`throttle.gpu_enter_pct`). Ignored when the GPU
+    /// is unmonitored (no Windows GPU perf counters) — the throttle is then CPU-only.
+    pub throttle_gpu_enter_pct: f32,
+    /// GPU utilization % exit threshold (`throttle.gpu_exit_pct`); strictly below enter.
+    pub throttle_gpu_exit_pct: f32,
+    /// How long pressure must stay above the enter threshold before stepping up one
+    /// throttle level, ms (`throttle.enter_after_ms`) — the sustained-enter dwell.
+    pub throttle_enter_after_ms: u32,
+    /// How long pressure must stay below the exit threshold before stepping down one
+    /// level, ms (`throttle.exit_after_ms`) — the recovered-exit dwell (longer = stickier).
+    pub throttle_exit_after_ms: u32,
+    /// Pressure sampling cadence, ms (`throttle.sample_interval_ms`). The floor keeps
+    /// sampling cheap.
+    pub throttle_sample_interval_ms: u32,
+    /// Minimum concurrent `embed_text` jobs at the Sustained level
+    /// (`throttle.embed_text_floor`). Clamped ≥ 1 so text indexing never fully stalls.
+    pub throttle_embed_text_floor: u32,
 }
 
 impl Default for Settings {
@@ -624,6 +653,21 @@ impl Default for Settings {
             capture_uia_text_enabled: true,
             capture_uia_latency_budget_ms: 150,
             capture_uia_min_text_chars: 16,
+            // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
+            // master OFF: flipping it on backs enrichment off under sustained load. Enter
+            // above 85% CPU / 90% GPU held 5 s; exit below 65% / 70% held 8 s (exit < enter
+            // = hysteresis, so a value between the bands holds the level instead of
+            // flapping); sample every 1 s; keep ≥1 embed_text worker at L2 so text indexing
+            // never fully stalls. Every threshold is a setting, never hardcoded (PR3 stance).
+            throttle_enabled: false,
+            throttle_cpu_enter_pct: 85.0,
+            throttle_cpu_exit_pct: 65.0,
+            throttle_gpu_enter_pct: 90.0,
+            throttle_gpu_exit_pct: 70.0,
+            throttle_enter_after_ms: 5000,
+            throttle_exit_after_ms: 8000,
+            throttle_sample_interval_ms: 1000,
+            throttle_embed_text_floor: 1,
         }
     }
 }
@@ -819,6 +863,39 @@ pub struct Toast {
     pub message: String,
 }
 
+/// A point-in-time system-pressure reading from the `sysmon` probe (`03 §8`). The
+/// enrichment throttle (`03 §5`) consumes this to decide whether to back enrichment off
+/// under sustained load. `gpu_pct` is `None` and `gpu_monitored` is `false` when Windows
+/// exposes no GPU performance counters — a truthful "GPU not monitored" state, not an
+/// error; the throttle then runs on CPU pressure alone (a weak-iGPU / VM machine).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct PressureSample {
+    /// Whole-machine CPU busy %, `0..=100` (not per-process — see `03 §5`).
+    pub cpu_pct: f32,
+    /// Summed GPU-engine utilization %, `0..=100`; `None` when GPU is unmonitored.
+    pub gpu_pct: Option<f32>,
+    /// Whether GPU monitoring is live; `false` → the UI shows "GPU not monitored".
+    pub gpu_monitored: bool,
+    /// When this sample was taken, unix epoch ms (the kernel clock unit, `03 §4`).
+    #[ts(type = "number")]
+    pub sampled_at: i64,
+}
+
+/// Current state of the enrichment throttle (`get_throttle_status` command + the
+/// `throttle_changed` event, `03 §7`). `level` is `0` Normal / `1` High (heavy
+/// enrichment paused) / `2` Sustained (text-embed concurrency floored). `sample` is
+/// `None` until the first probe reading lands; `gpu_monitored` mirrors the probe so the
+/// UI can show an honest "GPU not monitored" state even before a sample exists.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ThrottleStatus {
+    pub enabled: bool,
+    pub level: u8,
+    pub sample: Option<PressureSample>,
+    pub gpu_monitored: bool,
+}
+
 #[cfg(test)]
 mod ts_number_guard {
     use super::*;
@@ -848,6 +925,8 @@ mod ts_number_guard {
             ("JobStats", JobStats::inline()),
             ("ReportRequest", ReportRequest::inline()),
             ("ReportResponse", ReportResponse::inline()),
+            ("PressureSample", PressureSample::inline()),
+            ("ThrottleStatus", ThrottleStatus::inline()),
         ];
         for (name, decl) in decls {
             assert!(

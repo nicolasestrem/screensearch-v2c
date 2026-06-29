@@ -24,6 +24,7 @@ import type { Settings } from "../../bindings/Settings";
 import type { StorageStats } from "../../bindings/StorageStats";
 import type { MonitorInfo } from "../../bindings/MonitorInfo";
 import type { AppSuppression } from "../../bindings/AppSuppression";
+import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -127,3 +128,8 @@ export const setSettings = (settings: Settings): Promise<void> =>
  *  over-suppression (PR3, `03 §3b`). */
 export const getTextFilterStats = (): Promise<AppSuppression[]> =>
   invoke<AppSuppression[]>("get_text_filter_stats");
+
+/** Current enrichment-throttle status: live CPU/GPU pressure, level, and whether the
+ *  GPU is monitored (`03 §7`, former PR5). Live updates arrive via `throttle_changed`. */
+export const getThrottleStatus = (): Promise<ThrottleStatus> =>
+  invoke<ThrottleStatus>("get_throttle_status");

@@ -4499,6 +4499,7 @@ dependencies = [
  "ocr",
  "serde_json",
  "store",
+ "sysmon",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
@@ -5025,6 +5026,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "sysmon"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "traits",
+ "windows 0.62.2",
 ]
 
 [[package]]

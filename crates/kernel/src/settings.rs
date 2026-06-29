@@ -189,6 +189,29 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_min_text_chars,
         )
         .await,
+        throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
+        throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
+            .await,
+        throttle_cpu_exit_pct: num(store, "throttle.cpu_exit_pct", d.throttle_cpu_exit_pct).await,
+        throttle_gpu_enter_pct: num(store, "throttle.gpu_enter_pct", d.throttle_gpu_enter_pct)
+            .await,
+        throttle_gpu_exit_pct: num(store, "throttle.gpu_exit_pct", d.throttle_gpu_exit_pct).await,
+        throttle_enter_after_ms: num(store, "throttle.enter_after_ms", d.throttle_enter_after_ms)
+            .await,
+        throttle_exit_after_ms: num(store, "throttle.exit_after_ms", d.throttle_exit_after_ms)
+            .await,
+        throttle_sample_interval_ms: num(
+            store,
+            "throttle.sample_interval_ms",
+            d.throttle_sample_interval_ms,
+        )
+        .await,
+        throttle_embed_text_floor: num(
+            store,
+            "throttle.embed_text_floor",
+            d.throttle_embed_text_floor,
+        )
+        .await,
     })
 }
 
@@ -391,6 +414,42 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "capture.uia_min_text_chars".into(),
             s.capture_uia_min_text_chars.to_string(),
         ),
+        (
+            "throttle.enabled".into(),
+            bool_str(s.throttle_enabled).into(),
+        ),
+        (
+            "throttle.cpu_enter_pct".into(),
+            s.throttle_cpu_enter_pct.to_string(),
+        ),
+        (
+            "throttle.cpu_exit_pct".into(),
+            s.throttle_cpu_exit_pct.to_string(),
+        ),
+        (
+            "throttle.gpu_enter_pct".into(),
+            s.throttle_gpu_enter_pct.to_string(),
+        ),
+        (
+            "throttle.gpu_exit_pct".into(),
+            s.throttle_gpu_exit_pct.to_string(),
+        ),
+        (
+            "throttle.enter_after_ms".into(),
+            s.throttle_enter_after_ms.to_string(),
+        ),
+        (
+            "throttle.exit_after_ms".into(),
+            s.throttle_exit_after_ms.to_string(),
+        ),
+        (
+            "throttle.sample_interval_ms".into(),
+            s.throttle_sample_interval_ms.to_string(),
+        ),
+        (
+            "throttle.embed_text_floor".into(),
+            s.throttle_embed_text_floor.to_string(),
+        ),
     ];
     store.set_settings_batch(&kvs).await
 }
@@ -447,6 +506,21 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // count (0 disables the thin-yield fallback). Thresholds, not hardcoded.
     s.capture_uia_latency_budget_ms = clamp_u32(s.capture_uia_latency_budget_ms, 20, 2_000);
     s.capture_uia_min_text_chars = clamp_u32(s.capture_uia_min_text_chars, 0, 10_000);
+    // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Thresholds are
+    // settings, never hardcoded. Each `*_exit_pct` is clamped strictly below its
+    // `*_enter_pct` so the hysteresis invariant holds even against hand-edited DB values
+    // (the kernel is not a trust boundary); the embed_text floor is clamped >= 1 so text
+    // indexing never fully stalls under sustained pressure.
+    s.throttle_cpu_enter_pct = clamp_f32(s.throttle_cpu_enter_pct, 1.0, 100.0);
+    s.throttle_cpu_exit_pct =
+        clamp_f32(s.throttle_cpu_exit_pct, 0.0, s.throttle_cpu_enter_pct - 1.0);
+    s.throttle_gpu_enter_pct = clamp_f32(s.throttle_gpu_enter_pct, 1.0, 100.0);
+    s.throttle_gpu_exit_pct =
+        clamp_f32(s.throttle_gpu_exit_pct, 0.0, s.throttle_gpu_enter_pct - 1.0);
+    s.throttle_enter_after_ms = clamp_u32(s.throttle_enter_after_ms, 500, 120_000);
+    s.throttle_exit_after_ms = clamp_u32(s.throttle_exit_after_ms, 500, 300_000);
+    s.throttle_sample_interval_ms = clamp_u32(s.throttle_sample_interval_ms, 250, 10_000);
+    s.throttle_embed_text_floor = clamp_u32(s.throttle_embed_text_floor, 1, 16);
     s
 }
 

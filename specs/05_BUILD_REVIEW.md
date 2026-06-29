@@ -14,6 +14,65 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-29 — 0.2.1 PR5: Smart enrichment throttle
+
+**Branch:** `feat/0.2.1-pr5-enrichment-throttle`. The 0.2.1 line. Realizes the roadmap's former PR5
+(`docs/0.2.0.md` deferred work; `07` #49): an opt-in, default-OFF throttle that backs enrichment off
+under sustained CPU/GPU pressure while capture/OCR/storage never pause.
+
+### Implemented
+- **`crates/sysmon` pressure probe (the only new `unsafe`).** `traits::PressureProbe` impl: CPU via
+  `GetSystemTimes` (pure busy%-from-FILETIME-delta helper, 6 unit tests); GPU via Windows PDH
+  `\GPU Engine(*)\Utilization Percentage` with `PdhAddEnglishCounterW` (locale-proof) summed across
+  engines (pure aggregation helper, 4 unit tests). Infallible-by-contract: absent GPU counters latch
+  `gpu_monitored=false` / `gpu_pct=None` (truthful CPU-only fallback). 11 `sysmon` tests pass; the live
+  `sample_is_well_formed` exercised the real probe on this machine (CPU + a monitored GPU).
+- **Pure `kernel/src/throttle.rs` machine + governor loop.** Levels 0/1/2, `exit<enter` hysteresis,
+  enter/exit dwell, one level per dwell (9 unit tests incl. flap-suppression and the gpu-unmonitored
+  CPU-only path). The governor publishes the level into a shared `Arc<AtomicU8>` the worker pool reads
+  live — a level change reaches running workers with **no pool restart** (the headline design choice
+  vs the existing concurrency-via-restart mechanism).
+- **Worker-pool enforcement.** `claim_kinds` drops `embed_image`+`vision_tag` at level ≥ 1; level 2
+  caps concurrent `embed_text` to `throttle.embed_text_floor` (≥1) via an in-flight atomic + RAII guard.
+- **Settings / IPC / UI.** Nine clamped `throttle.*` keys; `get_throttle_status` + `throttle_changed`;
+  a Settings "Performance throttle" panel (all five view states + honest "GPU not monitored") and a
+  StatusRail "Throttling" chip (level ≥ 1 only).
+- **Integration proof (`kernel/tests/throttle.rs`, 2 tests).** With a `FakePressureProbe` driving live
+  pressure and the *real* worker pool + governor: under sustained pressure `embed_text` drains while
+  `embed_image`+`vision_tag` stay pending (done=1, pending=2), then all drain on recovery; with the
+  throttle disabled all three drain (gate inert when off).
+
+### Skipped / deferred
+- **On-demand vision under throttle is deferred, not bypassed** (default chosen). At level ≥ 1 an
+  explicit `enqueue_vision` (priority 10) waits until pressure clears rather than jumping the pause —
+  consistent with "back off vision under load." A one-line priority-exemption is the alternative if
+  user-initiated tags should bypass the throttle (recorded in `07` #49).
+- **Live under-load soak** (toggle on, peg CPU/GPU, watch L1/L2 engage in `npm run tauri dev`) is the
+  one acceptance item CI can't cover; the integration test exercises the same paths deterministically.
+
+### Hallucinated / corrected
+- First Win32 attempt assumed `GetSystemTimes` lived in `Win32_System_SystemInformation` and PDH handles
+  were `isize`; the compiler corrected both — `GetSystemTimes` is in `Win32_System_Threading`, and PDH
+  uses `PDH_HQUERY`/`PDH_HCOUNTER` (`*mut c_void` newtypes, not `Send`), so handles are stored as `isize`
+  and reconstructed at call sites to keep the probe `Send + Sync`.
+
+### Authorized deviation
+- **PDH GPU-Engine counters instead of NVML** (user chose "Universal native (PDH)") — covers any GPU
+  vendor + locale-safe + truthful CPU-only fallback. Recorded in `06` #13 and `07` #49.
+
+### Verification (verbatim, all green)
+- `cargo fmt --all -- --check` → exit 0 · `cargo clippy --workspace --all-targets -- -D warnings` → exit 0
+- `cargo test --workspace` → all suites pass (`sysmon` 11; `kernel` lib 22 incl. 9 throttle; `kernel`
+  `throttle.rs` 2; `kernel` `settings.rs` 6; `traits` 52; no failures across the workspace)
+- `cd ui && npm run lint` → clean · `npm run build` → built · `git diff --exit-code -- ui/src/bindings`
+  → regenerated `PressureSample.ts`/`ThrottleStatus.ts`/`Settings.ts` (committed with the change)
+
+### Still risky
+- PDH GPU-Engine counter availability is environment-dependent (headless/VM/old-driver); handled by the
+  truthful `gpu_monitored=false` latch, but only the live soak confirms the real GPU reads on a given box.
+- `GetSystemTimes` is whole-machine (not per-process), so a heavy *other* app can engage the throttle —
+  intended ("is the machine struggling?"), smoothed by the exit dwell + hysteresis, documented honestly.
+
 ## Pass — 2026-06-28 — 0.2.1 PR4 part 2: UIA text + click/scroll-stop triggers
 
 **Branch:** `feat/0.2.1-pr4p2-uia-and-mouse-triggers`. The 0.2.1 line. Two workstreams, one branch,

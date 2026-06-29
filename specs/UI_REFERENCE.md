@@ -70,7 +70,7 @@ Spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48. Z-layers: base / rail / ove
 ## 3. Information architecture (every screen → a real job)
 ```
 AppShell
- ├─ StatusRail (top): capture state · DB size · queue depth · sidecar/model · readiness   [telemetry]
+ ├─ StatusRail (top): capture state · DB size · queue depth · sidecar/model · readiness · throttle   [telemetry]
  ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
@@ -79,11 +79,18 @@ AppShell
      /timeline    Timeline  — the Scanline Timeline browser
      /timeline/:id Moment   — one frame: image, OCR text, vision tags, context, actions
      /insights    Insights  — activity analytics (nice-to-have; ships as real or honest-empty)
-     /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention
+     /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention · performance throttle (0.2.1)
      *            NotFound
 ```
 Rules: one primary action per screen; every route is reachable from NavRail or a link; no orphan
 screens; deep-linkable (real routes, `/timeline/:id` shareable within the app).
+
+**StatusRail "Throttling" chip (0.2.1).** When the smart enrichment throttle is active the rail
+shows a subtle, desaturated **"Throttling"** chip (functional `--warn`, not the bold accent) — shown
+**only at level ≥ 1**, hidden at level 0 / when `throttle.enabled` is off. It reflects the live
+`throttle_changed` event (`03 §7`) and reads back the current level (High / Sustained); a tooltip
+surfaces the live CPU/GPU pressure (or "GPU not monitored" when PDH counters are absent). It is a
+status indicator, not a control — the toggle and thresholds live in Settings.
 
 ## 4. Per-screen state matrix (the comprehensiveness guarantee)
 **Every view defines all of: `loading` · `empty` · `error` · `partial` · `populated`.** No screen
@@ -99,6 +106,7 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
 | Settings | — | save failed → keep form, explain | model downloading (progress) | optimistic + reconcile |
+| Settings · Performance throttle (0.2.1) | toggle OFF → readout collapsed to "Throttle disabled" (empty-off) | status probe failed → "Pressure unavailable", keep toggle + fields | partial: GPU unmonitored → CPU% shown + honest "GPU not monitored" | master toggle + live CPU/GPU + level readout + 8 threshold fields; loading = skeleton readout; populated = live CPU/GPU% + level (Normal/High/Sustained) |
 
 Loading uses skeletons that match final layout (no spinner-only screens). Empty states are
 **invitations to act**, not mood.
@@ -114,6 +122,10 @@ Domain (0.2.x): `RecallModeTabs` (Search/Ask/Reports), `TextSourceToggle` (conte
 `ReportBuilder` (daily/weekly/custom range → Generate), `ReportView` (markdown + clickable
 source-frame chips + Copy + `.md` download + model/tokens footer), `PromptCardGrid` (premade Ask
 cards: Day Recap, Standup Update, Time Breakdown, Top of Mind, AI Habits — click fills + submits).
+Domain (0.2.1): `ThrottlePanel` (Settings: master `Toggle` + 8 threshold `Field`s + live readout),
+`ThrottleStatus` (live CPU/GPU pressure + level Normal/High/Sustained, honest "GPU not monitored"
+when PDH counters are absent — five states per `§4`), `ThrottleChip` (subtle StatusRail indicator,
+level ≥ 1 only).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
 
 ## 6. Data & state (reliability by construction)
@@ -127,7 +139,8 @@ Each component owns one job; a label labels, an example demonstrates — nothing
   TanStack Query — no ad-hoc `useEffect` fetches; premade Ask cards just prefill + submit the
   existing `ask` flow.
 - Streaming (`ask`) consumes `answer_delta` events into a reducer; `readiness_changed` /
-  `sidecar_status` / `job_progress` drive the StatusRail live.
+  `sidecar_status` / `job_progress` / `throttle_changed` (0.2.1) drive the StatusRail live (the
+  last feeds the throttle chip + Settings readout via TanStack Query off `get_throttle_status`).
 - **Rules of Hooks are inviolable** — all hooks before any early return; JSX conditionals, not
   conditional hooks. (This is a known scar; see `04` guardrails.)
 - Error boundaries per route; a thrown render never blanks the whole app.
