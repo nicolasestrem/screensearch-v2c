@@ -742,6 +742,17 @@
 
 ---
 
+
+## 2026-06-29 — UI: Scanline timeline binary-search thumbnail lookup (`perf/scanline-timeline-binary-search`)
+- **Change:** `ScanlineTimeline` now memoizes a `captured_at`-sorted thumbnail copy with `useMemo` and
+  resolves hover previews through a pure insertion-point binary search instead of scanning every
+  thumbnail on every pointer move.
+- **Why:** Hover preview selection should scale with larger frame sets while preserving the existing
+  behavior for empty lists, exact matches, and cursor positions outside the first/last thumbnail.
+- **Verification:** `cd ui && npm run lint`; `cd ui && npm run build`.
+
+---
+
 ## 2026-06-25 — Specs: 0.2.0 PR1 attention-first text contract (`docs/0.2.0-pr1-specs`)
 - **Change:** Wrote the 0.2.0 contract into `/specs/` (no code):
   1. `02 §5b` — 0.2.x arc + **P6** (attention-first text signal + recall workflows) as a post-1.0 arc.
