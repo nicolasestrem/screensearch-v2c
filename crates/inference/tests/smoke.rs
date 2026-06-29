@@ -55,6 +55,7 @@ fn supervisor_for(
         // First-run model load + GPU warmup can be slow; allow plenty of headroom.
         health_timeout: Duration::from_secs(600),
         caps,
+        recycle_ceiling_bytes: 0,
     })
     .expect("build supervisor")
 }

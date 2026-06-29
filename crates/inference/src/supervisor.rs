@@ -56,6 +56,9 @@ pub struct SupervisorConfig {
     /// init). `build_args` consults this so it only emits flags the binary understands —
     /// the binary auto-updates to the latest release, so its flag set is not fixed.
     pub caps: SidecarCaps,
+    /// Committed-RAM ceiling (bytes) that triggers a sidecar recycle; `0` disables it.
+    /// Resolved once at construction from `sidecar.recycle_*` (like `idle_ttl`).
+    pub recycle_ceiling_bytes: u64,
 }
 
 /// A currently-running sidecar process and the client bound to it.
@@ -220,6 +223,44 @@ impl ModelSupervisor {
     /// runs its HTTP request through `lease.client()`.
     pub async fn acquire(&self, spec: ModelSpec) -> Result<Lease> {
         loop {
+            // Memory safety valve: if the running sidecar (same model) has grown past the
+            // recycle ceiling, refresh it before serving — drain in-flight, kill (freeing the
+            // leaked host RAM + VRAM via the one teardown path), respawn the same spec. This
+            // is the only teardown that fires *during* a backfill drain (the leak's runaway
+            // case), so it ignores keep-warm/pin; the immediate respawn keeps the model
+            // resident. The `!needs_restart` guard means a genuine model switch falls through
+            // to the exclusive-switch branch below instead.
+            if self.over_recycle_ceiling(&spec).await {
+                let permit = self.gate.enter_for_model_switch().await?;
+                let mut guard = self.state.lock().await;
+                // Re-check under the exclusive lock: another caller may have already recycled
+                // or switched, or the process may have been replaced since the probe.
+                if guard
+                    .as_ref()
+                    .is_some_and(|p| !needs_restart(&p.spec, &spec) && self.process_over_ceiling(p))
+                {
+                    let old = guard
+                        .take()
+                        .expect("sidecar present after over-ceiling check");
+                    self.emit(SidecarState::Recycled, Some(&old.spec));
+                    tracing::info!(
+                        ceiling_bytes = self.config.recycle_ceiling_bytes,
+                        "sidecar recycled at committed-RAM ceiling"
+                    );
+                    self.stop_child(old).await;
+                    let proc = self.spawn_with_retries(&spec).await?;
+                    *guard = Some(proc);
+                    let lease = self.lease_from_state(
+                        guard.as_ref().expect("sidecar present after recycle"),
+                        permit.into_single(),
+                    );
+                    drop(guard);
+                    return Ok(lease);
+                }
+                drop(guard);
+                drop(permit);
+                continue;
+            }
             if self.needs_exclusive_switch(&spec).await {
                 let permit = self.gate.enter_for_model_switch().await?;
                 let mut guard = self.state.lock().await;
@@ -318,6 +359,24 @@ impl ModelSupervisor {
             .await
             .as_ref()
             .is_some_and(|p| needs_restart(&p.spec, spec))
+    }
+
+    /// True when recycling is enabled and the running sidecar (same model as `spec`) has
+    /// grown past the committed-RAM ceiling. Cheap no-op when the ceiling is 0 (disabled).
+    async fn over_recycle_ceiling(&self, spec: &ModelSpec) -> bool {
+        if self.config.recycle_ceiling_bytes == 0 {
+            return false;
+        }
+        let guard = self.state.lock().await;
+        guard
+            .as_ref()
+            .is_some_and(|p| !needs_restart(&p.spec, spec) && self.process_over_ceiling(p))
+    }
+
+    /// Probe the sidecar's committed bytes and compare against the ceiling.
+    fn process_over_ceiling(&self, p: &SidecarProcess) -> bool {
+        process::query_private_bytes(p.child.pid())
+            .is_some_and(|rss| should_recycle(rss, self.config.recycle_ceiling_bytes))
     }
 
     fn lease_from_state(&self, running: &SidecarProcess, permit: RequestPermit) -> Lease {

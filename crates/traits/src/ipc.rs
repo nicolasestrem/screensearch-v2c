@@ -844,6 +844,7 @@ pub enum SidecarState {
     Ready,
     Evicted,
     Crashed,
+    Recycled,
 }
 
 /// Sidecar status update (`sidecar_status` event). `lane` says which model is (or was
