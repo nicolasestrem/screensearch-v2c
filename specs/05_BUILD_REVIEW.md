@@ -39,10 +39,21 @@ the cache-request rewrite (`FindAllBuildCache`) is the planned PR2.
   ignored` (the 2 new gate tests + the `#[ignore]`d live walk); no `FAILED`/`error[`/`panicked`.
 - `git diff --exit-code -- ui/src/bindings` → clean (no `Settings` change in this PR).
 
+### Follow-up commits (same branch)
+- **Configurable policy** — the choices above are now clamped Settings
+  (`capture.uia_run_on_interactive` off, `…_view_control_only` on, `…_max_nodes`,
+  `…_max_textpattern_calls`) with a Settings UI panel; bindings regenerated.
+- **TextPattern gating** — `classify::control_type_wants_textpattern` (pure, CI-tested); the live
+  `TextPattern` read now runs only on Document/Edit/Text controls, capped per walk.
+
 ### Still risky / deferred
 - **Live desktop acceptance is the real gate** — browser must stay responsive while scrolling a
   large Chromium/Electron page (`npm run tauri dev` + `cargo test -p uia -- --ignored`). Run before
-  merge. The cache-request rewrite + Settings knobs are PR2 (`07` #71).
+  merge.
+- **`FindAllBuildCache` cached-round-trip rewrite deferred** — the plan's "real lever", held back
+  because it's only exercisable via the `#[ignore]`d live test; a COM/cache bug would silently
+  thin-yield with no CI signal. Do it with live verification (`07` #71). The hang is already fixed
+  by PR1 + these follow-ups.
 
 ---
 

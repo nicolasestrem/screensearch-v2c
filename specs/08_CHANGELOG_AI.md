@@ -27,6 +27,21 @@
     per-text-run node explosion); RAII `in_flight` clear on every walk exit path; per-walk
     `debug!(nodes, spans, elapsed_ms)` + rate-limited `warn!` when a walk hits its latency budget.
   - `CHANGELOG.md`, `05`, `07` updated.
+- **Follow-up commits (same branch):**
+  - *Configurable policy* — promoted the hardcoded choices to clamped Settings
+    (`capture.uia_run_on_interactive` default off, `…_view_control_only` default on,
+    `…_max_nodes` 4000 replacing the `MAX_NODES` const, `…_max_textpattern_calls` 64): `traits`
+    `Settings` + `kernel` load/save/sanitize + `UiaBudget`/`UiaTriggerPolicy` + `spawn_ocr` wiring
+    + Settings UI panel + regenerated `ui/src/bindings/Settings.ts`.
+  - *TextPattern gating* — `classify::control_type_wants_textpattern` (pure, CI-tested); the walk
+    now probes the live `TextPattern` only on Document/Edit/Text controls and only under
+    `max_textpattern_calls`, skipping a cross-process round-trip on every non-text node.
+- **Deferred (explicit, needs live verification):** the `FindAllBuildCache` cached-round-trip
+  rewrite of the per-node reads (the "real lever" in the plan). Held back because its walk path is
+  only exercised by the `#[ignore]`d live-desktop test — a subtle COM/cache bug would silently
+  reduce UIA to always-thin-yield (→ OCR) with no CI signal, so it must be verified on a real
+  desktop. PR1 + the two follow-ups already remove the hang; the cache rewrite is an efficiency/
+  coverage gain. Tracked in `07` #71.
 - **Why:** Every capture trigger ran a live, uncached, raw-view walk of the foreground window's
   entire a11y subtree — thousands of synchronous cross-process COM calls the *target* app's UI
   thread had to service, freezing Chromium/Electron on large trees. The latency budget can't

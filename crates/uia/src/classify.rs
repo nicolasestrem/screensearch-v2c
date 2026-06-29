@@ -17,6 +17,10 @@ const SCROLLBAR: i32 = 50014;
 const TAB: i32 = 50018; // the Tab container; individual tabs are TabItem (50019)
 const SEPARATOR: i32 = 50038;
 const TITLEBAR: i32 = 50037;
+// Content controls whose body text lives in a TextPattern (documents / editable text).
+const DOCUMENT: i32 = 50030;
+const EDIT: i32 = 50004;
+const TEXT: i32 = 50020;
 
 /// Pure containers carry no body text of their own — their children do. The walk still
 /// descends into them; it just emits nothing for the container element itself.
@@ -42,6 +46,15 @@ pub(crate) fn is_container(control_type: i32) -> bool {
 /// (preserve OCR's "only what was visible" parity), and skip pure containers.
 pub(crate) fn should_emit(control_type: i32, is_password: bool, is_offscreen: bool) -> bool {
     !is_password && !is_offscreen && !is_container(control_type)
+}
+
+/// Whether an element's control type is one whose text is worth reading via the **live,
+/// uncacheable, cross-process** `TextPattern` visible ranges: documents and editable/text
+/// controls. For every other control type, `Name`/`Value` already cover the text and a
+/// `TextPattern` probe would just be an extra provider round-trip — the cost the hang fix
+/// bounds (`07` #71). Gating by control type means non-text nodes skip the probe entirely.
+pub(crate) fn control_type_wants_textpattern(control_type: i32) -> bool {
+    matches!(control_type, DOCUMENT | EDIT | TEXT)
 }
 
 /// Policy controlling which capture triggers run UIA, seeded from settings (`03 §3b`).
@@ -132,6 +145,18 @@ mod tests {
             assert!(trigger_runs_uia(CaptureTrigger::ClipboardChange, policy));
             assert!(trigger_runs_uia(CaptureTrigger::Manual, policy));
         }
+    }
+
+    #[test]
+    fn only_document_and_text_controls_want_textpattern() {
+        // TextPattern visible-range reads are the one live, uncacheable, cross-process cost;
+        // worth it only for documents/editable text. Everything else uses Name/Value.
+        assert!(control_type_wants_textpattern(50030), "Document");
+        assert!(control_type_wants_textpattern(50004), "Edit");
+        assert!(control_type_wants_textpattern(50020), "Text");
+        assert!(!control_type_wants_textpattern(50000), "Button");
+        assert!(!control_type_wants_textpattern(50033), "Pane");
+        assert!(!control_type_wants_textpattern(50008), "List");
     }
 
     #[test]

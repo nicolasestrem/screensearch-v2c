@@ -30,9 +30,17 @@ target never recovered. This is the low-risk mitigation; a cache-request rewrite
 - **Lighter walk.** The walk now uses the UIA **control view** instead of the raw view, collapsing a
   Chromium page's per-text-run node explosion to the elements that actually carry text — far fewer
   cross-process calls — while preserving the extracted text.
+- **Costliest call gated.** The live `TextPattern` text read (the one UIA call that can't be
+  batched) now runs only on document/editable-text elements and is capped per frame, so a text-heavy
+  page can't reopen the call storm.
 - **Observability.** Per-walk node count + elapsed are logged at debug, and a rate-limited warning
   fires when a walk hits its latency budget or frames are skipped under load, so the condition is
   visible in the log (previously the UIA path was silent at `info`).
+- **Tunable.** New Settings (Text source panel): run UIA on click/scroll (default off), use
+  control-view only (default on), max nodes per read, and max text reads per read — all clamped.
+
+A deeper optimization (replacing the per-element reads with a single cached UI Automation
+round-trip) is planned as a follow-up and pending live-desktop verification.
 
 ### 0.2.1 — Event-driven capture review follow-up
 Tightens the event-driven capture paper trail after review of the implemented PR4/PR5 roadmap items.
