@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Tauri 2 + Vite. The dev server port is pinned to match `devUrl` in
@@ -27,5 +27,14 @@ export default defineConfig({
         },
       },
     },
+  },
+  // Vitest: jsdom DOM, a shared setup (jest-dom matchers + a ResizeObserver
+  // polyfill jsdom lacks), and explicit imports (globals off) so test files
+  // stay honest about what they use.
+  test: {
+    environment: "jsdom",
+    globals: false,
+    setupFiles: ["./src/test/setup.ts"],
+    css: false,
   },
 });

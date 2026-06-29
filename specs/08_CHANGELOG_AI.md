@@ -11,6 +11,25 @@
 
 ---
 
+## 2026-06-29 — CI toolchain pin + release-build gate + first UI tests (`claude/codebase-improvements-847slc`)
+- **Change:**
+  - CI/toolchain: added root `rust-toolchain.toml` pinning `1.82.0`; `.github/workflows/ci.yml`
+    now uses `dtolnay/rust-toolchain@1.82.0` (was `@stable`) and adds a
+    `cargo build --workspace --release` step + a `npm test` step in the UI job.
+  - UI tests: added Vitest + React Testing Library + jsdom (`ui/package.json` devDeps + `test`/
+    `test:watch` scripts, `vite.config.ts` `test` block, `ui/src/test/setup.ts`,
+    `ui/src/test/renderRoute.tsx`). New specs for Timeline/Insights/Recall view states and the
+    `ask` reducer. Extracted the pure reducer to `ui/src/lib/ipc/askReducer.ts` (re-exported by
+    `useAsk.ts`; no behaviour change).
+- **Why:** Easy reliability wins from a code-quality survey. `@stable` drift could break CI under
+  `-D warnings` independent of any code change, and the release profile (`Cargo.toml`
+  `[profile.release]`) was never exercised by CI; the UI (UI_REFERENCE §4 five-state contract) had
+  zero automated tests guarding it against regression.
+- **Verification:** `cd ui && npm test` → 15 passed (4 files); `npm run lint`/`typecheck`/`build`
+  clean; sanity-break check confirmed a wrong assertion fails then reverted. Rust workspace is
+  Windows-only and does not build on this Linux box — the toolchain pin + release step are
+  config-only, verified by CI on `windows-latest`; YAML/TOML validated as well-formed locally.
+
 ## 2026-06-29 — PR #50 review fixes: recycle floors (explicit + auto) + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
 - **Change:** Address three PR-review findings on the recycle valve.
   1. **Recycle-loop footgun (Claude bot).** Raised the explicit `sidecar.recycle_rss_mb` floor from

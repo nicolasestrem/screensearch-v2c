@@ -32,12 +32,18 @@ jobs:
       - name: UI lint (Rules-of-Hooks gate at error level)
         working-directory: ui
         run: npm run lint
+      - name: UI test (view-state contract)
+        working-directory: ui
+        run: npm test
       - name: UI build (creates ui/dist)
         working-directory: ui
         run: npm run build
 
       # --- Rust workspace ---
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the project toolchain (Rust 1.82, see CLAUDE.md / rust-toolchain.toml)
+      # so a `stable` roll-forward can't break CI under `-D warnings` for reasons
+      # unrelated to a code change.
+      - uses: dtolnay/rust-toolchain@1.82.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -47,6 +53,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: build
         run: cargo build --workspace
+      # Exercise the shipping profile (lto="thin", codegen-units=1, strip=true) so a
+      # release-only build/LTO failure can't slip through the default-profile gate.
+      - name: build (release profile)
+        run: cargo build --workspace --release
       - name: test
         run: cargo test --workspace
 

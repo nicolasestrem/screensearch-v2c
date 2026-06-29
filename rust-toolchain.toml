@@ -1,0 +1,7 @@
+# Pin the toolchain so local dev resolves the same compiler CI uses. The project
+# targets Rust 1.82 (see CLAUDE.md "Build/verify" and specs/01). CI installs the
+# matching toolchain explicitly via `dtolnay/rust-toolchain@1.82.0` (that action
+# does not read this file), so the two are kept in lockstep deliberately.
+[toolchain]
+channel = "1.82.0"
+components = ["rustfmt", "clippy"]

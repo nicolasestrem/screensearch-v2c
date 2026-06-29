@@ -14,6 +14,41 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-29 — CI toolchain pin + UI view-state test harness (`claude/codebase-improvements-847slc`)
+
+Two easy reliability/quality wins from a code-quality survey (the rest — lock-poisoning
+resilience, store-layer tracing, deeper textfilter tests — were surveyed and deferred).
+
+### Implemented
+- **CI determinism (`.github/workflows/ci.yml` + new `rust-toolchain.toml`):** the Rust step
+  now installs `dtolnay/rust-toolchain@1.82.0` (was `@stable`) and a root `rust-toolchain.toml`
+  pins local dev to `1.82.0`, so a `stable` roll-forward can't break CI under `-D warnings` for
+  reasons unrelated to a code change. Added a `cargo build --workspace --release` step so the
+  shipping profile (`lto="thin"`, `codegen-units=1`, `strip=true`) is exercised in CI.
+- **UI test harness (Vitest + React Testing Library + jsdom):** first automated UI tests. New
+  `ui/src/test/setup.ts` (jest-dom matchers + a ResizeObserver stub jsdom lacks) and a
+  `renderRoute` helper (fresh QueryClient with retries off + MemoryRouter). Specs cover the
+  view-state contract: `Timeline` (loading/empty/error/populated), `Insights`
+  (loading/error/empty/populated), `Recall` search-mode invite + mode tabs. Extracted the pure
+  `ask` state machine to `ui/src/lib/ipc/askReducer.ts` (re-exported from `useAsk.ts` so
+  consumers are unaffected) and unit-tested its invariants (done-after-error doesn't resurrect,
+  citation dedupe, accumulation, reset). CI now runs `npm test` in the UI job.
+
+### Verification (verbatim, this Linux box)
+- `cd ui && npm test` → `Test Files 4 passed (4) · Tests 15 passed (15)`.
+- `npm run lint` → clean; `npm run typecheck` (`tsc --noEmit`) → clean; `npm run build` → built
+  in ~3s (test files excluded from `dist`).
+- Sanity-break check: flipping the Insights empty assertion to a non-matching string failed that
+  one test (3 others still passed) — confirms the harness actually drives state — then reverted.
+
+### Skipped / deferred
+- The **Rust** workspace is Windows-only (`windows`/WinRT crates), so it does **not** compile on
+  this Linux environment; the toolchain pin + release-build step are config-only and are verified
+  by CI on `windows-latest`, not locally. YAML/TOML validated as well-formed here.
+
+### Still risky
+- None. UI changes are test-only + a no-behaviour reducer extraction; CI changes are config-only.
+
 ## Pass — 2026-06-29 — Sidecar recycle valve (docs-only, `fix/vision-sidecar-rss-recycle`)
 
 **Branch:** `fix/vision-sidecar-rss-recycle`. Docs-only entry recording the upstream multimodal

@@ -1,65 +1,17 @@
-// The `ask` flow: a reducer that folds streamed `answer_delta` events into a
-// stable view-model (UI_REFERENCE §6). Each stream is scoped by a request id so
-// superseded deltas are ignored and reset can cancel the backend provider task.
+// The `ask` flow hook: owns the `answer_delta` subscription and request-id scoping,
+// and folds deltas into a stable view-model via the pure `askReducer` (UI_REFERENCE
+// §6). Each stream is scoped by a request id so superseded deltas are ignored and
+// reset can cancel the backend provider task.
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { listenTo } from "./events";
 import * as cmd from "./commands";
-import type { AnswerDelta } from "../../bindings/AnswerDelta";
+import { askReducer, initialAskState, type AskState } from "./askReducer";
 import type { AskRequest } from "../../bindings/AskRequest";
 
-export type AskPhase = "idle" | "streaming" | "done" | "error";
-
-export interface AskState {
-  phase: AskPhase;
-  /** Accumulated chain-of-thought (shown collapsed); empty when not requested. */
-  thinking: string;
-  /** Accumulated answer prose (markdown). */
-  answer: string;
-  /** Source frame ids supplied to the model, in first-seen order, deduplicated. */
-  citations: number[];
-  error: string | null;
-}
-
-const initial: AskState = {
-  phase: "idle",
-  thinking: "",
-  answer: "",
-  citations: [],
-  error: null,
-};
-
-type AskAction = { type: "start" } | { type: "reset" } | { type: "delta"; delta: AnswerDelta };
-
-function reducer(state: AskState, action: AskAction): AskState {
-  switch (action.type) {
-    case "reset":
-      return initial;
-    case "start":
-      return { ...initial, phase: "streaming" };
-    case "delta": {
-      const d = action.delta;
-      switch (d.type) {
-        case "thinking":
-          return { ...state, thinking: state.thinking + d.text };
-        case "token":
-          return { ...state, answer: state.answer + d.text };
-        case "citation":
-          // The current backend emits one id per frame included in the model prompt.
-          // The UI labels these as checked context, not claim-level citations.
-          return state.citations.includes(d.frame_id)
-            ? state
-            : { ...state, citations: [...state.citations, d.frame_id] };
-        case "done":
-          // A `done` after an `error` must not resurrect the stream.
-          return state.phase === "error" ? state : { ...state, phase: "done" };
-        case "error":
-          return { ...state, phase: "error", error: d.message };
-      }
-    }
-  }
-}
+// Re-exported so existing consumers (e.g. AnswerStream) keep importing from here.
+export type { AskPhase, AskState } from "./askReducer";
 
 export interface UseAsk extends AskState {
   /** Start streaming an answer for `request`. */
@@ -69,7 +21,7 @@ export interface UseAsk extends AskState {
 }
 
 export function useAsk(): UseAsk {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [state, dispatch] = useReducer(askReducer, initialAskState);
   const activeRequest = useRef<string | null>(null);
 
   // One persistent subscription for the lifetime of the hook; deltas always fold
