@@ -26,9 +26,9 @@ click + scroll-stop landed, and incomplete `CaptureTrigger` token round-trip cov
   `timer`), the default-off mouse-hook path, and schema v6. `docs/TESTING.md` now includes manual
   click/scroll-stop acceptance checks instead of saying those triggers are deferred.
 - **Coverage hardened.** `crates/traits/src/domain.rs` `capture_trigger_db_str_round_trips` now covers
-  `CaptureTrigger::Click` and `CaptureTrigger::ScrollStop`; a list-size assertion first failed at
-  `left: 6 / right: 8`, proving the test would have caught the omission, then passed after adding the
-  missing variants.
+  `CaptureTrigger::Click` and `CaptureTrigger::ScrollStop`; `CaptureTrigger::from_db_str` now has an
+  exhaustive variant guard so a future enum addition forces this parser path to be revisited at
+  compile time.
 - **Records updated.** `CHANGELOG.md`, `06`, `07`, and `08` record this as a review follow-up with no
   runtime/schema/IPC behavior change.
 

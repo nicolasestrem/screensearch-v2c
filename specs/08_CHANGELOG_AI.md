@@ -18,12 +18,15 @@
   - `docs/TESTING.md` now includes manual click + scroll-stop acceptance instead of saying those
     triggers are deferred.
   - `crates/traits/src/domain.rs` `capture_trigger_db_str_round_trips` now covers `Click` and
-    `ScrollStop` with a list-size guard; the red step failed at `left: 6 / right: 8` before adding
-    the missing variants.
+    `ScrollStop`; `from_db_str` now has an exhaustive variant guard so future enum additions force
+    this parser path to be revisited at compile time.
   - `CHANGELOG.md`, `05`, `06`, and `07` record the review follow-up.
 - **Why:** Keeps the 0.2.1 event-driven capture docs/tests aligned with the shipped implementation
   (`docs/0.2.0.md` deferred-work item; `07` #47) and prevents the `click` / `scroll_stop` DB tokens
   from drifting out of coverage again.
+- **PR review hardening:** Addressed the PR #47 bot finding that the original `covered.len() == 8`
+  assertion was a tautology. The durable guard is now in `from_db_str` instead of a fixed-array length
+  assertion in the test.
 - **Verification:** Targeted gates passed: `cargo fmt --all -- --check`;
   `cargo test -p traits capture_trigger_db_str_round_trips -- --nocapture`;
   `cargo test -p capture -- --nocapture`; `cargo test -p store

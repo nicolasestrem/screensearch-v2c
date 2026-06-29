@@ -17,7 +17,8 @@ Tightens the event-driven capture paper trail after review of the implemented PR
   include live manual acceptance steps for the mouse-hook triggers.
 - **Trigger token coverage hardened.** The `CaptureTrigger` round-trip test now covers `click` and
   `scroll_stop` in addition to the earlier timer / foreground / clipboard / idle / typing-pause /
-  manual tokens.
+  manual tokens, and the parser has an exhaustive guard so future enum additions force the
+  `from_db_str` path to be revisited.
 
 ### 0.2.1 — Smart enrichment throttle (former PR5)
 Adds an optional, off-by-default **performance throttle** that keeps the app responsive under load:
