@@ -59,6 +59,39 @@
 
 ---
 
+## 2026-06-29 — PR #48 review follow-up + 0.2.1 version bump (`fix/uia-chromium-hang`)
+- **Change:** Addressed the actionable PR #48 review findings and bumped the project version.
+  - *Redundant lock removed* (Gemini): `crates/uia/src/lib.rs` — `UiaTextProvider.tx` changed from
+    `Mutex<mpsc::SyncSender<…>>` to a bare `mpsc::SyncSender<…>`. `SyncSender<T>` is itself `Sync`
+    when `T: Send`, and `try_send` takes `&self`, so the provider is still `Sync` (the `OcrProvider`
+    trait requirement) with no lock — `recognize` now calls `self.tx.try_send(…)` directly instead
+    of `self.tx.lock().expect(…).clone()`. Removes a per-frame lock/clone; behaviour unchanged.
+  - *Spec §8 made truthful* (Codex P2): `specs/03_MASTER_PRODUCTION_SPEC.md §8` now documents the
+    full 0.2.1 capture key set with defaults + clamp ranges — the event-driven-capture keys (gap
+    from #44/#45) and the UIA text-source keys, including the four new hang-fix knobs
+    (`uia_run_on_interactive`, `uia_view_control_only`, `uia_max_nodes`, `uia_max_textpattern_calls`).
+    Satisfies the repo rule that every setting's default lives in §8.
+  - *Version bump to 0.2.1* (user request; tag deferred): `Cargo.toml` `[workspace.package]`
+    (inherited by all 9 crates + `src-tauri` via `version.workspace = true`), `src-tauri/tauri.conf.json`,
+    `package.json` + `ui/package.json`, and both `package-lock.json` files. `Cargo.lock` regenerated.
+  - *Not actioned (flagged to user):* Codex P2 "gate timer captures during interactive scrolling" —
+    default (event-capture-off) `Timer` frames still walk during scroll. A real residual gap, but the
+    fix (input-activity suppression for `Timer`) is a behaviour change needing a product decision;
+    raised with the user rather than silently implemented. The primary hang drivers are already fixed
+    for `Timer` frames (control view + node/TextPattern caps + in-flight guard).
+- **Why:** Review hygiene (`04 §7`) — the lock was dead weight, and `§8` is the settings
+  source-of-truth that QA/future work reads. Version bump per the user's explicit request to move the
+  code onto the 0.2.1 line (the GitHub release tag follows separately, not in this PR).
+- **Verification (verbatim):**
+  - `cargo fmt --all -- --check` → `=== FMT CLEAN ===` (no diff).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished \`dev\` profile [...] in 7.24s` (no warnings).
+  - `cargo test --workspace` → all green; `uia` lib `test result: ok. 13 passed; 0 failed; 1 ignored`; no `FAILED`/`error[`/`panicked` across the workspace.
+  - `cargo check --workspace` → `Finished` with `Cargo.lock` showing `screensearch`/`uia` at `version = "0.2.1"`.
+  - `npm run lint` (ui) → `screensearch-ui@0.2.1 lint` clean; `npm run build` → `✓ built in 1.93s`.
+  - `git diff --exit-code -- ui/src/bindings` → `BINDINGS CLEAN`.
+
+---
+
 ## 2026-06-29 — Event-driven capture review follow-up (`codex/event-capture-review-followups`)
 - **Change:** Addressed the review findings from the implemented event-driven capture work:
   - `docs/ARCHITECTURE.md` now documents the full landed trigger set, schema v6, and the default-off

@@ -34,7 +34,7 @@ mod worker;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -70,12 +70,13 @@ pub struct UiaBudget {
 
 /// UI Automation text provider backed by a dedicated COM MTA worker thread.
 ///
-/// `Mutex<SyncSender>` makes the provider `Sync` (the trait requires it); the lock is only
-/// held to clone the sender, never across the UIA call. The channel is bounded (capacity 1)
-/// and paired with `in_flight` so at most one walk runs and at most one is queued — a slow
-/// walk can no longer let triggers pile up an unbounded backlog against the target app.
+/// `SyncSender` is itself `Sync` (when the message is `Send`), so the provider is `Sync` —
+/// which the `OcrProvider` trait requires — with no lock needed; `try_send` takes `&self`.
+/// The channel is bounded (capacity 1) and paired with `in_flight` so at most one walk runs
+/// and at most one is queued — a slow walk can no longer let triggers pile up an unbounded
+/// backlog against the target app.
 pub struct UiaTextProvider {
-    tx: Mutex<mpsc::SyncSender<worker::Request>>,
+    tx: mpsc::SyncSender<worker::Request>,
     /// Set by the worker for the duration of a walk; `recognize` reads it to skip a frame to
     /// OCR instead of queueing behind an in-progress walk.
     in_flight: Arc<AtomicBool>,
@@ -103,7 +104,7 @@ impl UiaTextProvider {
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
-                tx: Mutex::new(tx),
+                tx,
                 in_flight,
                 skipped: AtomicU64::new(0),
                 budget,
@@ -137,7 +138,6 @@ impl OcrProvider for UiaTextProvider {
         let target_rect = frame.target_rect;
         let monitor_index = frame.monitor_index;
         let foreground_hwnd = frame.foreground_hwnd;
-        let tx = self.tx.lock().expect("uia sender poisoned").clone();
         // Hard ceiling against a wedged worker, on top of the worker's own soft budget.
         let timeout = Duration::from_millis(self.budget.latency_ms.saturating_mul(2).max(1));
 
@@ -146,15 +146,16 @@ impl OcrProvider for UiaTextProvider {
         // reply is a `tokio` oneshot awaited directly — no `spawn_blocking` task per frame. On
         // a hard timeout the receiver is dropped here and the worker's later `send` no-ops.
         let (resp_tx, resp_rx) = oneshot::channel();
-        tx.try_send(worker::Request {
-            width,
-            height,
-            target_rect,
-            monitor_index,
-            foreground_hwnd,
-            resp: resp_tx,
-        })
-        .map_err(|_| anyhow::anyhow!("UIA worker busy or gone — fall back to OCR"))?;
+        self.tx
+            .try_send(worker::Request {
+                width,
+                height,
+                target_rect,
+                monitor_index,
+                foreground_hwnd,
+                resp: resp_tx,
+            })
+            .map_err(|_| anyhow::anyhow!("UIA worker busy or gone — fall back to OCR"))?;
 
         match tokio::time::timeout(timeout, resp_rx).await {
             Ok(joined) => joined.map_err(|_| anyhow::anyhow!("UIA worker dropped the response"))?,

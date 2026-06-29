@@ -464,6 +464,30 @@ thresholds are settings, never hardcoded — same guardrail as the text-signal k
 `throttle.sample_interval_ms` (1000, clamp 250..=10000 — governor probe/sample cadence) ·
 `throttle.embed_text_floor` (1, clamp 1..=16 — min concurrent `embed_text` workers at level 2).
 
+**0.2.1 event-driven-capture keys** (opt-in `CaptureTrigger` source, `§5`/`07` #47; thresholds are
+settings, never hardcoded — same guardrail as above): `capture.event_driven_enabled` (false — master
+switch; off = timer cadence, every frame tagged `Timer`) · `capture.event_on_foreground` (true) ·
+`capture.event_on_clipboard` (true) · `capture.event_on_idle` (false) ·
+`capture.event_on_typing_pause` (false) · `capture.event_on_click` (false — needs the `WH_MOUSE_LL`
+hook) · `capture.event_on_scroll_stop` (false — needs the `WH_MOUSE_LL` hook) ·
+`capture.event_debounce_ms` (500, clamp 100..=10000) · `capture.event_min_interval_ms` (1000, clamp
+250..=60000 — the rate ceiling) · `capture.event_typing_pause_ms` (1500, clamp 500..=10000) ·
+`capture.event_idle_threshold_ms` (5000, clamp 1000..=60000) · `capture.event_fallback_interval_ms`
+(30000, clamp 1000..=3600000 — a static screen is still sampled at least this often, tagged `Timer`).
+
+**0.2.1 UIA text-source keys** (target-window accessibility text with OCR fallback, `07` #48/#71;
+thresholds are settings, never hardcoded): `capture.uia_text_enabled` (true — default ON, OCR carries
+any failure/timeout/thin-yield; hot-applies per frame) · `capture.uia_latency_budget_ms` (150, clamp
+20..=2000 — soft per-walk budget; a 2× hard timeout guards a wedged worker) · `capture.uia_min_text_chars`
+(16, clamp 0..=10000 — below this the read is a thin yield → OCR). UIA-hang-fix keys (`07` #71, all
+baked into the provider at startup → applied on app restart): `capture.uia_run_on_interactive` (false —
+default OFF; click/scroll-stop frames fall back to OCR, since a UIA walk during scroll is what froze
+Chromium/Electron; on = legacy, every trigger walks) · `capture.uia_view_control_only` (true — default
+ON; control view collapses a Chromium page's per-text-run node explosion; off = raw view, far heavier) ·
+`capture.uia_max_nodes` (4000, clamp 100..=20000 — hard cap on nodes visited per walk; replaces the
+former hardcoded constant) · `capture.uia_max_textpattern_calls` (64, clamp 1..=4096 — max live
+`TextPattern` visible-range reads per walk, the one uncacheable cross-process cost).
+
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.
 

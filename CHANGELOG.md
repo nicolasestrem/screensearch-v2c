@@ -42,6 +42,12 @@ target never recovered. This is the low-risk mitigation; a cache-request rewrite
 A deeper optimization (replacing the per-element reads with a single cached UI Automation
 round-trip) is planned as a follow-up and pending live-desktop verification.
 
+_Review follow-up (PR #48):_ removed a redundant lock around the UIA worker sender (`SyncSender`
+is already `Sync`), and documented the full 0.2.1 capture key set — the event-driven-capture keys
+and the UIA text-source keys (including the four new hang-fix knobs) — in the master spec `§8`.
+Project version bumped to **0.2.1** across the workspace, Tauri config, and npm manifests (the
+release tag follows separately).
+
 ### 0.2.1 — Event-driven capture review follow-up
 Tightens the event-driven capture paper trail after review of the implemented PR4/PR5 roadmap items.
 
