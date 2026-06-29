@@ -638,19 +638,18 @@ pub fn should_recycle(rss_bytes: u64, ceiling_bytes: u64) -> bool {
 }
 
 /// Auto recycle ceiling from total physical RAM: half of RAM, clamped to
-/// `[8 GiB, RAM − 6 GiB]` so it sits above the vision model's ~6.8 GB load baseline yet
-/// leaves headroom. Below ~14 GiB the band inverts, so fall back to the headroom bound
-/// (floored at 3 GiB) — the 8B vision model wants the Default 4B tier on such machines.
+/// `[8 GiB, max(RAM − 6 GiB, 8 GiB)]`. The **8 GiB floor always wins**, so the auto ceiling can
+/// never sit below the vision model's ~6.8 GB warmup baseline — a lower ceiling (the 3–6 GiB the
+/// old inverted-band fallback produced on 8–12 GiB machines) makes `over_recycle_ceiling` true
+/// right after every reload, a silent recycle-every-frame loop that breaks tagging. On <14 GiB
+/// machines the ceiling is therefore pinned at 8 GiB: recycle rarely/never fires and idle-TTL does
+/// the bounding; such machines should use the Default 4B vision tier (`07` #72). Matches the
+/// explicit floor in `kernel::settings::sanitize_settings`.
 pub fn auto_recycle_ceiling(total_ram_bytes: u64) -> u64 {
     const GIB: u64 = 1 << 30;
-    let half = total_ram_bytes / 2;
     let lo = 8 * GIB;
-    let hi = total_ram_bytes.saturating_sub(6 * GIB);
-    if hi <= lo {
-        hi.max(3 * GIB)
-    } else {
-        half.clamp(lo, hi)
-    }
+    let hi = total_ram_bytes.saturating_sub(6 * GIB).max(lo);
+    (total_ram_bytes / 2).clamp(lo, hi)
 }
 
 /// Resolve the configured recycle settings to a byte ceiling for `SupervisorConfig`:
@@ -1199,10 +1198,14 @@ mod tests {
 
     #[test]
     fn auto_ceiling_is_half_ram_within_band() {
+        // The 8 GiB floor always wins, so the auto ceiling never drops below the 8B vision model's
+        // ~6.8 GB warmup baseline — no recycle-every-frame loop. On <14 GiB it pins at 8 GiB
+        // (recycle effectively idles; idle-TTL bounds RAM; such machines want the 4B tier).
         assert_eq!(super::auto_recycle_ceiling(32 * GIB), 16 * GIB); // big box: RAM/2
         assert_eq!(super::auto_recycle_ceiling(16 * GIB), 8 * GIB); // RAM/2 == floor
-        assert_eq!(super::auto_recycle_ceiling(12 * GIB), 6 * GIB); // constrained: RAM-6
-        assert_eq!(super::auto_recycle_ceiling(8 * GIB), 3 * GIB); // tiny: floored, no panic
+        assert_eq!(super::auto_recycle_ceiling(14 * GIB), 8 * GIB); // boundary: RAM-6 == floor
+        assert_eq!(super::auto_recycle_ceiling(12 * GIB), 8 * GIB); // small box: pinned to floor
+        assert_eq!(super::auto_recycle_ceiling(8 * GIB), 8 * GIB); // tiny: floored, no panic
     }
 
     #[test]

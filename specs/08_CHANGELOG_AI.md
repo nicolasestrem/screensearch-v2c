@@ -11,8 +11,8 @@
 
 ---
 
-## 2026-06-29 — PR #50 review fixes: recycle floor + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
-- **Change:** Address two PR-review findings on the recycle valve.
+## 2026-06-29 — PR #50 review fixes: recycle floors (explicit + auto) + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Address three PR-review findings on the recycle valve.
   1. **Recycle-loop footgun (Claude bot).** Raised the explicit `sidecar.recycle_rss_mb` floor from
      `4096` to `8192` MiB in `crates/kernel/src/settings.rs` (+ unit test `100 → 8192`),
      `ui/src/routes/Settings.tsx`, and `specs/03 §8`. An explicit ceiling in `[4096, ~6963]` MiB sat
@@ -24,8 +24,15 @@
      construction (like `idle_ttl`), so it only takes effect on app restart. Relabelled both to
      `APPLY_RESTART` (matching the sibling `Idle TTL` control) and documented "applies on app
      restart" in `specs/03 §8` + `CHANGELOG.md`.
-- **Why:** Both are real correctness/UX defects on the open PR; the floor one could silently break
-  vision tagging for a manually-set ceiling.
+  3. **Auto-ceiling twin of the floor bug (Codex P2).** `auto_recycle_ceiling`'s inverted-band
+     fallback returned `3–6 GiB` on 8–12 GiB machines — below the same ~6.8 GB warmup baseline, so
+     the *default* (auto) path also recycle-looped when the 8B Quality tier was selected on a
+     small-RAM box. Floored the auto ceiling at `8 GiB` too (`max(RAM−6 GiB, 8 GiB)`), so it can
+     never sit below the baseline; updated the unit test (`12/8 GiB → 8 GiB`, added a 14 GiB
+     boundary) and the `07` #72 caveat. On <14 GiB the ceiling pins at 8 GiB → recycle idles,
+     idle-TTL bounds RAM (use the 4B tier there).
+- **Why:** All three are real correctness/UX defects on the open PR; the two floor bugs could
+  silently break vision tagging (recycle-every-frame) for a manual *or* the default auto ceiling.
 - **Verification:** full CI gate (UI lint+build, `cargo fmt`/`clippy`/`build`/`test --workspace`,
   binding guard) — see below.
 
