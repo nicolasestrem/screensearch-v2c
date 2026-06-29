@@ -40,7 +40,7 @@ omitted). Nothing here touches the network: every frame, query, and answer stays
 | **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, minimal live timeline | ✅ Complete |
 | **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
 | **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
-| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | ✅ Feature-complete; live-verified (full keyboard/state/a11y matrix pending) |
+| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; live-verified (full keyboard/state/a11y matrix pending) |
 | **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
 
 The **0.2.x arc** builds on that v1.0 base — an attention-first text signal plus recall and
@@ -68,7 +68,7 @@ idle, typing-pause, click, scroll-stop). **Vision tagging** (on-demand / timer /
 output with an honest confidence, never a fabricated score), **grounded streaming answers** with
 citations, and **Recall reports** (Daily / Weekly / Custom, citing their source frames) run on the
 local **llama.cpp sidecar**; the full Command-Deck UI surfaces all of it. An optional **enrichment
-throttle** eases background work off under sustained CPU/GPU pressure without ever pausing capture,
+throttle** eases off background work under sustained CPU/GPU pressure without ever pausing capture,
 OCR, or storage. Retention purges run at startup and hourly when enabled, and the StatusRail shows
 real DB/frame storage usage.
 
@@ -91,7 +91,7 @@ real DB/frame storage usage.
   is the composition root that wires concrete impls in.
 - **Processing:** *capture-cheap, enrich-deferred* — a durable SQLite **job queue** drained by a
   bounded worker pool (with retry/backoff, dead-lettering, and stale-job recovery). An optional
-  CPU/GPU **pressure throttle** narrows background enrichment under load; capture/OCR/storage never pause.
+  CPU/GPU **pressure throttle** reduces background enrichment under load; capture/OCR/storage never pause.
 - **Text source:** foreground-window text via **UI Automation** with automatic fallback to native
   **WinRT OCR**, then an attention-first filter that keeps content over chrome.
 - **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine); forward-only migrations.
