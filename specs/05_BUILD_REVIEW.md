@@ -14,6 +14,39 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-29 — Event-driven capture review follow-up
+
+**Branch:** `codex/event-capture-review-followups`. Addresses the review findings against the
+implemented event-driven capture work in `docs/0.2.0.md`: stale Architecture/Testing wording after
+click + scroll-stop landed, and incomplete `CaptureTrigger` token round-trip coverage.
+
+### Implemented
+- **Docs corrected.** `docs/ARCHITECTURE.md` now describes the full landed trigger set
+  (`foreground_change`, `clipboard_change`, `idle`, `typing_pause`, `click`, `scroll_stop`, fallback
+  `timer`), the default-off mouse-hook path, and schema v6. `docs/TESTING.md` now includes manual
+  click/scroll-stop acceptance checks instead of saying those triggers are deferred.
+- **Coverage hardened.** `crates/traits/src/domain.rs` `capture_trigger_db_str_round_trips` now covers
+  `CaptureTrigger::Click` and `CaptureTrigger::ScrollStop`; a list-size assertion first failed at
+  `left: 6 / right: 8`, proving the test would have caught the omission, then passed after adding the
+  missing variants.
+- **Records updated.** `CHANGELOG.md`, `06`, `07`, and `08` record this as a review follow-up with no
+  runtime/schema/IPC behavior change.
+
+### Verification
+- `cargo fmt --all -- --check` — pass.
+- `cargo test -p traits capture_trigger_db_str_round_trips -- --nocapture` — pass.
+- `cargo test -p capture -- --nocapture` — pass (`27 passed; 0 failed; 1 ignored` for lib tests; WGC
+  smoke remains ignored as a real-desktop check).
+- `cargo test -p store migration_v6_widens_capture_trigger_check_without_dropping_children -- --nocapture`
+  — pass.
+- `git diff --exit-code -- ui\src\bindings` — clean.
+
+### Still Risky
+- Live mouse-hook feel/latency and real WGC capture remain manual Windows-desktop checks; this follow-up
+  updated the manual acceptance instructions but did not run ignored live tests.
+
+---
+
 ## Pass — 2026-06-29 — 0.2.1 PR5: Smart enrichment throttle
 
 **Branch:** `feat/0.2.1-pr5-enrichment-throttle`. The 0.2.1 line. Realizes the roadmap's former PR5

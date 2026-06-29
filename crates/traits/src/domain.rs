@@ -522,14 +522,22 @@ mod tests {
 
     #[test]
     fn capture_trigger_db_str_round_trips() {
-        for t in [
+        let covered = [
             CaptureTrigger::Timer,
             CaptureTrigger::Idle,
             CaptureTrigger::ForegroundChange,
             CaptureTrigger::ClipboardChange,
             CaptureTrigger::TypingPause,
+            CaptureTrigger::Click,
+            CaptureTrigger::ScrollStop,
             CaptureTrigger::Manual,
-        ] {
+        ];
+        assert_eq!(
+            covered.len(),
+            8,
+            "keep CaptureTrigger round-trip cases in sync with the enum variants"
+        );
+        for t in covered {
             assert_eq!(
                 CaptureTrigger::from_db_str(t.as_db_str()),
                 Some(t),
