@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.2.1 — Sidecar recycle valve
+Sidecar recycle valve: recycle llama-server at a committed-RAM ceiling to bound the upstream
+multimodal memory leak (~149 MB committed host RAM per vision inference, VRAM flat, confirmed
+2026-06-29 on build 9842). `sidecar.recycle_enabled` (default true) / `sidecar.recycle_rss_mb`
+(default 0=auto; an explicit ceiling is clamped to 8192–131072 MiB — the 8 GiB floor clears the
+vision model's ~6.8 GB warmup baseline so it can't recycle on every reload). Both keys apply on
+app restart, like `sidecar.idle_ttl_secs`. Real fix is upstream / a newer bundled llama.cpp build
+(`07` #72).
+
 ### Docs — README refresh to 0.2.1
 Rewrote the top of `README.md` to match the live app (docs-only; no runtime or code change).
 - Replaced the stale, run-on 0.2.0-era status blockquote with a short prose status line for 0.2.1.

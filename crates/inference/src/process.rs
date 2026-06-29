@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::System::ProcessStatus::{
+    GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+};
+use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::{
     CreateProcessW, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, ResumeThread,
     TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_INFORMATION,
@@ -197,6 +201,48 @@ pub fn image_path(pid: u32) -> Option<PathBuf> {
     )))
 }
 
+/// The process's committed/private bytes (`PROCESS_MEMORY_COUNTERS_EX.PrivateUsage` —
+/// the metric Task Manager shows as "Private" and the recycle valve bounds). `None` if
+/// the process is gone or unqueryable.
+pub fn query_private_bytes(pid: u32) -> Option<u64> {
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: returns an owned handle or an error; nothing is dereferenced unsafely.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+    let cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+    // SAFETY: `handle` is valid; `counters`/`cb` are a valid out-param + its size. The
+    // EX struct is layout-compatible with the base counters the API writes into.
+    let res = unsafe {
+        GetProcessMemoryInfo(
+            handle,
+            &mut counters as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
+            cb,
+        )
+    };
+    // SAFETY: close the handle we opened.
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    res.ok()?;
+    Some(counters.PrivateUsage as u64)
+}
+
+/// Total physical RAM in bytes (`GlobalMemoryStatusEx.ullTotalPhys`); `0` on failure.
+pub fn total_physical_ram() -> u64 {
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `status` is a valid out-param with `dwLength` set per the API contract.
+    if unsafe { GlobalMemoryStatusEx(&mut status) }.is_ok() {
+        status.ullTotalPhys
+    } else {
+        0
+    }
+}
+
 /// Builds a Windows command line (`program` + `args`) with correct argv quoting,
 /// returned as a NUL-terminated, writable UTF-16 buffer for `CreateProcessW`.
 fn build_command_line(program: &Path, args: &[String]) -> Vec<u16> {
@@ -246,7 +292,27 @@ fn quote_arg(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::quote_arg;
+    use super::{query_private_bytes, quote_arg, total_physical_ram};
+
+    #[test]
+    fn total_physical_ram_is_nonzero() {
+        assert!(
+            total_physical_ram() > 0,
+            "GlobalMemoryStatusEx should report RAM"
+        );
+    }
+
+    #[test]
+    fn query_private_bytes_reports_for_self() {
+        let me = std::process::id();
+        let bytes = query_private_bytes(me).expect("own process has committed bytes");
+        assert!(bytes > 0);
+    }
+
+    #[test]
+    fn query_private_bytes_is_none_for_pid_zero() {
+        assert_eq!(query_private_bytes(0), None);
+    }
 
     #[test]
     fn quotes_only_when_needed() {

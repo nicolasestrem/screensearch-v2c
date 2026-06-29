@@ -11,6 +11,66 @@
 
 ---
 
+## 2026-06-29 — PR #50 review fixes: recycle floors (explicit + auto) + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Address three PR-review findings on the recycle valve.
+  1. **Recycle-loop footgun (Claude bot).** Raised the explicit `sidecar.recycle_rss_mb` floor from
+     `4096` to `8192` MiB in `crates/kernel/src/settings.rs` (+ unit test `100 → 8192`),
+     `ui/src/routes/Settings.tsx`, and `specs/03 §8`. An explicit ceiling in `[4096, ~6963]` MiB sat
+     *below* the vision model's ~6.8 GB warmup baseline, so `over_recycle_ceiling` fired immediately
+     after every reload → silent continuous recycle loop. `8192` matches `auto_recycle_ceiling`'s
+     `lo`, guaranteeing an explicit ceiling clears the baseline.
+  2. **Misleading apply-timing (Codex P2).** The two recycle Settings controls were labelled
+     `APPLY_SIDECAR` ("next sidecar launch"), but the ceiling is resolved once at supervisor
+     construction (like `idle_ttl`), so it only takes effect on app restart. Relabelled both to
+     `APPLY_RESTART` (matching the sibling `Idle TTL` control) and documented "applies on app
+     restart" in `specs/03 §8` + `CHANGELOG.md`.
+  3. **Auto-ceiling twin of the floor bug (Codex P2).** `auto_recycle_ceiling`'s inverted-band
+     fallback returned `3–6 GiB` on 8–12 GiB machines — below the same ~6.8 GB warmup baseline, so
+     the *default* (auto) path also recycle-looped when the 8B Quality tier was selected on a
+     small-RAM box. Floored the auto ceiling at `8 GiB` too (`max(RAM−6 GiB, 8 GiB)`), so it can
+     never sit below the baseline; updated the unit test (`12/8 GiB → 8 GiB`, added a 14 GiB
+     boundary) and the `07` #72 caveat. On <14 GiB the ceiling pins at 8 GiB → recycle idles,
+     idle-TTL bounds RAM (use the 4B tier there).
+- **Why:** All three are real correctness/UX defects on the open PR; the two floor bugs could
+  silently break vision tagging (recycle-every-frame) for a manual *or* the default auto ceiling.
+- **Verification:** full CI gate (UI lint+build, `cargo fmt`/`clippy`/`build`/`test --workspace`,
+  binding guard) — see below.
+
+---
+
+## 2026-06-29 — Live proof: recycle valve fires at the committed-RAM ceiling (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Runtime verification only (no code change) — confirms the shipped recycle valve
+  actually recycles the live vision sidecar when committed RAM crosses the configured ceiling.
+- **Why:** Task 7 / DoD for the leak mitigation: unit tests + review proved the logic; this proves
+  it end-to-end in the running app, including the no-orphan teardown (`03 §5/§6`).
+- **Verification:** Pre-seeded `sidecar.recycle_rss_mb=9000` (ceiling = 9 437 184 000 B = 9000 MiB),
+  `sidecar.recycle_enabled=true`, Quality (8B) vision tier; drove a continuous vision backlog and
+  sampled `Get-Process llama-server` every 3–5 s. Verbatim:
+  - Climb to ceiling, then recycle #1:
+    `22:17:15 PID=22256 Priv=8.75 GB → 22:17:18 Priv=9.07 GB (crossed) → 22:17:21 *** RECYCLE: PID 22256 -> 22004  Priv now 4.57 GB ***`
+  - Recycle log line (our supervisor path, not a crash):
+    `2026-06-29T20:17:18 INFO inference::supervisor: sidecar recycled at committed-RAM ceiling ceiling_bytes=9437184000`
+  - No orphan: `llama-server` instance count = **1** immediately after the recycle.
+  - Re-accumulation: new PID 22004 climbed 4.57 → 8.83 GB on continued tagging and parked above the
+    ceiling when activity paused (the check is `acquire()`-gated by design — it fires on the next
+    vision request, not on a timer), confirming the valve bounds host RAM repeatedly.
+
+---
+
+## 2026-06-29 — Sidecar recycle valve + upstream leak docs (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Docs-only — records the upstream llama.cpp multimodal host-memory leak and the
+  shipped recycle valve mitigation. Files changed: `specs/03_MASTER_PRODUCTION_SPEC.md §8`
+  (two new `sidecar.recycle_*` setting rows), `specs/07_KNOWN_GAPS.md` (new row #72),
+  `specs/05`/`06`/`08`, and `CHANGELOG.md`.
+- **Why:** Confirmed ~149 MB committed host RAM leaked per vision inference on the bundled
+  `llama-server` build 9842 (6f4f53f2b) — VRAM flat, not reclaimed while resident, freed on
+  exit. The recycle valve (`sidecar.recycle_enabled`/`sidecar.recycle_rss_mb`) was shipped to
+  bound the leak; recording it in `§8` + `07` makes the mitigation discoverable and the real fix
+  (upstream llama.cpp / newer build) trackable (`06` #15).
+- **Verification:** Docs-only; no build step required.
+
+---
+
 ## 2026-06-29 — Fix: UIA freezes Chromium/Electron apps — mitigation (`fix/uia-chromium-hang`)
 - **Change:** Stop UI Automation text extraction from hanging Chromium-based apps (Chrome, Edge,
   Claude Desktop/Electron) when scrolling large content. Mitigation subset (a cache-request rewrite

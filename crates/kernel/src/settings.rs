@@ -70,6 +70,14 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         sidecar_ctx_size: num(store, "sidecar.ctx_size", d.sidecar_ctx_size).await,
         sidecar_kv_cache_type: json(store, "sidecar.kv_cache_type", d.sidecar_kv_cache_type).await,
         sidecar_flash_attn: json(store, "sidecar.flash_attn", d.sidecar_flash_attn).await,
+        sidecar_recycle_enabled: boolean(
+            store,
+            "sidecar.recycle_enabled",
+            d.sidecar_recycle_enabled,
+        )
+        .await,
+        sidecar_recycle_rss_mb: num(store, "sidecar.recycle_rss_mb", d.sidecar_recycle_rss_mb)
+            .await,
         privacy_excluded_apps: json(store, "privacy.excluded_apps", d.privacy_excluded_apps).await,
         privacy_pause_on_lock: boolean(store, "privacy.pause_on_lock", d.privacy_pause_on_lock)
             .await,
@@ -340,6 +348,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             serde_json::to_string(&s.sidecar_flash_attn)?,
         ),
         (
+            "sidecar.recycle_enabled".into(),
+            bool_str(s.sidecar_recycle_enabled).into(),
+        ),
+        (
+            "sidecar.recycle_rss_mb".into(),
+            s.sidecar_recycle_rss_mb.to_string(),
+        ),
+        (
             "privacy.excluded_apps".into(),
             serde_json::to_string(&s.privacy_excluded_apps)?,
         ),
@@ -522,6 +538,16 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     } else {
         clamp_u32(s.sidecar_ctx_size, 512, 32_768)
     };
+    // 0 = automatic (derived from RAM); any explicit value is a real MiB ceiling clamped
+    // to a sane band. The 8 GiB floor matches `auto_recycle_ceiling`'s `lo`: the vision model
+    // loads to ~6.8 GB *before* the first inference, so any ceiling below that would fire
+    // `over_recycle_ceiling` immediately after every warmup → recycle → reload → over again,
+    // a silent continuous loop. 8 GiB clears the baseline with headroom to accumulate.
+    s.sidecar_recycle_rss_mb = if s.sidecar_recycle_rss_mb == 0 {
+        0
+    } else {
+        clamp_u32(s.sidecar_recycle_rss_mb, 8192, 131_072)
+    };
     s.sidecar_device = s
         .sidecar_device
         .and_then(|d| (!d.trim().is_empty()).then(|| d.trim().to_string()));
@@ -676,5 +702,36 @@ async fn json<T: DeserializeOwned>(store: &dyn Store, key: &str, default: T) -> 
             tracing::warn!(key, error = %e, "settings: read failed; using default");
             default
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_settings;
+    use traits::Settings;
+
+    #[test]
+    fn recycle_rss_mb_clamps_explicit_but_keeps_auto_zero() {
+        // 0 = automatic sentinel: must survive sanitization unchanged.
+        let s = sanitize_settings(Settings {
+            sidecar_recycle_rss_mb: 0,
+            ..Settings::default()
+        });
+        assert_eq!(s.sidecar_recycle_rss_mb, 0, "0 stays auto");
+
+        // Below the 8 GiB floor: clamped up (8192 = auto_recycle_ceiling's lo; clears the
+        // ~6.8 GB vision warmup baseline so an explicit value can't cause a recycle loop).
+        let s = sanitize_settings(Settings {
+            sidecar_recycle_rss_mb: 100,
+            ..Settings::default()
+        });
+        assert_eq!(s.sidecar_recycle_rss_mb, 8192);
+
+        // Above 131_072 ceiling: clamped down.
+        let s = sanitize_settings(Settings {
+            sidecar_recycle_rss_mb: 999_999,
+            ..Settings::default()
+        });
+        assert_eq!(s.sidecar_recycle_rss_mb, 131_072);
     }
 }

@@ -56,6 +56,9 @@ pub struct SupervisorConfig {
     /// init). `build_args` consults this so it only emits flags the binary understands —
     /// the binary auto-updates to the latest release, so its flag set is not fixed.
     pub caps: SidecarCaps,
+    /// Committed-RAM ceiling (bytes) that triggers a sidecar recycle; `0` disables it.
+    /// Resolved once at construction from `sidecar.recycle_*` (like `idle_ttl`).
+    pub recycle_ceiling_bytes: u64,
 }
 
 /// A currently-running sidecar process and the client bound to it.
@@ -220,6 +223,44 @@ impl ModelSupervisor {
     /// runs its HTTP request through `lease.client()`.
     pub async fn acquire(&self, spec: ModelSpec) -> Result<Lease> {
         loop {
+            // Memory safety valve: if the running sidecar (same model) has grown past the
+            // recycle ceiling, refresh it before serving — drain in-flight, kill (freeing the
+            // leaked host RAM + VRAM via the one teardown path), respawn the same spec. This
+            // is the only teardown that fires *during* a backfill drain (the leak's runaway
+            // case), so it ignores keep-warm/pin; the immediate respawn keeps the model
+            // resident. The `!needs_restart` guard means a genuine model switch falls through
+            // to the exclusive-switch branch below instead.
+            if self.over_recycle_ceiling(&spec).await {
+                let permit = self.gate.enter_for_model_switch().await?;
+                let mut guard = self.state.lock().await;
+                // Re-check under the exclusive lock: another caller may have already recycled
+                // or switched, or the process may have been replaced since the probe.
+                if guard
+                    .as_ref()
+                    .is_some_and(|p| !needs_restart(&p.spec, &spec) && self.process_over_ceiling(p))
+                {
+                    let old = guard
+                        .take()
+                        .expect("sidecar present after over-ceiling check");
+                    self.emit(SidecarState::Recycled, Some(&old.spec));
+                    tracing::info!(
+                        ceiling_bytes = self.config.recycle_ceiling_bytes,
+                        "sidecar recycled at committed-RAM ceiling"
+                    );
+                    self.stop_child(old).await;
+                    let proc = self.spawn_with_retries(&spec).await?;
+                    *guard = Some(proc);
+                    let lease = self.lease_from_state(
+                        guard.as_ref().expect("sidecar present after recycle"),
+                        permit.into_single(),
+                    );
+                    drop(guard);
+                    return Ok(lease);
+                }
+                drop(guard);
+                drop(permit);
+                continue;
+            }
             if self.needs_exclusive_switch(&spec).await {
                 let permit = self.gate.enter_for_model_switch().await?;
                 let mut guard = self.state.lock().await;
@@ -318,6 +359,24 @@ impl ModelSupervisor {
             .await
             .as_ref()
             .is_some_and(|p| needs_restart(&p.spec, spec))
+    }
+
+    /// True when recycling is enabled and the running sidecar (same model as `spec`) has
+    /// grown past the committed-RAM ceiling. Cheap no-op when the ceiling is 0 (disabled).
+    async fn over_recycle_ceiling(&self, spec: &ModelSpec) -> bool {
+        if self.config.recycle_ceiling_bytes == 0 {
+            return false;
+        }
+        let guard = self.state.lock().await;
+        guard
+            .as_ref()
+            .is_some_and(|p| !needs_restart(&p.spec, spec) && self.process_over_ceiling(p))
+    }
+
+    /// Probe the sidecar's committed bytes and compare against the ceiling.
+    fn process_over_ceiling(&self, p: &SidecarProcess) -> bool {
+        process::query_private_bytes(p.child.pid())
+            .is_some_and(|rss| should_recycle(rss, self.config.recycle_ceiling_bytes))
     }
 
     fn lease_from_state(&self, running: &SidecarProcess, permit: RequestPermit) -> Lease {
@@ -570,6 +629,39 @@ pub fn should_evict(
     backfill_active: bool,
 ) -> bool {
     in_flight == 0 && !backfill_active && idle_expired(elapsed, ttl)
+}
+
+/// Pure recycle predicate (extracted for testing, like `should_evict`): recycle once the
+/// sidecar's committed RAM reaches the ceiling. `ceiling_bytes == 0` disables recycling.
+pub fn should_recycle(rss_bytes: u64, ceiling_bytes: u64) -> bool {
+    ceiling_bytes != 0 && rss_bytes >= ceiling_bytes
+}
+
+/// Auto recycle ceiling from total physical RAM: half of RAM, clamped to
+/// `[8 GiB, max(RAM − 6 GiB, 8 GiB)]`. The **8 GiB floor always wins**, so the auto ceiling can
+/// never sit below the vision model's ~6.8 GB warmup baseline — a lower ceiling (the 3–6 GiB the
+/// old inverted-band fallback produced on 8–12 GiB machines) makes `over_recycle_ceiling` true
+/// right after every reload, a silent recycle-every-frame loop that breaks tagging. On <14 GiB
+/// machines the ceiling is therefore pinned at 8 GiB: recycle rarely/never fires and idle-TTL does
+/// the bounding; such machines should use the Default 4B vision tier (`07` #72). Matches the
+/// explicit floor in `kernel::settings::sanitize_settings`.
+pub fn auto_recycle_ceiling(total_ram_bytes: u64) -> u64 {
+    const GIB: u64 = 1 << 30;
+    let lo = 8 * GIB;
+    let hi = total_ram_bytes.saturating_sub(6 * GIB).max(lo);
+    (total_ram_bytes / 2).clamp(lo, hi)
+}
+
+/// Resolve the configured recycle settings to a byte ceiling for `SupervisorConfig`:
+/// `0` when disabled; an explicit MiB value; otherwise auto-derived from total RAM.
+pub fn resolve_recycle_ceiling(enabled: bool, rss_mb: u32) -> u64 {
+    if !enabled {
+        return 0;
+    }
+    if rss_mb > 0 {
+        return (rss_mb as u64) * 1024 * 1024;
+    }
+    auto_recycle_ceiling(process::total_physical_ram())
 }
 
 impl traits::BackfillControl for ModelSupervisor {
@@ -1088,5 +1180,42 @@ mod tests {
         let args = build_args(&s, 8080, &caps_full());
         assert!(!args.iter().any(|a| a == "--cache-type-k"));
         assert!(!args.iter().any(|a| a == "--cache-type-v"));
+    }
+
+    const GIB: u64 = 1 << 30;
+
+    #[test]
+    fn should_recycle_only_at_or_above_ceiling() {
+        assert!(!super::should_recycle(9 * GIB, 10 * GIB));
+        assert!(super::should_recycle(10 * GIB, 10 * GIB));
+        assert!(super::should_recycle(11 * GIB, 10 * GIB));
+    }
+
+    #[test]
+    fn should_recycle_disabled_when_ceiling_zero() {
+        assert!(!super::should_recycle(64 * GIB, 0));
+    }
+
+    #[test]
+    fn auto_ceiling_is_half_ram_within_band() {
+        // The 8 GiB floor always wins, so the auto ceiling never drops below the 8B vision model's
+        // ~6.8 GB warmup baseline — no recycle-every-frame loop. On <14 GiB it pins at 8 GiB
+        // (recycle effectively idles; idle-TTL bounds RAM; such machines want the 4B tier).
+        assert_eq!(super::auto_recycle_ceiling(32 * GIB), 16 * GIB); // big box: RAM/2
+        assert_eq!(super::auto_recycle_ceiling(16 * GIB), 8 * GIB); // RAM/2 == floor
+        assert_eq!(super::auto_recycle_ceiling(14 * GIB), 8 * GIB); // boundary: RAM-6 == floor
+        assert_eq!(super::auto_recycle_ceiling(12 * GIB), 8 * GIB); // small box: pinned to floor
+        assert_eq!(super::auto_recycle_ceiling(8 * GIB), 8 * GIB); // tiny: floored, no panic
+    }
+
+    #[test]
+    fn resolve_ceiling_branches() {
+        assert_eq!(super::resolve_recycle_ceiling(false, 0), 0); // disabled
+        assert_eq!(super::resolve_recycle_ceiling(false, 9000), 0); // disabled wins
+        assert_eq!(
+            super::resolve_recycle_ceiling(true, 9000),
+            9000 * 1024 * 1024
+        ); // explicit MiB
+        assert!(super::resolve_recycle_ceiling(true, 0) > 0); // auto from real RAM
     }
 }

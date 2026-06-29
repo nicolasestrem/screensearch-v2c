@@ -52,7 +52,18 @@ sidecar_kv_cache_type: KvCacheType,
  * Flash-attention mode (`--flash-attn`). Reduces attention memory and unlocks KV
  * quantization; `Auto` enables it when the bundled binary supports it.
  */
-sidecar_flash_attn: FlashAttnSetting, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, 
+sidecar_flash_attn: FlashAttnSetting, 
+/**
+ * Recycle (restart) the sidecar when its committed host RAM crosses the ceiling,
+ * reclaiming the upstream llama.cpp multimodal leak that otherwise grows the vision
+ * sidecar ~150 MB per frame during long tagging. On by default.
+ */
+sidecar_recycle_enabled: boolean, 
+/**
+ * Committed-RAM ceiling in MiB that triggers a sidecar recycle. `0` = automatic
+ * (derived from total system RAM). Ignored when `sidecar_recycle_enabled` is false.
+ */
+sidecar_recycle_rss_mb: number, privacy_excluded_apps: Array<string>, privacy_pause_on_lock: boolean, 
 /**
  * Default value of the Recall search "include app chrome / raw text" toggle
  * (`03 §8` `text.include_chrome_default`). `false` → default search uses

@@ -1132,6 +1132,10 @@ async fn init_inference(
         idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
         health_timeout: SIDECAR_HEALTH_TIMEOUT,
         caps,
+        recycle_ceiling_bytes: inference::resolve_recycle_ceiling(
+            settings.sidecar_recycle_enabled,
+            settings.sidecar_recycle_rss_mb,
+        ),
     };
     let supervisor = match ModelSupervisor::new(config) {
         Ok(s) => s,

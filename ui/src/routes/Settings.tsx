@@ -105,6 +105,8 @@ function sanitizeSettings(s: Settings): Settings {
     // 0 = automatic (per-lane default chosen in the backend); any other value is clamped
     // to a sane window. The two enum fields are constrained by their Select options.
     sidecar_ctx_size: s.sidecar_ctx_size === 0 ? 0 : clampInt(s.sidecar_ctx_size, 512, 32_768),
+    sidecar_recycle_enabled: !!s.sidecar_recycle_enabled,
+    sidecar_recycle_rss_mb: s.sidecar_recycle_rss_mb === 0 ? 0 : clampInt(s.sidecar_recycle_rss_mb, 8192, 131_072),
     sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
     // PR3 attention-filter thresholds — mirror the backend clamps (03 §8).
     text_chrome_suppress_min_seen: clampInt(s.text_chrome_suppress_min_seen, 2, 100_000),
@@ -942,6 +944,20 @@ export function Component() {
             value={draft.sidecar_ctx_size}
             onChange={intHandler("sidecar_ctx_size")}
             hint={`Max tokens kept in memory. 0 — or clearing the field — = automatic (small, tuned per lane); lower = less VRAM, but too low can truncate long answers. ${APPLY_SIDECAR}`}
+          />
+          <Toggle
+            label="Recycle sidecar on high memory"
+            checked={draft.sidecar_recycle_enabled}
+            onChange={(v) => set("sidecar_recycle_enabled", v)}
+            hint={`Restarts the engine when its memory crosses the ceiling, reclaiming a known upstream leak that grows the vision engine over long tagging runs. ${APPLY_RESTART}`}
+          />
+          <Field
+            label="Recycle memory ceiling (MiB)"
+            type="number"
+            min={0}
+            value={draft.sidecar_recycle_rss_mb}
+            onChange={intHandler("sidecar_recycle_rss_mb")}
+            hint={`Committed RAM that triggers a recycle (minimum 8192 when set explicitly). 0 — or clearing the field — = automatic (derived from your total RAM). Only used when the toggle is on. ${APPLY_RESTART}`}
           />
           <Select
             label="KV cache precision"

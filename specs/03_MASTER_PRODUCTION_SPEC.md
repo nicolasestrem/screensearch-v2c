@@ -438,6 +438,13 @@ optional human-readable explanation.
 `sidecar.ctx_size` (0=auto → per-lane default vision 4096 / answer 8192, else clamped 512–32768 —
 the dominant VRAM lever) · `sidecar.kv_cache_type` (`q8_0`; one of `f16`/`q8_0`/`q4_0`, quantized
 only when flash attention is active) · `sidecar.flash_attn` (`auto`; one of `auto`/`on`/`off`) ·
+`sidecar.recycle_enabled` (true — recycle the sidecar process when committed host RAM crosses the
+ceiling; mitigates the upstream llama.cpp multimodal memory leak, `07` #72) ·
+`sidecar.recycle_rss_mb` (0=auto → ceiling derived from total installed RAM, else clamped
+8192–131072 — the committed-RAM ceiling in MiB at which the sidecar is recycled; the 8 GiB floor
+matches the auto-ceiling minimum so an explicit value clears the vision model's ~6.8 GB warmup
+baseline and can't trigger a recycle loop; 0 is recommended for most users. Both keys are resolved
+once at supervisor construction like `sidecar.idle_ttl_secs`, so changes apply on app restart) ·
 `privacy.excluded_apps` (["1Password","KeePass","Bitwarden"]) · `privacy.pause_on_lock` (true).
 
 **0.2.x text-signal keys** (defaults provisional — finalized/tuned in PR2/PR3; thresholds are

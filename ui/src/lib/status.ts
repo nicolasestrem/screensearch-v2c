@@ -47,6 +47,8 @@ export function sidecarStateLabel(state: SidecarState): string {
       return "Loaded";
     case "starting":
       return "Loading…";
+    case "recycled":
+      return "Recycling…";
     case "evicted":
       return "Idle — unloaded";
     case "crashed":
@@ -61,6 +63,7 @@ export function sidecarStateTone(state: SidecarState): ChipTone {
     case "ready":
       return "ok";
     case "starting":
+    case "recycled":
       return "warn";
     case "crashed":
       return "danger";
