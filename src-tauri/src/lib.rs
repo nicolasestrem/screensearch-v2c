@@ -21,8 +21,8 @@ use traits::{
     CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
     JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
     ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
-    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, TimeRange, TimelineBucket,
-    ToastLevel, VisionTarget,
+    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, ThrottleStatus, TimeRange,
+    TimelineBucket, ToastLevel, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -136,6 +136,22 @@ async fn get_job_stats(state: State<'_, AppState>) -> Result<JobStats, String> {
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store.job_stats().await.map_err(|e| e.to_string())
+}
+
+/// Current enrichment-throttle status (`get_throttle_status`, `03 §7`): live CPU/GPU
+/// pressure, the throttle level, and whether the GPU is actually monitored (truthful
+/// "GPU not monitored" state). Returns the honest disabled status when there is no kernel.
+#[tauri::command]
+fn get_throttle_status(state: State<'_, AppState>) -> ThrottleStatus {
+    match &state.kernel {
+        Some(kernel) => kernel.throttle_status(),
+        None => ThrottleStatus {
+            enabled: false,
+            level: 0,
+            sample: None,
+            gpu_monitored: false,
+        },
+    }
 }
 
 /// Storage footprint for the StatusRail (`get_storage_stats`, P5 follow-up).
@@ -769,6 +785,12 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
             kernel.reconfigure_enrichment().await;
         }
     }
+    // Hot-apply the enrichment-throttle master switch: start/stop the governor to match
+    // `throttle.enabled` (docs/0.2.0.md former PR5). Threshold + cadence edits are picked up
+    // by the running loop each sample tick, so only the on/off toggle needs this.
+    if let Some(kernel) = state.kernel.clone() {
+        kernel.reconfigure_throttle().await;
+    }
     // Hot-apply capture/privacy changes to a running capture loop (restarts it so the new
     // CaptureConfig — e.g. a freshly excluded app — takes effect now, not on the next manual
     // start). No-op when nothing capture-relevant changed or capture isn't running.
@@ -892,6 +914,15 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(forward_events(kernel.clone(), handle));
 
+                // Inject the system-pressure probe (the only `unsafe`, in `sysmon`) and
+                // start the enrichment-throttle governor if `throttle.enabled` (docs/0.2.0.md
+                // former PR5). Independent of inference — it also governs embed_text.
+                kernel.set_pressure_probe(sysmon::native_probe());
+                {
+                    let kernel = kernel.clone();
+                    tauri::async_runtime::spawn(async move { kernel.reconfigure_throttle().await });
+                }
+
                 kernel.set_embed_readiness(
                     ComponentStatus::Initializing,
                     Some("loading embedding model".to_string()),
@@ -969,7 +1000,8 @@ pub fn run() {
             get_insights,
             get_settings,
             set_settings,
-            get_text_filter_stats
+            get_text_filter_stats,
+            get_throttle_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -982,6 +1014,7 @@ pub fn run() {
                 let state = app_handle.state::<AppState>();
                 if let Some(kernel) = state.kernel.clone() {
                     tauri::async_runtime::block_on(async {
+                        kernel.stop_throttle().await;
                         kernel.stop_vision_scheduler().await;
                         kernel.stop_workers().await;
                     });
@@ -1213,6 +1246,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             }
             Ok(KernelEvent::Toast(toast)) => {
                 let _ = app.emit("toast", toast);
+            }
+            Ok(KernelEvent::ThrottleChanged(status)) => {
+                let _ = app.emit("throttle_changed", status);
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")

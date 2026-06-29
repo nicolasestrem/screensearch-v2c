@@ -79,6 +79,18 @@ async fn round_trips_non_default_values() {
         capture_uia_text_enabled: false,
         capture_uia_latency_budget_ms: 300,
         capture_uia_min_text_chars: 32,
+        // Enrichment throttle — every field away from its default, within the sanitize
+        // clamps (each exit % kept below its enter %), so the round-trip exercises the
+        // new load/save encodings.
+        throttle_enabled: true,
+        throttle_cpu_enter_pct: 75.0,
+        throttle_cpu_exit_pct: 50.0,
+        throttle_gpu_enter_pct: 80.0,
+        throttle_gpu_exit_pct: 55.0,
+        throttle_enter_after_ms: 3000,
+        throttle_exit_after_ms: 6000,
+        throttle_sample_interval_ms: 2000,
+        throttle_embed_text_floor: 2,
     };
 
     save_settings(dyn_store, &original)

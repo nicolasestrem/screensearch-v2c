@@ -113,6 +113,12 @@ export function useLiveEvents() {
     );
 
     track(
+      listenTo("throttle_changed", (status) => {
+        qc.setQueryData(queryKeys.throttleStatus, status);
+      }),
+    );
+
+    track(
       listenTo("toast", (t) => {
         toastStore[t.level](t.message);
         if (t.message.toLowerCase().includes("retention")) {

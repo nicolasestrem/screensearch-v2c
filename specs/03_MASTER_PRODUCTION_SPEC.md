@@ -350,6 +350,21 @@ removes `embeddings`, and an `AFTER DELETE` trigger (or app-side txn) removes th
 - **Resource control:** worker concurrency, enabled job kinds, and the vision trigger mode are all
   settings (§8). Embedding workers may run on a background trigger; vision workers honor the
   on-demand/timer/idle mode strictly.
+- **Smart enrichment throttle (0.2.1, opt-in, default OFF).** When `throttle.enabled` is on, the
+  pool reacts to *sustained* CPU/GPU pressure with graded backpressure: at level ≥ 1 (High) the
+  claim-kind gate drops `vision_tag` + `embed_image` from the claimable set (heavy enrichment
+  pauses); at level 2 (Sustained) an in-flight gate additionally floors concurrent `embed_text` to
+  `throttle.embed_text_floor` (≥1). **Capture / OCR / storage never throttle** — they are
+  structurally outside the worker pool. Pressure is read through a `PressureProbe` seam injected by
+  the composition root (the kernel forbids `unsafe`, mirroring the `IdleSource` / `BackfillControl`
+  seam); the Windows-native impl lives in the `sysmon` crate (CPU via `GetSystemTimes`, GPU via PDH
+  `\GPU Engine(*)\Utilization Percentage` English counters, summed across engines — vendor-neutral).
+  When GPU counters are absent the probe latches a truthful **"GPU not monitored"** state and the
+  throttle runs CPU-only. A pure `ThrottleMachine` (clock-injected, no Win32) applies hysteresis
+  (`*_exit_pct` < `*_enter_pct`) and dwell timers, stepping one level per dwell; a kernel governor
+  loop samples the probe each `throttle.sample_interval_ms`, publishes the level into a shared
+  `AtomicU8` the pool reads (no pool restart on level change), and broadcasts `throttle_changed`
+  (§7). All thresholds are settings, never hardcoded (§8).
 
 ## 6. Inference sidecar — protocol & lifecycle (hard requirements)
 
@@ -388,13 +403,21 @@ duplicates). **Commands** (UI → core):
 | `generate_report` | `ReportRequest` → `ReportResponse` (0.2.x; daily/weekly/custom over `content_text`, cites frames — `§8b`) |
 | `enqueue_vision` | `frame_id \| TimeRange` → `enqueued_count` |
 | `get_job_stats` | `()` → `JobStats` |
+| `get_throttle_status` | `()` → `ThrottleStatus` (0.2.1; smart enrichment throttle — `§5`) |
 | `get_settings` / `set_settings` | `()` / `Settings` |
 | `set_model_tier` | `{lane, tier}` → `()` |
 | `capture_control` | `{start\|stop}` → `()` |
 | `get_readiness` | `()` → `Readiness` (capture, db, embed model, sidecar) |
 
 **Events** (core → UI): `capture_tick`, `job_progress`, `answer_delta`, `sidecar_status`,
-`readiness_changed`, `toast`.
+`readiness_changed`, `toast`, `throttle_changed` (0.2.1; payload `ThrottleStatus`, broadcast each
+governor tick while `throttle.enabled` — `§5`).
+
+**`ThrottleStatus` shape** (0.2.1, smart enrichment throttle): `{ enabled: bool, level: u8 (0=Normal
+/ 1=High / 2=Sustained), sample: Option<PressureSample>, gpu_monitored: bool }`, where
+`PressureSample = { cpu_pct: f32, gpu_pct: Option<f32>, gpu_monitored: bool, sampled_at: i64 }`.
+`gpu_monitored=false` (and `gpu_pct=None`) is the truthful "GPU not monitored" state — the throttle
+then runs CPU-only.
 
 **`Readiness` shape** (defined 2026-06-21, was silent — see `07` gap #3): each of
 `capture | db | embed_model | sidecar` is a `ComponentReadiness { status, detail? }`, where
@@ -428,6 +451,18 @@ settings, never hardcoded, per `§3b` and the guardrail in `04 §4`):
 `reports.map_reduce_min_frames` (20 — frame count above which a range uses map-reduce, `§8b`; set
 at the worst-case single-pass fit so frames are batched, not dropped, before the 8192 answer context
 overflows: ~400 tok/frame × 20 ≈ 8192).
+
+**0.2.1 smart-enrichment-throttle keys** (opt-in CPU/GPU backpressure for the worker pool, `§5`;
+thresholds are settings, never hardcoded — same guardrail as the text-signal keys above and `04 §4`):
+`throttle.enabled` (false — master switch; throttle is opt-in and OFF by default) ·
+`throttle.cpu_enter_pct` (85.0, clamp 1..=100 — busy% at which CPU pressure begins) ·
+`throttle.cpu_exit_pct` (65.0, clamp 0..=enter−1 — hysteresis; must sit below `cpu_enter_pct`) ·
+`throttle.gpu_enter_pct` (90.0, clamp 1..=100 — ignored when GPU is unmonitored, `§5`) ·
+`throttle.gpu_exit_pct` (70.0, clamp 0..=enter−1 — hysteresis; must sit below `gpu_enter_pct`) ·
+`throttle.enter_after_ms` (5000, clamp 500..=120000 — sustained-enter dwell before stepping up a level) ·
+`throttle.exit_after_ms` (8000, clamp 500..=300000 — recovered-exit dwell before stepping down a level) ·
+`throttle.sample_interval_ms` (1000, clamp 250..=10000 — governor probe/sample cadence) ·
+`throttle.embed_text_floor` (1, clamp 1..=16 — min concurrent `embed_text` workers at level 2).
 
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.

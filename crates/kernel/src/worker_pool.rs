@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -99,6 +100,19 @@ pub(crate) struct Shared {
     pub data_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
     pub concurrency: usize,
+    /// Current enrichment-throttle level, shared live with the kernel governor (`03 §5`):
+    /// `0` claims every enabled kind; `>= 1` pauses `embed_image` + `vision_tag`; `2` also
+    /// caps concurrent `embed_text` to `embed_text_floor`. Stays `0` when the throttle is
+    /// off, so behavior is unchanged. Read on every claim — no pool restart on a change.
+    pub throttle_level: Arc<AtomicU8>,
+    /// Minimum concurrent `embed_text` jobs at level 2 (clamped `>= 1`), so text indexing
+    /// never fully stalls under sustained pressure. Shared live with the governor, which
+    /// rewrites it from settings each tick — so a floor edit hot-applies seamlessly, the
+    /// same way the thresholds/dwells do, with no pool restart (`03 §5`).
+    pub embed_text_floor: Arc<AtomicUsize>,
+    /// Live count of in-flight `embed_text` jobs across the pool — the level-2 floor gate.
+    /// Fresh per pool (an in-flight count is meaningless across a restart).
+    pub active_embed_text: Arc<AtomicUsize>,
 }
 
 /// Handle to the running pool: a stop signal and the spawned task joins.
@@ -177,7 +191,34 @@ fn active_job_count(active_jobs: &Mutex<HashSet<i64>>) -> usize {
         .len()
 }
 
-fn claim_kinds(shared: &Shared) -> ([JobKind; 3], usize) {
+/// Tracks an in-flight `embed_text` job in the shared count for the level-2 floor gate.
+/// Always held while an `embed_text` job runs (regardless of level) so the count is
+/// already accurate the moment the throttle steps up to level 2.
+struct EmbedTextGuard {
+    count: Arc<AtomicUsize>,
+}
+
+impl EmbedTextGuard {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        // Relaxed is sufficient: the floor is a soft cap (`worker_loop` reads this count
+        // with `Relaxed` and an accepted one-job race), so a stronger ordering here would
+        // be a superfluous full fence the reader can't observe anyway.
+        count.fetch_add(1, Ordering::Relaxed);
+        Self { count }
+    }
+}
+
+impl Drop for EmbedTextGuard {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// The claimable job kinds, narrowed by both provider readiness (the original slot-gating)
+/// and the throttle: at `level >= 1` `embed_image` + `vision_tag` are dropped; at level 2
+/// `embed_text` is dropped too when the in-flight count has reached the floor (`allow_embed_text`
+/// is precomputed by the caller so the level read + count read are a single snapshot).
+fn claim_kinds(shared: &Shared, level: u8, allow_embed_text: bool) -> ([JobKind; 3], usize) {
     let embedder_ready = shared
         .embedder
         .read()
@@ -187,16 +228,18 @@ fn claim_kinds(shared: &Shared) -> ([JobKind; 3], usize) {
     let mut kinds = [JobKind::EmbedText; 3];
     let mut len = 0;
     if embedder_ready {
-        if shared.enable_embed_text {
+        if shared.enable_embed_text && allow_embed_text {
             kinds[len] = JobKind::EmbedText;
             len += 1;
         }
-        if shared.enable_embed_image {
+        // embed_image is "heavy" enrichment — paused once throttling engages (level >= 1).
+        if shared.enable_embed_image && level == 0 {
             kinds[len] = JobKind::EmbedImage;
             len += 1;
         }
     }
-    if vision_ready {
+    // vision_tag (sidecar) is paused once throttling engages (level >= 1).
+    if vision_ready && level == 0 {
         kinds[len] = JobKind::VisionTag;
         len += 1;
     }
@@ -211,7 +254,14 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         if *stop.borrow() {
             break;
         }
-        let (kinds_arr, len) = claim_kinds(&shared);
+        // Snapshot the throttle level + embed_text in-flight count once, so the claim set
+        // reflects a single consistent view (the floor is a soft cap; a rare race just
+        // lets one extra embed_text run, self-correcting next iteration).
+        let level = shared.throttle_level.load(Ordering::Relaxed);
+        let allow_embed_text = level < 2
+            || shared.active_embed_text.load(Ordering::Relaxed)
+                < shared.embed_text_floor.load(Ordering::Relaxed);
+        let (kinds_arr, len) = claim_kinds(&shared, level, allow_embed_text);
         let kinds = &kinds_arr[..len];
         let claimed = if kinds.is_empty() {
             None
@@ -227,6 +277,9 @@ async fn worker_loop(shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
         match claimed {
             Some(job) => {
                 let _active = ActiveJobGuard::new(shared.active_jobs.clone(), job.id);
+                // Track in-flight embed_text for the level-2 concurrency floor.
+                let _embed_text = (job.kind == JobKind::EmbedText)
+                    .then(|| EmbedTextGuard::new(shared.active_embed_text.clone()));
                 // Snapshot providers out of the shared slots before the await (the std
                 // RwLock guards must not cross it). Claim kinds are also slot-gated,
                 // so missing providers here are defensive against races.

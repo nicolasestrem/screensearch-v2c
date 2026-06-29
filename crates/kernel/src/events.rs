@@ -6,7 +6,8 @@
 //! Tauri.
 
 use traits::{
-    CaptureTick, JobCompleted, JobStats, ModelDownloadStatus, Readiness, SidecarStatus, Toast,
+    CaptureTick, JobCompleted, JobStats, ModelDownloadStatus, Readiness, SidecarStatus,
+    ThrottleStatus, Toast,
 };
 
 /// An event the kernel emits for the UI (forwarded to Tauri events by `src-tauri`).
@@ -34,4 +35,9 @@ pub enum KernelEvent {
     ModelDownload(ModelDownloadStatus),
     /// A transient user-facing notification.
     Toast(Toast),
+    /// The enrichment throttle's level or latest pressure sample changed — drives the
+    /// Settings pressure readout + the StatusRail "throttling" indicator
+    /// (`throttle_changed`, `03 §7`). Emitted each sample tick while the throttle is
+    /// enabled so the readout stays live.
+    ThrottleChanged(ThrottleStatus),
 }

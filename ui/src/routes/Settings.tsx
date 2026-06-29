@@ -20,6 +20,7 @@ import {
   useSettings,
   useSidecarDevices,
   useTextFilterStats,
+  useThrottleStatus,
 } from "../lib/ipc/queries";
 import { useSetModelTier, useSetSettings } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
@@ -111,6 +112,16 @@ function sanitizeSettings(s: Settings): Settings {
     reports_daily_top_k: clampInt(s.reports_daily_top_k, 1, 1_000),
     reports_weekly_top_k: clampInt(s.reports_weekly_top_k, 1, 2_000),
     reports_map_reduce_min_frames: clampInt(s.reports_map_reduce_min_frames, 1, 1_000),
+    // 0.2.1 enrichment throttle — mirror the backend clamps (03 §8); each exit % is kept
+    // strictly below its enter % so the hysteresis band is always valid.
+    throttle_cpu_enter_pct: clampInt(s.throttle_cpu_enter_pct, 1, 100),
+    throttle_cpu_exit_pct: clampInt(s.throttle_cpu_exit_pct, 0, clampInt(s.throttle_cpu_enter_pct, 1, 100) - 1),
+    throttle_gpu_enter_pct: clampInt(s.throttle_gpu_enter_pct, 1, 100),
+    throttle_gpu_exit_pct: clampInt(s.throttle_gpu_exit_pct, 0, clampInt(s.throttle_gpu_enter_pct, 1, 100) - 1),
+    throttle_enter_after_ms: clampInt(s.throttle_enter_after_ms, 500, 120_000),
+    throttle_exit_after_ms: clampInt(s.throttle_exit_after_ms, 500, 300_000),
+    throttle_sample_interval_ms: clampInt(s.throttle_sample_interval_ms, 250, 10_000),
+    throttle_embed_text_floor: clampInt(s.throttle_embed_text_floor, 1, 16),
   };
 }
 
@@ -170,6 +181,59 @@ function SuppressionReadout() {
   );
 }
 
+const THROTTLE_LEVEL_LABEL = ["Normal", "High", "Sustained"] as const;
+
+/**
+ * Live enrichment-throttle status (former PR5, `03 §8`): current CPU/GPU pressure, the
+ * throttle level, and a truthful "GPU not monitored" state when Windows exposes no GPU
+ * performance counters. All view states — loading, error, off, populated.
+ */
+function ThrottleReadout() {
+  const status = useThrottleStatus();
+  if (status.isLoading) return <Skeleton className="h-12 w-full" />;
+  if (status.isError) {
+    return (
+      <p className="text-caption text-ink-muted">
+        Couldn't load throttle status: {String(status.error)}
+      </p>
+    );
+  }
+  const s = status.data;
+  if (!s || !s.enabled) {
+    return (
+      <p className="text-caption text-ink-muted">
+        Throttle is off — enrichment always runs at full speed.
+      </p>
+    );
+  }
+  const cpu = s.sample ? `${Math.round(s.sample.cpu_pct)}%` : "—";
+  const gpu = !s.gpu_monitored
+    ? "GPU not monitored"
+    : s.sample?.gpu_pct != null
+      ? `${Math.round(s.sample.gpu_pct)}%`
+      : "—";
+  const levelLabel = THROTTLE_LEVEL_LABEL[s.level] ?? "Normal";
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-body text-ink tabular-nums">
+        CPU {cpu} · GPU {gpu} · Level: {levelLabel}
+      </p>
+      {!s.gpu_monitored && (
+        <p className="text-caption text-ink-muted">
+          Your GPU exposes no Windows performance counters; throttling uses CPU pressure only.
+        </p>
+      )}
+      {s.level > 0 && (
+        <p className="text-caption text-ink-muted">
+          Throttling active — vision tagging and image embeds are paused
+          {s.level >= 2 ? " and text-embed concurrency is reduced" : ""}; capture, OCR, and
+          storage keep running.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function Component() {
   const settings = useSettings();
   const readiness = useReadiness();
@@ -179,6 +243,10 @@ export function Component() {
   const sidecarAvailable =
     readiness.data?.sidecar.status === "ready" || readiness.data?.sidecar.status === "disabled";
   const sidecarDevices = useSidecarDevices(sidecarAvailable);
+  const throttleStatus = useThrottleStatus();
+  // Default true while unknown, so GPU threshold fields aren't annotated as dead until the
+  // probe confirms the GPU genuinely isn't monitored.
+  const gpuMonitored = throttleStatus.data?.gpu_monitored ?? true;
   const setSettings = useSetSettings();
   const setTier = useSetModelTier();
 
@@ -606,6 +674,102 @@ export function Component() {
             batchSize={draft.enrich_vision_batch_size}
             onChange={patch}
           />
+        </div>
+      </Panel>
+
+      <Panel title="Performance throttle">
+        <div className="flex flex-col gap-4">
+          <Toggle
+            label="Throttle enrichment under load"
+            checked={draft.throttle_enabled}
+            onChange={(v) => set("throttle_enabled", v)}
+            hint={`Pause heavy enrichment (vision tagging, image embeds) and ease text-embed concurrency when the machine is under sustained CPU/GPU pressure, so your foreground work stays responsive. Capture, OCR, and storage never pause. ${APPLY_NOW}`}
+          />
+          <ThrottleReadout />
+          {draft.throttle_enabled && (
+            <div className="flex flex-col gap-4 border-t border-line pt-3">
+              <Field
+                label="CPU enter threshold (%)"
+                type="number"
+                min={1}
+                max={100}
+                value={draft.throttle_cpu_enter_pct}
+                onChange={intHandler("throttle_cpu_enter_pct")}
+                hint={`Start throttling once CPU stays at or above this. ${APPLY_NOW}`}
+              />
+              <Field
+                label="CPU exit threshold (%)"
+                type="number"
+                min={0}
+                max={99}
+                value={draft.throttle_cpu_exit_pct}
+                onChange={intHandler("throttle_cpu_exit_pct")}
+                hint={`Ease throttling once CPU stays below this (kept under the enter threshold for hysteresis). ${APPLY_NOW}`}
+              />
+              <Field
+                label="GPU enter threshold (%)"
+                type="number"
+                min={1}
+                max={100}
+                value={draft.throttle_gpu_enter_pct}
+                onChange={intHandler("throttle_gpu_enter_pct")}
+                hint={
+                  gpuMonitored
+                    ? `Start throttling once GPU stays at or above this. ${APPLY_NOW}`
+                    : "Your GPU isn't monitored on this machine, so this has no effect."
+                }
+              />
+              <Field
+                label="GPU exit threshold (%)"
+                type="number"
+                min={0}
+                max={99}
+                value={draft.throttle_gpu_exit_pct}
+                onChange={intHandler("throttle_gpu_exit_pct")}
+                hint={
+                  gpuMonitored
+                    ? `Ease throttling once GPU stays below this (kept under the enter threshold). ${APPLY_NOW}`
+                    : "Your GPU isn't monitored on this machine, so this has no effect."
+                }
+              />
+              <Field
+                label="Enter delay (ms)"
+                type="number"
+                min={500}
+                max={120000}
+                value={draft.throttle_enter_after_ms}
+                onChange={intHandler("throttle_enter_after_ms")}
+                hint={`Pressure must stay high this long before throttling steps up a level. ${APPLY_NOW}`}
+              />
+              <Field
+                label="Exit delay (ms)"
+                type="number"
+                min={500}
+                max={300000}
+                value={draft.throttle_exit_after_ms}
+                onChange={intHandler("throttle_exit_after_ms")}
+                hint={`Pressure must stay low this long before throttling steps back down a level. ${APPLY_NOW}`}
+              />
+              <Field
+                label="Sample interval (ms)"
+                type="number"
+                min={250}
+                max={10000}
+                value={draft.throttle_sample_interval_ms}
+                onChange={intHandler("throttle_sample_interval_ms")}
+                hint={`How often CPU/GPU pressure is sampled. ${APPLY_NOW}`}
+              />
+              <Field
+                label="Text-embed floor (workers)"
+                type="number"
+                min={1}
+                max={16}
+                value={draft.throttle_embed_text_floor}
+                onChange={intHandler("throttle_embed_text_floor")}
+                hint={`Keep at least this many text-embed workers running even under the heaviest throttle, so search indexing never fully stalls. ${APPLY_NOW}`}
+              />
+            </div>
+          )}
         </div>
       </Panel>
 

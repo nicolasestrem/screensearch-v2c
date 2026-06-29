@@ -174,4 +174,53 @@ capture_uia_latency_budget_ms: number,
  * strictly better. Baked into the provider at startup — applied on app restart (a
  * capture stop/start reuses the existing provider).
  */
-capture_uia_min_text_chars: number, };
+capture_uia_min_text_chars: number, 
+/**
+ * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
+ * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
+ * never runs and enrichment drains at full configured concurrency, exactly as
+ * before. When on, sustained CPU/GPU pressure pauses `vision_tag`/`embed_image` and
+ * floors `embed_text` concurrency; capture/OCR/storage never throttle (`03 §5`).
+ */
+throttle_enabled: boolean, 
+/**
+ * CPU busy % at/above which pressure counts toward raising a throttle level
+ * (`throttle.cpu_enter_pct`). A threshold, never hardcoded (`03 §3b` stance).
+ */
+throttle_cpu_enter_pct: number, 
+/**
+ * CPU busy % below which pressure counts toward lowering a level
+ * (`throttle.cpu_exit_pct`). Kept strictly below the enter % for hysteresis.
+ */
+throttle_cpu_exit_pct: number, 
+/**
+ * GPU utilization % enter threshold (`throttle.gpu_enter_pct`). Ignored when the GPU
+ * is unmonitored (no Windows GPU perf counters) — the throttle is then CPU-only.
+ */
+throttle_gpu_enter_pct: number, 
+/**
+ * GPU utilization % exit threshold (`throttle.gpu_exit_pct`); strictly below enter.
+ */
+throttle_gpu_exit_pct: number, 
+/**
+ * How long pressure must stay above the enter threshold before stepping up one
+ * throttle level, ms (`throttle.enter_after_ms`) — the sustained-enter dwell.
+ */
+throttle_enter_after_ms: number, 
+/**
+ * How long pressure must stay below the exit threshold before stepping down one
+ * level, ms (`throttle.exit_after_ms`) — the recovered-exit dwell (longer = stickier).
+ */
+throttle_exit_after_ms: number, 
+/**
+ * Pressure sampling cadence, ms (`throttle.sample_interval_ms`). The floor keeps
+ * sampling cheap.
+ */
+throttle_sample_interval_ms: number, 
+/**
+ * Minimum concurrent `embed_text` jobs at the Sustained level
+ * (`throttle.embed_text_floor`). Clamped ≥ 1 so text indexing never fully stalls.
+ * Hot-applied by the governor each sample tick, like the other `throttle.*` knobs —
+ * no worker-pool restart.
+ */
+throttle_embed_text_floor: number, };

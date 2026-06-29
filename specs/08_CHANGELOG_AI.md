@@ -11,6 +11,40 @@
 
 ---
 
+## 2026-06-29 — 0.2.1 PR5: Smart enrichment throttle (`feat/0.2.1-pr5-enrichment-throttle`)
+- **Change:** Opt-in, default-OFF CPU/GPU pressure throttle for enrichment (`docs/0.2.0.md` former PR5, `07` #49).
+  - **New `crates/sysmon`** (peer of `capture`/`uia`, depends on `traits` only — `03 §2`): implements
+    `traits::PressureProbe { sample() -> PressureSample; gpu_monitored() }`. CPU via `GetSystemTimes`
+    (busy% = 1 − Δidle/Δ(kernel+user)); GPU via Windows **PDH** `\GPU Engine(*)\Utilization Percentage`
+    using `PdhAddEnglishCounterW` (locale-proof), summed across engines. The **only new `unsafe`**;
+    pure delta/aggregation helpers are unit-tested without syscalls. Absent GPU counters → latch
+    `gpu_monitored=false`, report `gpu_pct=None` (truthful "GPU not monitored", CPU-only throttle).
+  - **Pure `kernel/src/throttle.rs` `ThrottleMachine`** (clock injected, no Win32 — mirrors `capture::trigger`):
+    levels 0/1/2 with `exit<enter` hysteresis + enter/exit dwell timers, one level per dwell (9 unit tests).
+    A kernel `governor_loop` samples the probe each `throttle.sample_interval_ms`, publishes the level into
+    a shared `Arc<AtomicU8>` the worker pool reads live (no pool restart on a change), caches `ThrottleStatus`,
+    broadcasts `throttle_changed`. Started/stopped to match `throttle.enabled` via `reconfigure_throttle`
+    (peer of `reconfigure_enrichment`) and on `ExitRequested`.
+  - **Worker pool (`worker_pool::claim_kinds`)**: drops `embed_image`+`vision_tag` at level ≥ 1; at level 2
+    an in-flight `AtomicUsize` gate caps concurrent `embed_text` to `throttle.embed_text_floor` (≥1).
+    Capture/OCR/storage are structurally outside the pool — never throttle.
+  - **IPC + UI**: `get_throttle_status -> ThrottleStatus` command, `throttle_changed` event, new
+    `PressureSample`/`ThrottleStatus` ts-rs bindings; a Settings "Performance throttle" panel (master
+    toggle + live readout with the honest "GPU not monitored" state + 8 clamped threshold fields, all
+    five view states) and a StatusRail "Throttling" chip shown only at level ≥ 1.
+  - **Settings**: nine `throttle.*` keys with defaults + clamps (`exit<enter` enforced in `sanitize_settings`),
+    wired through `kernel/src/settings.rs` load/save/sanitize, mirrored in the UI sanitizer.
+- **Why:** `docs/0.2.0.md` deferred work + `07` #49 — let enrichment yield to the user under load without
+  ever pausing capture/OCR/storage; thresholds are settings, never hardcoded (`03 §8`, the PR3 stance).
+- **Deviation (user-authorized):** GPU monitored via **PDH GPU-Engine counters (any vendor)** rather than
+  the roadmap's NVML-only framing — broader coverage + locale-safe + truthful CPU-only fallback (`06` #13).
+- **Verification (all green, verbatim):** `cargo fmt --all -- --check` (exit 0) · `cargo clippy --workspace
+  --all-targets -- -D warnings` (exit 0) · `cargo test --workspace` (all suites pass: `sysmon` 11, `kernel`
+  lib 22 incl. 9 throttle, `kernel` `throttle.rs` integration 2, `kernel` `settings.rs` 6, `traits` 52) ·
+  `cd ui && npm run lint` (clean) · `npm run build` (built) · `git diff --exit-code -- ui/src/bindings`
+  (regenerated `PressureSample.ts`/`ThrottleStatus.ts`/`Settings.ts` committed). The live `sysmon` probe
+  ran on real hardware (`sample_is_well_formed` sampled CPU + a monitored GPU).
+
 ## 2026-06-28 — 0.2.1 PR4 part 2: UIA text + click/scroll-stop triggers (`feat/0.2.1-pr4p2-uia-and-mouse-triggers`)
 - **Change:** Two workstreams on one branch (two commits, one PR).
   - **A — UIA target-window text, default ON, OCR fallback (`07` #48).** New `crates/uia`

@@ -13,6 +13,7 @@ import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { AnswerEvent } from "../../bindings/AnswerEvent";
 import type { ReportProgress } from "../../bindings/ReportProgress";
 import type { Toast } from "../../bindings/Toast";
+import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 
 /** Map of backend event name → payload type. */
 export interface AppEvents {
@@ -25,6 +26,7 @@ export interface AppEvents {
   answer_delta: AnswerEvent;
   report_progress: ReportProgress;
   toast: Toast;
+  throttle_changed: ThrottleStatus;
 }
 
 /**

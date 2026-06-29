@@ -102,6 +102,11 @@ app, **not** a retrofit of the v1.0 phases above. It is tracked in detail in `do
 - **Deferred to 0.2.1** (highest-risk, most-invasive, not needed for the retrieval fix):
   event-driven capture, UIA text, and a smart enrichment throttle — each its own gated PR, recorded
   in `07`. **0.2.0 keeps timer/idle capture; no raw keystrokes or clipboard text are ever stored.**
+- **Realized on 0.2.1.** The **smart enrichment throttle** (the roadmap's former PR5, `07` gap #49)
+  now ships on the 0.2.1 line: opt-in, default-OFF, CPU/GPU-pressure-aware backpressure that pauses
+  heavy enrichment (`vision_tag` / `embed_image`, and at the deepest level floors `embed_text`
+  concurrency) under *sustained* load, while **capture / OCR / storage never pause** (they sit
+  outside the worker pool). Contract in `03 §5/§7/§8`.
 
 ## 6. Risks & mitigations
 

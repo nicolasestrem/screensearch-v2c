@@ -10,6 +10,7 @@ import {
   useReadiness,
   useSidecarStatus,
   useStorageStats,
+  useThrottleStatus,
 } from "../../lib/ipc/queries";
 import {
   sidecarStateLabel,
@@ -37,6 +38,7 @@ export function StatusRail() {
   const storage = useStorageStats();
   const sidecar = useSidecarStatus();
   const download = useModelDownload();
+  const throttle = useThrottleStatus();
 
   // A model fetch is global, slow (multi-GB) work — surface it in the rail so it's visible
   // from any screen, not just the Settings panel. Percent shown when the total is known.
@@ -45,6 +47,11 @@ export function StatusRail() {
     dl && dl.total_bytes && dl.total_bytes > 0
       ? Math.min(100, Math.round((dl.downloaded_bytes / dl.total_bytes) * 100))
       : null;
+
+  // Only present under real pressure (level >= 1) — genuinely subtle, hidden when idle or
+  // when the throttle is off. Tells the user why enrichment slowed without hunting Settings.
+  const throttling =
+    throttle.data?.enabled && throttle.data.level >= 1 ? throttle.data : null;
 
   return (
     <header className="flex items-center justify-between gap-4 h-12 px-4 bg-surface border-b border-line">
@@ -56,6 +63,26 @@ export function StatusRail() {
       </div>
 
       <div className="flex items-center gap-2">
+        {throttling && (
+          <Tooltip
+            label={`Throttling enrichment (${throttling.level >= 2 ? "Sustained" : "High"})${
+              throttling.sample
+                ? ` · CPU ${Math.round(throttling.sample.cpu_pct)}% · ${
+                    throttling.gpu_monitored && throttling.sample.gpu_pct != null
+                      ? `GPU ${Math.round(throttling.sample.gpu_pct)}%`
+                      : "GPU not monitored"
+                  }`
+                : ""
+            }`}
+            side="bottom"
+          >
+            <Chip tone="warn" dot>
+              <IconCpu size={14} />
+              Throttling
+            </Chip>
+          </Tooltip>
+        )}
+
         {dl && (
           <Tooltip
             label={

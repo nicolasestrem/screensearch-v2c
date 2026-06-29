@@ -16,6 +16,7 @@ members = [
     "crates/embeddings",
     "crates/inference",
     "crates/textfilter",
+    "crates/sysmon",
     "crates/doctor",
 ]
 
@@ -109,6 +110,7 @@ uia = { path = "crates/uia" }
 embeddings = { path = "crates/embeddings" }
 inference = { path = "crates/inference" }
 textfilter = { path = "crates/textfilter" }
+sysmon = { path = "crates/sysmon" }
 
 [profile.release]
 strip = true

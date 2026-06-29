@@ -8,6 +8,7 @@ import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { TimeRange } from "../../bindings/TimeRange";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
 import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
+import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -70,6 +71,18 @@ export function useModelDownload() {
 /** Persisted settings. */
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: cmd.getSettings });
+}
+
+/**
+ * Enrichment-throttle status: live CPU/GPU pressure, level, and whether the GPU is
+ * monitored. Fetched once, then kept live by the `throttle_changed` event (see
+ * useLiveEvents) which the governor emits each sample tick while enabled.
+ */
+export function useThrottleStatus() {
+  return useQuery<ThrottleStatus>({
+    queryKey: queryKeys.throttleStatus,
+    queryFn: cmd.getThrottleStatus,
+  });
 }
 
 /** Per-app text-filter suppression rates (PR3 guardrail). */

@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use tokio::sync::{broadcast, watch, Mutex};
@@ -20,13 +20,15 @@ use tokio::task::JoinHandle;
 use traits::{
     AnswerProvider, BackfillControl, CaptureConfig, CaptureSource, ComponentReadiness,
     ComponentStatus, EmbeddingProvider, JobKind, ModelDownloadStatus, NewJob, OcrProvider,
-    Readiness, SidecarState, SidecarStatus, Store, Toast, ToastLevel, VisionProvider, VisionTarget,
+    PressureProbe, Readiness, SidecarState, SidecarStatus, Store, ThrottleStatus, Toast,
+    ToastLevel, VisionProvider, VisionTarget,
 };
 
 mod capture_loop;
 mod events;
 pub mod reports;
 pub mod settings;
+mod throttle;
 mod vision_scheduler;
 mod worker_pool;
 
@@ -87,6 +89,23 @@ pub struct Kernel {
     answer: Mutex<Option<Arc<dyn AnswerProvider>>>,
     /// The running timer/idle vision scheduler; `None` until inference is attached.
     scheduler: Mutex<Option<vision_scheduler::SchedulerHandle>>,
+    /// System-pressure probe for the enrichment throttle (`03 §5/§8`); injected by the
+    /// composition root (the kernel forbids `unsafe`). `None` if the platform probe
+    /// couldn't be built — the throttle then stays off.
+    pressure_probe: RwLock<Option<Arc<dyn PressureProbe>>>,
+    /// Current throttle level (`0` Normal / `1` High / `2` Sustained), shared live with
+    /// the worker pool so a level change reaches running workers without a pool restart.
+    /// Stays `0` whenever the throttle is disabled.
+    throttle_level: Arc<AtomicU8>,
+    /// The level-2 `embed_text` concurrency floor (clamped `>= 1`), shared live with both
+    /// the worker pool (which reads it) and the governor (which rewrites it from settings
+    /// each tick) so a floor edit hot-applies seamlessly, like the thresholds/dwells.
+    throttle_embed_text_floor: Arc<AtomicUsize>,
+    /// Latest throttle status (level + last pressure sample), cached for the
+    /// `get_throttle_status` command and the `throttle_changed` event.
+    throttle_status: Arc<RwLock<ThrottleStatus>>,
+    /// The running throttle governor loop; `None` when the throttle is disabled.
+    throttle: Mutex<Option<throttle::ThrottleHandle>>,
 }
 
 impl Kernel {
@@ -159,6 +178,18 @@ impl Kernel {
             vision: Arc::new(RwLock::new(None)),
             answer: Mutex::new(None),
             scheduler: Mutex::new(None),
+            pressure_probe: RwLock::new(None),
+            throttle_level: Arc::new(AtomicU8::new(0)),
+            // Min clamp; the real value is written from settings by `start_workers` and the
+            // governor before it's ever consulted (only at level 2).
+            throttle_embed_text_floor: Arc::new(AtomicUsize::new(1)),
+            throttle_status: Arc::new(RwLock::new(ThrottleStatus {
+                enabled: false,
+                level: 0,
+                sample: None,
+                gpu_monitored: false,
+            })),
+            throttle: Mutex::new(None),
         }
     }
 
@@ -351,6 +382,16 @@ impl Kernel {
             data_dir,
             events: self.events.clone(),
             concurrency: settings.enrich_worker_concurrency.max(1) as usize,
+            throttle_level: self.throttle_level.clone(),
+            embed_text_floor: {
+                // Seed the shared floor from settings; the governor keeps it current per tick.
+                self.throttle_embed_text_floor.store(
+                    settings.throttle_embed_text_floor.max(1) as usize,
+                    Ordering::Relaxed,
+                );
+                self.throttle_embed_text_floor.clone()
+            },
+            active_embed_text: Arc::new(AtomicUsize::new(0)),
         });
         *guard = Some(pool);
         tracing::info!("enrichment workers started");
@@ -509,6 +550,98 @@ impl Kernel {
             handle.stop().await;
             tracing::info!("vision scheduler stopped");
         }
+    }
+
+    /// Injects the system-pressure probe for the enrichment throttle (`03 §5/§8`). The
+    /// composition root builds it (the only `unsafe`, in `sysmon`) and calls this once at
+    /// startup, then [`Kernel::reconfigure_throttle`] to honor the master-enable setting.
+    /// Seeds the cached status' `gpu_monitored` so the UI is truthful before the first
+    /// sample lands.
+    pub fn set_pressure_probe(&self, probe: Arc<dyn PressureProbe>) {
+        let monitored = probe.gpu_monitored();
+        *self
+            .pressure_probe
+            .write()
+            .expect("pressure probe lock poisoned") = Some(probe);
+        self.throttle_status
+            .write()
+            .expect("throttle status lock poisoned")
+            .gpu_monitored = monitored;
+    }
+
+    /// Starts or stops the throttle governor to match the `throttle.enabled` setting,
+    /// without an app restart. Called once at startup (after [`Kernel::set_pressure_probe`])
+    /// and from the settings-save path (peer of [`Kernel::reconfigure_enrichment`]). When
+    /// disabled it resets the shared level to `0` so the worker pool resumes full draining.
+    pub async fn reconfigure_throttle(&self) {
+        let enabled = settings::load_settings(self.store.as_ref())
+            .await
+            .throttle_enabled;
+        let mut guard = self.throttle.lock().await;
+        if enabled {
+            if guard.is_some() {
+                return;
+            }
+            let probe = self
+                .pressure_probe
+                .read()
+                .expect("pressure probe lock poisoned")
+                .clone();
+            match probe {
+                Some(probe) => {
+                    *guard = Some(throttle::spawn(
+                        self.store.clone(),
+                        probe,
+                        self.throttle_level.clone(),
+                        self.throttle_embed_text_floor.clone(),
+                        self.throttle_status.clone(),
+                        self.events.clone(),
+                    ));
+                    tracing::info!("enrichment throttle governor started");
+                }
+                None => tracing::warn!(
+                    "throttle enabled but no pressure probe injected; throttle stays off"
+                ),
+            }
+        } else if let Some(handle) = guard.take() {
+            handle.stop().await;
+            self.reset_throttle_baseline();
+            tracing::info!("enrichment throttle governor stopped");
+        }
+    }
+
+    /// Stops the throttle governor (idempotent). Called on shutdown.
+    pub async fn stop_throttle(&self) {
+        if let Some(handle) = self.throttle.lock().await.take() {
+            handle.stop().await;
+            self.reset_throttle_baseline();
+            tracing::info!("enrichment throttle governor stopped");
+        }
+    }
+
+    /// Resets the shared level to `0` and the cached status to the honest disabled state
+    /// (preserving the truthful `gpu_monitored`), then broadcasts the change.
+    fn reset_throttle_baseline(&self) {
+        self.throttle_level.store(0, Ordering::Relaxed);
+        let snapshot = {
+            let mut st = self
+                .throttle_status
+                .write()
+                .expect("throttle status lock poisoned");
+            st.enabled = false;
+            st.level = 0;
+            st.sample = None;
+            *st
+        };
+        let _ = self.events.send(KernelEvent::ThrottleChanged(snapshot));
+    }
+
+    /// The latest throttle status (backs the `get_throttle_status` command).
+    pub fn throttle_status(&self) -> ThrottleStatus {
+        *self
+            .throttle_status
+            .read()
+            .expect("throttle status lock poisoned")
     }
 }
 
