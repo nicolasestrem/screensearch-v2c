@@ -589,3 +589,18 @@ the exact evidence paths. All required commands exited 0:
 
 
 > Pre-0.2.x (v0.1.0) history archived in specs/archive/05_BUILD_REVIEW.v0.1.0.md.
+
+## Build review — 2026-06-29 — Ask OCR hydration failure handling
+
+**Branch:** `fix-ask-ocr-texts-error`.
+
+### Implemented
+- Replaced the `ask` command's silent `ocr_texts(...).unwrap_or_default()` fallback with explicit pre-stream error handling. Ask now hydrates retrieval hits through `ask_context`; if the bulk OCR/content-text read fails, the command returns a clear error before spawning the answer stream. Missing text for individual frames still falls back to that hit's snippet after a successful bulk read.
+- Added a unit test that simulates an `ocr_texts` failure and asserts the exact command-side error message includes the hydrated frame count and original store error.
+- Updated `CHANGELOG.md` and this build-loop record.
+
+### Verification
+- `cargo fmt --all -- --check`
+- `cargo test -p screensearch ask_context_returns_clear_error_when_ocr_hydration_fails -- --nocapture` *(blocked in this Linux container by missing `glib-2.0` system package required by Tauri/WebKit GTK dependencies before the test binary could compile).*
+
+---

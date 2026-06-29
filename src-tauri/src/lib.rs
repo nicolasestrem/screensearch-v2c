@@ -256,6 +256,49 @@ async fn enqueue_vision(target: VisionTarget, state: State<'_, AppState>) -> Res
         .map_err(|e| e.to_string())
 }
 
+/// Builds grounded Ask context before any answer stream starts. Full context hydration
+/// is required for Ask quality: a failed `ocr_texts` bulk read means the command returns
+/// a clear error instead of silently degrading every retrieved frame to snippets. Frames
+/// with no stored text still fall back to their individual search snippet.
+async fn ask_context<S: Store + ?Sized>(
+    store: &S,
+    query: &str,
+    top_k: u32,
+) -> Result<Vec<RetrievedChunk>, String> {
+    let hits = store
+        .hybrid_search(&SearchQuery {
+            text: query.to_string(),
+            limit: top_k,
+            time_range: None,
+            // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
+            include_chrome: false,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    // Hydrate context text in a single bulk query (avoid an N+1 over the hits).
+    // If the bulk read fails, return before spawning the answer stream so grounded
+    // Ask does not silently answer from low-quality snippets only.
+    let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    let ocr = store.ocr_texts(&frame_ids).await.map_err(|e| {
+        format!(
+            "failed to hydrate Ask OCR context for {} frames: {e}",
+            frame_ids.len()
+        )
+    })?;
+    Ok(hits
+        .into_iter()
+        .map(|hit| {
+            let text = ocr.get(&hit.frame_id).cloned().unwrap_or(hit.snippet);
+            RetrievedChunk {
+                frame_id: hit.frame_id,
+                text,
+                score: hit.score,
+                captured_at: hit.captured_at,
+            }
+        })
+        .collect())
+}
+
 /// Ask a grounded question about the screen history (`ask`, `03 §7/§13.5`). Returns
 /// immediately; the answer streams back as `answer_delta` events. Retrieves the top-K
 /// chunks via hybrid search, supplies their full OCR text as reviewed context, and runs
@@ -290,32 +333,7 @@ async fn ask(
     // ASK_TOP_K), overridable per request via `AskRequest.top_k`.
     let settings = kernel::settings::load_settings(store.as_ref()).await;
     let top_k = request.top_k.unwrap_or(settings.retrieval_default_top_k);
-    let hits = store
-        .hybrid_search(&SearchQuery {
-            text: request.query.clone(),
-            limit: top_k,
-            time_range: None,
-            // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
-            include_chrome: false,
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-    // Hydrate context text in a single bulk query (avoid an N+1 over the hits),
-    // falling back to each hit's snippet when a frame has no OCR text.
-    let frame_ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
-    let ocr = store.ocr_texts(&frame_ids).await.unwrap_or_default();
-    let context: Vec<RetrievedChunk> = hits
-        .into_iter()
-        .map(|hit| {
-            let text = ocr.get(&hit.frame_id).cloned().unwrap_or(hit.snippet);
-            RetrievedChunk {
-                frame_id: hit.frame_id,
-                text,
-                score: hit.score,
-                captured_at: hit.captured_at,
-            }
-        })
-        .collect();
+    let context = ask_context(store.as_ref(), &request.query, top_k).await?;
 
     // Stream: the provider sends typed deltas on `tx`; a forwarder tags each with
     // `request_id` before emitting it as an `answer_delta` event. The provider task
@@ -1799,6 +1817,138 @@ Available devices:
         assert_eq!(
             parse_sidecar_device_ids(output),
             vec!["Vulkan0", "Vulkan1", "CUDA0"]
+        );
+    }
+
+    struct FailingOcrContextStore;
+
+    #[async_trait]
+    impl Store for FailingOcrContextStore {
+        async fn insert_frame(&self, _f: traits::domain::NewFrame) -> traits::Result<i64> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn insert_ocr(
+            &self,
+            _frame_id: i64,
+            _ocr: traits::domain::OcrResult,
+        ) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn insert_vision(
+            &self,
+            _frame_id: i64,
+            _v: traits::domain::VisionAnalysis,
+        ) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn upsert_text_embedding(
+            &self,
+            _frame_id: i64,
+            _chunk_index: i32,
+            _chunk_text: &str,
+            _source: traits::domain::ChunkSource,
+            _emb: &traits::domain::Embedding,
+            _model: &str,
+        ) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn upsert_image_embedding(
+            &self,
+            _frame_id: i64,
+            _emb: &traits::domain::Embedding,
+            _model: &str,
+        ) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn hybrid_search(&self, q: &SearchQuery) -> traits::Result<Vec<SearchHit>> {
+            assert_eq!(q.text, "where was rust mentioned?");
+            assert_eq!(q.limit, 2);
+            assert!(!q.include_chrome);
+            Ok(vec![SearchHit {
+                frame_id: 42,
+                captured_at: 1_234,
+                snippet: "snippet fallback".to_string(),
+                score: 0.75,
+                image_path: "frames/42.jpg".to_string(),
+                app_hint: Some("Editor".to_string()),
+            }])
+        }
+
+        async fn get_enrichment_input(
+            &self,
+            _frame_id: i64,
+        ) -> traits::Result<Option<traits::domain::FrameEnrichmentInput>> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn ocr_texts(
+            &self,
+            frame_ids: &[i64],
+        ) -> traits::Result<std::collections::HashMap<i64, String>> {
+            assert_eq!(frame_ids, &[42]);
+            Err(
+                std::io::Error::new(std::io::ErrorKind::Other, "simulated ocr_texts failure")
+                    .into(),
+            )
+        }
+
+        async fn enqueue_job(&self, _job: traits::jobs::NewJob) -> traits::Result<i64> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn claim_jobs(
+            &self,
+            _kinds: &[traits::jobs::JobKind],
+            _limit: u32,
+            _now: i64,
+        ) -> traits::Result<Vec<traits::jobs::Job>> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn complete_job(&self, _id: i64) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn fail_job(
+            &self,
+            _id: i64,
+            _err: &str,
+            _retry_at: Option<i64>,
+        ) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn job_stats(&self) -> traits::Result<JobStats> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn reset_stale_running_jobs(&self, _older_than_ms: i64) -> traits::Result<u64> {
+            unreachable!("not used by ask_context")
+        }
+
+        async fn get_setting(&self, _key: &str) -> traits::Result<Option<String>> {
+            Ok(None)
+        }
+
+        async fn set_setting(&self, _key: &str, _value: &str) -> traits::Result<()> {
+            unreachable!("not used by ask_context")
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_context_returns_clear_error_when_ocr_hydration_fails() {
+        let err = ask_context(&FailingOcrContextStore, "where was rust mentioned?", 2)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            "failed to hydrate Ask OCR context for 1 frames: simulated ocr_texts failure"
         );
     }
 
