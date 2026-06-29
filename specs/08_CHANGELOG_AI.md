@@ -11,6 +11,30 @@
 
 ---
 
+## 2026-06-29 — Event-driven capture review follow-up (`codex/event-capture-review-followups`)
+- **Change:** Addressed the review findings from the implemented event-driven capture work:
+  - `docs/ARCHITECTURE.md` now documents the full landed trigger set, schema v6, and the default-off
+    `WH_MOUSE_LL` click/scroll-stop path.
+  - `docs/TESTING.md` now includes manual click + scroll-stop acceptance instead of saying those
+    triggers are deferred.
+  - `crates/traits/src/domain.rs` `capture_trigger_db_str_round_trips` now covers `Click` and
+    `ScrollStop`; `from_db_str` now has an exhaustive variant guard so future enum additions force
+    this parser path to be revisited at compile time.
+  - `CHANGELOG.md`, `05`, `06`, and `07` record the review follow-up.
+- **Why:** Keeps the 0.2.1 event-driven capture docs/tests aligned with the shipped implementation
+  (`docs/0.2.0.md` deferred-work item; `07` #47) and prevents the `click` / `scroll_stop` DB tokens
+  from drifting out of coverage again.
+- **PR review hardening:** Addressed the PR #47 bot finding that the original `covered.len() == 8`
+  assertion was a tautology. The durable guard is now in `from_db_str` instead of a fixed-array length
+  assertion in the test.
+- **Verification:** Targeted gates passed: `cargo fmt --all -- --check`;
+  `cargo test -p traits capture_trigger_db_str_round_trips -- --nocapture`;
+  `cargo test -p capture -- --nocapture`; `cargo test -p store
+  migration_v6_widens_capture_trigger_check_without_dropping_children -- --nocapture`;
+  `git diff --exit-code -- ui\src\bindings`. Raw output is preserved in the session response.
+
+---
+
 ## 2026-06-29 — 0.2.1 PR5: Smart enrichment throttle (`feat/0.2.1-pr5-enrichment-throttle`)
 - **Change:** Opt-in, default-OFF CPU/GPU pressure throttle for enrichment (`docs/0.2.0.md` former PR5, `07` #49).
   - **New `crates/sysmon`** (peer of `capture`/`uia`, depends on `traits` only — `03 §2`): implements

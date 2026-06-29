@@ -73,6 +73,16 @@ impl CaptureTrigger {
     /// Parses the DB token back into a [`CaptureTrigger`]; `None` on an unknown token
     /// (including the SQL `NULL` → "unknown/legacy frame" case the caller handles).
     pub fn from_db_str(s: &str) -> Option<Self> {
+        let _: fn(Self) = |trigger| match trigger {
+            Self::Timer
+            | Self::Idle
+            | Self::ForegroundChange
+            | Self::ClipboardChange
+            | Self::TypingPause
+            | Self::Click
+            | Self::ScrollStop
+            | Self::Manual => {}
+        };
         match s {
             "timer" => Some(CaptureTrigger::Timer),
             "idle" => Some(CaptureTrigger::Idle),
@@ -522,14 +532,17 @@ mod tests {
 
     #[test]
     fn capture_trigger_db_str_round_trips() {
-        for t in [
+        let covered = [
             CaptureTrigger::Timer,
             CaptureTrigger::Idle,
             CaptureTrigger::ForegroundChange,
             CaptureTrigger::ClipboardChange,
             CaptureTrigger::TypingPause,
+            CaptureTrigger::Click,
+            CaptureTrigger::ScrollStop,
             CaptureTrigger::Manual,
-        ] {
+        ];
+        for t in covered {
             assert_eq!(
                 CaptureTrigger::from_db_str(t.as_db_str()),
                 Some(t),
