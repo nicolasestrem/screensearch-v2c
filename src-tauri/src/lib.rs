@@ -1559,18 +1559,27 @@ fn spawn_ocr(
     let budget = uia::UiaBudget {
         latency_ms: u64::from(settings.capture_uia_latency_budget_ms),
         min_text_chars: settings.capture_uia_min_text_chars as usize,
+        max_nodes: settings.capture_uia_max_nodes,
+        max_textpattern_calls: settings.capture_uia_max_textpattern_calls,
+        control_view: settings.capture_uia_view_control_only,
+    };
+    let trigger_policy = uia::classify::UiaTriggerPolicy {
+        run_on_interactive: settings.capture_uia_run_on_interactive,
     };
 
     match uia::UiaTextProvider::spawn(budget) {
         Ok(provider) => {
             tracing::info!(
                 enabled = settings.capture_uia_text_enabled,
+                run_on_interactive = settings.capture_uia_run_on_interactive,
+                control_view = settings.capture_uia_view_control_only,
                 "UI Automation text ready (OCR fallback)"
             );
             let composite: Arc<dyn OcrProvider> = Arc::new(UiaWithOcrFallback {
                 uia: Arc::new(provider),
                 ocr,
                 uia_enabled: uia_enabled.clone(),
+                trigger_policy,
             });
             (composite, None)
         }
@@ -1590,17 +1599,21 @@ struct UiaWithOcrFallback {
     uia: Arc<dyn OcrProvider>,
     ocr: Arc<dyn OcrProvider>,
     uia_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Which capture triggers run UIA (`capture.uia_run_on_interactive`). Baked at spawn,
+    /// like the budget; changing it applies on restart.
+    trigger_policy: uia::classify::UiaTriggerPolicy,
 }
 
 #[async_trait]
 impl OcrProvider for UiaWithOcrFallback {
     async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        // Gate UIA off high-frequency interactive triggers (scroll/click): each runs a fresh
-        // full-tree walk against the foreground app, and on a large Chromium/Electron a11y tree
-        // that freezes the target's UI thread ("Not responding"). Those frames go straight to
-        // OCR (the captured bitmap), which never touches the target app (`07` #48 hang fix).
+        // Gate UIA off high-frequency interactive triggers (scroll/click) by default: each
+        // runs a fresh full-tree walk against the foreground app, and on a large
+        // Chromium/Electron a11y tree that freezes the target's UI thread ("Not responding").
+        // Those frames go straight to OCR (the captured bitmap), which never touches the
+        // target app (`07` #71 hang fix; `capture.uia_run_on_interactive` opts back in).
         if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed)
-            && uia::classify::trigger_runs_uia(frame.trigger)
+            && uia::classify::trigger_runs_uia(frame.trigger, self.trigger_policy)
         {
             match self.uia.recognize(frame).await {
                 Ok(result) => return Ok(result),

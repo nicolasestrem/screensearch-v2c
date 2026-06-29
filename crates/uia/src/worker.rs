@@ -46,7 +46,7 @@ pub(crate) struct Request {
 }
 
 /// Hard caps so a pathological accessibility tree can't blow the latency budget or memory.
-const MAX_NODES: u32 = 4000;
+/// (The node cap is now `budget.max_nodes`, a clamped setting — `07` #71.)
 const MAX_DEPTH: u32 = 40;
 const MAX_SPANS: usize = 10_000;
 /// Upper bound on *pending* (pushed-but-not-yet-visited) elements. `MAX_NODES` only bounds
@@ -182,14 +182,20 @@ fn read_foreground(
 
     // SAFETY: ElementFromHandle on the foreground HWND; returns Err if it has no element.
     let root = unsafe { automation.ElementFromHandle(hwnd) }?;
-    // SAFETY: ControlViewWalker is a property accessor returning the shared control-view
-    // walker. Control view (not raw view) is the load fix: a Chromium/Electron raw tree
-    // exposes one element per inline text-run, so a long page or a large grid (e.g. the
-    // qBittorrent web UI) explodes into tens of thousands of nodes — each a synchronous
-    // cross-process call that freezes the target's UI thread. Control view collapses those
-    // to the content/control elements that actually carry text, slashing node count while
-    // preserving the text we extract (Name / TextPattern visible ranges live on them).
-    let walker = unsafe { automation.ControlViewWalker() }?;
+    // Control view (not raw view) is the load fix: a Chromium/Electron raw tree exposes one
+    // element per inline text-run, so a long page or a large grid (e.g. the qBittorrent web
+    // UI) explodes into tens of thousands of nodes — each a synchronous cross-process call
+    // that freezes the target's UI thread. Control view collapses those to the content/control
+    // elements that actually carry text, slashing node count while preserving the text we
+    // extract (Name / TextPattern visible ranges live on them). The view is a clamped setting.
+    // SAFETY: *ViewWalker are property accessors returning the shared walker for that view.
+    let walker = unsafe {
+        if budget.control_view {
+            automation.ControlViewWalker()
+        } else {
+            automation.RawViewWalker()
+        }
+    }?;
 
     let mon_origin = monitors::monitor_origin(req.monitor_index).unwrap_or((0, 0));
     let start = Instant::now();
@@ -204,7 +210,7 @@ fn read_foreground(
     let mut stack: Vec<(IUIAutomationElement, u32)> = vec![(root, 0)];
     let mut nodes: u32 = 0;
     while let Some((elem, depth)) = stack.pop() {
-        if nodes >= MAX_NODES || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
+        if nodes >= budget.max_nodes || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
             break;
         }
         nodes += 1;

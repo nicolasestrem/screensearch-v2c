@@ -87,9 +87,11 @@ function sanitizeSettings(s: Settings): Settings {
       1_000,
       3_600_000,
     ),
-    // UIA text knobs — mirror the backend clamps (docs/0.2.0.md #48).
+    // UIA text knobs — mirror the backend clamps (docs/0.2.0.md #48, hang fix 07 #71).
     capture_uia_latency_budget_ms: clampInt(s.capture_uia_latency_budget_ms, 20, 2_000),
     capture_uia_min_text_chars: clampInt(s.capture_uia_min_text_chars, 0, 10_000),
+    capture_uia_max_nodes: clampInt(s.capture_uia_max_nodes, 100, 20_000),
+    capture_uia_max_textpattern_calls: clampInt(s.capture_uia_max_textpattern_calls, 1, 4_096),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
     storage_max_width: clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
@@ -581,6 +583,36 @@ export function Component() {
             value={draft.capture_uia_min_text_chars}
             onChange={intHandler("capture_uia_min_text_chars")}
             hint={`If UIA returns fewer characters than this, use OCR for that frame instead (0 disables). ${APPLY_RESTART}`}
+          />
+          <Toggle
+            label="Run UIA on click and scroll"
+            checked={draft.capture_uia_run_on_interactive}
+            onChange={(v) => set("capture_uia_run_on_interactive", v)}
+            hint={`Off (recommended): click/scroll frames use OCR instead of UI Automation. Scrolling a large page (e.g. a big web grid) with this on can make some apps — Chrome, Edge, Electron apps — briefly stop responding. ${APPLY_RESTART}`}
+          />
+          <Toggle
+            label="Use control view only (faster)"
+            checked={draft.capture_uia_view_control_only}
+            onChange={(v) => set("capture_uia_view_control_only", v)}
+            hint={`On (recommended): walk only meaningful controls, not every text fragment — far fewer cross-process calls on large pages. ${APPLY_RESTART}`}
+          />
+          <Field
+            label="UIA max nodes per read"
+            type="number"
+            min={100}
+            max={20000}
+            value={draft.capture_uia_max_nodes}
+            onChange={intHandler("capture_uia_max_nodes")}
+            hint={`Upper bound on accessibility elements visited per frame, so a huge page can't stall the read. ${APPLY_RESTART}`}
+          />
+          <Field
+            label="UIA max text reads per read"
+            type="number"
+            min={1}
+            max={4096}
+            value={draft.capture_uia_max_textpattern_calls}
+            onChange={intHandler("capture_uia_max_textpattern_calls")}
+            hint={`Upper bound on full-text reads per frame (the costliest UIA call); bounds a text-heavy page. ${APPLY_RESTART}`}
           />
         </div>
       </Panel>

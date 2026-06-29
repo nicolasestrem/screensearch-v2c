@@ -58,6 +58,14 @@ pub struct UiaBudget {
     /// Minimum gathered text length below which the read is treated as a thin yield
     /// (`capture.uia_min_text_chars`) → `Err` → OCR fallback for that frame.
     pub min_text_chars: usize,
+    /// Hard cap on accessibility nodes visited per walk (`capture.uia_max_nodes`, `07` #71).
+    pub max_nodes: u32,
+    /// Max live `TextPattern` visible-range reads per walk
+    /// (`capture.uia_max_textpattern_calls`, `07` #71) — the one uncacheable cross-process cost.
+    pub max_textpattern_calls: u32,
+    /// Walk the control view (`true`) rather than the raw view (`capture.uia_view_control_only`,
+    /// `07` #71). Control view collapses a Chromium page's per-text-run node explosion.
+    pub control_view: bool,
 }
 
 /// UI Automation text provider backed by a dedicated COM MTA worker thread.
@@ -195,6 +203,9 @@ mod tests {
         let provider = UiaTextProvider::spawn(UiaBudget {
             latency_ms: 150,
             min_text_chars: 0,
+            max_nodes: 4000,
+            max_textpattern_calls: 64,
+            control_view: true,
         })
         .expect("spawn uia worker");
         let result = provider
