@@ -658,6 +658,7 @@ fn sidecar_component(status: &SidecarStatus) -> (ComponentStatus, Option<String>
             ComponentStatus::Disabled,
             Some("idle — unloaded (loads on demand)".to_string()),
         ),
+        SidecarState::Recycled => (ComponentStatus::Initializing, status.model.clone()),
         SidecarState::Crashed => (ComponentStatus::Error, Some("sidecar crashed".to_string())),
         SidecarState::Stopped => (ComponentStatus::Disabled, Some("stopped".to_string())),
     }
