@@ -14,6 +14,24 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-29 — Sidecar recycle valve (docs-only, `fix/vision-sidecar-rss-recycle`)
+
+**Branch:** `fix/vision-sidecar-rss-recycle`. Docs-only entry recording the upstream multimodal
+leak and the shipped mitigation (`07` #72). No code, test, or binding changes in this pass.
+
+### Implemented
+- **`specs/03_MASTER_PRODUCTION_SPEC.md §8`** — added `sidecar.recycle_enabled` and
+  `sidecar.recycle_rss_mb` rows in the sidecar settings block, mirroring neighboring rows.
+- **`specs/07_KNOWN_GAPS.md`** — new row #72 recording the upstream llama.cpp multimodal leak
+  (~149 MB committed host RAM per vision inference, confirmed 2026-06-29) and the local recycle
+  valve mitigation.
+- **`specs/05`/`06`/`08`/`CHANGELOG.md`** — one concise entry each.
+
+### Skipped / deferred
+- Real fix is upstream / a newer bundled `llama-server` build; tracked as a separate item.
+
+---
+
 ## Pass — 2026-06-29 — Fix: UIA freezes Chromium/Electron apps (mitigation)
 
 **Branch:** `fix/uia-chromium-hang`. Bug: with UIA text on (default), Chrome/Edge/Claude Desktop

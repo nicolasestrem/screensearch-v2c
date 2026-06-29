@@ -11,6 +11,20 @@
 
 ---
 
+## 2026-06-29 — Sidecar recycle valve + upstream leak docs (`fix/vision-sidecar-rss-recycle`)
+- **Change:** Docs-only — records the upstream llama.cpp multimodal host-memory leak and the
+  shipped recycle valve mitigation. Files changed: `specs/03_MASTER_PRODUCTION_SPEC.md §8`
+  (two new `sidecar.recycle_*` setting rows), `specs/07_KNOWN_GAPS.md` (new row #72),
+  `specs/05`/`06`/`08`, and `CHANGELOG.md`.
+- **Why:** Confirmed ~149 MB committed host RAM leaked per vision inference on the bundled
+  `llama-server` build 9842 (6f4f53f2b) — VRAM flat, not reclaimed while resident, freed on
+  exit. The recycle valve (`sidecar.recycle_enabled`/`sidecar.recycle_rss_mb`) was shipped to
+  bound the leak; recording it in `§8` + `07` makes the mitigation discoverable and the real fix
+  (upstream llama.cpp / newer build) trackable (`06` #15).
+- **Verification:** Docs-only; no build step required.
+
+---
+
 ## 2026-06-29 — Fix: UIA freezes Chromium/Electron apps — mitigation (`fix/uia-chromium-hang`)
 - **Change:** Stop UI Automation text extraction from hanging Chromium-based apps (Chrome, Edge,
   Claude Desktop/Electron) when scrolling large content. Mitigation subset (a cache-request rewrite
