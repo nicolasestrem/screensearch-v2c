@@ -1,9 +1,16 @@
 // Read-side hooks. TanStack Query owns all server-state — one place for cache,
 // loading, error, and refetch (UI_REFERENCE §6; no bespoke useEffect fetches).
+//
+// Each read hook's result is passed through `useMaybeOverride` — the single seam
+// for the DEV-ONLY route-state override (KNOWN_GAPS #43). It is a no-op in
+// production (const-folds away) and whenever no `?__devState=…` is present, so the
+// live empty/partial/populated outcomes are untouched; only forced loading/error
+// states flow through. Mutations and the Ask/Report state machines are NOT wrapped.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import * as cmd from "./commands";
 import { queryKeys } from "./queryKeys";
+import { useMaybeOverride } from "../dev/useDevStateOverride";
 import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { TimeRange } from "../../bindings/TimeRange";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
@@ -12,32 +19,37 @@ import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
-  return useQuery({ queryKey: queryKeys.readiness, queryFn: cmd.getReadiness });
+  const q = useQuery({ queryKey: queryKeys.readiness, queryFn: cmd.getReadiness });
+  return useMaybeOverride(q, queryKeys.readiness);
 }
 
 /** Job-queue counts; kept live by `job_progress`. */
 export function useJobStats() {
-  return useQuery({ queryKey: queryKeys.jobStats, queryFn: cmd.getJobStats });
+  const q = useQuery({ queryKey: queryKeys.jobStats, queryFn: cmd.getJobStats });
+  return useMaybeOverride(q, queryKeys.jobStats);
 }
 
 /** Storage footprint; refreshed by capture/retention events. */
 export function useStorageStats() {
-  return useQuery({ queryKey: queryKeys.storageStats, queryFn: cmd.getStorageStats });
+  const q = useQuery({ queryKey: queryKeys.storageStats, queryFn: cmd.getStorageStats });
+  return useMaybeOverride(q, queryKeys.storageStats);
 }
 
 /** Connected monitors for Settings. */
 export function useMonitors() {
-  return useQuery({ queryKey: queryKeys.monitors, queryFn: cmd.getMonitors });
+  const q = useQuery({ queryKey: queryKeys.monitors, queryFn: cmd.getMonitors });
+  return useMaybeOverride(q, queryKeys.monitors);
 }
 
 /** llama.cpp device ids for advanced sidecar selection. */
 export function useSidecarDevices(enabled = true) {
-  return useQuery({
+  const q = useQuery({
     queryKey: queryKeys.sidecarDevices,
     queryFn: cmd.listSidecarDevices,
     enabled,
     retry: 0,
   });
+  return useMaybeOverride(q, queryKeys.sidecarDevices);
 }
 
 /**
@@ -47,11 +59,12 @@ export function useSidecarDevices(enabled = true) {
  */
 export function useSidecarStatus() {
   const qc = useQueryClient();
-  return useQuery<SidecarStatus | null>({
+  const q = useQuery<SidecarStatus | null>({
     queryKey: queryKeys.sidecarStatus,
     queryFn: () => qc.getQueryData<SidecarStatus | null>(queryKeys.sidecarStatus) ?? null,
     staleTime: Infinity,
   });
+  return useMaybeOverride(q, queryKeys.sidecarStatus);
 }
 
 /**
@@ -61,16 +74,18 @@ export function useSidecarStatus() {
  */
 export function useModelDownload() {
   const qc = useQueryClient();
-  return useQuery<ModelDownloadStatus | null>({
+  const q = useQuery<ModelDownloadStatus | null>({
     queryKey: queryKeys.modelDownload,
     queryFn: () => qc.getQueryData<ModelDownloadStatus | null>(queryKeys.modelDownload) ?? null,
     staleTime: Infinity,
   });
+  return useMaybeOverride(q, queryKeys.modelDownload);
 }
 
 /** Persisted settings. */
 export function useSettings() {
-  return useQuery({ queryKey: queryKeys.settings, queryFn: cmd.getSettings });
+  const q = useQuery({ queryKey: queryKeys.settings, queryFn: cmd.getSettings });
+  return useMaybeOverride(q, queryKeys.settings);
 }
 
 /**
@@ -79,37 +94,43 @@ export function useSettings() {
  * useLiveEvents) which the governor emits each sample tick while enabled.
  */
 export function useThrottleStatus() {
-  return useQuery<ThrottleStatus>({
+  const q = useQuery<ThrottleStatus>({
     queryKey: queryKeys.throttleStatus,
     queryFn: cmd.getThrottleStatus,
   });
+  return useMaybeOverride(q, queryKeys.throttleStatus);
 }
 
 /** Per-app text-filter suppression rates (PR3 guardrail). */
 export function useTextFilterStats(enabled = true) {
-  return useQuery({
+  const q = useQuery({
     queryKey: queryKeys.textFilterStats,
     queryFn: cmd.getTextFilterStats,
     enabled,
   });
+  return useMaybeOverride(q, queryKeys.textFilterStats);
 }
 
 /** Hybrid search; idle until there is a non-empty query (no empty-string calls). */
 export function useSearch(query: SearchQuery, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.search(query),
+  const queryKey = queryKeys.search(query);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.search(query),
     enabled: enabled && query.text.trim().length > 0,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /** Timeline density buckets; invalidated (debounced) by `capture_tick`. */
 export function useTimeline(range: TimeRange, bucketCount: number, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.timeline(range, bucketCount),
+  const queryKey = queryKeys.timeline(range, bucketCount);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getTimeline(range, bucketCount),
     enabled: enabled && bucketCount > 0 && range.end > range.start,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /**
@@ -118,11 +139,13 @@ export function useTimeline(range: TimeRange, bucketCount: number, enabled = tru
  * an empty/invalid window so we never ask for the whole table.
  */
 export function useFrames(range: TimeRange, limit: number, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.frames(range, limit),
+  const queryKey = queryKeys.frames(range, limit);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getFrames(range, limit),
     enabled: enabled && limit > 0 && range.end > range.start,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /**
@@ -137,20 +160,24 @@ export function useFrameContext(
   limitEach: number,
   enabled = true,
 ) {
-  return useQuery({
-    queryKey: queryKeys.frameContext(at, halfWindowMs, limitEach),
+  const queryKey = queryKeys.frameContext(at, halfWindowMs, limitEach);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getFrameContext(at, halfWindowMs, limitEach),
     enabled: enabled && halfWindowMs > 0 && limitEach > 0,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /** One frame's full detail; idle until a frame id is selected. */
 export function useFrame(frameId: number | null) {
-  return useQuery({
-    queryKey: queryKeys.frame(frameId ?? -1),
+  const queryKey = queryKeys.frame(frameId ?? -1);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getFrame(frameId as number),
     enabled: frameId != null,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /**
@@ -159,18 +186,22 @@ export function useFrame(frameId: number | null) {
  * frames, so the spans aren't fetched for the common image case).
  */
 export function useFrameSpans(frameId: number | null, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.frameSpans(frameId ?? -1),
+  const queryKey = queryKeys.frameSpans(frameId ?? -1);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getFrameSpans(frameId as number),
     enabled: enabled && frameId != null,
   });
+  return useMaybeOverride(q, queryKey);
 }
 
 /** Activity aggregates for the Insights screen. */
 export function useInsights(range: TimeRange, bucketCount: number, enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.insights(range, bucketCount),
+  const queryKey = queryKeys.insights(range, bucketCount);
+  const q = useQuery({
+    queryKey,
     queryFn: () => cmd.getInsights(range, bucketCount),
     enabled: enabled && bucketCount > 0 && range.end > range.start,
   });
+  return useMaybeOverride(q, queryKey);
 }

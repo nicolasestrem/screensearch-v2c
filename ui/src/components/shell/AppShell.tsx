@@ -9,6 +9,7 @@ import { StatusRail } from "./StatusRail";
 import { NavRail } from "./NavRail";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { CommandPalette } from "./CommandPalette";
+import { DevStateBadge } from "./DevStateBadge";
 import { ToastViewport } from "../primitives";
 import { useLiveEvents } from "../../lib/ipc/useLiveEvents";
 import { useUiStore } from "../../state/uiStore";
@@ -40,6 +41,7 @@ export function AppShell() {
       </div>
       <CommandPalette />
       <ToastViewport />
+      {import.meta.env.DEV && <DevStateBadge />}
     </div>
   );
 }
