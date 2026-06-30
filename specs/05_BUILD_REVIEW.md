@@ -20,6 +20,45 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
+
+From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.
+
+### Implemented
+- **#26 — Inno/portable-ZIP/MSI dropped, gap closed.** Doc-only sweep of 9 live refs to the v0.1.0
+  reality (unsigned NSIS); DoD §13.9 re-scoped to NSIS and met; code-signing kept as the lone open
+  packaging item. Logged as the spec-contradiction resolution `06` #16.
+- **Single-instance focus.** `src-tauri/src/lib.rs` callback now `show()`s before `unminimize()`/
+  `set_focus()`. *(Defensive: the app has no tray-hide path today, so the distinct hidden-window effect
+  isn't reachable to stage live; build/clippy/test clean and the ordering is correct.)*
+- **#42 — five a11y fixes:** NavRail roving-tabindex + `aria-current="page"`; Command Palette
+  focus-restore on close; Recall Ask focus-to-answer; Settings `<Panel group>` (`role="group"` +
+  `aria-labelledby`). NavRail + Palette **live-verified** via a Playwright focus probe; Settings-group +
+  Ask-focus build/code-verified (need live backend data).
+
+### Verification (Windows) — verbatim
+- `npm run lint` → `EXIT 0`; `npm run build` → `✓ built in 1.96s`
+- `cargo fmt --all -- --check` → `EXIT 0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile … in 53.41s` / `EXIT 0`
+- `cargo build --workspace` → `Finished dev profile … in 22.11s` / `EXIT 0`
+- `cargo test --workspace` → every suite `ok`, **0 failed** (inference 102, traits 53, store 49+14,
+  kernel 27, capture 27, uia 16/2-ignored, sysmon 11, textfilter 12, screensearch_lib 7, embeddings 1,
+  ocr 1)
+- `git diff --exit-code -- ui/src/bindings` → clean (`EXIT 0`)
+- **Playwright focus probe:** NavRail `{Deck tabIndex 0, aria-current page}`, ArrowDown→Recall (tabIndex
+  follows), End→Settings, ArrowDown wraps→Deck, ArrowUp wraps→Settings; Command Palette Ctrl+K→
+  `role=combobox` input, Esc→focus restored to the ⌘K `BUTTON`; forced `?__devState=error` renders with
+  NavRail un-trapped.
+
+### Skipped / deferred
+- Live data-backed keyboard pass of Timeline scrub/open, Recall results, Moment actions in the real
+  WebView2 app — Playwright can't attach to WebView2 and plain Chrome has no captured frames; those
+  handlers are pre-existing + ARIA-correct + unchanged, so it stays a low-risk manual residual (`07` #42).
+- Recall results arrow-key roving nav — offered, declined as YAGNI (results are already Tab-reachable
+  links; `UI_REFERENCE` §7 is met).
+
+---
+
 ## Pass — 2026-06-30 — Model-downloader resume hardening (`fix/download-resume-hardening`)
 
 Closed two open durability gaps in `crates/inference/src/download.rs` (download-hardening scope, per
