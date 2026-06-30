@@ -133,3 +133,16 @@ proved it was **not** a memory win — it was a regression.
 - 1568 px lands ~1009 image tokens — right at the model's logged ≥1024 grounding recommendation;
   fine for holistic tagging, and there is now ample 8192-ctx headroom to raise the cap if precise
   grounding is ever needed.
+
+### Follow-up — PR #61 review fix (drop the per-frame full-res clone)
+Gemini flagged `downscale_for_vlm` (`vision.rs`) cloning the whole `RgbaImage` (~20 MB for a
+3440×1440 capture) on every call, then discarding the clone during resize. Fixed by checking the
+dimensions on the borrowed frame and, when it overflows, calling `image::imageops::resize(img, …)`
+directly on the reference — no clone on the (common, ultra-wide) resize path; the pass-through
+branch still clones the already-small frame. The fitted dimensions reuse the same round-to-nearest
+scale `DynamicImage::resize` applied (`ratio = VISION_MAX_EDGE / longest edge`), so the cap math is
+byte-for-byte identical and the two existing tests stay green unchanged.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → `FMT_EXIT=0`;
+  `cargo clippy -p inference --all-targets -- -D warnings` → `CLIPPY_EXIT=0`; `cargo test -p
+  inference --lib` → `98 passed; 0 failed` (incl. `downscales_oversized_frame_to_max_edge`
+  3440×1440 → 1568×656 and `small_frame_passes_through_at_native_size`).

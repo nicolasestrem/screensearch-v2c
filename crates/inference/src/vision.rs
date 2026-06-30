@@ -274,15 +274,20 @@ fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
 /// it under the sidecar window and cuts prefill time. Triangle filtering is fast and more than
 /// enough fidelity for activity/app tagging.
 fn downscale_for_vlm(img: &image::RgbaImage) -> image::DynamicImage {
-    let dynimg = image::DynamicImage::ImageRgba8(img.clone());
-    if dynimg.width().max(dynimg.height()) <= VISION_MAX_EDGE {
-        return dynimg;
+    let (width, height) = (img.width(), img.height());
+    if width.max(height) <= VISION_MAX_EDGE {
+        return image::DynamicImage::ImageRgba8(img.clone());
     }
-    dynimg.resize(
-        VISION_MAX_EDGE,
-        VISION_MAX_EDGE,
-        image::imageops::FilterType::Triangle,
-    )
+    // Resize the borrowed frame directly — `DynamicImage::resize` would force a full-resolution
+    // clone (~20 MB for a 3440×1440 capture) only to discard it. The fitted dimensions use the
+    // same round-to-nearest scale `resize` applies (ratio = VISION_MAX_EDGE / longest edge), so
+    // the cap math is unchanged.
+    let ratio = f64::from(VISION_MAX_EDGE) / f64::from(width.max(height));
+    let nwidth = ((f64::from(width) * ratio).round() as u32).max(1);
+    let nheight = ((f64::from(height) * ratio).round() as u32).max(1);
+    let resized =
+        image::imageops::resize(img, nwidth, nheight, image::imageops::FilterType::Triangle);
+    image::DynamicImage::ImageRgba8(resized)
 }
 
 /// The GGUF filename, used as the `model` field recorded with the analysis.
