@@ -18,9 +18,11 @@ requests in ~0.1 s without running inference** — the GPU sat near-idle while t
 resident (~6.4 GB VRAM). Fix is two-part, plus the diagnosability gaps that hid it:
 - **Downscale the VLM request image** to a 1568 px longest edge before JPEG-encoding
   (`crates/inference/src/vision.rs`). Captures/timeline keep full resolution — only the tag request
-  shrinks — so it fixes the overflow *and* cuts prefill time (addresses the slowdown).
-- **Vision auto-context 4096 → 8192** (`crates/inference/src/models.rs`) as a safety net for
-  ultra-wide / multi-monitor frames.
+  shrinks — so it fixes the overflow *and* cuts prefill time (addresses the slowdown). The 1568 px
+  cap bounds even a worst-case square frame to ~2.5 K prompt tokens, comfortably under the
+  spec-contracted **4096**-token vision default — so the auto-context is left unchanged (per PR #61
+  review: bumping it would have contradicted `03 §8` "not bumped by default" and raised KV-cache
+  VRAM on weak GPUs for headroom the downscale makes unnecessary).
 - **Record the real cause**: `vision_tag` failures now log the full anyhow chain (`{e:#}`) into
   `jobs.last_error` (`crates/kernel/src/worker_pool.rs`) instead of the collapsed `"vision
   completion"`, and the sidecar's stdout/stderr are captured to `<sidecar dir>/llama-server.log`

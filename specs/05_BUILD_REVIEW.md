@@ -106,7 +106,8 @@ proved it was **not** a memory win — it was a regression.
 ### Implemented (`07` #74; TDD red→green per change)
 - **Downscale the VLM image** to a 1568 px longest edge in `vision::encode_data_url` (captures keep
   full resolution). Tests: oversized 3440×1440 → 1568×656; small frame passes through unscaled.
-- **Vision auto-ctx 4096 → 8192** (`models.rs`); updated the per-lane auto-ctx test.
+- **Vision auto-ctx left at the spec default 4096** (`models.rs`). _(An initial 4096 → 8192 "safety
+  net" bump was reverted after the PR #61 Codex review — see the follow-up below.)_
 - **Surface the real cause:** `vision_tag_outcome` formats with `{e:#}` (`worker_pool.rs`). Test:
   a failing provider's chained error now lands `exceed_context_size_error` in `jobs.last_error`
   (`kernel --test enrichment`).
@@ -122,17 +123,19 @@ proved it was **not** a memory win — it was a regression.
   `kernel --test enrichment` incl. `vision_tag_failure_records_full_error_chain`)
 - `cd ui && npm run lint` → `EXIT 0`; `npm run build` → `✓ built in 1.64s`
 - `git diff --exit-code -- ui/src/bindings` → `BINDINGS_DIFF_EXIT=0`
-- **Live E2E** (`npm run tauri dev`, new binary): sidecar launched `--ctx-size 8192`;
-  `llama-server.log` written (`n_ctx_slot = 8192`); `vision_tag done` 0 → 8; faithful downscaled
-  request → **HTTP 200** in 2.8 s, `prompt_tokens 1159`, content
-  `{"description":"…Visual Studio Code…","activity_type":"coding","confidence":0.95}`.
+- **Live E2E** (`npm run tauri dev`, new binary): this run was on the interim 8192 build, so the
+  sidecar launched `--ctx-size 8192` (`n_ctx_slot = 8192` in `llama-server.log`); `vision_tag done`
+  0 → 8; faithful downscaled request → **HTTP 200** in 2.8 s, `prompt_tokens 1159`, content
+  `{"description":"…Visual Studio Code…","activity_type":"coding","confidence":0.95}`. The measured
+  **1159 prompt tokens** is what matters here: it sits far under the reverted **4096** default, so the
+  downscale alone clears the overflow without the ctx bump.
 
 ### Still risky / follow-up
 - The ~115 `vision_tag` rows that dead-lettered **before** the fix stay dead (terminal state) — a
   manual requeue is needed to re-tag those frames (`07` #74 residual).
 - 1568 px lands ~1009 image tokens — right at the model's logged ≥1024 grounding recommendation;
-  fine for holistic tagging, and there is now ample 8192-ctx headroom to raise the cap if precise
-  grounding is ever needed.
+  fine for holistic tagging. The worst case (a square frame) is ≤ 1568×1568 ≈ 2.46 MP → ~2.5 K
+  prompt tokens, still under 4096; `sidecar.ctx_size` remains the power-user knob for more headroom.
 
 ### Follow-up — PR #61 review fix (drop the per-frame full-res clone)
 Gemini flagged `downscale_for_vlm` (`vision.rs`) cloning the whole `RgbaImage` (~20 MB for a
@@ -146,3 +149,16 @@ byte-for-byte identical and the two existing tests stay green unchanged.
   `cargo clippy -p inference --all-targets -- -D warnings` → `CLIPPY_EXIT=0`; `cargo test -p
   inference --lib` → `98 passed; 0 failed` (incl. `downscales_oversized_frame_to_max_edge`
   3440×1440 → 1568×656 and `small_frame_passes_through_at_native_size`).
+
+### Follow-up — PR #61 review fix (revert the vision auto-ctx bump; Codex P2)
+Codex flagged that bumping the vision auto-context 4096 → 8192 contradicts the spec contract
+(`03 §8:438` vision auto = 4096; `§:522` "`sidecar.ctx_size` … **not** bumped by default") and
+raises KV-cache VRAM on weak GPUs for *every* tag — and since this PR already downscales the request
+image, the bump is unnecessary. Reverted `default_ctx_for(ModelLane::Vision)` back to **4096**
+(`models.rs`) and restored the per-lane test assertion (`vision auto ctx == 4096`; answer stays
+8192). The downscale alone fixes the overflow: the 1568 px cap bounds the worst case (a square
+frame) to ~2.5 K prompt tokens < 4096, and the live run measured only 1159. `sidecar.ctx_size`
+remains the documented power-user VRAM knob. Doc/CHANGELOG updated to drop the bump.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → `FMT_EXIT=0`;
+  `cargo clippy -p inference --all-targets -- -D warnings` → `CLIPPY_EXIT=0`; `cargo test -p
+  inference --lib` → `98 passed; 0 failed` (incl. `auto_ctx_size_resolves_per_lane_and_override_passes_through`).

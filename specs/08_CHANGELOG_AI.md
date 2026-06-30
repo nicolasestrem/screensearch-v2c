@@ -51,7 +51,11 @@
 ## 2026-06-30 — Fix vision context overflow on full-res frames (`fix/vision-fullres-ctx-overflow`)
 - **Change:** (1) `crates/inference/src/vision.rs` — `encode_data_url` downscales the VLM request
   image to a 1568 px longest edge (`VISION_MAX_EDGE`) before JPEG-encoding; captures/timeline keep
-  full resolution. (2) `crates/inference/src/models.rs` — vision auto-ctx 4096 → 8192. (3)
+  full resolution. `downscale_for_vlm` resizes the borrowed frame directly (no full-res clone — PR
+  #61 Gemini review). (2) `crates/inference/src/models.rs` — vision auto-ctx **left at the spec
+  default 4096**; an interim 4096 → 8192 bump was reverted after the PR #61 Codex P2 (it contradicted
+  `03 §8`'s "not bumped by default" and added KV-cache VRAM on weak GPUs — the downscale already
+  bounds the worst case to ~2.5 K < 4096 tokens). (3)
   `crates/kernel/src/worker_pool.rs` — `vision_tag` failure formats the error with `{e:#}` (full
   anyhow chain) into `jobs.last_error`. (4) `crates/inference/src/process.rs` (+ `supervisor.rs`
   `SupervisorConfig.sidecar_log`, `src-tauri/src/lib.rs`) — capture the sidecar's stdout/stderr to
