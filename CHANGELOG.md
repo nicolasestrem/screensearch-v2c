@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Ask — OCR hydration failures
-Ask now fails clearly before starting an answer stream if the bulk `ocr_texts` context hydration query fails, rather than silently falling back every retrieved frame to search snippets. Individual frames with no stored text still use their snippet after a successful hydration query; review follow-up keeps the regression test focused without a full `Store` fake.
+Ask now fails clearly before starting an answer stream if the bulk `ocr_texts` context hydration query fails, rather than silently falling back every retrieved frame to search snippets. Individual frames with no stored text still use their snippet after a successful hydration query; review follow-up keeps the regression test focused without a full `Store` fake, and hydration now moves each text out of the bulk-read map instead of cloning it per retrieved chunk.
 
 ### UI — Scanline timeline thumbnail lookup
 Optimized the Scanline Timeline hover-preview lookup by sorting thumbnail metadata once per

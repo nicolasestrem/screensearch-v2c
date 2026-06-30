@@ -288,12 +288,13 @@ fn hydrate_ask_context(
     frame_count: usize,
     ocr: Result<std::collections::HashMap<i64, String>, String>,
 ) -> Result<Vec<RetrievedChunk>, String> {
-    let ocr = ocr
+    let mut ocr = ocr
         .map_err(|e| format!("failed to hydrate Ask OCR context for {frame_count} frames: {e}"))?;
     Ok(hits
         .into_iter()
         .map(|hit| {
-            let text = ocr.get(&hit.frame_id).cloned().unwrap_or(hit.snippet);
+            // `ocr` is consumed here, so take ownership of each string instead of cloning.
+            let text = ocr.remove(&hit.frame_id).unwrap_or(hit.snippet);
             RetrievedChunk {
                 frame_id: hit.frame_id,
                 text,
