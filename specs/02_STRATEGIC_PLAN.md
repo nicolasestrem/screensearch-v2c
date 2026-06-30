@@ -77,7 +77,7 @@ Detailed schema, traits, command/event contracts, and sidecar protocol live in `
 - **P4 — Inference sidecar:** Job-Object lifecycle (spawn/reap/heartbeat/evict), model-agnostic
   tiered loader; on-demand/timed **vision tagging** + **RAG answers** (thinking).
 - **P5 — Product:** Command-Deck UI polish; settings (model tiers, schedules, retention);
-  packaging (Inno installer + portable ZIP); first release.
+  packaging (**NSIS** installer; signing pending); first release.
 - **Later (nice-to-haves):** multi-model routing UI, timeline analytics, export, sharing,
   auto-update, OS automation.
 

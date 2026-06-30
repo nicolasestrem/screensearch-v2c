@@ -51,6 +51,16 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [thinking, streaming, thinkingOpen]);
 
+  // When the answer finishes streaming, move focus to the answer region so keyboard
+  // users land on the result instead of being stranded at the query input, and screen
+  // readers announce it (the prose isn't aria-live — that would read every streamed
+  // token). It's a non-interactive region focused programmatically, so the visible ring
+  // is suppressed; the answer prose is itself the obvious result.
+  const answerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (phase === "done") answerRef.current?.focus();
+  }, [phase]);
+
   if (phase === "idle") return null;
 
   if (phase === "error") {
@@ -83,7 +93,13 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
         </details>
       )}
 
-      <div className="prose prose-deck max-w-none">
+      <div
+        ref={answerRef}
+        tabIndex={-1}
+        role="region"
+        aria-label="Answer"
+        className="prose prose-deck max-w-none focus-visible:outline-none"
+      >
         <Markdown
           remarkPlugins={[remarkGfm]}
           components={{

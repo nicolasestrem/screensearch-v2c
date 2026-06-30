@@ -411,7 +411,7 @@ export function Component() {
         </div>
       </div>
 
-      <Panel title="Capture">
+      <Panel group title="Capture">
         <div className="flex flex-col gap-4">
           <Field
             label="Capture interval (ms)"
@@ -467,7 +467,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Event-driven capture">
+      <Panel group title="Event-driven capture">
         <div className="flex flex-col gap-4">
           <Toggle
             label="Enable event-driven capture"
@@ -563,7 +563,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Text source">
+      <Panel group title="Text source">
         <div className="flex flex-col gap-4">
           <Toggle
             label="Use UI Automation text (with OCR fallback)"
@@ -631,7 +631,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Storage">
+      <Panel group title="Storage">
         <div className="flex flex-col gap-4">
           <Field
             label="JPEG quality"
@@ -658,6 +658,7 @@ export function Component() {
       </Panel>
 
       <Panel
+        group
         title="Models"
         action={modelsLoading ? <Chip tone="warn">models loading…</Chip> : undefined}
       >
@@ -685,11 +686,11 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Inference engine">
+      <Panel group title="Inference engine">
         <ModelPanel />
       </Panel>
 
-      <Panel title="Enrichment">
+      <Panel group title="Enrichment">
         <div className="flex flex-col gap-4">
           <Toggle
             label="Embed OCR text"
@@ -723,7 +724,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Performance throttle">
+      <Panel group title="Performance throttle">
         <div className="flex flex-col gap-4">
           <Toggle
             label="Throttle enrichment under load"
@@ -819,7 +820,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Text filtering">
+      <Panel group title="Text filtering">
         <div className="flex flex-col gap-4">
           <Toggle
             label="Search app chrome by default"
@@ -860,7 +861,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Reports & retrieval">
+      <Panel group title="Reports & retrieval">
         <div className="flex flex-col gap-4">
           <Field
             label="Ask retrieval depth"
@@ -901,7 +902,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Privacy">
+      <Panel group title="Privacy">
         <div className="flex flex-col gap-4">
           <Field
             label="Excluded apps"
@@ -921,7 +922,7 @@ export function Component() {
         </div>
       </Panel>
 
-      <Panel title="Sidecar (advanced)">
+      <Panel group title="Sidecar (advanced)">
         <div className="flex flex-col gap-4">
           <Field
             label="Idle TTL (seconds)"

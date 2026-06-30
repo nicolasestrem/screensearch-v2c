@@ -14,7 +14,7 @@
 |---|---|
 | Working name | **ScreenSearch V2c** (repo: `screensearch-v2c`) — `✓ decided` |
 | One-line pitch | A Windows-native app that continuously captures your screen, makes it searchable by text *and* meaning, and answers questions about what you've seen — fully local. — `✓ decided` |
-| Project type | **Open-source product app** — shipped with an installer + website **screensearch.app**. — `✓ decided` |
+| Project type | **Open-source product app** — shipped with an **NSIS** installer + website **screensearch.app**. — `✓ decided` |
 | License | **MIT** — `✓ decided` |
 | Relationship to V1 | **Standalone.** No code link, **no data import**, nothing shared with V1. V1 is reference knowledge only. — `✓ decided` |
 
@@ -101,7 +101,7 @@ cutting-edge with caveats. The model-agnostic sidecar loads whichever tier is se
 
 | Field | Value |
 |---|---|
-| Distribution | **Inno Setup installer (major releases) + portable ZIP.** **Auto-update** is a nice-to-have (later). — `✓ decided` |
+| Distribution | **Unsigned NSIS installer** (Tauri 2 native; shipped v0.1.0). Inno/MSI/portable ZIP dropped — see `07` #26; code-signing pending. **Auto-update** is a nice-to-have (later). — `✓ decided (revised → NSIS)` |
 | Build/runtime deps | WebView2 runtime (ships on Win11), Vulkan-capable GPU (optional, CPU fallback), models downloaded on first use. **No Python in the end-user runtime** (Python is fine for build/dev tooling). — `✓ decided` |
 | CI/CD | **From scratch** (GitHub Actions, new). — `✓ decided` |
 | Timeline / effort budget | **Open-ended** — no deadline. Phasing optimizes for correctness, not speed. — `✓ decided` |

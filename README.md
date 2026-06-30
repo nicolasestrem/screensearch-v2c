@@ -7,8 +7,8 @@ on-device, no cloud.
 > **Status — 0.2.1.** Capture → OCR/UIA text → deferred enrichment → **hybrid search**, the
 > **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`), and the full
 > **Command-Deck UI** all run on the live app. The 0.2.x arc adds attention-first text filtering,
-> Recall reports, opt-in event-driven capture, and a smart enrichment throttle. **Packaging**
-> (installer + portable ZIP, code signing) is the remaining follow-up. Design lives in
+> Recall reports, opt-in event-driven capture, and a smart enrichment throttle. The unsigned
+> **NSIS installer** ships today; **code-signing** is the lone remaining packaging follow-up. Design lives in
 > [`specs/`](./specs); the as-built architecture is in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 > A standalone, clean-slate project — no shared code or data with any prior version.
 
@@ -41,7 +41,7 @@ omitted). Nothing here touches the network: every frame, query, and answer stays
 | **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
 | **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
 | **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; live-verified (full keyboard/state/a11y matrix pending) |
-| **Pkg** | Installer + portable ZIP, `onnxruntime.dll` bundling, code signing (DoD §13.9) | ⏳ Deferred follow-up |
+| **Pkg** | Unsigned **NSIS** installer shipped (v0.1.0); Inno/MSI/portable ZIP dropped; `onnxruntime.dll` static-linked (not bundled); **code-signing** the lone follow-up (DoD §13.9, `07` #26) | 🚧 Signing pending |
 
 The **0.2.x arc** builds on that v1.0 base — an attention-first text signal plus recall and
 capture refinements:

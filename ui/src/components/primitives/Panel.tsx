@@ -11,18 +11,39 @@ export interface PanelProps extends HTMLAttributes<HTMLElement> {
   action?: ReactNode;
   /** Removes inner padding (e.g. for an edge-to-edge ribbon). */
   flush?: boolean;
+  /**
+   * Expose the panel as an accessible form group: sets `role="group"` +
+   * `aria-labelledby` (pointing at the title) so screen readers announce the title
+   * when navigating the controls inside — the ARIA equivalent of `<fieldset>`/
+   * `<legend>`, without altering the card layout. Opt-in (used by Settings); requires
+   * a `title`. Non-form panels stay plain `<section>`s.
+   */
+  group?: boolean;
   children: ReactNode;
 }
 
-export function Panel({ title, action, flush = false, className, children, ...rest }: PanelProps) {
+export function Panel({ title, action, flush = false, group = false, className, children, ...rest }: PanelProps) {
+  // A stable id from the title so the group can be labelled by it (only when grouping).
+  const titleId =
+    group && title
+      ? `panel-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
+      : undefined;
   return (
     <section
       className={cn("bg-surface border border-line rounded-panel", className)}
+      role={titleId ? "group" : undefined}
+      aria-labelledby={titleId}
       {...rest}
     >
       {(title || action) && (
         <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line">
-          {title ? <span className="eyebrow">{title}</span> : <span />}
+          {title ? (
+            <span id={titleId} className="eyebrow">
+              {title}
+            </span>
+          ) : (
+            <span />
+          )}
           {action}
         </header>
       )}

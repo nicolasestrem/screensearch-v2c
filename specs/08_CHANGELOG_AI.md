@@ -17,6 +17,57 @@
 
 ---
 
+## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
+- **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
+  the first):
+  1. **NavRail roving tab-stop didn't follow external navigation.** `focusIndex` was seeded once at
+     mount, so navigating via the Command Palette / an in-app link / browser back left `tabIndex=0` on a
+     stale link. Added `useEffect(() => setFocusIndex(activeIndexFor(pathname)), [pathname])` — re-derives
+     the tab stop only (never calls `.focus()`); arrow moves don't change the path so they're untouched.
+  2. **Command Palette focus-restore stole focus on navigation.** Restoring focus to the opener on every
+     close yanked it back to the ⌘K trigger when a command navigated to a route that autofocuses (Recall's
+     search input). Fix: restore **only on dismiss** — `run()` sets `restoreFocusRef.current = false` so a
+     command's destination/action owns focus; the cleanup also now guards `openerRef.current?.isConnected`.
+     (Gemini's literal `document.body.contains` suggestion alone wouldn't fix it — the trigger lives in the
+     always-mounted NavRail, so it's always connected; the dismiss-vs-run distinction is the real fix.)
+- **Why:** Both regress keyboard/SR navigation introduced by the #42 changes; `UI_REFERENCE` §7.
+- **Verification — verbatim:** `npm run lint` EXIT 0; `npm run build` `✓ built in 1.45s`. **Live Playwright
+  probe:** (1) palette-navigate `/`→`/timeline` ⇒ NavRail tab stop = **Timeline** (was stale Deck before);
+  (2) palette-navigate →`/recall` ⇒ `document.activeElement` = the **"Search query" `INPUT`** (not the ⌘K
+  button); (3) focus ⌘K → `Ctrl+K` → `Esc` ⇒ focus **restored to the ⌘K button** (dismiss path intact).
+
+## 2026-06-30 — Cancel Inno installer (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
+- **Change:** Three known-gap closures.
+  1. **#26 packaging — Inno/portable-ZIP/MSI formally dropped, gap closed.** Tauri 2 shipped an
+     unsigned NSIS installer in v0.1.0 (`bundle.targets=["nsis"]`); the specs still demanded an "Inno
+     Setup installer + portable ZIP" in 9 live places. Rewrote every one to NSIS — `00` §A/§G, `01`,
+     `02` P5, `03` §11 + DoD §13.9, `docs/ARCHITECTURE.md` §12, `.github/workflows/ci.yml`, `README.md`
+     — re-scoped DoD §13.9 to "NSIS builds successfully" (met), and flipped `07` #26 to ✅ with
+     **code-signing as the lone open packaging item** (already tracked under `07` "Manual steps").
+  2. **Single-instance focus (Gemini PR #27 follow-up).** The `src-tauri/src/lib.rs` single-instance
+     callback now calls `window.show()` before `unminimize()`/`set_focus()`, so a hidden/tray-minimized
+     window is restored (not just unminimized) on a second launch.
+  3. **#42 keyboard/focus matrix — five UI fixes.** NavRail roving-tabindex (Arrow/Home/End, wrap) +
+     `aria-current="page"`; Command Palette focus restoration on close; Recall Ask focus-to-answer on
+     stream completion; Settings `<Panel group>` (`role="group"` + `aria-labelledby`, the ARIA
+     fieldset/legend equivalent, card layout untouched).
+- **Why:** `07` #26/#42 + the `07` single-instance TODO. #26 was a standing spec-vs-reality
+  contradiction (logged in `06` #16); #42 was an open P5 a11y audit follow-up; the single-instance
+  bullet was a deferred PR #27 review note.
+- **Verification (Windows) — verbatim:**
+  - `npm run lint` → `EXIT 0`; `npm run build` → `✓ built in 1.96s`
+  - `cargo fmt --all -- --check` → `EXIT 0`
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile … in 53.41s` / `EXIT 0`
+  - `cargo build --workspace` → `Finished … in 22.11s`; `cargo test --workspace` → every suite `ok`,
+    **0 failed** (inference 102, traits 53, store 49+14, kernel 27, capture 27, uia 16/2-ignored,
+    sysmon 11, textfilter 12, screensearch_lib 7, embeddings 1, ocr 1, doctor 0)
+  - `git diff --exit-code -- ui/src/bindings` → clean (`EXIT 0`)
+  - **Live focus probe (Playwright/Chromium vs the Vite dev server):** NavRail `Deck {tabIndex 0,
+    aria-current page}`, ArrowDown→Recall (tabIndex follows), End→Settings, ArrowDown wraps→Deck,
+    ArrowUp wraps→Settings, re-seeds to active route on navigation; Command Palette `Ctrl+K`→
+    `role=combobox` input, `Esc`→focus restored to the ⌘K `BUTTON`. (Settings-group + Ask-focus need
+    live backend data the IPC-less probe can't supply → build + code-verified.)
+
 ## 2026-06-30 — Model-downloader resume hardening (`fix/download-resume-hardening`)
 - **Change:** Two localized fixes in `crates/inference/src/download.rs`, both TDD'd.
   1. **Gap #69 — wrong-sized `.part` no longer publishes garbage.** `open_preallocated` now returns

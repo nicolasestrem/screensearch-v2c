@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
+ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still
+called for an "Inno Setup installer + portable ZIP"; all nine live references (project intake,
+context, plan, master-spec DoD §13.9, architecture doc, CI note, README) are rewritten to NSIS, and
+DoD §13.9 is re-scoped to "NSIS installer builds successfully" and met. **Code-signing** is now the
+lone remaining packaging follow-up (known-gap #26 closed).
+
+### Fixed — Second launch restores a hidden window
+The single-instance handler now shows the existing window before unminimizing and focusing it, so a
+hidden / tray-minimized window is properly restored (not just unminimized) on a second launch.
+
+### Accessibility — Keyboard & focus pass (gap #42)
+- **Navigation rail** is a single Tab stop with a roving tabindex: Arrow Up/Down (wrapping) and
+  Home/End move focus between the five destinations, and the active route carries `aria-current="page"`.
+- **Command palette** returns focus to the control that opened it when it closes.
+- **Recall → Ask** moves focus to the answer once streaming finishes, so keyboard and screen-reader
+  users land on the result.
+- **Settings** exposes each section's controls as a labelled group for assistive technology.
+
 ### Fixed — Model-downloader resume hardening (two corruption/waste edge cases)
 Two narrow but real durability gaps in the parallel chunked model downloader
 (`crates/inference/src/download.rs`), neither previously test-covered:
