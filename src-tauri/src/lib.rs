@@ -1170,6 +1170,7 @@ async fn init_inference(
         binary,
         reap_binaries,
         pidfile,
+        sidecar_log: Some(sidecar_dir.join("llama-server.log")),
         idle_ttl: Duration::from_secs(settings.sidecar_idle_ttl_secs as u64),
         health_timeout: SIDECAR_HEALTH_TIMEOUT,
         caps,

@@ -48,6 +48,10 @@ pub struct SupervisorConfig {
     pub reap_binaries: Vec<PathBuf>,
     /// Where the child's pid is recorded for the startup reap.
     pub pidfile: PathBuf,
+    /// Optional file to capture the sidecar's stdout+stderr (truncated per spawn). `None`
+    /// discards them (the prior behavior). The composition root points this at
+    /// `<sidecar dir>/llama-server.log` so a spawn/crash diagnostic is recoverable.
+    pub sidecar_log: Option<PathBuf>,
     /// Stop the sidecar after this long with no in-flight request (`sidecar.idle_ttl_secs`).
     pub idle_ttl: Duration,
     /// Max time to wait for `/health` after a spawn before declaring failure.
@@ -499,8 +503,12 @@ impl ModelSupervisor {
         let args = build_args(spec, port, &self.config.caps);
         self.emit(SidecarState::Starting, Some(spec));
 
-        let child = process::spawn_suspended(&self.config.binary, &args)
-            .with_context(|| format!("spawn {}", self.config.binary.display()))?;
+        let child = process::spawn_suspended(
+            &self.config.binary,
+            &args,
+            self.config.sidecar_log.as_deref(),
+        )
+        .with_context(|| format!("spawn {}", self.config.binary.display()))?;
         // Assign-before-resume: no window in which the child runs unbound (`03 §6`).
         if let Err(e) = self.job.assign(child.process_handle()) {
             child.kill();

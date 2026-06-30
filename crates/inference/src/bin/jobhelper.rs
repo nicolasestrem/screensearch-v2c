@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
     let child = spawn_suspended(
         &ping,
         &["-n".to_string(), "600".to_string(), "127.0.0.1".to_string()],
+        None,
     )?;
 
     // Assign BEFORE resume (03 §6): no window in which the child runs unbound.

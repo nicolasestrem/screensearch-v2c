@@ -33,9 +33,14 @@ pub struct ModelSpec {
     pub flash_attn: FlashAttnSetting,
 }
 
-/// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. Vision
-/// sends one image + a short (≤512-token) JSON reply; the answer lane carries ~8 RAG
-/// chunks + a streamed reply, so it gets a larger window.
+/// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. A native
+/// full-screen capture used to tokenize to ~4000 vision tokens and overflow this 4096 window
+/// (`exceed_context_size_error`, `07` native-res-vs-ctx); the request image is now downscaled
+/// to a 1568 px longest edge before tagging (`vision::encode_data_url`), which bounds the worst
+/// case (a square frame) to well under 4096, so the spec-contracted default stays 4096 here
+/// (`03 §8`: vision auto = 4096, "not bumped by default"). `sidecar.ctx_size` remains the
+/// power-user VRAM knob for anyone who wants more headroom. The answer lane carries ~8 RAG
+/// chunks + a streamed reply, so it pins 8192.
 pub(crate) fn default_ctx_for(lane: ModelLane) -> u32 {
     match lane {
         ModelLane::Vision => 4096,

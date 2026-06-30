@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Full-resolution frames overflowed the vision context (tagging failed + slow)
+Native full-resolution captures (e.g. a 3440×1440 ultra-wide frame → ~4148 vision tokens) exceeded
+the vision lane's pinned **4096**-token context, so `llama-server` rejected every tag with HTTP 400
+`exceed_context_size_error`; jobs retried 3× and dead-lettered (DB showed `vision_tag` 72 dead / 0
+done). The deceptively low RAM/VRAM that looked like a "memory miracle" was the model **rejecting
+requests in ~0.1 s without running inference** — the GPU sat near-idle while the weights stayed
+resident (~6.4 GB VRAM). Fix is two-part, plus the diagnosability gaps that hid it:
+- **Downscale the VLM request image** to a 1568 px longest edge before JPEG-encoding
+  (`crates/inference/src/vision.rs`). Captures/timeline keep full resolution — only the tag request
+  shrinks — so it fixes the overflow *and* cuts prefill time (addresses the slowdown). The 1568 px
+  cap bounds even a worst-case square frame to ~2.5 K prompt tokens, comfortably under the
+  spec-contracted **4096**-token vision default — so the auto-context is left unchanged (per PR #61
+  review: bumping it would have contradicted `03 §8` "not bumped by default" and raised KV-cache
+  VRAM on weak GPUs for headroom the downscale makes unnecessary).
+- **Record the real cause**: `vision_tag` failures now log the full anyhow chain (`{e:#}`) into
+  `jobs.last_error` (`crates/kernel/src/worker_pool.rs`) instead of the collapsed `"vision
+  completion"`, and the sidecar's stdout/stderr are captured to `<sidecar dir>/llama-server.log`
+  (`crates/inference/src/process.rs`) — previously the sidecar's own error was discarded.
+
 ### Docs — Restore the archive-on-release convention across the build-loop logs
 Brought the lean-logs convention current. v0.1.0 history was archived on 2026-06-27, but the shipped
 **0.2.0, 0.2.1, and 0.2.2** history had piled back up in the live logs. Moved it out **verbatim**

@@ -7,11 +7,14 @@
 //! precisely because the standard library gives no way to spawn suspended and recover
 //! the main-thread handle needed to resume.
 
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
+};
 use windows::Win32::System::ProcessStatus::{
     GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 };
@@ -19,7 +22,8 @@ use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTAT
 use windows::Win32::System::Threading::{
     CreateProcessW, GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, ResumeThread,
     TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, STARTUPINFOW,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, STARTF_USESTDHANDLES,
+    STARTUPINFOW,
 };
 
 /// `GetExitCodeProcess` reports this sentinel exit code while a process is running.
@@ -86,15 +90,41 @@ impl Drop for SuspendedChild {
 
 /// Spawns `program args…` **suspended**, with no console window. The caller must
 /// assign the returned child to a job before calling [`SuspendedChild::resume`].
-pub fn spawn_suspended(program: &Path, args: &[String]) -> Result<SuspendedChild> {
+///
+/// When `log_path` is `Some`, the child's stdout+stderr are redirected to that file
+/// (truncated per spawn) so the sidecar's own diagnostics survive — otherwise a
+/// `CREATE_NO_WINDOW` child writes them nowhere. The log handle is the *only* handle marked
+/// inheritable, so enabling inheritance does not leak unrelated handles into the child.
+pub fn spawn_suspended(
+    program: &Path,
+    args: &[String],
+    log_path: Option<&Path>,
+) -> Result<SuspendedChild> {
     // CreateProcessW may mutate the command-line buffer in place, so it must be a
     // writable, NUL-terminated UTF-16 vector that outlives the call.
     let mut cmdline = build_command_line(program, args);
 
-    let startup = STARTUPINFOW {
+    // Optionally redirect the child's stdout+stderr to a log file. The handle is kept alive
+    // (owned by `log_file`) until after `CreateProcessW`, then dropped so the parent no longer
+    // holds the file open — the child writes through its own inherited copy.
+    let log_file = match log_path {
+        Some(path) => Some(open_inheritable_log(path)?),
+        None => None,
+    };
+
+    let mut startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         ..Default::default()
     };
+    if let Some(file) = &log_file {
+        let handle = HANDLE(file.as_raw_handle() as _);
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdOutput = handle;
+        startup.hStdError = handle;
+    }
+    // Inherit handles only when redirecting — and we marked *only* the log handle inheritable,
+    // so no unrelated handle leaks into the child.
+    let inherit_handles = log_file.is_some();
     let mut info = PROCESS_INFORMATION::default();
 
     // SAFETY: `cmdline` is writable + NUL-terminated and lives past the call;
@@ -106,7 +136,7 @@ pub fn spawn_suspended(program: &Path, args: &[String]) -> Result<SuspendedChild
             Some(PWSTR(cmdline.as_mut_ptr())),
             None,
             None,
-            false,
+            inherit_handles,
             CREATE_SUSPENDED | CREATE_NO_WINDOW,
             None,
             PCWSTR::null(),
@@ -116,11 +146,36 @@ pub fn spawn_suspended(program: &Path, args: &[String]) -> Result<SuspendedChild
     }
     .with_context(|| format!("CreateProcessW failed for {}", program.display()))?;
 
+    // The child has its own inherited copy of the log handle now; release the parent's.
+    drop(log_file);
+
     Ok(SuspendedChild {
         process: info.hProcess,
         thread: info.hThread,
         pid: info.dwProcessId,
     })
+}
+
+/// Creates (truncating) the sidecar log file and marks its handle inheritable so a spawned
+/// child can write to it. Rust opens files non-inheritable by default, so we flip only this
+/// one handle's inherit bit — keeping handle inheritance scoped to the log alone.
+fn open_inheritable_log(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .with_context(|| format!("open sidecar log {}", path.display()))?;
+    let handle = HANDLE(file.as_raw_handle() as _);
+    // SAFETY: `handle` is a valid file handle owned by `file`; we only set its inherit flag.
+    unsafe {
+        SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
+            .with_context(|| format!("mark sidecar log inheritable {}", path.display()))?;
+    }
+    Ok(file)
 }
 
 /// Whether a process id is currently running. Used by the startup reap (`03 §6`).
@@ -292,7 +347,38 @@ fn quote_arg(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{query_private_bytes, quote_arg, total_physical_ram};
+    use super::{
+        query_private_bytes, quote_arg, spawn_suspended, total_physical_ram, wait_for_exit,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn spawn_suspended_captures_child_stdout_to_log() {
+        // A child spawned with CREATE_NO_WINDOW writes its output nowhere; with a log path its
+        // stdout+stderr must land in the file so a sidecar spawn/crash is diagnosable.
+        let marker = "screensearch_sidecar_log_marker_4148";
+        let log = std::env::temp_dir().join(format!(
+            "screensearch-sidecar-log-test-{}.log",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&log);
+        let cmd =
+            std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+        let args = vec!["/c".to_string(), "echo".to_string(), marker.to_string()];
+
+        let child = spawn_suspended(Path::new(&cmd), &args, Some(&log)).expect("spawn cmd");
+        child.resume().expect("resume child");
+        assert!(
+            wait_for_exit(child.process_handle(), 5_000),
+            "child should exit promptly"
+        );
+        let contents = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(&log);
+        assert!(
+            contents.contains(marker),
+            "sidecar log should capture child stdout, got: {contents:?}"
+        );
+    }
 
     #[test]
     fn total_physical_ram_is_nonzero() {
