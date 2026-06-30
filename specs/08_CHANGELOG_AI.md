@@ -17,6 +17,38 @@
 
 ---
 
+## 2026-06-30 — Model-downloader resume hardening (`fix/download-resume-hardening`)
+- **Change:** Two localized fixes in `crates/inference/src/download.rs`, both TDD'd.
+  1. **Gap #69 — wrong-sized `.part` no longer publishes garbage.** `open_preallocated` now returns
+     `unbacked = (pre_existing_len != total)` instead of "created"; the chunked-download caller
+     discards a header-matching `.parts` bitmap whenever the part is `unbacked`. This covers the
+     external-cleanup case (a tool truncates an existing `.part`; `set_len` re-grows it with zeros)
+     that the old "created"-only check missed, plus the corruption-grown (`> total`) case (broadened
+     from `< total` to `!= total` per a PR #62 review note), while never flagging a legitimate resume
+     (always preallocated to exactly `total`). New red→green tests
+     `truncated_part_discards_stale_partial_manifest` + `oversized_part_discards_stale_manifest`.
+  2. **PR #27 Codex-P2 — re-check cache before retrying a locked download.** Extracted the
+     clean-layout + HF-cache fast paths into `place_if_cached`; folded the single-stream
+     lock-retry into `fetch_one` so that after each `LockAcquisition` backoff it re-checks
+     `place_if_cached` and short-circuits if the lock holder finished during the sleep (no
+     re-download / publish collision). Extended the backoff (added `LOCK_RETRY_BACKOFF_CAP` 15 s,
+     `LOCK_RETRY_MAX_ATTEMPTS` 5→24 ≈ 5 min total) so a real multi-GB download by the holder is
+     outlasted rather than abandoned at ~20 s. New `place_if_cached_*` unit tests. The doc-hidden
+     `download_file_with_lock_retry_for_diagnostics` (used by `examples/repro_8b.rs`) keeps its own
+     minimal backoff loop.
+- **Why:** Both are open durability gaps in `07_KNOWN_GAPS.md` — silent corruption (zeros published,
+  length check passes, sha256 skipped when the CDN advertises no `X-Linked-ETag`) and wasted
+  re-download/collision on lock contention. `03 §13` wants the downloader robust and resumable. The
+  separate `#46` row (orphaned **detached** writers in the same fallback) stays open — it needs
+  replacing hf-hub's high-level downloader, out of this scope.
+- **Verification (Windows, after the PR #62 review fix) — verbatim:**
+  - `cargo test -p inference --lib` → `test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s` (incl. `truncated_part_discards_stale_partial_manifest`, `oversized_part_discards_stale_manifest`, `place_if_cached_short_circuits_when_dest_already_present`, `place_if_cached_returns_false_when_nothing_cached`; existing `resume_*`/`fresh_part_*`/`integrity_*` unchanged)
+  - `cargo fmt --all -- --check` → `EXIT 0`
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile … in 2.43s` / `EXIT 0`
+  - `cargo build --workspace` → `Finished dev profile … in 8.90s` / `EXIT 0`
+  - `cargo test --workspace` → all suites green / `EXIT 0`
+  - `git diff --exit-code -- ui/src/bindings` → clean (`EXIT 0`)
+
 ## 2026-06-30 — Spec archival sweep + close gaps #43/#44 (`chore/archive-known-gaps`)
 - **Change:** (1) Restored the archive-on-release convention: moved the shipped 0.2.0/0.2.1/0.2.2
   entries out of the live build-loop logs (`05`/`06`/`07`/`08`) and `CHANGELOG.md` into per-arc

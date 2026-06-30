@@ -67,7 +67,13 @@ const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// failure streams no bytes, so retrying never double-counts progress. (A lock left by a *dead*
 /// process is released by the OS, so this only ever waits on a genuinely live holder.)
 const LOCK_RETRY_BACKOFF: Duration = Duration::from_secs(2);
-const LOCK_RETRY_MAX_ATTEMPTS: u32 = 5;
+/// Per-attempt backoff is capped here so the wait grows then plateaus instead of ballooning; with
+/// [`LOCK_RETRY_MAX_ATTEMPTS`] the total patience is ~5 min — long enough to outlast a real
+/// multi-GB download by the lock holder (the old ~20 s gave up far too early), while the
+/// post-backoff cache re-check in [`fetch_one`] exits the instant the holder finishes, so the full
+/// wait is rarely paid.
+const LOCK_RETRY_BACKOFF_CAP: Duration = Duration::from_secs(15);
+const LOCK_RETRY_MAX_ATTEMPTS: u32 = 24;
 
 /// Parallel HTTP `Range` connections the chunked model downloader opens. HF's CDN throttles a
 /// single connection to ~20 MB/s but serves many in parallel, so several connections saturate a
@@ -821,28 +827,9 @@ async fn fetch_one(
     copying: &Arc<AtomicBool>,
 ) -> Result<()> {
     let base = clean_base(filename);
-    let dest = dir.join(base);
-    if dest.exists() {
-        if let Ok(meta) = std::fs::metadata(&dest) {
-            downloaded.fetch_add(meta.len(), Ordering::Relaxed);
-        }
-        return Ok(());
-    }
 
-    // A finalized blob already in the cache (a prior run downloaded it but never copied it
-    // into the clean layout): copy it — no network round-trip, no re-download. The copy is
-    // disk I/O, so flag it so the network stall watchdog doesn't fire on a slow multi-GB copy.
-    let cache = Cache::new(cache_dir.to_path_buf());
-    if let Some(cached) = cache
-        .repo(Repo::new(repo_id.to_string(), RepoType::Model))
-        .get(filename)
-    {
-        let size = std::fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
-        copying.store(true, Ordering::Relaxed);
-        let placed = place_in_clean_layout_async(cached, dir, base).await;
-        copying.store(false, Ordering::Relaxed);
-        placed?;
-        downloaded.fetch_add(size, Ordering::Relaxed);
+    // Already in the clean layout, or a finalized blob waiting in the HF cache — no network.
+    if place_if_cached(cache_dir, repo_id, filename, dir, base, downloaded, copying).await? {
         return Ok(());
     }
 
@@ -859,52 +846,93 @@ async fn fetch_one(
         }
     }
 
-    // Single-stream fallback (range-less server, or probe failure): unchanged hf-hub path.
-    let cached = download_with_lock_retry(repo_api, filename, downloaded)
-        .await
-        .with_context(|| format!("download {filename}"))?;
-    // The streamed bytes are already counted; the publish copy is local I/O, so flag it to
-    // pause the stall watchdog rather than re-counting (which would push the bar past 100%).
-    copying.store(true, Ordering::Relaxed);
-    let placed = place_in_clean_layout_async(cached, dir, base).await;
-    copying.store(false, Ordering::Relaxed);
-    placed
-}
-
-/// Downloads one repo file via hf-hub, retrying with linear backoff when another *live*
-/// downloader holds the per-blob advisory lock ([`ApiError::LockAcquisition`]) — the contention
-/// that surfaced as the ~5 s "download failed" + retry storm when two app instances raced the
-/// same model. Progress accrues into `downloaded`; a lock failure streams no bytes, so a retry
-/// never double-counts. Non-lock errors propagate immediately.
-async fn download_with_lock_retry(
-    repo_api: &ApiRepo,
-    filename: &str,
-    downloaded: &Arc<AtomicU64>,
-) -> std::result::Result<PathBuf, ApiError> {
+    // Single-stream fallback (range-less server, or probe failure): hf-hub path with a lock-aware
+    // retry. hf-hub guards each blob with an advisory lock; when another *live* downloader holds it
+    // we back off and retry rather than surfacing a hard error the vision scheduler then retries in
+    // a tight loop (the observed "download storm"). A lock failure streams no bytes, so retrying
+    // never double-counts. After each backoff we re-check the cache fast paths first: if the holder
+    // finished during the sleep, copy its finalized blob into place instead of re-downloading it or
+    // colliding on publish (PR #27 Codex-P2). Non-lock errors propagate immediately.
     let mut attempt: u32 = 0;
     loop {
         let progress = ByteCounter {
             downloaded: downloaded.clone(),
         };
         match repo_api.download_with_progress(filename, progress).await {
-            Ok(path) => return Ok(path),
-            Err(e) => {
-                attempt += 1;
-                if matches!(e, ApiError::LockAcquisition(_)) && attempt < LOCK_RETRY_MAX_ATTEMPTS {
-                    let backoff = LOCK_RETRY_BACKOFF * attempt;
-                    tracing::warn!(
-                        filename,
-                        attempt,
-                        backoff_secs = backoff.as_secs(),
-                        "model file lock held by another download; backing off and retrying"
-                    );
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
-                return Err(e);
+            Ok(cached) => {
+                // The streamed bytes are already counted; the publish copy is local I/O, so flag it
+                // to pause the stall watchdog rather than re-counting (which would push the bar past
+                // 100%).
+                copying.store(true, Ordering::Relaxed);
+                let placed = place_in_clean_layout_async(cached, dir, base).await;
+                copying.store(false, Ordering::Relaxed);
+                return placed;
             }
+            Err(e)
+                if matches!(e, ApiError::LockAcquisition(_))
+                    && attempt < LOCK_RETRY_MAX_ATTEMPTS =>
+            {
+                attempt += 1;
+                let backoff = (LOCK_RETRY_BACKOFF * attempt).min(LOCK_RETRY_BACKOFF_CAP);
+                tracing::warn!(
+                    filename,
+                    attempt,
+                    backoff_secs = backoff.as_secs(),
+                    "model file lock held by another download; backing off and retrying"
+                );
+                tokio::time::sleep(backoff).await;
+                // The lock holder may have finished during the backoff — grab its finalized blob
+                // and short-circuit rather than re-downloading or racing it on publish.
+                if place_if_cached(cache_dir, repo_id, filename, dir, base, downloaded, copying)
+                    .await?
+                {
+                    return Ok(());
+                }
+            }
+            Err(e) => return Err(e).with_context(|| format!("download {filename}")),
         }
     }
+}
+
+/// Checks the two no-network fast paths for `filename` and, if either holds, makes the file present
+/// in the clean layout: it is already in the clean layout, or a finalized blob sits in the HF cache
+/// (a prior run — or another instance that just released the lock — downloaded it but never copied
+/// it across), which we copy into place. Returns `Ok(true)` when the file is now available in the
+/// clean layout (nothing left to fetch), `Ok(false)` when neither path applied. The cache copy is
+/// local disk I/O, so it flags `copying` to pause the network stall watchdog; the file's on-disk
+/// size is added to `downloaded` exactly once so the progress bar stays truthful.
+async fn place_if_cached(
+    cache_dir: &Path,
+    repo_id: &str,
+    filename: &str,
+    dir: &Path,
+    base: &str,
+    downloaded: &Arc<AtomicU64>,
+    copying: &Arc<AtomicBool>,
+) -> Result<bool> {
+    let dest = dir.join(base);
+    if dest.exists() {
+        if let Ok(meta) = std::fs::metadata(&dest) {
+            downloaded.fetch_add(meta.len(), Ordering::Relaxed);
+        }
+        return Ok(true);
+    }
+
+    let cache = Cache::new(cache_dir.to_path_buf());
+    if let Some(cached) = cache
+        .repo(Repo::new(repo_id.to_string(), RepoType::Model))
+        .get(filename)
+    {
+        let size = std::fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
+        copying.store(true, Ordering::Relaxed);
+        let placed = place_in_clean_layout_async(cached, dir, base).await;
+        copying.store(false, Ordering::Relaxed);
+        placed?;
+        downloaded.fetch_add(size, Ordering::Relaxed);
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 // ── Parallel chunked downloader (PR8) ──────────────────────────────────────────────────────
@@ -1104,19 +1132,22 @@ async fn chunked_download(
     let chunk_size = cfg.chunk_size;
     let chunk_count = total.div_ceil(chunk_size) as usize;
 
-    let (part_file, part_created) = open_preallocated(&part, total).await?;
+    let (part_file, part_unbacked) = open_preallocated(&part, total).await?;
     let file = Arc::new(part_file);
     let mut manifest =
         Manifest::load_or_init(&manifest_path, total, chunk_size, chunk_count).await?;
 
-    // A brand-new (zero-filled) `.part` cannot have any completed chunks — there are no real bytes
-    // on disk to back a `done` mark. A header-matching manifest that survived here is stale: either
-    // a prior run's post-publish cleanup of the bitmap silently failed (all-done), or an interrupted
-    // download left a partial bitmap whose multi-GB `.part` a user/cleanup tool later reclaimed
-    // (partly-done). Trusting *any* completed bit skips that range, leaving zeros in the assembled
-    // file: the length check passes (`set_len` gives exactly `total` bytes) and the sha256 check is
-    // skipped whenever the CDN advertised no `X-Linked-ETag`. Re-initialise so every chunk refetches.
-    if part_created && manifest.any_complete() {
+    // A `.part` that doesn't already hold `total` real bytes cannot back a `done` mark — there are
+    // only zeros there. `open_preallocated` reports this (`part_unbacked`) for both a brand-new
+    // (zero-filled) part and a pre-existing one an external truncation shrank, which `set_len`
+    // re-grows with zeros (#69). A header-matching manifest that survived over such a part is stale:
+    // either a prior run's post-publish cleanup of the bitmap silently failed (all-done), or an
+    // interrupted download left a partial bitmap whose multi-GB `.part` a user/cleanup tool later
+    // reclaimed (partly-done). Trusting *any* completed bit skips that range, leaving zeros in the
+    // assembled file: the length check passes (`set_len` gives exactly `total` bytes) and the sha256
+    // check is skipped whenever the CDN advertised no `X-Linked-ETag`. Re-initialise so every chunk
+    // refetches. (A legitimate resume is preallocated to `total`, so `part_unbacked` is false.)
+    if part_unbacked && manifest.any_complete() {
         manifest = Manifest::reinit(&manifest_path, total, chunk_size, chunk_count).await?;
     }
 
@@ -1171,35 +1202,44 @@ async fn chunked_download(
 
 /// Opens (creating if absent) the `.part` file for read+write and ensures it is `total` bytes
 /// long via `set_len`, so every chunk can `seek_write` at its fixed offset without concurrently
-/// extending the file. Returns `(file, created)` where `created` is `true` only when this call
-/// brought the file into existence — the caller uses that to reject a stale all-done manifest left
-/// over a brand-new (zero-filled) part. `create_new` makes the create-vs-existed decision atomic
-/// (no `exists()` TOCTOU). Off the async runtime — file allocation is blocking I/O.
+/// extending the file. Returns `(file, unbacked)` where `unbacked` is `true` when the part did
+/// **not** already hold *exactly* `total` real bytes — it was just created (length 0), an external
+/// truncation left it shorter (so `set_len` re-grows the tail with zeros), or external corruption
+/// left it longer (gap #69). In any of those a header-matching `.parts` bitmap cannot be trusted:
+/// its done-marks may cover bytes that aren't real, so the caller discards it. A legitimate
+/// interrupted download is always preallocated to exactly `total`, so it reports `unbacked = false`
+/// and resumes normally. `create_new` makes the create-vs-existed decision atomic (no `exists()`
+/// TOCTOU). Off the async runtime — file allocation is blocking I/O.
 async fn open_preallocated(part: &Path, total: u64) -> Result<(std::fs::File, bool)> {
     let part = part.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<(std::fs::File, bool)> {
-        let (file, created) = match std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .open(&part)
         {
-            Ok(file) => (file, true),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let file = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&part)
-                    .with_context(|| format!("open {}", part.display()))?;
-                (file, false)
-            }
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&part)
+                .with_context(|| format!("open {}", part.display()))?,
             Err(e) => return Err(e).with_context(|| format!("create {}", part.display())),
         };
-        if file.metadata()?.len() != total {
+        // A part can back a `done` mark only if it already holds *exactly* `total` real bytes. Any
+        // other on-disk length means it isn't in the state a resume left it: shorter (brand-new at 0,
+        // or externally truncated — `set_len` re-grows the tail with zeros) or longer (external
+        // corruption/append). A legitimate interrupted download is always preallocated to exactly
+        // `total`, so only these anomalies trip `unbacked` — report it so the caller discards a stale
+        // bitmap rather than trusting done-marks the bytes can't back (#69).
+        let pre_len = file.metadata()?.len();
+        let unbacked = pre_len != total;
+        if pre_len != total {
             file.set_len(total)
                 .with_context(|| format!("preallocate {} to {total} bytes", part.display()))?;
         }
-        Ok((file, created))
+        Ok((file, unbacked))
     })
     .await
     .context("open part-file task failed")?
@@ -1630,9 +1670,12 @@ fn write_file_durable(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Diagnostic entry point for `examples/repro_8b.rs` (not used by the app): download a single
-/// repo file into `cache_dir` with the same lock-contention backoff [`fetch_one`] uses, so the
-/// fix can be exercised under concurrent contention without driving the whole app.
+/// Diagnostic entry point for `examples/repro_8b.rs` (not used by the app): download a single repo
+/// file into `cache_dir`, retrying with the same lock-contention backoff [`fetch_one`]'s
+/// single-stream fallback uses, so the concurrent-instance race can be exercised without driving the
+/// whole app. Returns the cached blob path (no clean-layout placement). Mirrors the production
+/// backoff but omits the post-backoff cache re-check, which needs the clean-layout context
+/// `fetch_one` owns.
 #[doc(hidden)]
 pub async fn download_file_with_lock_retry_for_diagnostics(
     cache_dir: &Path,
@@ -1646,9 +1689,30 @@ pub async fn download_file_with_lock_retry_for_diagnostics(
         .context("build hf-hub api")?;
     let repo_api = api.model(repo_id.to_string());
     let downloaded = Arc::new(AtomicU64::new(0));
-    download_with_lock_retry(&repo_api, filename, &downloaded)
-        .await
-        .with_context(|| format!("download {filename}"))
+    let mut attempt: u32 = 0;
+    loop {
+        let progress = ByteCounter {
+            downloaded: downloaded.clone(),
+        };
+        match repo_api.download_with_progress(filename, progress).await {
+            Ok(path) => return Ok(path),
+            Err(e)
+                if matches!(e, ApiError::LockAcquisition(_))
+                    && attempt < LOCK_RETRY_MAX_ATTEMPTS =>
+            {
+                attempt += 1;
+                let backoff = (LOCK_RETRY_BACKOFF * attempt).min(LOCK_RETRY_BACKOFF_CAP);
+                tracing::warn!(
+                    filename,
+                    attempt,
+                    backoff_secs = backoff.as_secs(),
+                    "model file lock held by another download; backing off and retrying"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(e) => return Err(e).with_context(|| format!("download {filename}")),
+        }
+    }
 }
 
 /// Number of `poll`-interval watchdog ticks with no new bytes that constitutes a stall
@@ -2563,6 +2627,202 @@ mod tests {
             log.lock().unwrap().len(),
             chunk_count,
             "every chunk must be re-fetched after the stale partial manifest is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn place_if_cached_short_circuits_when_dest_already_present() {
+        // The cheap fast path the lock-retry re-checks after a backoff: when the file is already in
+        // the clean layout (e.g. the lock holder finished and published it during our sleep),
+        // `place_if_cached` returns true and counts its bytes — no network, no cache lookup needed.
+        let dir = unique_temp_dir("place-if-cached-dest");
+        let base = "model.gguf";
+        let body = vec![7u8; 4096];
+        std::fs::write(dir.join(base), &body).unwrap();
+        let empty_cache = unique_temp_dir("place-if-cached-dest-cache");
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+
+        let found = place_if_cached(
+            &empty_cache,
+            "org/repo",
+            base,
+            &dir,
+            base,
+            &downloaded,
+            &copying,
+        )
+        .await
+        .expect("place_if_cached must not error");
+
+        assert!(
+            found,
+            "an already-present clean-layout file must short-circuit"
+        );
+        assert_eq!(
+            downloaded.load(Ordering::Relaxed),
+            body.len() as u64,
+            "the on-disk size is counted exactly once"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(empty_cache);
+    }
+
+    #[tokio::test]
+    async fn place_if_cached_returns_false_when_nothing_cached() {
+        // Neither the clean layout nor the HF cache has the file → the caller must proceed to
+        // actually download it (returns false, leaves the progress counter untouched).
+        let dir = unique_temp_dir("place-if-cached-miss");
+        let empty_cache = unique_temp_dir("place-if-cached-miss-cache");
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+
+        let found = place_if_cached(
+            &empty_cache,
+            "org/repo",
+            "model.gguf",
+            &dir,
+            "model.gguf",
+            &downloaded,
+            &copying,
+        )
+        .await
+        .expect("place_if_cached must not error on a miss");
+
+        assert!(!found, "a miss must report nothing was placed");
+        assert_eq!(
+            downloaded.load(Ordering::Relaxed),
+            0,
+            "a miss must not touch the progress counter"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(empty_cache);
+    }
+
+    #[tokio::test]
+    async fn truncated_part_discards_stale_partial_manifest() {
+        // Gap #69: an external cleanup tool *truncates* an existing multi-GB `.part` (shrinks it)
+        // without deleting it, then the next run reopens it. `open_preallocated` re-grows it to
+        // `total` with `set_len` — zero-filling the reclaimed tail — but because the file already
+        // existed, the brand-new-part reset never fired. A header-matching partial bitmap that still
+        // marks chunks `done` would skip them, leaving zeros there; the length check passes and there
+        // is no sha256 to catch it. The downloader must notice the part can no longer back its
+        // done-marks (on-disk length < total) and refetch *every* chunk.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-truncated-partial-manifest");
+        let base = "model.gguf";
+
+        // Pre-seed a TRUNCATED `.part` (shorter than `total`, as a cleanup tool would leave it)
+        // alongside a header-matching partial bitmap (first half done). A real interrupted download
+        // preallocates the part to `total`; only truncation can leave it short.
+        let half = chunk_count / 2;
+        assert!(
+            half > 0 && half < chunk_count,
+            "need a genuine mix of done/pending chunks"
+        );
+        {
+            let truncated_len = total / 4;
+            assert!(
+                truncated_len < total,
+                "precondition: the part is shorter than total"
+            );
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.join(format!("{base}.part")))
+                .unwrap();
+            f.set_len(truncated_len).unwrap();
+        }
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            for i in 0..chunk_count {
+                bytes.push(if i < half { b'1' } else { b'0' });
+            }
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None); // no sha256 — re-fetching is the only safety net
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect(
+                "a truncated part with a stale partial manifest must re-download, not publish zeros",
+            );
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(
+            out, blob,
+            "published file must be the real bytes, not zeros in the done-marked ranges"
+        );
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after a stale manifest over a truncated part is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn oversized_part_discards_stale_manifest() {
+        // Defensive sibling of the truncated case (gap #69, broadened to any size mismatch): external
+        // corruption leaves an existing `.part` *longer* than `total` (e.g. junk appended). `set_len`
+        // shrinks it back to `total`, but those bytes can't be trusted to back a header-matching
+        // bitmap's done-marks — a legitimate resume is always preallocated to exactly `total`, never
+        // larger. `open_preallocated` reports any length != total as unbacked, so the stale manifest
+        // is discarded and every chunk refetched.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-oversized-manifest");
+        let base = "model.gguf";
+
+        {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.join(format!("{base}.part")))
+                .unwrap();
+            f.set_len(total * 2).unwrap(); // larger than total — never a legitimate resume state
+        }
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            bytes.extend_from_slice(&vec![b'1'; chunk_count]); // stale all-done
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect("an oversized part with a stale manifest must re-download, not publish junk");
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(out, blob, "published file must be the real bytes");
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after a stale manifest over an oversized part is discarded"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

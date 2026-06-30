@@ -20,6 +20,58 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-30 — Model-downloader resume hardening (`fix/download-resume-hardening`)
+
+Closed two open durability gaps in `crates/inference/src/download.rs` (download-hardening scope, per
+user), both via TDD. The user also asked to drop the stale `#74` row (its only residual was re-tagging
+dead `vision_tag` jobs in a throwaway dev DB — a don't-care; resolution history stays in the PR #61
+records).
+
+### Implemented
+- **#69 — wrong-sized `.part` no longer publishes garbage.** `open_preallocated` now reports a part as
+  `unbacked` when its pre-existing on-disk length is `!= total` (brand-new, externally truncated, or
+  corruption-grown larger), not just when it created the file; the chunked-download caller discards the
+  stale `.parts` bitmap in that case and refetches every chunk. No false positives on a legitimate
+  resume — a real interrupted part is always preallocated to exactly `total`. Wrote
+  `truncated_part_discards_stale_partial_manifest` first (observed red: published file all-zeros), then
+  the fix (green); `oversized_part_discards_stale_manifest` covers the `> total` case (the `< total`→
+  `!= total` broadening came from a PR #62 review note).
+- **Cache re-check on lock retry (PR #27 Codex-P2).** Extracted the clean-layout + HF-cache fast paths
+  into `place_if_cached`; folded the single-stream lock-retry into `fetch_one` so each `LockAcquisition`
+  backoff re-checks the cache and short-circuits if the holder finished mid-sleep. Extended the backoff
+  (`LOCK_RETRY_BACKOFF_CAP` 15 s; `LOCK_RETRY_MAX_ATTEMPTS` 5→24 ≈ 5 min) so a real multi-GB download is
+  outlasted, not abandoned at ~20 s. Added `place_if_cached_*` unit tests. The doc-hidden
+  `download_file_with_lock_retry_for_diagnostics` (the `examples/repro_8b.rs` entry point) keeps a
+  minimal inline backoff loop.
+
+### Verification (Windows, after the PR #62 review fix) — verbatim
+- `cargo test -p inference --lib` → `test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s`
+- `cargo fmt --all -- --check` → `EXIT 0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile … in 2.43s` / `EXIT 0`
+- `cargo build --workspace` → `Finished dev profile … in 8.90s` / `EXIT 0`
+- `cargo test --workspace` → every suite `ok` (store 49+14; inference 102 lib + integration; traits 53;
+  uia 16/2-ignored; sysmon 11; textfilter 12; kernel; screensearch 7; e2e/perf/smoke ignored) / `EXIT 0`
+- `git diff --exit-code -- ui/src/bindings` → clean (`EXIT 0`)
+
+### Skipped / deferred
+- The `#46` row proper (orphaned **detached** chunk writers in the single-stream hf-hub fallback) — left
+  open; the real fix replaces hf-hub's high-level `download_with_progress`, out of this scope.
+- "Gemini — single-instance focus" PR #27 follow-up — out of the download-hardening scope; still open.
+- **Declined a PR #62 review note** (Gemini, medium): wrap `place_if_cached` in `tokio::task::spawn_blocking`.
+  `place_if_cached` is a verbatim extraction of code that shipped throughout 0.2.x; its only heavy op (the
+  multi-GB copy) is already offloaded via `place_in_clean_layout_async` (which exists precisely for that),
+  and the rest are stat-level (`exists`/`metadata`/`Cache::get`) — the same inline-stat pattern used across
+  `fetch_one`/`chunked_download`. Gemini's rewrite would re-implement that offload inline and diverge from
+  the established pattern for no measurable gain. The sibling note (broaden the size check to `!= total`) was
+  **applied**.
+
+### Still risky
+- The lock-retry / `place_if_cached` HF-cache branch can't be unit-tested portably (a valid hf-hub cache
+  layout needs symlinked snapshots/blobs; Windows-restricted). It's an unchanged extraction of
+  already-shipped working code; the dest-present and miss branches *are* unit-tested. The
+  `LockAcquisition` path itself is network/contention-dependent and exercised by `examples/repro_8b.rs`,
+  not CI.
+
 ## Pass — 2026-06-30 — Spec archival sweep + close reachable gaps #43/#44 (`chore/archive-known-gaps`)
 
 From a `/superpowers:brainstorming` design (plan approved): shrink `07_KNOWN_GAPS.md` by restoring
