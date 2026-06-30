@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 7;
+pub const LATEST_SCHEMA_VERSION: i32 = 8;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -39,6 +39,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
     (7, MIGRATION_V7),
+    (8, MIGRATION_V8),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -329,4 +330,18 @@ CREATE INDEX idx_frames_captured_at ON frames(captured_at);
 const MIGRATION_V7: &str = r#"
 ALTER TABLE frames ADD COLUMN image_purged INTEGER NOT NULL DEFAULT 0
   CHECK (image_purged IN (0,1));
+"#;
+
+/// v8 — index the degrade-to-text retention sweep. `frames_with_image_older_than` filters
+/// `captured_at < cutoff AND image_purged = 0 ORDER BY captured_at`. Under degrade-to-text,
+/// purged rows stay in `frames` forever, so against the plain `idx_frames_captured_at` the
+/// hourly sweep would scan and skip an ever-growing prefix of already-purged history to find
+/// the current candidates (or prove there are none) — cost grows with all expired history. A
+/// **partial** index over `captured_at` restricted to `image_purged = 0` contains only the
+/// candidate rows (and shrinks as frames degrade), so the sweep is O(matched), independent of
+/// how much purged history has accumulated. SQLite uses it whenever the query's `WHERE`
+/// includes the literal `image_purged = 0` predicate (it does). Index-only, no data change.
+const MIGRATION_V8: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_frames_image_retention
+  ON frames(captured_at) WHERE image_purged = 0;
 "#;

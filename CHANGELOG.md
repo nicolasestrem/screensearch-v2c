@@ -23,7 +23,8 @@ the on-screen *text* as durable, searchable proof forever.
   raw/content text + spans + embeddings. Old captures stay fully searchable; the Moment view renders a
   crisp **text + layout reconstruction** from the stored OCR/UIA spans (a new `get_frame_spans`
   command + `FrameReconstruction` component) in place of the image. Previously retention hard-deleted
-  the whole capture. Schema v7 adds `frames.image_purged`; degraded frames show a "Text kept" state in
+  the whole capture. Schema v7 adds `frames.image_purged` and v8 adds a partial index so the hourly
+  sweep stays fast as purged history accumulates; degraded frames show a "Text kept" state in
   timeline/search/citation tiles. **Heads-up:** the new default auto-expires screenshots older than 30
   days (text is always kept) — set "Keep screenshots (days)" to `0` to keep images forever.
 

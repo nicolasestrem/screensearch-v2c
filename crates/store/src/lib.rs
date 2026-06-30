@@ -419,8 +419,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 7,
-            "latest schema is v7 (degrade-to-text retention adds frames.image_purged)"
+            version, 8,
+            "latest schema is v8 (degrade-to-text retention: image_purged + sweep index)"
         );
 
         let frame_rows: i64 = conn
@@ -516,6 +516,43 @@ mod migration_tests {
             conn.execute("UPDATE frames SET image_purged = 2 WHERE id = 1", [])
                 .is_err(),
             "image_purged outside {{0,1}} must violate the CHECK"
+        );
+    }
+
+    /// v8 adds a **partial** index for the degrade-to-text retention sweep. The candidate
+    /// query (`frames_with_image_older_than`) must use it instead of scanning past an
+    /// ever-growing prefix of already-purged rows — so the planner must pick
+    /// `idx_frames_image_retention`, not the plain `captured_at` index, for that predicate.
+    #[test]
+    fn migration_v8_indexes_image_retention_sweep() {
+        let mut conn = open_at_version(7);
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        // The partial index exists.
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_frames_image_retention'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read sqlite_master");
+        assert_eq!(idx, 1, "v8 creates idx_frames_image_retention");
+
+        // The sweep query actually uses it (the whole point of the index).
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, captured_at, image_path, image_purged, app_hint FROM frames
+                 WHERE captured_at < 1 AND image_purged = 0
+                 ORDER BY captured_at ASC LIMIT 1",
+                [],
+                |r| r.get(3),
+            )
+            .expect("explain query plan");
+        assert!(
+            plan.contains("idx_frames_image_retention"),
+            "sweep must use the partial retention index, got plan: {plan}"
         );
     }
 }

@@ -43,6 +43,18 @@
   - **Live (this desktop, `cargo test -p screensearch --test e2e_capture -- --ignored`):**
     `captured + stored native WebP: 3440x1440 at frames/day-20634/1782814402065-0.webp` — real
     ultra-wide capture stored as a valid, native-resolution WebP (decoded dims == captured dims).
+- **PR #58 review fixes (Codex + Gemini bots):**
+  1. **Faithful span reconstruction** (`FrameReconstruction.tsx`): each span is now bounded to its
+     **stored** bbox width (`maxWidth = s.w`, clamped ≥ 0) with the font fit to both height and width
+     (`min(cqh, cqw)`), so a long word can't overpaint its neighbours (Codex) and the `(1 − x)`
+     negative-`max-width` on OCR noise is gone (Gemini).
+  2. **Stale-cache refresh** (`useLiveEvents.ts`): the retention/degrade toast now also invalidates the
+     singular `frame`, `frameSpans`, and `search` caches, so an open Moment/Recall switches to the text
+     reconstruction instead of fetching a now-deleted image (Codex).
+  3. **Retention-sweep index** (schema **v8** `idx_frames_image_retention`): a partial index over
+     `captured_at WHERE image_purged = 0` so the hourly `frames_with_image_older_than` sweep stays
+     O(matched) as purged history accumulates, instead of scanning past an ever-growing purged prefix
+     (Codex). New test asserts the sweep's `EXPLAIN QUERY PLAN` uses it.
 
 ---
 
