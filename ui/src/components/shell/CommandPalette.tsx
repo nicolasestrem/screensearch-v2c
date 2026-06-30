@@ -40,6 +40,10 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  // Restore focus to the opener only on *dismiss* (Esc / backdrop), not when a command
+  // runs — a command navigates or acts, and the destination (e.g. Recall's autofocused
+  // search input) should own focus; restoring would steal it back to the ⌘K trigger.
+  const restoreFocusRef = useRef(true);
   const listboxId = "command-palette-listbox";
 
   const commands = useMemo<Command[]>(() => {
@@ -72,12 +76,17 @@ export function CommandPalette() {
     if (!open) return;
     openerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreFocusRef.current = true; // default to restore; run() opts out
     setQuery("");
     setActive(0);
     const t = setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
       clearTimeout(t);
-      openerRef.current?.focus();
+      // Only on dismiss, and only if the opener is still in the document (a command on a
+      // now-unmounted page would otherwise be a detached, focus-stealing no-op).
+      if (restoreFocusRef.current && openerRef.current?.isConnected) {
+        openerRef.current.focus();
+      }
     };
   }, [open]);
 
@@ -92,6 +101,7 @@ export function CommandPalette() {
   if (!open) return null;
 
   const run = (cmd: Command) => {
+    restoreFocusRef.current = false; // the command's destination/action owns focus next
     close();
     cmd.run();
   };

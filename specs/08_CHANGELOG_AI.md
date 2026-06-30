@@ -17,6 +17,25 @@
 
 ---
 
+## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
+- **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
+  the first):
+  1. **NavRail roving tab-stop didn't follow external navigation.** `focusIndex` was seeded once at
+     mount, so navigating via the Command Palette / an in-app link / browser back left `tabIndex=0` on a
+     stale link. Added `useEffect(() => setFocusIndex(activeIndexFor(pathname)), [pathname])` — re-derives
+     the tab stop only (never calls `.focus()`); arrow moves don't change the path so they're untouched.
+  2. **Command Palette focus-restore stole focus on navigation.** Restoring focus to the opener on every
+     close yanked it back to the ⌘K trigger when a command navigated to a route that autofocuses (Recall's
+     search input). Fix: restore **only on dismiss** — `run()` sets `restoreFocusRef.current = false` so a
+     command's destination/action owns focus; the cleanup also now guards `openerRef.current?.isConnected`.
+     (Gemini's literal `document.body.contains` suggestion alone wouldn't fix it — the trigger lives in the
+     always-mounted NavRail, so it's always connected; the dismiss-vs-run distinction is the real fix.)
+- **Why:** Both regress keyboard/SR navigation introduced by the #42 changes; `UI_REFERENCE` §7.
+- **Verification — verbatim:** `npm run lint` EXIT 0; `npm run build` `✓ built in 1.45s`. **Live Playwright
+  probe:** (1) palette-navigate `/`→`/timeline` ⇒ NavRail tab stop = **Timeline** (was stale Deck before);
+  (2) palette-navigate →`/recall` ⇒ `document.activeElement` = the **"Search query" `INPUT`** (not the ⌘K
+  button); (3) focus ⌘K → `Ctrl+K` → `Esc` ⇒ focus **restored to the ⌘K button** (dismiss path intact).
+
 ## 2026-06-30 — Cancel Inno installer (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 - **Change:** Three known-gap closures.
   1. **#26 packaging — Inno/portable-ZIP/MSI formally dropped, gap closed.** Tauri 2 shipped an

@@ -4,7 +4,7 @@
 // Keyboard (UI_REFERENCE §7): a roving tabindex makes the rail a single Tab stop —
 // Arrow Up/Down (wrapping) and Home/End move focus between links; Enter follows one.
 import { NavLink, useLocation } from "react-router-dom";
-import { useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../state/uiStore";
 import {
@@ -45,6 +45,14 @@ export function NavRail() {
   // Roving tabindex: exactly one link sits in the Tab order at a time (seeded to the
   // current route); arrow keys move focus without leaving the rail.
   const [focusIndex, setFocusIndex] = useState(() => activeIndexFor(pathname));
+
+  // Keep the tab stop on the current route when navigation happens *outside* the rail
+  // (Command Palette, an in-app link, browser back/forward) — otherwise the next Tab into
+  // the rail lands on a stale link. Arrow-key moves don't change the path, so they aren't
+  // clobbered. Re-derives focus position only; never moves focus (no .focus() here).
+  useEffect(() => {
+    setFocusIndex(activeIndexFor(pathname));
+  }, [pathname]);
 
   const focusItem = (index: number) => {
     const next = (index + ITEMS.length) % ITEMS.length; // wrap at both ends
