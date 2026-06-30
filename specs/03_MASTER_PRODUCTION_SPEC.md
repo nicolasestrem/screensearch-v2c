@@ -544,7 +544,7 @@ transitions, and model load/evict are logged at info. No screen content or OCR t
 ## 11. CI/CD
 GitHub Actions on `windows-latest`: `cargo fmt --check`, `cargo clippy --workspace -D warnings`,
 `cargo build`, `cargo test` (GPU/WinRT tests `#[ignore]`d), `ui` `npm ci && npm run build`, and a
-`tauri build` artifact job. Release workflow (later): Inno Setup installer + portable ZIP.
+`tauri build` artifact job. Release workflow (later): **NSIS** installer (shipped v0.1.0; code-signing pending). Inno/MSI/portable ZIP dropped — `07` #26.
 
 ## 12. Failure modes & rollback
 - **Migrations** forward-only via `schema_version`; each ships an idempotent up-script.
@@ -566,7 +566,7 @@ GitHub Actions on `windows-latest`: `cargo fmt --check`, `cargo clippy --workspa
    sidecar reload.
 7. **No orphaned `llama-server` after a forced app crash** — verified by test and manually.
 8. `cargo clippy -D warnings` clean; all non-ignored tests green.
-9. Installer + portable ZIP build successfully.
+9. **NSIS installer builds successfully** (shipped v0.1.0; Inno/MSI/portable ZIP dropped — `07` #26); code-signing pending.
 
 ---
 

@@ -59,6 +59,6 @@ jobs:
       - name: environment doctor (informational)
         run: cargo run -p doctor
 
-# NOTE: the packaging/artifact job (Inno Setup installer + portable ZIP, 00 §G)
-# is added in P5 — see specs/02 §5. P0 CI gates fmt, clippy, build, test, UI
-# build/lint, and binding freshness.
+# NOTE: the NSIS installer ships via `tauri build` (`bundle.targets=["nsis"]`, v0.1.0; Inno/MSI/
+# portable ZIP dropped — see specs/07 #26). A CI artifact + code-signing job is still TODO. CI gates
+# fmt, clippy, build, test, UI build/lint, and binding freshness.

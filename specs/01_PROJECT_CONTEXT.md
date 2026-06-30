@@ -22,7 +22,7 @@ it proved which engines are reliable and which approaches failed (see §5).
 
 - **Product:** an open-source, local-first Windows app that continuously captures the screen,
   makes it searchable by **text and meaning**, and answers questions about what was seen.
-- **Distribution intent:** installer + portable ZIP, website **screensearch.app**.
+- **Distribution intent:** unsigned NSIS installer (signing pending), website **screensearch.app**.
 - **Primary users:** privacy-conscious Windows power users.
 - **Privacy stance (non-negotiable):** all data local; no cloud upload; no telemetry by default.
 

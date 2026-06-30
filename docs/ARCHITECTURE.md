@@ -435,10 +435,11 @@ request id, and the UI ignores stale deltas.
 P4 completed the inference sidecar (vision tagging + grounded `ask`) and P5 completed the Command
 Deck UI; the no-orphan gate passes. What remains for v1.0:
 
-- **Packaging** — Inno Setup installer + portable ZIP; must bundle `onnxruntime.dll` (the `ort`
-  build-time artifact) beside the exe; code signing (see `07` — SignPath Foundation / Azure Trusted
-  Signing / Certum). The `llama-server` binary and GGUF models are *not* bundled — they download at
-  runtime.
+- **Packaging** — shipped an unsigned **NSIS** installer (v0.1.0; `bundle.targets=["nsis"]`).
+  Inno/MSI/portable ZIP were dropped (Tauri 2 ships NSIS natively — `07` #26). `onnxruntime.dll`
+  bundling is **moot** — `ort` static-links ONNX Runtime into the exe. Remaining: **code-signing**
+  (see `07` — SignPath Foundation / Azure Trusted Signing / Certum). The `llama-server` binary and
+  GGUF models are *not* bundled — they download at runtime.
 - **Polish carried from P4** (`07` #19): a download-progress %% in `sidecar` readiness and optional
   pending-job dedup for the vision scheduler. Multi-GPU device selection is now available through
   `list_sidecar_devices` + `sidecar.device`.
