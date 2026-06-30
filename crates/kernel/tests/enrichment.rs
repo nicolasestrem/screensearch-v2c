@@ -509,6 +509,69 @@ async fn process_job_vision_tag_writes_analysis() {
     assert_eq!(frame.activity_type.as_deref(), Some("coding")); // mirrored onto the frame
 }
 
+/// A vision provider that fails with a wrapped error chain, mirroring the real
+/// `vision.rs` → `client.rs` path (a deep sidecar cause under `.context("vision completion")`).
+struct FailingVision;
+
+#[async_trait]
+impl VisionProvider for FailingVision {
+    async fn analyze(&self, _image: &RgbaImage) -> Result<VisionAnalysis> {
+        Err(anyhow::anyhow!(
+            "sidecar returned HTTP 400: exceed_context_size_error (4148 > 4096 tokens)"
+        )
+        .context("sidecar chat request")
+        .context("vision completion"))
+    }
+}
+
+/// A failed vision tag must record the *full* error chain in `last_error`, so the real sidecar
+/// cause (e.g. `exceed_context_size_error`) survives instead of the collapsed top context.
+/// Regression guard for the `{e}` → `{e:#}` formatting fix in `vision_tag_outcome`.
+#[tokio::test]
+async fn vision_tag_failure_records_full_error_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let fid = store.insert_frame(new_frame(8_500)).await.unwrap();
+    store.enqueue_job(vision_tag_job(Some(fid))).await.unwrap();
+
+    let abs = data_dir.join("frames").join("8500.jpg");
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])))
+        .to_rgb8()
+        .save(&abs)
+        .unwrap();
+
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MapEmbedder::new());
+    let vision: Arc<dyn VisionProvider> = Arc::new(FailingVision);
+
+    let job = store
+        .claim_jobs(&[JobKind::VisionTag], 1, 1)
+        .await
+        .unwrap()
+        .pop()
+        .expect("a vision_tag job to claim");
+    process_job(&store, &embedder, Some(&vision), &data_dir, job)
+        .await
+        .unwrap();
+
+    // The attempt failed retryably; re-claim it (far-future `now`) to read the recorded error.
+    let failed = store
+        .claim_jobs(&[JobKind::VisionTag], 1, i64::MAX / 2)
+        .await
+        .unwrap()
+        .pop()
+        .expect("the retryable vision_tag job to be visible again");
+    let err = failed
+        .last_error
+        .expect("a failed attempt records last_error");
+    assert!(
+        err.contains("exceed_context_size_error"),
+        "the deep sidecar cause must survive in last_error, got: {err}"
+    );
+}
+
 /// Vision-only startup must not depend on the embedding provider. Users can disable
 /// embeddings while still asking the sidecar to tag stored frames, and those jobs
 /// should drain as soon as inference is attached.

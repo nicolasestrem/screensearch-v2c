@@ -51,6 +51,7 @@ fn supervisor_for(
         binary,
         reap_binaries,
         pidfile: sidecar_dir.join("llama-server.pid"),
+        sidecar_log: Some(sidecar_dir.join("llama-server.log")),
         idle_ttl: Duration::from_secs(60),
         // First-run model load + GPU warmup can be slow; allow plenty of headroom.
         health_timeout: Duration::from_secs(600),

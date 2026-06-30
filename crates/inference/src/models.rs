@@ -33,12 +33,16 @@ pub struct ModelSpec {
     pub flash_attn: FlashAttnSetting,
 }
 
-/// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. Vision
-/// sends one image + a short (≤512-token) JSON reply; the answer lane carries ~8 RAG
-/// chunks + a streamed reply, so it gets a larger window.
+/// Per-lane automatic context window used when `SidecarParams::ctx_size` is `0`. A
+/// full-screen capture is itself thousands of vision tokens — a native 3440×1440 frame
+/// tokenizes to ~4000, which overflowed the old 4096 window and rejected the request with
+/// `exceed_context_size_error` (`07` native-res-vs-ctx). The image is now downscaled before
+/// tagging (`vision::encode_data_url`), so real usage stays small; this 8192 default is a
+/// safety net for ultra-wide / multi-monitor frames. The answer lane carries ~8 RAG chunks +
+/// a streamed reply, so it uses the same window.
 pub(crate) fn default_ctx_for(lane: ModelLane) -> u32 {
     match lane {
-        ModelLane::Vision => 4096,
+        ModelLane::Vision => 8192,
         ModelLane::Answer => 8192,
     }
 }
@@ -355,7 +359,7 @@ mod tests {
             params(99, None),
         )
         .unwrap();
-        assert_eq!(v.ctx_size, 4096, "vision auto ctx");
+        assert_eq!(v.ctx_size, 8192, "vision auto ctx");
         assert_eq!(a.ctx_size, 8192, "answer auto ctx");
         // The tuning fields are carried through unchanged.
         assert_eq!(v.kv_cache_type, KvCacheType::Q8_0);

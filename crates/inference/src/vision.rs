@@ -36,6 +36,12 @@ const ACTIVITY_TYPES: &[&str] = &[
 
 const VISION_MAX_TOKENS: u32 = 512;
 const JPEG_QUALITY: u8 = 80;
+/// Longest edge (px) of the image actually sent to the VLM. A native full-screen capture
+/// (e.g. 3440×1440) tokenizes to ~4000 vision tokens and overflowed the sidecar context with
+/// `exceed_context_size_error`; capping the longest edge keeps the request well under the
+/// window *and* speeds up prefill. The stored capture (timeline/reconstruction) keeps full
+/// resolution — only the tag request is downscaled (`encode_data_url`).
+const VISION_MAX_EDGE: u32 = 1568;
 // No literal value is shown for `confidence` — an earlier prompt pinned `0.0` and the
 // model dutifully echoed it, recording a fabricated score (`07` #20). The field is
 // described, not demonstrated; the response-format grammar and `parse_vision` enforce
@@ -248,9 +254,10 @@ fn extract_json(s: &str) -> Option<String> {
     (end > start).then(|| s[start..=end].to_string())
 }
 
-/// Encodes an RGBA frame as a `data:image/jpeg;base64,…` URL for the OpenAI image API.
+/// Encodes an RGBA frame as a `data:image/jpeg;base64,…` URL for the OpenAI image API,
+/// downscaling oversized frames first (see [`downscale_for_vlm`]).
 fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
-    let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+    let rgb = downscale_for_vlm(img).to_rgb8();
     let mut buf = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY)
         .encode_image(&rgb)
@@ -259,6 +266,23 @@ fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
         "data:image/jpeg;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(&buf)
     ))
+}
+
+/// Downscales a frame so its longest edge is at most [`VISION_MAX_EDGE`], preserving aspect
+/// ratio; returns it unscaled when it already fits. A native full-screen capture is otherwise
+/// thousands of vision tokens (`exceed_context_size_error`); shrinking the request image keeps
+/// it under the sidecar window and cuts prefill time. Triangle filtering is fast and more than
+/// enough fidelity for activity/app tagging.
+fn downscale_for_vlm(img: &image::RgbaImage) -> image::DynamicImage {
+    let dynimg = image::DynamicImage::ImageRgba8(img.clone());
+    if dynimg.width().max(dynimg.height()) <= VISION_MAX_EDGE {
+        return dynimg;
+    }
+    dynimg.resize(
+        VISION_MAX_EDGE,
+        VISION_MAX_EDGE,
+        image::imageops::FilterType::Triangle,
+    )
 }
 
 /// The GGUF filename, used as the `model` field recorded with the analysis.
@@ -273,6 +297,41 @@ fn model_label(spec: &ModelSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Decodes a `data:image/jpeg;base64,…` URL back to an image so a test can inspect the
+    /// dimensions actually sent to the VLM.
+    fn decode_data_url(url: &str) -> image::DynamicImage {
+        let b64 = url
+            .strip_prefix("data:image/jpeg;base64,")
+            .expect("jpeg data url prefix");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        image::load_from_memory(&bytes).expect("decode jpeg")
+    }
+
+    #[test]
+    fn downscales_oversized_frame_to_max_edge() {
+        // A native ultra-wide capture (3440×1440) tokenizes to ~4000 vision tokens and
+        // overflowed the sidecar context; the request image must be capped to VISION_MAX_EDGE
+        // on its longest edge, aspect ratio preserved.
+        let img = image::RgbaImage::new(3440, 1440);
+        let decoded = decode_data_url(&encode_data_url(&img).unwrap());
+        assert_eq!(
+            decoded.width().max(decoded.height()),
+            VISION_MAX_EDGE,
+            "longest edge must be capped"
+        );
+        assert_eq!((decoded.width(), decoded.height()), (1568, 656));
+    }
+
+    #[test]
+    fn small_frame_passes_through_at_native_size() {
+        // A frame already within the cap is sent unscaled — no needless quality loss.
+        let img = image::RgbaImage::new(800, 600);
+        let decoded = decode_data_url(&encode_data_url(&img).unwrap());
+        assert_eq!((decoded.width(), decoded.height()), (800, 600));
+    }
 
     #[test]
     fn parses_well_formed_json() {

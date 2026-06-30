@@ -47,3 +47,27 @@
 - **Verification:** `npm run lint` `EXIT 0`; `npm run build` `✓ built in 1.55s`;
   `grep -rl __devState dist/assets/` **absent**; `grep -rl "dev: forced route error" dist/assets/`
   **absent**; `git diff --stat -- ui/src/bindings` clean.
+
+## 2026-06-30 — Fix vision context overflow on full-res frames (`fix/vision-fullres-ctx-overflow`)
+- **Change:** (1) `crates/inference/src/vision.rs` — `encode_data_url` downscales the VLM request
+  image to a 1568 px longest edge (`VISION_MAX_EDGE`) before JPEG-encoding; captures/timeline keep
+  full resolution. (2) `crates/inference/src/models.rs` — vision auto-ctx 4096 → 8192. (3)
+  `crates/kernel/src/worker_pool.rs` — `vision_tag` failure formats the error with `{e:#}` (full
+  anyhow chain) into `jobs.last_error`. (4) `crates/inference/src/process.rs` (+ `supervisor.rs`
+  `SupervisorConfig.sidecar_log`, `src-tauri/src/lib.rs`) — capture the sidecar's stdout/stderr to
+  `<sidecar dir>/llama-server.log` via an inheritable log handle (only that handle is inheritable).
+- **Why:** native full-res captures (`07` #73) made a 3440×1440 frame ~4148 vision tokens > the
+  4096 ctx, so `llama-server` returned HTTP 400 `exceed_context_size_error` for every tag (DB: 72
+  dead / 0 done). The low RAM/VRAM that looked like a "miracle" was the model rejecting requests in
+  ~0.1 s without inference. The cause was invisible because the worker logged only the top context
+  and the sidecar's stderr was discarded — both fixed here (`07` #74).
+- **Verification:** TDD red→green per change (models ctx; vision downscale large/small; worker
+  `{e:#}` end-to-end via a failing provider → `jobs.last_error` contains `exceed_context_size_error`;
+  process.rs real-child stdout capture). Full gate all `EXIT 0`: `cargo fmt --check`,
+  `clippy --workspace --all-targets -D warnings`, `build --workspace`, `test --workspace`
+  (inference **98 passed**; kernel enrichment incl. the new chain test), `npm run lint` + `build`
+  (`✓ built in 1.64s`), `git diff --exit-code -- ui/src/bindings` clean. **Live E2E:** rebuilt dev
+  app → sidecar launches with `--ctx-size 8192`, `llama-server.log` written (`n_ctx_slot = 8192`),
+  `vision_tag done` 0 → 8, and a faithful downscaled request returned **HTTP 200** in 2.8 s
+  (`prompt_tokens 1159`) with `{"description":"…Visual Studio Code…","activity_type":"coding",
+  "confidence":0.95}` — was HTTP 400 `4148 > 4096` before the fix.

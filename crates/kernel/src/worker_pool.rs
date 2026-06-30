@@ -571,7 +571,10 @@ async fn vision_tag_outcome(
     );
     let analysis = match vision.analyze(&image).await {
         Ok(a) => a,
-        Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e}")),
+        // `{e:#}` prints the whole anyhow chain so the real sidecar cause (e.g.
+        // `exceed_context_size_error`) reaches `jobs.last_error` instead of collapsing to the
+        // top `.context("vision completion")`.
+        Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e:#}")),
     };
     match store.insert_vision(frame_id, analysis).await {
         Ok(()) => Outcome::Complete { changed_data: true },

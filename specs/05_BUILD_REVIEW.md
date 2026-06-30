@@ -85,3 +85,51 @@ not the hook call.
   `BUILD_EXIT=0`; `grep -rl __devState dist/assets/` → **absent** (`GREP_EXIT=1`);
   `grep -rl "dev: forced route error" dist/assets/` → **absent** (the whole override module, not just
   the param string, is gone); `git diff --stat -- ui/src/bindings` → clean.
+
+## Pass — 2026-06-30 — Fix vision context overflow on full-res frames (`fix/vision-fullres-ctx-overflow`)
+
+User-reported symptom: vision tagging "failing for the first time" and "significantly slower," while
+the model appeared to use "merely 3 GB RAM" (a "miracle?"). A live read of the running dev session
+proved it was **not** a memory win — it was a regression.
+
+### Diagnosis (evidence)
+- The sidecar was fully GPU-resident (6.4 GB dedicated VRAM on the RTX 5060 Ti; `-ngl 99`,
+  `--ctx-size 4096`), so the low footprint was the existing memory-tuning, not magic.
+- A faithful reproduction (real captured frame → JPEG q80 → exact request body) returned
+  `HTTP 400 — {"error":{"message":"request (4148 tokens) exceeds the available context size (4096
+  tokens)…","type":"exceed_context_size_error","n_prompt_tokens":4148,"n_ctx":4096}}`. Frame
+  3440×1440 (native, from #73). The DB had `vision_tag` **72 dead / 0 done**.
+- The error was hidden: the worker recorded only the collapsed top context (`"vision completion"`),
+  and the sidecar's stderr was discarded entirely (`process.rs` spawned with `CREATE_NO_WINDOW`,
+  no redirect).
+
+### Implemented (`07` #74; TDD red→green per change)
+- **Downscale the VLM image** to a 1568 px longest edge in `vision::encode_data_url` (captures keep
+  full resolution). Tests: oversized 3440×1440 → 1568×656; small frame passes through unscaled.
+- **Vision auto-ctx 4096 → 8192** (`models.rs`); updated the per-lane auto-ctx test.
+- **Surface the real cause:** `vision_tag_outcome` formats with `{e:#}` (`worker_pool.rs`). Test:
+  a failing provider's chained error now lands `exceed_context_size_error` in `jobs.last_error`
+  (`kernel --test enrichment`).
+- **Capture sidecar stdout/stderr** to `<sidecar dir>/llama-server.log` (`process.rs` inheritable
+  log handle + `SupervisorConfig.sidecar_log`, wired in `src-tauri/src/lib.rs`). Test: a real child
+  (`cmd /c echo …`) writes to the log and is read back.
+
+### Verification (Windows, full CI sequence) — verbatim
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `CLIPPY_EXIT=0`
+- `cargo build --workspace` → `Finished … in 27.08s` / `BUILD_EXIT=0`
+- `cargo test --workspace` → `TEST_EXIT=0` (inference **98 passed** incl. new vision/process tests;
+  `kernel --test enrichment` incl. `vision_tag_failure_records_full_error_chain`)
+- `cd ui && npm run lint` → `EXIT 0`; `npm run build` → `✓ built in 1.64s`
+- `git diff --exit-code -- ui/src/bindings` → `BINDINGS_DIFF_EXIT=0`
+- **Live E2E** (`npm run tauri dev`, new binary): sidecar launched `--ctx-size 8192`;
+  `llama-server.log` written (`n_ctx_slot = 8192`); `vision_tag done` 0 → 8; faithful downscaled
+  request → **HTTP 200** in 2.8 s, `prompt_tokens 1159`, content
+  `{"description":"…Visual Studio Code…","activity_type":"coding","confidence":0.95}`.
+
+### Still risky / follow-up
+- The ~115 `vision_tag` rows that dead-lettered **before** the fix stay dead (terminal state) — a
+  manual requeue is needed to re-tag those frames (`07` #74 residual).
+- 1568 px lands ~1009 image tokens — right at the model's logged ≥1024 grounding recommendation;
+  fine for holistic tagging, and there is now ample 8192-ctx headroom to raise the cap if precise
+  grounding is ever needed.
