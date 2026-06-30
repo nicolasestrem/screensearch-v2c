@@ -783,3 +783,13 @@
 
 
 > Pre-0.2.x (v0.1.0) history archived in specs/archive/08_CHANGELOG_AI.v0.1.0.md.
+
+## 2026-06-29 — Ask OCR hydration failure handling (`codex/update-error-handling-in-ask-command`)
+- **Change:** Extracted Ask retrieval hydration into `ask_context` and made `ocr_texts` failures fatal before answer streaming starts, instead of silently replacing the full grounded context with search snippets through `unwrap_or_default()`.
+- **Why:** Grounded Ask quality depends on full content-text hydration; a storage/query failure should be visible to the UI and user rather than producing a lower-quality answer from fallback snippets with no warning.
+- **Review follow-up:** Removed the large `Store` fake from the regression test and split the pure hydration/error mapping into `hydrate_ask_context`, so the test simulates the `ocr_texts` failure result without placeholder trait methods.
+- **PR #53 review follow-up:** `hydrate_ask_context` now takes ownership of each hydrated string via `ocr.remove(...)` (the map is consumed) instead of cloning, dropping a `String` clone per retrieved chunk; corrected the stale branch name in this entry and `05_BUILD_REVIEW.md`.
+- **Test:** Added `hydrate_ask_context_returns_clear_error_when_ocr_texts_fails`, which simulates an `ocr_texts` failure and verifies the exact clear error path.
+- **Verification (Windows, full CI sequence):** `cargo fmt --all -- --check` (EXIT 0); `cargo clippy --workspace --all-targets -- -D warnings` (EXIT 0); `cargo test --workspace` (all suites green, EXIT 0, including the targeted `hydrate_ask_context_*` test); `git diff --exit-code -- ui/src/bindings` clean. The earlier Linux-container run was blocked by a missing `glib-2.0` pkg-config dependency and was rerun on the Windows target.
+
+---

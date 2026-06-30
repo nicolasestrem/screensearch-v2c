@@ -589,3 +589,26 @@ the exact evidence paths. All required commands exited 0:
 
 
 > Pre-0.2.x (v0.1.0) history archived in specs/archive/05_BUILD_REVIEW.v0.1.0.md.
+
+## Build review — 2026-06-29 — Ask OCR hydration failure handling
+
+**Branch:** `codex/update-error-handling-in-ask-command`.
+
+### Implemented
+- Replaced the `ask` command's silent `ocr_texts(...).unwrap_or_default()` fallback with explicit pre-stream error handling. Ask now hydrates retrieval hits through `ask_context`; if the bulk OCR/content-text read fails, the command returns a clear error before spawning the answer stream. Missing text for individual frames still falls back to that hit's snippet after a successful bulk read.
+- Added a focused unit test that simulates the `ocr_texts` failure result and asserts the exact command-side error message includes the hydrated frame count and original store error.
+- PR review follow-up: removed the large `Store` fake from the test and split the pure hydration/error mapping into `hydrate_ask_context`, so the regression remains covered without unrelated trait-method placeholders.
+- PR #53 review follow-up: in `hydrate_ask_context`, take ownership of each hydrated string via `ocr.remove(&hit.frame_id)` (the map is consumed) instead of `ocr.get(...).cloned()`, avoiding a `String` clone per retrieved chunk. Corrected the stale branch name in this record and `08_CHANGELOG_AI.md`.
+- Updated `CHANGELOG.md` and this build-loop record.
+
+### Verification (Windows, full CI sequence)
+- `cargo fmt --all -- --check` → `EXIT: 0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile [unoptimized + debuginfo] target(s) in 14.24s` / `EXIT: 0`
+- `cargo test -p screensearch hydrate_ask_context_returns_clear_error_when_ocr_texts_fails -- --nocapture` →
+  `test tests::hydrate_ask_context_returns_clear_error_when_ocr_texts_fails ... ok` / `test result: ok. 1 passed; 0 failed`
+- `cargo test --workspace` → all suites green (`screensearch_lib` 7 passed; `store` 10 + 49 passed; `sysmon` 11; `textfilter` 12; `traits` 52; `uia` 16; e2e/perf ignored on this host) / `EXIT: 0`
+- `git diff --exit-code -- ui/src/bindings` → clean (`EXIT: 0`)
+
+> Earlier Linux-container run was blocked by a missing `glib-2.0` system package (Tauri/WebKit GTK dependency); the verification above was rerun on the Windows target.
+
+---
