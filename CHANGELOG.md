@@ -17,9 +17,10 @@ Two narrow but real durability gaps in the parallel chunked model downloader
   existing `.part` without deleting it, `set_len` re-grew the file with zeros while a header-matching
   bitmap still marked those (now-zero) chunks "done" — so the zero-filled ranges were published (the
   length check passes; sha256 is skipped when the CDN advertises no `X-Linked-ETag`).
-  `open_preallocated` now reports a part as untrustworthy whenever its on-disk length is **below**
-  `total` (brand-new *or* truncated), forcing a full refetch. Safe for normal resumes: a legitimate
-  interrupted `.part` is always preallocated to exactly `total`, so it is never falsely discarded.
+  `open_preallocated` now reports a part as untrustworthy whenever its on-disk length is **not
+  exactly** `total` (brand-new, truncated, *or* corruption-grown larger), forcing a full refetch.
+  Safe for normal resumes: a legitimate interrupted `.part` is always preallocated to exactly
+  `total`, so it is never falsely discarded.
 - **A locked download re-checks the cache before re-downloading (PR #27 Codex-P2).** When another
   live downloader holds hf-hub's per-blob advisory lock, the single-stream fallback backs off and
   retries; it now re-checks the clean-layout and HF-cache fast paths **after each backoff**, so if

@@ -1203,13 +1203,13 @@ async fn chunked_download(
 /// Opens (creating if absent) the `.part` file for read+write and ensures it is `total` bytes
 /// long via `set_len`, so every chunk can `seek_write` at its fixed offset without concurrently
 /// extending the file. Returns `(file, unbacked)` where `unbacked` is `true` when the part did
-/// **not** already hold `total` real bytes — i.e. it was just created (length 0) *or* an external
-/// truncation left it shorter than `total`, so `set_len` re-grew the tail with zeros (gap #69). In
-/// either case a header-matching `.parts` bitmap cannot be trusted: its done-marks may cover bytes
-/// that are now zero, so the caller discards it. A legitimate interrupted download is always
-/// preallocated to exactly `total`, so it reports `unbacked = false` and resumes normally.
-/// `create_new` makes the create-vs-existed decision atomic (no `exists()` TOCTOU). Off the async
-/// runtime — file allocation is blocking I/O.
+/// **not** already hold *exactly* `total` real bytes — it was just created (length 0), an external
+/// truncation left it shorter (so `set_len` re-grows the tail with zeros), or external corruption
+/// left it longer (gap #69). In any of those a header-matching `.parts` bitmap cannot be trusted:
+/// its done-marks may cover bytes that aren't real, so the caller discards it. A legitimate
+/// interrupted download is always preallocated to exactly `total`, so it reports `unbacked = false`
+/// and resumes normally. `create_new` makes the create-vs-existed decision atomic (no `exists()`
+/// TOCTOU). Off the async runtime — file allocation is blocking I/O.
 async fn open_preallocated(part: &Path, total: u64) -> Result<(std::fs::File, bool)> {
     let part = part.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<(std::fs::File, bool)> {
@@ -1227,11 +1227,14 @@ async fn open_preallocated(part: &Path, total: u64) -> Result<(std::fs::File, bo
                 .with_context(|| format!("open {}", part.display()))?,
             Err(e) => return Err(e).with_context(|| format!("create {}", part.display())),
         };
-        // A part can back a `done` mark only if it already holds `total` bytes. A shorter file
-        // (brand-new at 0, or externally truncated) is re-grown to `total` with zeros below, so its
-        // done-marks are untrustworthy — report it so the caller discards the stale bitmap (#69).
+        // A part can back a `done` mark only if it already holds *exactly* `total` real bytes. Any
+        // other on-disk length means it isn't in the state a resume left it: shorter (brand-new at 0,
+        // or externally truncated — `set_len` re-grows the tail with zeros) or longer (external
+        // corruption/append). A legitimate interrupted download is always preallocated to exactly
+        // `total`, so only these anomalies trip `unbacked` — report it so the caller discards a stale
+        // bitmap rather than trusting done-marks the bytes can't back (#69).
         let pre_len = file.metadata()?.len();
-        let unbacked = pre_len < total;
+        let unbacked = pre_len != total;
         if pre_len != total {
             file.set_len(total)
                 .with_context(|| format!("preallocate {} to {total} bytes", part.display()))?;
@@ -2767,6 +2770,59 @@ mod tests {
             log.lock().unwrap().len(),
             chunk_count,
             "every chunk must be re-fetched after a stale manifest over a truncated part is discarded"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn oversized_part_discards_stale_manifest() {
+        // Defensive sibling of the truncated case (gap #69, broadened to any size mismatch): external
+        // corruption leaves an existing `.part` *longer* than `total` (e.g. junk appended). `set_len`
+        // shrinks it back to `total`, but those bytes can't be trusted to back a header-matching
+        // bitmap's done-marks — a legitimate resume is always preallocated to exactly `total`, never
+        // larger. `open_preallocated` reports any length != total as unbacked, so the stale manifest
+        // is discarded and every chunk refetched.
+        let blob = synthetic_blob(300 * 1024);
+        let chunk_size = 64 * 1024u64;
+        let total = blob.len() as u64;
+        let chunk_count = total.div_ceil(chunk_size) as usize;
+        let (server, log) = mount_range_server(blob.clone()).await;
+        let dir = unique_temp_dir("chunk-oversized-manifest");
+        let base = "model.gguf";
+
+        {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.join(format!("{base}.part")))
+                .unwrap();
+            f.set_len(total * 2).unwrap(); // larger than total — never a legitimate resume state
+        }
+        {
+            let header = Manifest::header_for(total, chunk_size, chunk_count);
+            let mut bytes = header.into_bytes();
+            bytes.extend_from_slice(&vec![b'1'; chunk_count]); // stale all-done
+            std::fs::write(dir.join(format!("{base}.parts")), &bytes).unwrap();
+        }
+
+        let url = format!("{}/blob", server.uri());
+        let info = test_info(total, None);
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let copying = Arc::new(AtomicBool::new(false));
+        let cfg = test_cfg(4, chunk_size);
+
+        chunked_download(&info, &url, &dir, base, &downloaded, &copying, &cfg)
+            .await
+            .expect("an oversized part with a stale manifest must re-download, not publish junk");
+
+        let out = std::fs::read(dir.join(base)).unwrap();
+        assert_eq!(out, blob, "published file must be the real bytes");
+        assert_eq!(
+            log.lock().unwrap().len(),
+            chunk_count,
+            "every chunk must be re-fetched after a stale manifest over an oversized part is discarded"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
