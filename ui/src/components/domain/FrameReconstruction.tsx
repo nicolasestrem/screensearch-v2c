@@ -45,25 +45,36 @@ export function FrameReconstruction({ spans, width, height, className }: FrameRe
           </span>
         </div>
       ) : (
-        spans.map((s, i) => (
-          <span
-            key={i}
-            className={cn(
-              "absolute overflow-hidden whitespace-nowrap font-mono leading-none",
-              ROLE_TONE[s.role],
-            )}
-            // Geometry is data, not design tokens: place each word at its normalized
-            // position and scale it to ~90% of its line height (`cqh` = % of canvas height).
-            style={{
-              left: `${s.x * 100}%`,
-              top: `${s.y * 100}%`,
-              maxWidth: `${(1 - s.x) * 100}%`,
-              fontSize: `${Math.max(s.h * 90, 0.5)}cqh`,
-            }}
-          >
-            {s.text}
-          </span>
-        ))
+        spans.map((s, i) => {
+          // Fit each word inside its STORED bbox so the reconstruction reflects the saved
+          // layout, not an overlapping one: line height sets the size, but a long word is
+          // also capped to its box width (≈0.6em per monospace char) so it can't paint over
+          // the spans to its right. `cqh`/`cqw` = % of the canvas height/width.
+          const chars = Math.max(s.text.length, 1);
+          const byHeight = `${Math.max(s.h * 90, 0.5)}cqh`;
+          const fontSize =
+            s.w > 0 ? `min(${byHeight}, ${(s.w * 100) / (0.6 * chars)}cqw)` : byHeight;
+          return (
+            <span
+              key={i}
+              className={cn(
+                "absolute overflow-hidden whitespace-nowrap font-mono leading-none",
+                ROLE_TONE[s.role],
+              )}
+              // Geometry is data, not design tokens: position + box come from the span's
+              // normalized bbox. `maxWidth` is clamped ≥ 0 — OCR noise can yield x or w > 1,
+              // and a negative max-width is invalid CSS (silently ignored).
+              style={{
+                left: `${s.x * 100}%`,
+                top: `${s.y * 100}%`,
+                maxWidth: `${Math.max(s.w * 100, 0)}%`,
+                fontSize,
+              }}
+            >
+              {s.text}
+            </span>
+          );
+        })
       )}
     </div>
   );
