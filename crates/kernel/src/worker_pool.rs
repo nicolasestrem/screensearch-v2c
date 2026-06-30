@@ -559,6 +559,16 @@ async fn vision_tag_outcome(
             };
         }
     };
+    // Privacy-safe VLM request provenance (gap #44): frame id + the relative capture
+    // path only — never image bytes/data-URL, OCR `content_text`, app/window title, or
+    // the model reply (`init_tracing`'s "no screen content at info level" contract).
+    // Emitted at `info` so it reaches `screensearch.log` (the default `EnvFilter` is
+    // `info`; a `debug!` here would be silently dropped — the original audit gap).
+    tracing::info!(
+        frame_id,
+        image_path = %input.image_path,
+        "vision_tag: sending frame image to VLM"
+    );
     let analysis = match vision.analyze(&image).await {
         Ok(a) => a,
         Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e}")),
