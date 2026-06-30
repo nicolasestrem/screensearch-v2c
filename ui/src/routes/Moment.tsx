@@ -9,7 +9,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Button, ErrorState, Panel, Skeleton } from "../components/primitives";
 import { FrameTile, MomentDetail } from "../components/domain";
 import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "../components/icons";
-import { useFrame, useFrameContext } from "../lib/ipc/queries";
+import { useFrame, useFrameContext, useFrameSpans } from "../lib/ipc/queries";
 import { useEnqueueVision } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
 
@@ -30,6 +30,10 @@ export function Component() {
   // frames and drop the anchor, breaking navigation).
   const at = detail.data?.captured_at ?? 0;
   const neighbours = useFrameContext(at, NEIGHBOUR_HALF_MS, NEIGHBOUR_EACH, detail.data != null);
+
+  // Spans back the text+layout reconstruction shown when the screenshot has expired.
+  // Only fetched for degraded frames (the common image case never pays for it).
+  const spans = useFrameSpans(frameId, detail.data?.image_purged ?? false);
 
   const queueVision = () => {
     if (frameId == null) return;
@@ -136,7 +140,12 @@ export function Component() {
         </div>
       </div>
 
-      <MomentDetail detail={detail.data} onQueueVision={queueVision} queueing={enqueue.isPending} />
+      <MomentDetail
+        detail={detail.data}
+        onQueueVision={queueVision}
+        queueing={enqueue.isPending}
+        spans={spans.data}
+      />
 
       {context.length > 0 && (
         <Panel title="Around this moment">

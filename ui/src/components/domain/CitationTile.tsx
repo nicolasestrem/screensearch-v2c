@@ -22,6 +22,7 @@ export function CitationTile({ frameId }: CitationTileProps) {
     >
       <FrameImage
         imagePath={data?.image_path ?? null}
+        imagePurged={data?.image_purged ?? false}
         alt=""
         className="aspect-video w-full rounded-chip object-cover bg-overlay"
       />

@@ -41,6 +41,7 @@ export function SearchResult({ hit }: SearchResultProps) {
     >
       <FrameImage
         imagePath={hit.image_path}
+        imagePurged={hit.image_purged}
         alt=""
         className="h-16 w-28 shrink-0 rounded-chip object-cover bg-overlay"
       />

@@ -18,7 +18,8 @@ fn row_to_meta(r: &Row<'_>) -> rusqlite::Result<FrameMeta> {
         frame_id: r.get(0)?,
         captured_at: r.get(1)?,
         image_path: r.get(2)?,
-        app_hint: r.get(3)?,
+        image_purged: r.get::<_, i64>(3)? != 0,
+        app_hint: r.get(4)?,
     })
 }
 
@@ -38,7 +39,7 @@ impl SqliteStore {
         }
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint
+                "SELECT id, captured_at, image_path, image_purged, app_hint
                  FROM frames
                  WHERE captured_at >= ?1 AND captured_at < ?2
                  ORDER BY captured_at DESC
@@ -80,8 +81,8 @@ impl SqliteStore {
             // window, rather than an integer stride that halves the sample once `total`
             // edges past `limit`. `LIMIT` is a defensive cap. (Codex review, PR #33.)
             let mut stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint FROM (
-                     SELECT id, captured_at, image_path, app_hint,
+                "SELECT id, captured_at, image_path, image_purged, app_hint FROM (
+                     SELECT id, captured_at, image_path, image_purged, app_hint,
                             row_number() OVER (ORDER BY captured_at ASC, id ASC) - 1 AS rn,
                             count(*) OVER () AS total
                      FROM frames
@@ -109,7 +110,7 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let after = conn
                 .query_row(
-                    "SELECT id, captured_at, image_path, app_hint
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
                      FROM frames WHERE captured_at >= ?1
                      ORDER BY captured_at ASC LIMIT 1",
                     params![at],
@@ -118,7 +119,7 @@ impl SqliteStore {
                 .optional()?;
             let before = conn
                 .query_row(
-                    "SELECT id, captured_at, image_path, app_hint
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
                      FROM frames WHERE captured_at < ?1
                      ORDER BY captured_at DESC LIMIT 1",
                     params![at],
@@ -145,7 +146,7 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let after = conn
                 .query_row(
-                    "SELECT id, captured_at, image_path, app_hint
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
                      FROM frames
                      WHERE captured_at >= ?1 AND captured_at >= ?2 AND captured_at < ?3
                      ORDER BY captured_at ASC LIMIT 1",
@@ -155,7 +156,7 @@ impl SqliteStore {
                 .optional()?;
             let before = conn
                 .query_row(
-                    "SELECT id, captured_at, image_path, app_hint
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
                      FROM frames
                      WHERE captured_at < ?1 AND captured_at >= ?2 AND captured_at < ?3
                      ORDER BY captured_at DESC LIMIT 1",
@@ -168,15 +169,61 @@ impl SqliteStore {
         .await
     }
 
+    /// Bounded **image-retention** candidates: frames older than `cutoff` whose screenshot
+    /// is still present (`image_purged = 0`), oldest first. Backs the degrade-to-text
+    /// retention sweep — the caller deletes each returned frame's image file then calls
+    /// [`purge_frame_image`](Self::purge_frame_image) to keep the row + text as durable
+    /// proof. Excluding already-purged frames means a frame is a candidate exactly once,
+    /// so the sweep converges instead of re-listing text-only rows every hour forever.
+    pub async fn frames_with_image_older_than(
+        &self,
+        cutoff: i64,
+        limit: u32,
+    ) -> Result<Vec<FrameMeta>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, captured_at, image_path, image_purged, app_hint
+                 FROM frames
+                 WHERE captured_at < ?1 AND image_purged = 0
+                 ORDER BY captured_at ASC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![cutoff, i64::from(limit)], row_to_meta)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Marks a frame's screenshot as retention-degraded: sets `image_purged = 1` and keeps
+    /// everything else (the row, `frame_text`, `text_spans`, embeddings, vision). The
+    /// caller deletes the on-disk image file first; this only records that the image is
+    /// gone so the UI shows the text+layout reconstruction and the sweep skips the frame
+    /// next time. Idempotent (a second call is a no-op UPDATE).
+    pub async fn purge_frame_image(&self, frame_id: i64) -> Result<()> {
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE frames SET image_purged = 1 WHERE id = ?1",
+                params![frame_id],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Bounded retention candidates: frames older than `cutoff`, oldest first. The
-    /// caller deletes the returned rows and their JPEG files in small batches.
+    /// caller deletes the returned rows and their image files in small batches.
     pub async fn frames_older_than(&self, cutoff: i64, limit: u32) -> Result<Vec<FrameMeta>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint
+                "SELECT id, captured_at, image_path, image_purged, app_hint
                  FROM frames
                  WHERE captured_at < ?1
                  ORDER BY captured_at ASC
@@ -202,7 +249,7 @@ impl SqliteStore {
         let hint = hint.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint
+                "SELECT id, captured_at, image_path, image_purged, app_hint
                  FROM frames
                  WHERE app_hint = ?1 COLLATE NOCASE
                  ORDER BY captured_at ASC
@@ -245,7 +292,7 @@ impl SqliteStore {
             let n = i64::from(limit_each);
             // Closest BEFORE the anchor: largest `captured_at` strictly below `at`.
             let mut before_stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint
+                "SELECT id, captured_at, image_path, image_purged, app_hint
                  FROM frames
                  WHERE captured_at >= ?1 AND captured_at < ?2
                  ORDER BY captured_at DESC
@@ -256,7 +303,7 @@ impl SqliteStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             // Closest AFTER the anchor: smallest `captured_at` strictly above `at`.
             let mut after_stmt = conn.prepare(
-                "SELECT id, captured_at, image_path, app_hint
+                "SELECT id, captured_at, image_path, image_purged, app_hint
                  FROM frames
                  WHERE captured_at > ?1 AND captured_at <= ?2
                  ORDER BY captured_at ASC
@@ -298,7 +345,7 @@ fn nearer(at: i64, before: Option<FrameMeta>, after: Option<FrameMeta>) -> Optio
 #[cfg(test)]
 mod tests {
     use crate::SqliteStore;
-    use traits::NewFrame;
+    use traits::{NewFrame, OcrResult};
 
     fn frame(at: i64) -> NewFrame {
         NewFrame {
@@ -399,5 +446,70 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// Degrade-to-text retention keeps the row + text as durable proof: after
+    /// `purge_frame_image` the frame still hydrates with its raw text and reports
+    /// `image_purged`, and it is no longer an image-retention candidate.
+    #[tokio::test]
+    async fn purge_frame_image_drops_image_but_keeps_text_proof() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let id = store.insert_frame(frame(100)).await.unwrap();
+        store
+            .insert_ocr(
+                id,
+                OcrResult {
+                    text: "secret receipt".to_string(),
+                    mean_confidence: -1.0,
+                    engine: "winrt".to_string(),
+                    spans: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let before = store.get_frame(id).await.unwrap().unwrap();
+        assert!(!before.image_purged, "freshly captured frame has its image");
+
+        store.purge_frame_image(id).await.unwrap();
+
+        let after = store.get_frame(id).await.unwrap().unwrap();
+        assert!(after.image_purged, "image marked purged");
+        assert_eq!(
+            after.raw_text.as_deref(),
+            Some("secret receipt"),
+            "text proof survives the image purge"
+        );
+
+        // No longer an image-retention candidate (purged once, never re-listed).
+        let cands = store.frames_with_image_older_than(200, 10).await.unwrap();
+        assert!(
+            cands.iter().all(|f| f.frame_id != id),
+            "purged frame is excluded from image-retention candidates"
+        );
+    }
+
+    /// `frames_with_image_older_than` lists only old frames whose image is still present,
+    /// oldest first — so the sweep converges instead of re-listing text-only rows.
+    #[tokio::test]
+    async fn image_older_than_excludes_purged_and_recent() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let old_kept = store.insert_frame(frame(100)).await.unwrap();
+        let old_purged = store.insert_frame(frame(150)).await.unwrap();
+        let recent = store.insert_frame(frame(300)).await.unwrap();
+        store.purge_frame_image(old_purged).await.unwrap();
+
+        let cands = store.frames_with_image_older_than(250, 10).await.unwrap();
+        let ids: Vec<i64> = cands.iter().map(|f| f.frame_id).collect();
+        assert_eq!(
+            ids,
+            vec![old_kept],
+            "only old, still-imaged frames; oldest first"
+        );
+        assert!(
+            !ids.contains(&old_purged),
+            "already-degraded frame excluded"
+        );
+        assert!(!ids.contains(&recent), "in-window frame excluded");
     }
 }

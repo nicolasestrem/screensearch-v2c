@@ -1,5 +1,7 @@
-// RetentionControl (UI_REFERENCE §5) — the capture-retention window. A backend
-// sweep runs at startup and hourly; 0 keeps captures forever.
+// RetentionControl (UI_REFERENCE §5) — the screenshot-retention window. A backend sweep
+// runs at startup and hourly; past the window it removes the screenshot but KEEPS the
+// recognized text (still searchable; the Moment view shows a text reconstruction). 0
+// keeps screenshots forever.
 import { Field } from "../primitives";
 
 export interface RetentionControlProps {
@@ -10,7 +12,7 @@ export interface RetentionControlProps {
 export function RetentionControl({ days, onChange }: RetentionControlProps) {
   return (
     <Field
-      label="Retention (days)"
+      label="Keep screenshots (days)"
       type="number"
       min={0}
       value={days}
@@ -20,7 +22,7 @@ export function RetentionControl({ days, onChange }: RetentionControlProps) {
         // A cleared field is NaN — fall back to 0 so the input doesn't snap back.
         else if (e.currentTarget.value === "") onChange(0);
       }}
-      hint="0 keeps captures forever. Old captures are purged at startup and hourly."
+      hint="After this many days a capture's screenshot is removed to save space, but its recognized text is kept and stays searchable. 0 keeps screenshots forever."
     />
   );
 }

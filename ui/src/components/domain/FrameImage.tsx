@@ -10,10 +10,13 @@ import { useEffect, useState, type ImgHTMLAttributes } from "react";
 
 import { frameSrc } from "../../lib/ipc/frameSrc";
 import { cn } from "../../lib/cn";
-import { IconImage } from "../icons";
+import { IconImage, IconDatabase } from "../icons";
 
 export interface FrameImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> {
   imagePath: string | null | undefined;
+  /** When the screenshot has been retention-degraded — the image file is gone but the
+   *  text proof remains. Renders a "text kept" state instead of fetching a dead path. */
+  imagePurged?: boolean;
   /** Intrinsic pixel dimensions, when known — reserve space to avoid layout shift. */
   intrinsicWidth?: number;
   intrinsicHeight?: number;
@@ -22,6 +25,7 @@ export interface FrameImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement
 
 export function FrameImage({
   imagePath,
+  imagePurged = false,
   intrinsicWidth,
   intrinsicHeight,
   alt,
@@ -32,6 +36,12 @@ export function FrameImage({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    // Degraded captures have no file to fetch — skip the resolve and show "text kept".
+    if (imagePurged) {
+      setSrc(null);
+      setFailed(false);
+      return;
+    }
     let active = true;
     setFailed(false);
     setSrc(null);
@@ -41,7 +51,25 @@ export function FrameImage({
     return () => {
       active = false;
     };
-  }, [imagePath]);
+  }, [imagePath, imagePurged]);
+
+  // Retention-degraded: the screenshot was deleted on purpose to save space; the text
+  // proof is preserved (and a full reconstruction shows in the Moment view).
+  if (imagePurged) {
+    return (
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center gap-1 bg-overlay text-ink-faint",
+          className,
+        )}
+        role="img"
+        aria-label={alt || "Screenshot expired; text kept"}
+      >
+        <IconDatabase size={20} />
+        <span className="text-caption font-body">Text kept</span>
+      </div>
+    );
+  }
 
   // No resolvable URL (dev mode, missing path) or a failed decode → a placeholder
   // that still fills the caller's box, so layout never shifts when it resolves.

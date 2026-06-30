@@ -94,7 +94,9 @@ function sanitizeSettings(s: Settings): Settings {
     capture_uia_max_textpattern_calls: clampInt(s.capture_uia_max_textpattern_calls, 1, 4_096),
     capture_uia_suppress_during_input_ms: clampInt(s.capture_uia_suppress_during_input_ms, 0, 10_000),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
-    storage_max_width: clampInt(s.storage_max_width, 320, 7680),
+    // 0 = native (no downscale) — mirrors the backend sentinel; any other value clamps.
+    storage_max_width:
+      s.storage_max_width === 0 ? 0 : clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
     enrich_worker_concurrency: clampInt(s.enrich_worker_concurrency, 1, 16),
     enrich_vision_timer_interval_ms: clampInt(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000),
@@ -638,15 +640,15 @@ export function Component() {
             max={100}
             value={draft.storage_jpeg_quality}
             onChange={intHandler("storage_jpeg_quality")}
-            hint={`Higher = sharper frames, larger database. ${APPLY_CAPTURE}`}
+            hint={`Legacy setting — captures are now stored as lossless WebP, so this has no effect today. ${APPLY_CAPTURE}`}
           />
           <Field
             label="Max width (px)"
             type="number"
-            min={320}
+            min={0}
             value={draft.storage_max_width}
             onChange={intHandler("storage_max_width")}
-            hint={`Captured frames are downscaled to this width. ${APPLY_CAPTURE}`}
+            hint={`Captures wider than this are downscaled. 0 = native resolution (no downscale) — best for ultra-wide monitors. ${APPLY_CAPTURE}`}
           />
           <RetentionControl
             days={draft.storage_retention_days}

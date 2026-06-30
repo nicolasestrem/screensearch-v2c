@@ -126,6 +126,13 @@ export function useLiveEvents() {
           qc.invalidateQueries({ queryKey: queryKeys.framesPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.timelinePrefix });
           qc.invalidateQueries({ queryKey: queryKeys.insightsPrefix });
+          // Degrade-to-text flips image_purged on existing rows, so a frame's singular
+          // detail, its spans, and any search hits are now stale (they still point at the
+          // just-deleted image). Refresh them so an open Moment/Recall switches to the text
+          // reconstruction instead of fetching a now-missing image.
+          qc.invalidateQueries({ queryKey: queryKeys.framePrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.frameSpansPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
         }
       }),
     );

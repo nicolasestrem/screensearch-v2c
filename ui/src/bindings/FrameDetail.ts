@@ -6,7 +6,13 @@ import type { VisionAnalysis } from "./VisionAnalysis";
 /**
  * Full detail for a single frame (`get_frame` output).
  */
-export type FrameDetail = { frame_id: number, captured_at: number, monitor_index: number, width: number, height: number, image_path: string, app_hint: string | null, window_title: string | null, browser_url: string | null, activity_type: string | null, 
+export type FrameDetail = { frame_id: number, captured_at: number, monitor_index: number, width: number, height: number, image_path: string, 
+/**
+ * `true` once this frame's screenshot has been retention-degraded — the image file
+ * is gone but the text proof (raw/content text + `text_spans`) remains. The Moment
+ * view renders the layout reconstruction instead of the image (`storage.retention_days`).
+ */
+image_purged: boolean, app_hint: string | null, window_title: string | null, browser_url: string | null, activity_type: string | null, 
 /**
  * Why the frame was captured (`frames.capture_trigger`, 0.2.1 event-driven
  * capture). `None` for legacy frames or an unrecognized token; the Moment view

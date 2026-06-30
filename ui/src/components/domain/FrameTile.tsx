@@ -27,6 +27,7 @@ export function FrameTile({ frame, className }: FrameTileProps) {
     >
       <FrameImage
         imagePath={frame.image_path}
+        imagePurged={frame.image_purged}
         alt={`Capture at ${clockTime(frame.captured_at)}`}
         className="aspect-video w-full rounded-chip object-cover bg-overlay"
       />

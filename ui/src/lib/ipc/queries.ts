@@ -153,6 +153,19 @@ export function useFrame(frameId: number | null) {
   });
 }
 
+/**
+ * One frame's text spans for the text+layout reconstruction. Idle until a frame id is
+ * selected and `enabled` (the Moment route turns it on only for retention-degraded
+ * frames, so the spans aren't fetched for the common image case).
+ */
+export function useFrameSpans(frameId: number | null, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.frameSpans(frameId ?? -1),
+    queryFn: () => cmd.getFrameSpans(frameId as number),
+    enabled: enabled && frameId != null,
+  });
+}
+
 /** Activity aggregates for the Insights screen. */
 export function useInsights(range: TimeRange, bucketCount: number, enabled = true) {
   return useQuery({

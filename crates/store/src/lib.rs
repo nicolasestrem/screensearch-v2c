@@ -419,8 +419,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 6,
-            "v6 is the event-driven click/scroll-stop migration"
+            version, 8,
+            "latest schema is v8 (degrade-to-text retention: image_purged + sweep index)"
         );
 
         let frame_rows: i64 = conn
@@ -478,6 +478,81 @@ mod migration_tests {
         assert_eq!(
             child_after, 0,
             "ON DELETE CASCADE must still fire after rebuild"
+        );
+    }
+
+    /// v7 adds `frames.image_purged` for degrade-to-text retention. An existing frame
+    /// (carried up from v5, through the v6 rebuild) must read back as `0` ("image
+    /// present"); the column must accept `1` and reject anything else via its CHECK.
+    #[test]
+    fn migration_v7_adds_image_purged_present_by_default() {
+        let mut conn = open_at_version(6);
+        conn.execute(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, capture_trigger)
+             VALUES (1, 100, 0, 10, 10, 'p', 'h', 'timer')",
+            [],
+        )
+        .expect("insert v6 frame");
+
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+
+        // Pre-existing row defaults to "image present".
+        let purged: i64 = conn
+            .query_row("SELECT image_purged FROM frames WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .expect("read image_purged");
+        assert_eq!(purged, 0, "existing frames keep their image (purged = 0)");
+
+        // The degrade write is accepted; a bogus value is rejected by the CHECK.
+        conn.execute("UPDATE frames SET image_purged = 1 WHERE id = 1", [])
+            .expect("marking image purged must satisfy the CHECK");
+        assert!(
+            conn.execute("UPDATE frames SET image_purged = 2 WHERE id = 1", [])
+                .is_err(),
+            "image_purged outside {{0,1}} must violate the CHECK"
+        );
+    }
+
+    /// v8 adds a **partial** index for the degrade-to-text retention sweep. The candidate
+    /// query (`frames_with_image_older_than`) must use it instead of scanning past an
+    /// ever-growing prefix of already-purged rows — so the planner must pick
+    /// `idx_frames_image_retention`, not the plain `captured_at` index, for that predicate.
+    #[test]
+    fn migration_v8_indexes_image_retention_sweep() {
+        let mut conn = open_at_version(7);
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        // The partial index exists.
+        let idx: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_frames_image_retention'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read sqlite_master");
+        assert_eq!(idx, 1, "v8 creates idx_frames_image_retention");
+
+        // The sweep query actually uses it (the whole point of the index).
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, captured_at, image_path, image_purged, app_hint FROM frames
+                 WHERE captured_at < 1 AND image_purged = 0
+                 ORDER BY captured_at ASC LIMIT 1",
+                [],
+                |r| r.get(3),
+            )
+            .expect("explain query plan");
+        assert!(
+            plan.contains("idx_frames_image_retention"),
+            "sweep must use the partial retention index, got plan: {plan}"
         );
     }
 }

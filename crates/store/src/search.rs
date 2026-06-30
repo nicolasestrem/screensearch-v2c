@@ -232,10 +232,11 @@ impl SqliteStore {
 
             // bulk-fetch frame context for every candidate
             let frames_sql = format!(
-                "SELECT id, captured_at, image_path, app_hint FROM frames WHERE id IN ({})",
+                "SELECT id, captured_at, image_path, image_purged, app_hint
+                 FROM frames WHERE id IN ({})",
                 placeholders(ids.len())
             );
-            let frames: HashMap<i64, (i64, String, Option<String>)> = conn
+            let frames: HashMap<i64, (i64, String, bool, Option<String>)> = conn
                 .prepare(&frames_sql)?
                 .query_map(params_from_iter(ids.iter()), |r| {
                     Ok((
@@ -243,7 +244,8 @@ impl SqliteStore {
                         (
                             r.get::<_, i64>(1)?,
                             r.get::<_, String>(2)?,
-                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, i64>(3)? != 0,
+                            r.get::<_, Option<String>>(4)?,
                         ),
                     ))
                 })?
@@ -272,7 +274,8 @@ impl SqliteStore {
             // assemble in fused (RRF) order; skip frames that vanished between arms
             let mut hits = Vec::with_capacity(fused.len());
             for (frame_id, score) in fused {
-                let Some((captured_at, image_path, app_hint)) = frames.get(&frame_id) else {
+                let Some((captured_at, image_path, image_purged, app_hint)) = frames.get(&frame_id)
+                else {
                     continue;
                 };
                 let snippet = match snippets.get(&frame_id) {
@@ -288,6 +291,7 @@ impl SqliteStore {
                     snippet,
                     score: score as f32,
                     image_path: image_path.clone(),
+                    image_purged: *image_purged,
                     app_hint: app_hint.clone(),
                 });
             }

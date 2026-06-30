@@ -8,6 +8,7 @@ import type { Readiness } from "../../bindings/Readiness";
 import type { JobStats } from "../../bindings/JobStats";
 import type { FrameDetail } from "../../bindings/FrameDetail";
 import type { FrameMeta } from "../../bindings/FrameMeta";
+import type { TextSpan } from "../../bindings/TextSpan";
 import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { SearchHit } from "../../bindings/SearchHit";
 import type { CaptureControl } from "../../bindings/CaptureControl";
@@ -49,6 +50,11 @@ export const listSidecarDevices = (): Promise<string[]> =>
 /** Full per-frame detail; `null` if the id is unknown. */
 export const getFrame = (frameId: number): Promise<FrameDetail | null> =>
   invoke<FrameDetail | null>("get_frame", { frameId });
+
+/** A frame's recognized text spans (normalized geometry + role), reading order. Backs
+ *  the Moment text+layout reconstruction shown when a screenshot has been degraded. */
+export const getFrameSpans = (frameId: number): Promise<TextSpan[]> =>
+  invoke<TextSpan[]>("get_frame_spans", { frameId });
 
 /** Hybrid search over OCR text + vectors, fused via RRF (`03 §7`). */
 export const search = (query: SearchQuery): Promise<SearchHit[]> =>

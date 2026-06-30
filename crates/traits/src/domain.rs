@@ -245,9 +245,13 @@ impl SuppressReason {
 }
 
 /// One OCR/UIA text span with normalized `[0,1]` geometry (`03 §3b`). Carried on
-/// [`OcrResult::spans`] and persisted to `text_spans` (`03 §4`). Internal — it never
-/// crosses the typed IPC boundary (`FrameDetail` surfaces only raw/content text).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// [`OcrResult::spans`] and persisted to `text_spans` (`03 §4`). Also surfaced over the
+/// typed IPC boundary by `get_frame_spans` so the UI can render a crisp text+layout
+/// **reconstruction** of a frame whose screenshot has been retention-degraded (the
+/// stored geometry + role is enough to redraw what was on screen — "text is enough" as
+/// durable proof).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct TextSpan {
     /// The recognized text, verbatim.
     pub text: String,
@@ -339,7 +343,8 @@ pub struct NewFrame {
     pub monitor_index: u32,
     pub width: u32,
     pub height: u32,
-    /// Relative path to the stored JPEG on disk.
+    /// Relative path to the stored capture image on disk (lossless WebP; legacy rows may
+    /// be `.jpg`).
     pub image_path: String,
     pub content_hash: String,
     pub app_hint: Option<String>,

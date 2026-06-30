@@ -1,5 +1,5 @@
 //! The always-on capture pipeline (`02 §5`, `03 §5`): pull a *changed* frame from
-//! the [`CaptureSource`], OCR it on full resolution, JPEG-encode it for storage,
+//! the [`CaptureSource`], OCR it on full resolution, lossless-WebP-encode it for storage,
 //! write `frames` + `ocr_text`, enqueue an `embed_text` job, and emit a
 //! `capture_tick`. This is the cheap half of the system; everything expensive is
 //! deferred to the job queue (consumed in P3+).
@@ -42,9 +42,11 @@ pub struct LoopCtx {
     /// `enrich.image_embeddings` — whether each stored frame also enqueues an
     /// `embed_image` job (optional visual recall, off by default).
     pub enrich_image_embeddings: bool,
-    /// `storage.jpeg_quality` (0–100).
+    /// `storage.jpeg_quality` (1–100). Inert for the lossless WebP encoder; kept so the
+    /// setting round-trips and a future lossy codec can use it without a wiring change.
     pub jpeg_quality: u8,
-    /// `storage.max_width` — JPEGs wider than this are downscaled (aspect kept).
+    /// `storage.max_width` — captures wider than this are downscaled (aspect kept);
+    /// `0` = native (no downscale), keeping ultra-wide captures legible.
     pub max_width: u32,
     /// PR3 attention-filter thresholds (`03 §8`), snapshotted at capture start (a
     /// runtime change applies on the next capture start, like the other capture/storage
@@ -97,13 +99,7 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
 
     let (rel_db_path, abs_path) =
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
-    write_jpeg(
-        frame.pixels.clone(),
-        abs_path,
-        ctx.max_width,
-        ctx.jpeg_quality,
-    )
-    .await?;
+    write_webp(frame.pixels.clone(), abs_path, ctx.max_width).await?;
 
     let frame_id = ctx
         .store
@@ -177,28 +173,25 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
 /// `captured_at` (unix-ms / 86_400_000) — no calendar dependency (recorded in `07`).
 fn image_paths(frames_dir: &std::path::Path, captured_at: i64, monitor: u32) -> (String, PathBuf) {
     let day = captured_at.div_euclid(86_400_000);
-    let rel_within = format!("day-{day}/{captured_at}-{monitor}.jpg");
+    let rel_within = format!("day-{day}/{captured_at}-{monitor}.webp");
     let abs = frames_dir.join(&rel_within);
     (format!("frames/{rel_within}"), abs)
 }
 
-/// Downscale to `max_width` (aspect-preserved) and JPEG-encode at `quality`,
-/// creating parent dirs. Runs on the blocking pool (CPU + file IO).
-async fn write_jpeg(
-    pixels: Arc<RgbaImage>,
-    path: PathBuf,
-    max_width: u32,
-    quality: u8,
-) -> Result<()> {
+/// Downscale to `max_width` (aspect-preserved; `0` = native, no downscale) and encode as
+/// **lossless WebP**, creating parent dirs. Lossless keeps text crisp (no JPEG ringing on
+/// an ultra-wide capture) and compresses flat UI well; the constant alpha of an opaque
+/// screen is dropped to RGB. Runs on the blocking pool (CPU + file IO). `storage_jpeg_quality`
+/// does not apply to the lossless encoder.
+async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Result<()> {
     tokio::task::spawn_blocking(move || -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let resized = maybe_resize(&pixels, max_width);
-        // JPEG has no alpha channel — drop it.
         let rgb = image::DynamicImage::ImageRgba8(resized).into_rgb8();
         let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
-        image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality).write_image(
+        image::codecs::webp::WebPEncoder::new_lossless(file).write_image(
             rgb.as_raw(),
             rgb.width(),
             rgb.height(),
@@ -209,7 +202,8 @@ async fn write_jpeg(
     .await?
 }
 
-/// Clone-and-resize to `max_width` if wider; otherwise clone as-is.
+/// Clone-and-resize to `max_width` if wider; otherwise clone as-is. `max_width == 0` means
+/// native resolution (no downscale).
 fn maybe_resize(pixels: &RgbaImage, max_width: u32) -> RgbaImage {
     if max_width == 0 || pixels.width() <= max_width {
         return pixels.clone();
@@ -222,4 +216,46 @@ fn maybe_resize(pixels: &RgbaImage, max_width: u32) -> RgbaImage {
         new_h,
         image::imageops::FilterType::Triangle,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{image_paths, maybe_resize};
+    use image::RgbaImage;
+    use std::path::Path;
+
+    /// Stored captures are WebP, sharded into per-day buckets by `captured_at`.
+    #[test]
+    fn image_paths_are_webp_and_day_sharded() {
+        let (rel, abs) = image_paths(Path::new("/data/frames"), 1_700_000_000_000, 0);
+        assert!(rel.starts_with("frames/day-"), "day-sharded: {rel}");
+        assert!(rel.ends_with(".webp"), "stored as webp: {rel}");
+        assert_eq!(abs.extension().and_then(|s| s.to_str()), Some("webp"));
+    }
+
+    /// `max_width == 0` is the native sentinel: an ultra-wide frame is stored at full
+    /// width so its text stays legible (the readability fix).
+    #[test]
+    fn native_max_width_zero_does_not_downscale() {
+        let img = RgbaImage::new(3440, 1440);
+        let out = maybe_resize(&img, 0);
+        assert_eq!((out.width(), out.height()), (3440, 1440));
+    }
+
+    /// A positive `max_width` below native downscales, preserving aspect ratio.
+    #[test]
+    fn positive_max_width_downscales_keeping_aspect() {
+        let img = RgbaImage::new(3440, 1440);
+        let out = maybe_resize(&img, 1720);
+        assert_eq!(out.width(), 1720);
+        assert_eq!(out.height(), 720, "aspect preserved (1720/3440 * 1440)");
+    }
+
+    /// A `max_width` at or above the frame width is a no-op (never upscales).
+    #[test]
+    fn max_width_at_or_above_native_is_noop() {
+        let img = RgbaImage::new(1280, 720);
+        let out = maybe_resize(&img, 4000);
+        assert_eq!((out.width(), out.height()), (1280, 720));
+    }
 }
