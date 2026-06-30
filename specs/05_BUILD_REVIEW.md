@@ -66,3 +66,22 @@ the archive-on-release convention, and close the two reachable open gaps.
 - `#43` is dev-only by construction (stripped from prod, proven by the `dist` grep); the documented
   per-route manual screenshot pass (`docs/DEV_STATE_OVERRIDE.md`) is the live acceptance and was not
   run headless here.
+
+### Follow-up — PR #60 review fix (`#43` prod-path correctness)
+Three reviewers (Codex P3, Gemini high, Claude bot) independently flagged the same real defect:
+`useMaybeOverride` called `useSearchParams()` **before** the `import.meta.env.DEV` guard. Because the
+helper is invoked from the production `queries.ts` call-site, that hook call is *not* tree-shaken — so
+release builds subscribed all 17 query consumers to router-history changes (extra re-renders on every
+client-side navigation), and coupled every global read query to a `<Router>` context (crash risk in
+hook usage outside a Router). The `dist` grep had only proven the `__devState` *string* was stripped,
+not the hook call.
+- **Fix:** drop `useSearchParams`; read `window.location.search` directly *inside* the DEV guard
+  (`ui/src/lib/dev/useDevStateOverride.ts`). The helper now calls **no** React hook, so the early
+  return makes the production path a plain `return result` identity — no subscription, no Router
+  coupling, and no Rules-of-Hooks concern (nothing conditional is a hook). `readDevState` already
+  accepted a raw `location.search` string (leading `?` handled by `URLSearchParams`). Doc + CHANGELOG
+  updated to state the stronger guarantee.
+- **Verification (verbatim):** `npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 1.55s` /
+  `BUILD_EXIT=0`; `grep -rl __devState dist/assets/` → **absent** (`GREP_EXIT=1`);
+  `grep -rl "dev: forced route error" dist/assets/` → **absent** (the whole override module, not just
+  the param string, is gone); `git diff --stat -- ui/src/bindings` → clean.

@@ -36,3 +36,14 @@
   (`✓ built in 1.81s`); `grep -rl __devState ui/dist/assets/` **absent** (prod tree-shake);
   `git diff --exit-code -- ui/src/bindings` clean; archived blocks diff **byte-identical** against
   `git HEAD`; all `#N` cross-references resolve live-or-archived.
+
+## 2026-06-30 — PR #60 review fix: dev override truly hook-free in prod (`#43`)
+- **Change:** `ui/src/lib/dev/useDevStateOverride.ts` now reads `window.location.search` inside the
+  `import.meta.env.DEV` guard instead of calling `useSearchParams()` above it. Doc + CHANGELOG updated.
+- **Why:** Codex/Gemini/Claude reviewers all caught that the pre-guard hook call survives tree-shaking
+  (the helper is on the production `queries.ts` path), so release builds subscribed all 17 query
+  consumers to router history and required a `<Router>` context. With no hook call, the production
+  helper folds to `return result`. No Rules-of-Hooks concern (nothing conditional is a hook).
+- **Verification:** `npm run lint` `EXIT 0`; `npm run build` `✓ built in 1.55s`;
+  `grep -rl __devState dist/assets/` **absent**; `grep -rl "dev: forced route error" dist/assets/`
+  **absent**; `git diff --stat -- ui/src/bindings` clean.

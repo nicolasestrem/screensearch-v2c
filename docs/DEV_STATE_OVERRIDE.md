@@ -73,8 +73,10 @@ with **real data** as noted.
   `UseQueryResult`. Type-correct against TanStack Query v5's discriminated result
   union (no `any`).
 - `ui/src/lib/dev/useDevStateOverride.ts` — `useMaybeOverride(result, queryKey)`.
-  Calls `useSearchParams()` unconditionally (Rules-of-Hooks safe), then returns
-  early in production via `import.meta.env.DEV`.
+  Returns early in production via `import.meta.env.DEV` (the first statement), then
+  reads `window.location.search` directly — it calls **no** React hooks, so the
+  production helper folds to a plain `return result` (no router subscription on the
+  17 query consumers) and the read queries never require a `<Router>` context.
 - `ui/src/lib/ipc/queries.ts` — every read hook ends with
   `return useMaybeOverride(q, queryKey)`. Mutations (`mutations.ts`) and the
   `useAsk` / `useReport` state machines are **not** wrapped.

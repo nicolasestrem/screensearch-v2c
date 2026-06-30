@@ -25,7 +25,10 @@ Brought the lean-logs convention current. v0.1.0 history was archived on 2026-06
 A dev-only `?__devState=loading|error` URL param forces any P5 route into its loading or error state
 for audit verification, applied centrally at the TanStack Query seam and **stripped from production
 builds** (`import.meta.env.DEV`). Empty/partial/populated stay driven by real data — no mocks in the
-production path. Documented in `docs/DEV_STATE_OVERRIDE.md`.
+production path. Documented in `docs/DEV_STATE_OVERRIDE.md`. Per PR #60 review, the helper reads
+`window.location.search` directly instead of `useSearchParams()`, so it calls no React hook: the
+production path truly folds to `return result` (no router-history subscription on the 17 query
+consumers, no `<Router>`-context coupling) rather than merely stripping the `__devState` string.
 
 ### Added — Privacy-safe VLM request logging (closes `07` #44)
 The kernel now logs `frame_id` + the relative capture path at `info` immediately before each vision
