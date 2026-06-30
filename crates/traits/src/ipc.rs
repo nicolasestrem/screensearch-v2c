@@ -53,6 +53,10 @@ pub struct SearchHit {
     pub snippet: String,
     pub score: f32,
     pub image_path: String,
+    /// `true` once this frame's screenshot has been retention-degraded — text proof kept,
+    /// image gone. Purged frames still match search (the text is preserved); the result
+    /// tile shows a "screenshot expired" state instead of a broken thumbnail.
+    pub image_purged: bool,
     pub app_hint: Option<String>,
 }
 
@@ -71,6 +75,10 @@ pub struct FrameMeta {
     pub captured_at: i64,
     pub image_path: String,
     pub app_hint: Option<String>,
+    /// `true` once this frame's screenshot has been retention-degraded — the JPEG/WebP
+    /// file is gone but the text proof remains (`storage.retention_days`). The UI shows a
+    /// "screenshot expired, text kept" state instead of a broken thumbnail.
+    pub image_purged: bool,
 }
 
 /// Input to the `ask` command. The answer streams back via request-scoped `answer_delta` events.
@@ -261,6 +269,10 @@ pub struct FrameDetail {
     pub width: u32,
     pub height: u32,
     pub image_path: String,
+    /// `true` once this frame's screenshot has been retention-degraded — the image file
+    /// is gone but the text proof (raw/content text + `text_spans`) remains. The Moment
+    /// view renders the layout reconstruction instead of the image (`storage.retention_days`).
+    pub image_purged: bool,
     pub app_hint: Option<String>,
     pub window_title: Option<String>,
     pub browser_url: Option<String>,
@@ -428,9 +440,15 @@ pub struct Settings {
     /// Empty = all monitors.
     pub capture_monitors: Vec<u32>,
     pub capture_diff_threshold: f32,
+    /// JPEG quality (1–100). Inert for the lossless WebP encoder used by the storage path
+    /// today; retained for the setting's stability and any future lossy codec.
     pub storage_jpeg_quality: u8,
+    /// Max stored-image width in px; the capture is downscaled (aspect kept) above it.
+    /// `0` = native (no downscale) — keeps ultra-wide captures legible.
     pub storage_max_width: u32,
-    /// 0 = keep forever.
+    /// Days to keep the *screenshot* before it degrades to text-only proof. The frame row
+    /// and its raw/content text + spans are always kept (they are the durable proof); only
+    /// the image file is removed. `0` = keep screenshots forever.
     pub storage_retention_days: u32,
     pub enrich_embed_text: bool,
     pub enrich_image_embeddings: bool,
@@ -614,8 +632,13 @@ impl Default for Settings {
             capture_monitors: Vec::new(),
             capture_diff_threshold: 0.006,
             storage_jpeg_quality: 80,
-            storage_max_width: 1280,
-            storage_retention_days: 0,
+            // 0 = capture at the monitor's native width (no downscale) — keeps ultra-wide
+            // captures legible; any positive value caps the stored image width.
+            storage_max_width: 0,
+            // Days to keep the *screenshot* before it degrades to text-only proof (the row
+            // + raw/content text + spans always survive). Non-zero by default so storage is
+            // bounded out of the box; 0 = keep screenshots forever.
+            storage_retention_days: 30,
             enrich_embed_text: true,
             enrich_image_embeddings: false,
             // Timed/idle vision enrichment are opt-in (off by default); on-demand is

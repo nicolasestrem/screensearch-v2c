@@ -81,8 +81,10 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 blake3 = "1"
 
-# imaging (capture/embeddings share the same image type)
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# imaging (capture/embeddings share the same image type). `webp` enables the lossless
+# WebP encoder (via image-webp, already in the tree) used by the capture storage path —
+# crisper than JPEG on text and no new C dependency.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 # in-process embeddings: fastembed (ONNX via `ort`, no Python — 01 §5, 03 §3).
 # 5.17 ships the `EmbeddingGemma300MQ` text variant (768-dim, quantized) and the

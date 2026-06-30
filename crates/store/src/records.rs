@@ -684,7 +684,8 @@ impl SqliteStore {
             let base = conn
                 .query_row(
                     "SELECT captured_at, monitor_index, width, height, image_path,
-                            app_hint, window_title, browser_url, activity_type, capture_trigger
+                            app_hint, window_title, browser_url, activity_type, capture_trigger,
+                            image_purged
                      FROM frames WHERE id = ?1",
                     params![frame_id],
                     |r| {
@@ -695,6 +696,7 @@ impl SqliteStore {
                             width: r.get(2)?,
                             height: r.get(3)?,
                             image_path: r.get(4)?,
+                            image_purged: r.get::<_, i64>(10)? != 0,
                             app_hint: r.get(5)?,
                             window_title: r.get(6)?,
                             browser_url: r.get(7)?,

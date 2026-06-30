@@ -24,6 +24,9 @@ export const queryKeys = {
   timeline: (range: TimeRange, bucketCount: number) => ["timeline", range, bucketCount] as const,
   framePrefix: ["frame"] as const,
   frame: (frameId: number) => ["frame", frameId] as const,
+  // A frame's text spans (for the text+layout reconstruction of a degraded capture).
+  frameSpansPrefix: ["frameSpans"] as const,
+  frameSpans: (frameId: number) => ["frameSpans", frameId] as const,
   // Frame *lists* (FrameMeta) — distinct from the singular `frame` detail above.
   // A new capture (`capture_tick`) invalidates every range/limit variant at once.
   framesPrefix: ["frames"] as const,

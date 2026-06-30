@@ -345,10 +345,15 @@ needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool
 settings after save. If image embeddings are newly enabled, the composition root reloads the
 FastEmbed provider with the optional image lane before workers claim `embed_image` jobs. Capture's
 enqueue decisions for new `embed_*` jobs are still captured when a capture session starts, so
-changing those toggles affects capture enqueueing on the next capture start. A
-`storage.retention_days` value of `0` means keep forever; any positive value is enforced by a
-startup and hourly sweeper that removes
-safe relative frame files first, then deletes their DB rows in bounded batches.
+changing those toggles affects capture enqueueing on the next capture start. Captures are stored as **lossless WebP** at `storage.max_width` (default `0` = native, no
+downscale — keeps ultra-wide text legible); `storage.jpeg_quality` is inert for the lossless encoder.
+`storage.retention_days` (default `30`) is a **degrade-to-text** window, not a hard delete: a startup
+and hourly sweeper removes the **screenshot file** of frames past the window and marks
+`frames.image_purged = 1`, but keeps the row + raw/content text + spans + embeddings as durable,
+searchable proof. The Moment view renders a text + layout reconstruction (from `text_spans`, via
+`get_frame_spans`) for degraded frames. Candidates are listed via `frames_with_image_older_than`
+(`image_purged = 0`) so each frame degrades exactly once; `0` keeps screenshots forever. (True
+full-delete, `delete_frame`, remains for the one-time self-capture purge.)
 
 ---
 
@@ -375,8 +380,9 @@ request id, and the UI ignores stale deltas.
 1. Resolve `<app-data>`; create `logs/`; init tracing (console + daily-rotating file).
 2. Open the store (`open_store`) → `db` readiness Ready / Error.
 3. Spawn the retention sweeper. It runs once at startup and then hourly, using
-   `storage.retention_days`, `frames_older_than`, `delete_frame`, and a containment-checked frame
-   path under `<app-data>/frames`.
+   `storage.retention_days`, `frames_with_image_older_than`, and a containment-checked frame path
+   under `<app-data>/frames`: it deletes the screenshot file then calls `purge_frame_image`
+   (degrade-to-text), keeping the row + text. `0` disables it.
 4. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
 5. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
    off-thread → `attach_embedder`: store embedder + embedder worker slot, `embed_model = Ready`,

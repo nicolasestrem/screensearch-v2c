@@ -155,7 +155,7 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
     )
     .await;
 
-    // every frame: row stored with OCR text + foreground context + a JPEG on disk.
+    // every frame: row stored with OCR text + foreground context + a WebP on disk.
     // content_text is a passthrough copy of raw_text in PR2 (03 §3b).
     for i in 0..3 {
         let id = i64::from(i) + 1;
@@ -166,8 +166,17 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
         assert!(detail.content_text.as_deref().unwrap().contains("ocr text"));
         assert_eq!(detail.raw_text, detail.content_text);
         assert!(
+            !detail.image_purged,
+            "freshly captured frame still has its image"
+        );
+        assert!(
+            detail.image_path.ends_with(".webp"),
+            "capture stored as WebP: {}",
+            detail.image_path
+        );
+        assert!(
             data_dir.join(&detail.image_path).exists(),
-            "jpeg should be written at {}",
+            "capture image should be written at {}",
             detail.image_path
         );
     }

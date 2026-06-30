@@ -14,6 +14,40 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-06-30 — Readable native-WebP captures + degrade-to-text retention (`feat/degrade-to-text-retention`)
+
+**Branch:** `feat/degrade-to-text-retention`. From a `/superpowers:brainstorming` design (plan
+approved): fix unreadable ultra-wide captures + unbounded storage, keep on-screen text as durable
+proof.
+
+### Implemented
+- **Native, lossless-WebP storage** — encoder JPEG→`WebPEncoder::new_lossless`, `.webp` extension,
+  `storage.max_width == 0` = native (new default); `image` `+webp` feature (no new C dep). Unit tests
+  for native/positive/no-op resize + `.webp` path (`crates/kernel/src/capture_loop.rs`).
+- **Degrade-to-text retention** — schema **v7** `frames.image_purged`; `frames_with_image_older_than`
+  + `purge_frame_image`; sweeper degrades instead of deletes (`src-tauri/src/lib.rs`). Store tests for
+  purge-keeps-text and candidate-exclusion; migration v7 test (default-present + CHECK).
+- **Proof surface** — `image_purged` on `FrameMeta`/`FrameDetail`/`SearchHit`; `get_frame_spans` +
+  exported `TextSpan`; new `FrameReconstruction` component; `FrameImage` "Text kept" state; Settings
+  native-width + retention copy.
+- **Verification (verbatim):** UI lint clean + `vite build ✓`; `cargo fmt --check` clean; `clippy
+  -D warnings` clean; `cargo test --workspace` all `ok`; binding guard clean after commit. **Live:**
+  `e2e_capture --ignored` → `captured + stored native WebP: 3440x1440` (real ultra-wide, decoded dims
+  == captured dims).
+
+### Skipped / deferred
+- DB-side growth pruning, lossy WebP/AVIF, and vision/`embed_image` on already-degraded frames — all
+  out of scope by user decision (`07` #73). `storage.jpeg_quality` is now inert (lossless encoder).
+
+### Still risky
+- New `storage.retention_days` default (30) auto-expires screenshots >30 days old on existing installs
+  (text always kept; set 0 to keep images forever) — called out in `CHANGELOG.md`.
+- The text+layout reconstruction quality depends on span coverage (graphical/photographic content has
+  no text to redraw); the full degrade→reconstruction cycle is covered by unit tests + UI build, not a
+  live 30-day run.
+
+---
+
 ## Pass — 2026-06-29 — Sidecar recycle valve (docs-only, `fix/vision-sidecar-rss-recycle`)
 
 **Branch:** `fix/vision-sidecar-rss-recycle`. Docs-only entry recording the upstream multimodal

@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tempfile = "3"
+# Used by the live e2e_capture test to decode the stored capture and assert it is a
+# valid, native-resolution WebP (no downscale). Test-only.
+image.workspace = true
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }

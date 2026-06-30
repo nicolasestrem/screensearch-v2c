@@ -522,7 +522,14 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.capture_interval_ms = clamp_u32(s.capture_interval_ms, 250, 3_600_000);
     s.capture_diff_threshold = clamp_f32(s.capture_diff_threshold, 0.0, 1.0);
     s.storage_jpeg_quality = clamp_u8(s.storage_jpeg_quality, 1, 100);
-    s.storage_max_width = clamp_u32(s.storage_max_width, 320, 7680);
+    // 0 = native (no downscale) — the capture path keeps the frame at the monitor's full
+    // width so ultra-wide captures stay legible. Any positive value is a real width ceiling
+    // clamped to a sane band (mirrors the `0 = auto` sentinels for sidecar ctx/recycle).
+    s.storage_max_width = if s.storage_max_width == 0 {
+        0
+    } else {
+        clamp_u32(s.storage_max_width, 320, 7680)
+    };
     s.storage_retention_days = clamp_u32(s.storage_retention_days, 0, 3650);
     s.enrich_worker_concurrency = clamp_u32(s.enrich_worker_concurrency, 1, 16);
     s.enrich_vision_timer_interval_ms =

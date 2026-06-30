@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 6;
+pub const LATEST_SCHEMA_VERSION: i32 = 7;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -38,6 +38,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (4, MIGRATION_V4),
     (5, MIGRATION_V5),
     (6, MIGRATION_V6),
+    (7, MIGRATION_V7),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -316,4 +317,16 @@ DROP INDEX IF EXISTS idx_frames_captured_at;
 DROP TABLE frames;
 ALTER TABLE frames_new RENAME TO frames;
 CREATE INDEX idx_frames_captured_at ON frames(captured_at);
+"#;
+
+/// v7 — degrade-to-text retention (`storage.retention_days`). Adds `frames.image_purged`:
+/// `0` while the screenshot is on disk, `1` once the retention sweep has deleted the image
+/// file but kept the row + `frame_text` + `text_spans` + embeddings as durable proof. A
+/// plain additive `ADD COLUMN` (no table rebuild): existing rows default to `0` ("image
+/// present"), and the `CHECK` mirrors the other closed-set columns so a future bug writing
+/// a bad value fails loudly. The retention sweep lists candidates via
+/// `frames_with_image_older_than` (`image_purged = 0`) so each frame degrades exactly once.
+const MIGRATION_V7: &str = r#"
+ALTER TABLE frames ADD COLUMN image_purged INTEGER NOT NULL DEFAULT 0
+  CHECK (image_purged IN (0,1));
 "#;

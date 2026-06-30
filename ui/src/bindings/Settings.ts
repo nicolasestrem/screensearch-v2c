@@ -19,9 +19,21 @@ export type Settings = { capture_interval_ms: number,
 /**
  * Empty = all monitors.
  */
-capture_monitors: Array<number>, capture_diff_threshold: number, storage_jpeg_quality: number, storage_max_width: number, 
+capture_monitors: Array<number>, capture_diff_threshold: number, 
 /**
- * 0 = keep forever.
+ * JPEG quality (1–100). Inert for the lossless WebP encoder used by the storage path
+ * today; retained for the setting's stability and any future lossy codec.
+ */
+storage_jpeg_quality: number, 
+/**
+ * Max stored-image width in px; the capture is downscaled (aspect kept) above it.
+ * `0` = native (no downscale) — keeps ultra-wide captures legible.
+ */
+storage_max_width: number, 
+/**
+ * Days to keep the *screenshot* before it degrades to text-only proof. The frame row
+ * and its raw/content text + spans are always kept (they are the durable proof); only
+ * the image file is removed. `0` = keep screenshots forever.
  */
 storage_retention_days: number, enrich_embed_text: boolean, enrich_image_embeddings: boolean, 
 /**

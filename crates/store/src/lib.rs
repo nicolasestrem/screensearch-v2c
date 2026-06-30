@@ -419,8 +419,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 6,
-            "v6 is the event-driven click/scroll-stop migration"
+            version, 7,
+            "latest schema is v7 (degrade-to-text retention adds frames.image_purged)"
         );
 
         let frame_rows: i64 = conn
@@ -478,6 +478,44 @@ mod migration_tests {
         assert_eq!(
             child_after, 0,
             "ON DELETE CASCADE must still fire after rebuild"
+        );
+    }
+
+    /// v7 adds `frames.image_purged` for degrade-to-text retention. An existing frame
+    /// (carried up from v5, through the v6 rebuild) must read back as `0` ("image
+    /// present"); the column must accept `1` and reject anything else via its CHECK.
+    #[test]
+    fn migration_v7_adds_image_purged_present_by_default() {
+        let mut conn = open_at_version(6);
+        conn.execute(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, capture_trigger)
+             VALUES (1, 100, 0, 10, 10, 'p', 'h', 'timer')",
+            [],
+        )
+        .expect("insert v6 frame");
+
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+
+        // Pre-existing row defaults to "image present".
+        let purged: i64 = conn
+            .query_row("SELECT image_purged FROM frames WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .expect("read image_purged");
+        assert_eq!(purged, 0, "existing frames keep their image (purged = 0)");
+
+        // The degrade write is accepted; a bogus value is rejected by the CHECK.
+        conn.execute("UPDATE frames SET image_purged = 1 WHERE id = 1", [])
+            .expect("marking image purged must satisfy the CHECK");
+        assert!(
+            conn.execute("UPDATE frames SET image_purged = 2 WHERE id = 1", [])
+                .is_err(),
+            "image_purged outside {{0,1}} must violate the CHECK"
         );
     }
 }

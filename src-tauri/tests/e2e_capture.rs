@@ -58,7 +58,7 @@ async fn capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     kernel.stop_capture().await;
 
-    // A frame was captured, OCR'd, and stored, with a JPEG on disk.
+    // A frame was captured, OCR'd, and stored, with a WebP on disk.
     let frame = store
         .get_frame(1)
         .await
@@ -66,9 +66,31 @@ async fn capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs() {
         .expect("at least one frame stored");
     assert!(frame.width > 0 && frame.height > 0);
     assert!(
-        tmp.path().join(&frame.image_path).exists(),
-        "jpeg written at {}",
+        !frame.image_purged,
+        "a freshly captured frame keeps its image"
+    );
+    let abs = tmp.path().join(&frame.image_path);
+    assert!(
+        frame.image_path.ends_with(".webp"),
+        "capture stored as WebP, got {}",
         frame.image_path
+    );
+    assert!(abs.exists(), "webp written at {}", frame.image_path);
+
+    // The stored file is a real, decodable WebP — and at NATIVE resolution (default
+    // storage.max_width = 0 → no downscale), so an ultra-wide capture stays legible. The
+    // decoded dimensions must equal the captured frame's.
+    let decoded = image::open(&abs).expect("stored capture decodes as a valid image");
+    eprintln!(
+        "captured + stored native WebP: {}x{} at {}",
+        decoded.width(),
+        decoded.height(),
+        frame.image_path
+    );
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (frame.width, frame.height),
+        "native capture is stored without downscaling"
     );
 
     // The frame_text row exists (raw/content text may be empty on a blank screen —

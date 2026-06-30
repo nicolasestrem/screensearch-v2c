@@ -4494,6 +4494,7 @@ dependencies = [
  "async-trait",
  "capture",
  "embeddings",
+ "image",
  "inference",
  "kernel",
  "ocr",

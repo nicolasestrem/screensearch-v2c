@@ -21,8 +21,8 @@ use traits::{
     CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
     JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
     ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
-    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, ThrottleStatus, TimeRange,
-    TimelineBucket, ToastLevel, VisionTarget,
+    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, TextSpan, ThrottleStatus,
+    TimeRange, TimelineBucket, ToastLevel, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -207,6 +207,22 @@ async fn get_frame(
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     store.get_frame(frame_id).await.map_err(|e| e.to_string())
+}
+
+/// All recognized text spans for a frame — normalized `[0,1]` geometry + classified role
+/// (`03 §3b`), in reading order. Backs the Moment view's text+layout **reconstruction**,
+/// the durable proof shown when a frame's screenshot has been retention-degraded
+/// (`storage.retention_days`). Empty when the frame has no spans.
+#[tauri::command]
+async fn get_frame_spans(
+    frame_id: i64,
+    state: State<'_, AppState>,
+) -> Result<Vec<TextSpan>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store.frame_spans(frame_id).await.map_err(|e| e.to_string())
 }
 
 /// Hybrid search over OCR text + (once embeddings exist) vectors, fused via RRF
@@ -1007,6 +1023,7 @@ pub fn run() {
             get_monitors,
             list_sidecar_devices,
             get_frame,
+            get_frame_spans,
             search,
             capture_control,
             enqueue_vision,
@@ -1380,7 +1397,12 @@ fn parse_sidecar_device_ids(output: &str) -> Vec<String> {
 async fn retention_sweeper(store: Arc<SqliteStore>, kernel: Arc<Kernel>, data_dir: PathBuf) {
     loop {
         match run_retention_once(store.clone(), kernel.clone(), &data_dir).await {
-            Ok(n) if n > 0 => tracing::info!(purged = n, "retention sweep purged captures"),
+            Ok(n) if n > 0 => {
+                tracing::info!(
+                    degraded = n,
+                    "retention sweep expired screenshots (text kept)"
+                )
+            }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "retention sweep failed"),
         }
@@ -1399,34 +1421,41 @@ async fn run_retention_once(
     }
     let retention_ms = i64::from(settings.storage_retention_days).saturating_mul(DAY_MS);
     let cutoff = now_ms().saturating_sub(retention_ms);
+    // Degrade-to-text retention: past the window we delete the screenshot file but KEEP the
+    // row + raw/content text + spans + embeddings as durable, searchable proof (the Moment
+    // view renders a text+layout reconstruction). Candidates exclude already-degraded frames
+    // so the sweep converges instead of re-listing text-only rows every hour.
     let candidates = store
-        .frames_older_than(cutoff, RETENTION_BATCH)
+        .frames_with_image_older_than(cutoff, RETENTION_BATCH)
         .await
         .map_err(|e| e.to_string())?;
-    let mut purged = 0_u64;
+    let mut degraded = 0_u64;
     for frame in candidates {
-        let image_path = safe_frame_path(data_dir, &frame.image_path);
-        if let Some(path) = image_path {
+        if let Some(path) = safe_frame_path(data_dir, &frame.image_path) {
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(path = %path.display(), error = %e, "retention could not delete frame file");
+                    // Leave image_purged=0 so a transient failure (AV/indexer sharing
+                    // violation) is retried next sweep instead of marking the row text-only
+                    // while its file lingers.
+                    tracing::warn!(path = %path.display(), error = %e, "retention could not delete frame image");
                     continue;
                 }
             }
         }
-        if let Err(e) = store.delete_frame(frame.frame_id).await {
-            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not delete frame from database");
+        if let Err(e) = store.purge_frame_image(frame.frame_id).await {
+            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not mark frame image purged");
             continue;
         }
-        purged += 1;
+        degraded += 1;
     }
-    if purged > 0 {
+    if degraded > 0 {
+        // Keep "retention" in the message — useLiveEvents refreshes storage stats on it.
         kernel.emit_toast(
             ToastLevel::Info,
-            format!("Retention purged {purged} old captures"),
+            format!("Retention expired {degraded} old screenshots (text kept)"),
         );
     }
-    Ok(purged)
+    Ok(degraded)
 }
 
 /// Settings watermark marking that the one-time self-capture purge has run.
@@ -1833,7 +1862,8 @@ Available devices:
             captured_at: 1_234,
             snippet: "snippet fallback".to_string(),
             score: 0.75,
-            image_path: "frames/42.jpg".to_string(),
+            image_path: "frames/42.webp".to_string(),
+            image_purged: false,
             app_hint: Some("Editor".to_string()),
         }];
 

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Storage — readable native-WebP captures + degrade-to-text retention
+Two coupled changes fix unreadable ultra-wide captures and unbounded storage growth, while keeping
+the on-screen *text* as durable, searchable proof forever.
+- **Readable captures.** `storage.max_width` now defaults to `0` = **native resolution** (no
+  downscale), and captures are stored as **lossless WebP** instead of downscaled JPEG. On an
+  ultra-wide this keeps text crisp where the old 1280 px JPEG crushed it 3–4×. Verified live: a real
+  capture stored a 3440×1440 native WebP. (`storage.jpeg_quality` is now inert — the lossless encoder
+  ignores it; the setting is kept for forward-compat. No new dependency: the WebP encoder ships in the
+  already-present `image-webp`.)
+- **Degrade-to-text retention.** `storage.retention_days` now defaults to **30** and its meaning
+  changed: past the window the sweep deletes only the **screenshot file** and keeps the frame's row +
+  raw/content text + spans + embeddings. Old captures stay fully searchable; the Moment view renders a
+  crisp **text + layout reconstruction** from the stored OCR/UIA spans (a new `get_frame_spans`
+  command + `FrameReconstruction` component) in place of the image. Previously retention hard-deleted
+  the whole capture. Schema v7 adds `frames.image_purged`; degraded frames show a "Text kept" state in
+  timeline/search/citation tiles. **Heads-up:** the new default auto-expires screenshots older than 30
+  days (text is always kept) — set "Keep screenshots (days)" to `0` to keep images forever.
+
 ### Ask — OCR hydration failures
 Ask now fails clearly before starting an answer stream if the bulk `ocr_texts` context hydration query fails, rather than silently falling back every retrieved frame to search snippets. Individual frames with no stored text still use their snippet after a successful hydration query; review follow-up keeps the regression test focused without a full `Store` fake, and hydration now moves each text out of the bulk-read map instead of cloning it per retrieved chunk.
 

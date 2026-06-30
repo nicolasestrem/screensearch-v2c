@@ -11,6 +11,41 @@
 
 ---
 
+## 2026-06-30 — Readable native-WebP captures + degrade-to-text retention (`feat/degrade-to-text-retention`)
+- **Change:** Fix unreadable ultra-wide captures and unbounded storage growth while keeping on-screen
+  text as durable, searchable proof.
+  1. **Native, lossless-WebP storage** (`crates/kernel/src/capture_loop.rs`, root `Cargo.toml`
+     `image` `+webp`): the storage encoder is now `image::codecs::webp::WebPEncoder::new_lossless`
+     and frames are written `.webp`; `storage.max_width == 0` (new default) means native resolution
+     (no downscale). `sanitize_settings` admits `0` as a native sentinel (`crates/kernel/src/settings.rs`).
+     No new C dependency — `image-webp 0.2.4` (lossless encoder) was already in the tree.
+  2. **Degrade-to-text retention** (schema **v7** `frames.image_purged`; `crates/store/src/frames.rs`
+     `frames_with_image_older_than` + `purge_frame_image`; `src-tauri/src/lib.rs` `run_retention_once`):
+     past `storage.retention_days` (new default **30**) the sweep deletes only the image file and keeps
+     the row + `frame_text` + `text_spans` + embeddings; candidates exclude already-degraded frames so
+     each frame degrades once. `delete_frame` stays for the self-capture purge.
+  3. **Proof when the image is gone:** `image_purged` on `FrameMeta`/`FrameDetail`/`SearchHit`; new
+     `get_frame_spans` command over the existing `SqliteStore::frame_spans`; `TextSpan` now exported via
+     ts-rs. New `FrameReconstruction` component draws spans (normalized geometry + role) as positioned
+     text in the Moment view for degraded frames; `FrameImage` shows a "Text kept" state in tile/search/
+     citation surfaces. Settings: native-width affordance + restated retention semantics (`RetentionControl`).
+- **Why:** User brainstorm (`docs/superpowers/specs/2026-06-30-*` / plan): proof = "text + layout is
+  enough", keep on-demand Vision usable (recent pixels), enable retention but keep text. The DB (~40% of
+  growth) and lossy/AVIF codecs are explicitly out of scope. `03 §5`/`§8` storage + retention.
+- **Verification (Windows, verbatim):**
+  - `cd ui && npm run lint` → clean (`eslint .`, no output).
+  - `npm run build` → `tsc --noEmit && vite build` → `✓ built in 2.09s` (408 modules).
+  - `cargo fmt --all -- --check` → clean.
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished` (no warnings).
+  - `cargo test --workspace` → all suites `ok` (store 49 incl. migration v7 + `purge_frame_image` +
+    `image_older_than_excludes_purged_and_recent`; kernel capture_loop native/webp resize tests).
+  - `git diff --exit-code -- ui/src/bindings` → clean after committing the regenerated bindings.
+  - **Live (this desktop, `cargo test -p screensearch --test e2e_capture -- --ignored`):**
+    `captured + stored native WebP: 3440x1440 at frames/day-20634/1782814402065-0.webp` — real
+    ultra-wide capture stored as a valid, native-resolution WebP (decoded dims == captured dims).
+
+---
+
 ## 2026-06-29 — PR #50 review fixes: recycle floors (explicit + auto) + apply-timing labels (`fix/vision-sidecar-rss-recycle`)
 - **Change:** Address three PR-review findings on the recycle valve.
   1. **Recycle-loop footgun (Claude bot).** Raised the explicit `sidecar.recycle_rss_mb` floor from
