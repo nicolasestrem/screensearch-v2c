@@ -854,6 +854,9 @@ pub fn run() {
         // focus the existing window and let the second process exit.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
+                // Restore a hidden / tray-minimized window *before* unminimize + focus —
+                // unminimize alone won't re-show a window that was `hide()`d to the tray.
+                let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
