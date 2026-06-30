@@ -39,6 +39,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const listboxId = "command-palette-listbox";
 
   const commands = useMemo<Command[]>(() => {
@@ -63,13 +64,21 @@ export function CommandPalette() {
     return q ? commands.filter((c) => c.label.toLowerCase().includes(q)) : commands;
   }, [commands, query]);
 
-  // Reset and focus the input each time the palette opens.
+  // Reset and focus the input each time the palette opens, and restore focus to the
+  // element that opened it (the ⌘K trigger, or wherever focus was when the hotkey
+  // fired) on close — modal focus best practice, so keyboard users aren't dropped to
+  // the top of the page.
   useEffect(() => {
     if (!open) return;
+    openerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setActive(0);
     const t = setTimeout(() => inputRef.current?.focus(), 0);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      openerRef.current?.focus();
+    };
   }, [open]);
 
   // Keep the active index within the (possibly shrunk) filtered list. Reset to 0
