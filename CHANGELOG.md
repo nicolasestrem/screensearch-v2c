@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Model-downloader resume hardening (two corruption/waste edge cases)
+Two narrow but real durability gaps in the parallel chunked model downloader
+(`crates/inference/src/download.rs`), neither previously test-covered:
+- **A truncated `.part` no longer publishes zeros (gap #69).** The resume bitmap was only discarded
+  when the downloader *created* a brand-new `.part`. If an external cleanup tool truncated an
+  existing `.part` without deleting it, `set_len` re-grew the file with zeros while a header-matching
+  bitmap still marked those (now-zero) chunks "done" — so the zero-filled ranges were published (the
+  length check passes; sha256 is skipped when the CDN advertises no `X-Linked-ETag`).
+  `open_preallocated` now reports a part as untrustworthy whenever its on-disk length is **below**
+  `total` (brand-new *or* truncated), forcing a full refetch. Safe for normal resumes: a legitimate
+  interrupted `.part` is always preallocated to exactly `total`, so it is never falsely discarded.
+- **A locked download re-checks the cache before re-downloading (PR #27 Codex-P2).** When another
+  live downloader holds hf-hub's per-blob advisory lock, the single-stream fallback backs off and
+  retries; it now re-checks the clean-layout and HF-cache fast paths **after each backoff**, so if
+  the holder finishes during the sleep the loser copies the finished blob into place instead of
+  re-downloading it or colliding on publish. The bounded backoff was extended (per-attempt cap + more
+  attempts → ~5 min total) so a real multi-GB download by the holder is outlasted rather than
+  abandoned after ~20 s, while the cache re-check exits the instant the holder is done.
+
 ### Fixed — Full-resolution frames overflowed the vision context (tagging failed + slow)
 Native full-resolution captures (e.g. a 3440×1440 ultra-wide frame → ~4148 vision tokens) exceeded
 the vision lane's pinned **4096**-token context, so `llama-server` rejected every tag with HTTP 400
