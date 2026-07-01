@@ -44,6 +44,15 @@
   `build_cache_request` now takes the view flag and `SetTreeFilter(Control|Raw ViewCondition)` in
   lock-step with the walker; control-view default unchanged. Verify: `fmt`/`clippy`/`cargo test -p uia`
   EXIT 0; live `--ignored` control-view path non-regressed (3×: 282 spans / 6316 chars / ~90 ms).
+  (3) **Don't cache field values before the privacy guard (Codex P2).** Caching `ValueValue` meant
+  `BuildUpdatedCache` prefetched every node's field value — including password/offscreen fields —
+  *before* `should_emit` runs, a visible-only/"password fields are never read" regression vs. the
+  pre-#71 live walk (which read `Value` only after the guard). Removed `ValueValue`/`ValuePattern`
+  from the batched cache; `extract_text` now reads `Value` **live** via `GetCurrentPattern`, and it is
+  only called after the guard passes — so a masked/hidden value is never fetched. `Name`/metadata stay
+  batched (the bulk of nodes are static text), and value-bearing inputs are a small live-read fraction.
+  Verify: `cargo fmt -p uia -- --check` EXIT 0; `cargo clippy -p uia --all-targets -- -D warnings`
+  EXIT 0; `cargo test -p uia` 16 passed/2 ignored; live `--ignored` walk yields text (4 spans / 30 chars).
 
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught

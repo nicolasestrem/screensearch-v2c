@@ -22,7 +22,7 @@ use windows::Win32::UI::Accessibility::{
     IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationTextPattern,
     IUIAutomationValuePattern, TreeScope_Element, UIA_BoundingRectanglePropertyId,
     UIA_ControlTypePropertyId, UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId,
-    UIA_NamePropertyId, UIA_TextPatternId, UIA_ValuePatternId, UIA_ValueValuePropertyId,
+    UIA_NamePropertyId, UIA_TextPatternId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic};
 
@@ -361,10 +361,11 @@ fn read_foreground(
 }
 
 /// Builds the `IUIAutomationCacheRequest` the walk's per-node `BuildUpdatedCache` uses to
-/// pre-fetch every property (and the `ValuePattern`) it reads per element, so the per-node
-/// loop reads `Cached*` getters in-process instead of making a cross-process COM call each
-/// (`07` #71). `_Full` element mode keeps a live backing so the cached `ValuePattern` is
-/// queryable and a document/editor's `TextPattern` visible ranges can still be read live.
+/// pre-fetch the metadata + `Name` it reads per element, so the per-node loop reads `Cached*`
+/// getters in-process instead of making a cross-process COM call each (`07` #71). The field
+/// *value* is intentionally excluded (read live, post-guard — see the value comment below).
+/// `_Full` element mode keeps a live backing so `GetCurrentPattern` for the live `ValuePattern`
+/// value and a document/editor's `TextPattern` visible ranges still work on the cached element.
 ///
 /// `control_view` must match the walk's navigation view (below): a cache request's `TreeFilter`
 /// defaults to the **control-view** condition, and "caching is performed only for elements that
@@ -385,11 +386,15 @@ fn build_cache_request(
         cache.AddProperty(UIA_IsPasswordPropertyId)?;
         cache.AddProperty(UIA_IsOffscreenPropertyId)?;
         cache.AddProperty(UIA_BoundingRectanglePropertyId)?;
-        cache.AddPattern(UIA_ValuePatternId)?;
-        // Caching a *pattern* does NOT cache its properties — `CachedValue()` reads the Value
-        // *property* (`UIA_ValueValuePropertyId`), so it must be added explicitly or the cached
-        // read fails and single-line edit content (URL bars, search/form inputs) is dropped.
-        cache.AddProperty(UIA_ValueValuePropertyId)?;
+        // The field *value* (`ValuePattern` / `UIA_ValueValuePropertyId`) is deliberately NOT
+        // cached here. `BuildUpdatedCache` pre-fetches every requested property for *every* walked
+        // node, so caching the value would pull a password/offscreen field's text into this
+        // process *before* the `should_emit` password/offscreen guard runs — breaking the crate's
+        // visible-only / "password fields are never read" guarantee. Instead `extract_text` reads
+        // the value **live** (`GetCurrentPattern(UIA_ValuePatternId)`), and it is only called after
+        // the guard passes, so a masked/hidden field's value is never fetched (parity with the
+        // pre-#71 live walk). Value-bearing inputs are a small fraction of nodes, so the live read
+        // costs little; the bulk static-text nodes still batch their `Name` above (`07` #71).
         // Keep the filter in the SAME view the walk navigates (control-view default drops raw-only
         // nodes from the cache — see the docstring). Control view is the default, but set it
         // explicitly so the two views stay visibly in lock-step.
@@ -416,11 +421,12 @@ fn build_cache_request(
 /// once the per-walk TextPattern cap is hit, so the costly live `TextPattern` probe is skipped
 /// and only `ValuePattern`/`Name` are read (`07` #71).
 ///
-/// The **Value** and **Name** are read from the client-side cache (`GetCachedPattern` /
-/// `CachedName`, populated by the walk's per-node `BuildUpdatedCache`) — no cross-process cost.
-/// Only the `TextPattern` visible ranges stay a live cross-process read: text ranges can't be
-/// cached (even a cached pattern object re-enters the provider on the range calls), so it is
-/// gated to document/editor controls and capped per walk.
+/// The **Name** is read from the client-side cache (`CachedName`, populated by the walk's per-node
+/// `BuildUpdatedCache`) — no cross-process cost. The **Value** and the `TextPattern` visible ranges
+/// stay live cross-process reads: both are deliberately uncached so a field's text is only fetched
+/// after `should_emit` clears the password/offscreen guard (the value would otherwise be prefetched
+/// for every node), and text ranges can't be cached anyway. `TextPattern` is further gated to
+/// document/editor controls and capped per walk; value-bearing inputs are a small fraction of nodes.
 fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<String> {
     // GetCurrent/CachedPattern returns Err when the pattern is unsupported (windows-rs maps the
     // documented S_OK+NULL result to E_POINTER), so each `if let Ok` cleanly skips.
@@ -458,11 +464,13 @@ fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<
                 }
             }
         }
-        // Cached ValuePattern value (inputs) — the pattern object was cached via `AddPattern`
-        // under `_Full` mode, so `CachedValue` reads in-process.
-        if let Ok(unknown) = elem.GetCachedPattern(UIA_ValuePatternId) {
+        // Live `ValuePattern` value (inputs). Read live — NOT from the cache — so a field's value
+        // is only ever fetched here, after `should_emit` cleared the password/offscreen guard;
+        // caching it would prefetch masked/hidden values for every node (see `build_cache_request`).
+        // `_Full` cache mode keeps the live backing, so `GetCurrentPattern` works on the cached elem.
+        if let Ok(unknown) = elem.GetCurrentPattern(UIA_ValuePatternId) {
             if let Ok(value_pattern) = unknown.cast::<IUIAutomationValuePattern>() {
-                if let Ok(bstr) = value_pattern.CachedValue() {
+                if let Ok(bstr) = value_pattern.CurrentValue() {
                     let s = bstr.to_string();
                     if !s.trim().is_empty() {
                         return Some(s);
