@@ -906,6 +906,10 @@ pub fn run() {
                         }
                         Err(e) => tracing::warn!(error = %e, "filter_version backfill failed"),
                     }
+                    // Then reclaim DB rows for frames already purged before per-line span
+                    // merging shipped (`07` #73a). After the backfill above, so any purged
+                    // frame still gets accurate content_text from its per-word spans first.
+                    merge_purged_spans_once(store.clone()).await;
                 });
             }
             let readiness = Readiness {
@@ -1426,9 +1430,10 @@ async fn run_retention_once(
     let retention_ms = i64::from(settings.storage_retention_days).saturating_mul(DAY_MS);
     let cutoff = now_ms().saturating_sub(retention_ms);
     // Degrade-to-text retention: past the window we delete the screenshot file but KEEP the
-    // row + raw/content text + spans + embeddings as durable, searchable proof (the Moment
-    // view renders a text+layout reconstruction). Candidates exclude already-degraded frames
-    // so the sweep converges instead of re-listing text-only rows every hour.
+    // row + raw/content text + embeddings as durable, searchable proof, and collapse the
+    // per-word `text_spans` to per-line (`07` #73a) so the DB shrinks too — the Moment view
+    // still renders a line-level text+layout reconstruction. Candidates exclude already-
+    // degraded frames so the sweep converges instead of re-listing text-only rows every hour.
     let candidates = store
         .frames_with_image_older_than(cutoff, RETENTION_BATCH)
         .await
@@ -1450,6 +1455,12 @@ async fn run_retention_once(
             tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not mark frame image purged");
             continue;
         }
+        // Shrink the DB too, not just disk: collapse the now-permanent per-word `text_spans`
+        // to per-line (`07` #73a). Non-fatal — a miss keeps the per-word rows and is caught by
+        // the one-time backfill; the FrameReconstruction stays intact (line-level layout).
+        if let Err(e) = store.merge_frame_spans_to_lines(frame.frame_id).await {
+            tracing::warn!(frame_id = frame.frame_id, error = %e, "retention: span merge failed (kept per-word)");
+        }
         degraded += 1;
     }
     if degraded > 0 {
@@ -1464,6 +1475,70 @@ async fn run_retention_once(
 
 /// Settings watermark marking that the one-time self-capture purge has run.
 const SELF_PURGE_KEY: &str = "maintenance.self_capture_purged";
+
+/// Settings watermark marking that the one-time per-word→per-line span merge for
+/// already-purged frames has run.
+const PURGED_SPANS_MERGED_KEY: &str = "maintenance.purged_spans_merged";
+
+/// One-time backfill (`07` #73a): collapse the per-word `text_spans` of frames that were
+/// retention-purged *before* per-line merging shipped down to per-line spans, reclaiming DB
+/// rows while keeping the `FrameReconstruction` intact. New purges are merged inline by the
+/// retention sweep; this drains the pre-existing backlog. Gated by [`PURGED_SPANS_MERGED_KEY`]
+/// so it runs once (a clean/fresh DB finds no purged frames and no-ops); cursor-batched so the
+/// connection is released between batches. The watermark is recorded only on a **clean** full
+/// drain — i.e. every listed frame was merged with no error — so any failure (a list error *or*
+/// a per-frame merge error, e.g. the DB briefly busy) leaves the watermark unset and the whole
+/// backfill retries next launch, mirroring `purge_self_captures`. The merge is idempotent, so
+/// re-running over already-merged frames is a harmless no-op-equivalent — only the still-per-word
+/// stragglers actually change — until the pass finally completes without a hiccup.
+async fn merge_purged_spans_once(store: Arc<SqliteStore>) {
+    if matches!(
+        store.get_setting(PURGED_SPANS_MERGED_KEY).await,
+        Ok(Some(_))
+    ) {
+        return;
+    }
+    let mut cursor = 0_i64;
+    let mut merged = 0_u64;
+    let mut clean_drain = true;
+    loop {
+        let batch = match store.purged_frame_ids(cursor, 256).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, "purged-span merge: list failed");
+                clean_drain = false;
+                break;
+            }
+        };
+        if batch.is_empty() {
+            break; // drained the backlog; `clean_drain` still reflects per-frame outcomes
+        }
+        for id in batch {
+            cursor = id; // advance past every listed frame so the scan always terminates
+            if let Err(e) = store.merge_frame_spans_to_lines(id).await {
+                tracing::warn!(frame_id = id, error = %e, "purged-span merge: frame failed (kept per-word)");
+                // A per-frame failure (not just a list failure) withholds the watermark so this
+                // frame is retried next launch instead of being permanently skipped (`07` #73a).
+                clean_drain = false;
+                continue;
+            }
+            merged += 1;
+        }
+    }
+    // Only watermark a fully clean drain: a list *or* per-frame failure retries the whole
+    // (idempotent) backfill next launch rather than stranding a straggler's per-word rows.
+    if clean_drain {
+        if let Err(e) = store.set_setting(PURGED_SPANS_MERGED_KEY, "1").await {
+            tracing::warn!(error = %e, "purged-span merge: could not record watermark");
+        }
+    }
+    if merged > 0 {
+        tracing::info!(
+            merged,
+            "merged per-word spans to per-line for purged frames (`07` #73a)"
+        );
+    }
+}
 
 /// One-time purge of the app's own previously-captured frames (PR3 audit,
 /// `docs/AUDIT_0.2.0_PR3_2026-06-26.md`). Before the self-window capture skip existed,
@@ -1843,6 +1918,92 @@ mod tests {
         assert!(safe_frame_path(&data, "../frames/100.jpg").is_none());
         assert!(safe_frame_path(&data, "screens/100.jpg").is_none());
         assert!(safe_frame_path(&data, "frames/../100.jpg").is_none());
+    }
+
+    /// `07` #73a one-time backfill: it merges every purged frame's per-word spans to per-line,
+    /// records the completion watermark on a clean drain, and short-circuits on re-run. (A fresh
+    /// store with no purged frames still watermarks — a clean, empty drain.)
+    #[tokio::test]
+    async fn merge_purged_spans_once_merges_backlog_then_watermarks_and_is_idempotent() {
+        fn word(text: &str, x: f32) -> traits::TextSpan {
+            traits::TextSpan {
+                normalized_text: traits::normalize_text(text),
+                text: text.to_string(),
+                source: traits::TextSource::Ocr,
+                role: traits::TextRole::Unknown,
+                x,
+                y: 0.0,
+                w: 0.1,
+                h: 0.05,
+                line_index: 0,
+                is_searchable: true,
+                suppress_reason: None,
+            }
+        }
+
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut ids = Vec::new();
+        for at in [1_000_i64, 2_000] {
+            let id = store
+                .insert_frame(traits::NewFrame {
+                    captured_at: at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{at}.jpg"),
+                    content_hash: format!("h{at}"),
+                    app_hint: None,
+                    window_title: None,
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+            store
+                .insert_ocr(
+                    id,
+                    traits::OcrResult {
+                        text: "hello world".to_string(),
+                        mean_confidence: -1.0,
+                        engine: "winrt".to_string(),
+                        spans: vec![word("hello", 0.0), word("world", 0.2)],
+                    },
+                )
+                .await
+                .unwrap();
+            store.purge_frame_image(id).await.unwrap();
+            ids.push(id);
+        }
+        // Pre: two per-word spans per purged frame.
+        for &id in &ids {
+            assert_eq!(store.frame_spans(id).await.unwrap().len(), 2);
+        }
+
+        merge_purged_spans_once(store.clone()).await;
+
+        // Post: one line span per frame; the clean drain recorded the watermark.
+        for &id in &ids {
+            assert_eq!(
+                store.frame_spans(id).await.unwrap().len(),
+                1,
+                "merged to one line"
+            );
+        }
+        assert_eq!(
+            store
+                .get_setting(PURGED_SPANS_MERGED_KEY)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1"),
+            "clean drain sets the completion watermark"
+        );
+
+        // Idempotent: a second run short-circuits on the watermark and leaves the spans untouched.
+        merge_purged_spans_once(store.clone()).await;
+        for &id in &ids {
+            assert_eq!(store.frame_spans(id).await.unwrap().len(), 1);
+        }
     }
 
     #[test]

@@ -17,6 +17,29 @@
 
 ---
 
+## 2026-07-01 — Degrade-to-text DB shrink: merge purged spans to lines (#73a) (`fix/degrade-to-text-db-growth`)
+- **Change:** Degrade-to-text retention now shrinks the DB too. For a purged frame, the per-word
+  `text_spans` are merged into per-line spans: new pure `merge_spans_to_lines` (group by `line_index`,
+  union bbox, join text, content-wins role/searchable) + store `merge_frame_spans_to_lines` (one
+  transaction). Wired into `run_retention_once` (after `purge_frame_image`, non-fatal) and a one-time
+  watermark-gated backfill `merge_purged_spans_once` (`maintenance.purged_spans_merged`) over the
+  pre-existing purged backlog, backed by new cursor-batched `store::purged_frame_ids`.
+- **Why:** `07` #73 (a). The DB (~40% of growth) didn't shrink on retention. `text_spans` are the
+  largest prunable artifact but power `FrameReconstruction` for purged frames (`MomentDetail.tsx`
+  renders it in place of the purged image), so they're **merged** (keeps a line-level reconstruction),
+  not pruned. Search is unaffected (FTS reads `content_text`; the vector arm reads `embeddings`).
+- **Review fix (CONFIRMED low):** `merge_purged_spans_once` set the completion watermark even when
+  individual frames failed to merge, diverging from the `purge_self_captures` retry pattern. Now a
+  `clean_drain` flag withholds the watermark on any list- or per-frame failure, so the idempotent
+  backfill retries next launch. Covered by a new `screensearch_lib` test.
+- **Verification — verbatim:** RED then GREEN across `merge_spans_to_lines` (4 unit),
+  `merge_frame_spans_to_lines_*` / `purged_frame_ids_*` (store integration), and
+  `merge_purged_spans_once_*` (`screensearch_lib`). Full CI: `npm run lint` EXIT 0 / `npm run build`
+  `✓ built in 1.54s`; `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace --all-targets --
+  -D warnings` EXIT 0 (1.39s); `cargo build --workspace` EXIT 0; `cargo test --workspace` all green,
+  0 failed (store 18 lib + 52 integration; `screensearch_lib` 8); `git diff --exit-code -- ui/src/bindings`
+  clean. Adversarial 3-lens review: 1 low finding, fixed.
+
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
   the first):

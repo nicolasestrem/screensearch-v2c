@@ -215,6 +215,29 @@ impl SqliteStore {
         .await
     }
 
+    /// Purged (retention-degraded) frame ids with `id > after`, ascending, up to `limit`.
+    /// Cursor-batched backing for the one-time span-merge backfill (`07` #73a): it drains the
+    /// pre-existing purged backlog (frames purged before per-word→per-line merging shipped)
+    /// one batch at a time, releasing the connection between batches. `limit == 0` → empty.
+    pub async fn purged_frame_ids(&self, after: i64, limit: u32) -> Result<Vec<i64>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM frames
+                 WHERE image_purged = 1 AND id > ?1
+                 ORDER BY id ASC
+                 LIMIT ?2",
+            )?;
+            let ids = stmt
+                .query_map(params![after, i64::from(limit)], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
+        .await
+    }
+
     /// Bounded retention candidates: frames older than `cutoff`, oldest first. The
     /// caller deletes the returned rows and their image files in small batches.
     pub async fn frames_older_than(&self, cutoff: i64, limit: u32) -> Result<Vec<FrameMeta>> {

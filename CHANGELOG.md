@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Expired screenshots now shrink the database too, not just disk (gap #73a)
+When a screenshot expires under retention, the app keeps a text + layout reconstruction of it. That
+reconstruction is drawn from per-word text positions, which are the biggest remaining database cost
+for old frames. Rather than delete them (which would blank out the reconstruction), the app now
+**merges each expired frame's words into per-line entries** — reclaiming roughly 80% of those rows
+while the reconstruction still reads correctly at the line level. Merging happens as frames expire,
+and a one-time pass on first launch cleans up frames that expired before this shipped. Search is
+unaffected. (Full-text and semantic search read separate stored text/vectors, not these positions.)
+
 ### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
 ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still
 called for an "Inno Setup installer + portable ZIP"; all nine live references (project intake,
