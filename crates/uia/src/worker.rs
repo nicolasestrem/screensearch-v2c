@@ -195,7 +195,7 @@ fn read_foreground(
     // soft deadline are checked between every node and sibling, so the walk always returns partial
     // text within budget on any tree shape. The one uncacheable cost — a document/editor's live
     // `TextPattern` visible ranges — stays live, gated, and capped.
-    let cache = build_cache_request(automation)?;
+    let cache = build_cache_request(automation, budget.control_view)?;
     // Control view (not raw view) is the load fix: a Chromium/Electron raw tree exposes one element
     // per inline text-run, so a long page or a large grid explodes into tens of thousands of nodes.
     // Control view collapses those to the elements that actually carry text. A clamped setting.
@@ -365,7 +365,18 @@ fn read_foreground(
 /// loop reads `Cached*` getters in-process instead of making a cross-process COM call each
 /// (`07` #71). `_Full` element mode keeps a live backing so the cached `ValuePattern` is
 /// queryable and a document/editor's `TextPattern` visible ranges can still be read live.
-fn build_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
+///
+/// `control_view` must match the walk's navigation view (below): a cache request's `TreeFilter`
+/// defaults to the **control-view** condition, and "caching is performed only for elements that
+/// appear in [that] view" (MS docs). So in raw-view mode (`capture.uia_view_control_only` off,
+/// walk uses `RawViewWalker`), a raw-only element the walker navigates to would get its requested
+/// properties skipped by the default filter — `Cached*` reads come back empty and its text is
+/// silently lost to OCR. Set the filter to the same view we walk in so every navigated node is
+/// eligible to cache (`07` #71).
+fn build_cache_request(
+    automation: &IUIAutomation,
+    control_view: bool,
+) -> Result<IUIAutomationCacheRequest> {
     // SAFETY: cache-request construction/config on the automation object on the COM thread.
     unsafe {
         let cache = automation.CreateCacheRequest()?;
@@ -379,6 +390,15 @@ fn build_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheR
         // *property* (`UIA_ValueValuePropertyId`), so it must be added explicitly or the cached
         // read fails and single-line edit content (URL bars, search/form inputs) is dropped.
         cache.AddProperty(UIA_ValueValuePropertyId)?;
+        // Keep the filter in the SAME view the walk navigates (control-view default drops raw-only
+        // nodes from the cache — see the docstring). Control view is the default, but set it
+        // explicitly so the two views stay visibly in lock-step.
+        let view_filter = if control_view {
+            automation.ControlViewCondition()?
+        } else {
+            automation.RawViewCondition()?
+        };
+        cache.SetTreeFilter(&view_filter)?;
         // `_Element` scope: cache only this element's own properties, not its descendants'.
         // Each `BuildUpdatedCache` call in the walk refreshes one element; its children are
         // walked separately, so we only need the element's own props here — that keeps every

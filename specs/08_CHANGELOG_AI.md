@@ -37,6 +37,13 @@
   `cargo test -p uia -- --ignored` passes **bounded** on a heavy window that timed out the bulk-fetch
   variants; `npm run tauri dev` captured `primary_source='uia'` Chrome frames (1186–1748 chars, omnibox
   URL present, no over-budget warnings).
+- **PR #68 review fixes (2026-07-01):** (1) reworded 7 stale `FindAllBuildCache` doc-comments to the
+  shipped `BuildUpdatedCache` design (comment-only). (2) **Raw-view cache filter** — a cache request's
+  `TreeFilter` defaults to control-view, so with `capture.uia_view_control_only` off the `RawViewWalker`
+  navigated to raw-only nodes whose properties the filter skipped (`Cached*` empty → text lost to OCR).
+  `build_cache_request` now takes the view flag and `SetTreeFilter(Control|Raw ViewCondition)` in
+  lock-step with the walker; control-view default unchanged. Verify: `fmt`/`clippy`/`cargo test -p uia`
+  EXIT 0; live `--ignored` control-view path non-regressed (3×: 282 spans / 6316 chars / ~90 ms).
 
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught

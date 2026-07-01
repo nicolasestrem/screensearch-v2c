@@ -58,6 +58,21 @@ required be **live-verified** (the walk path runs only in the `#[ignore]`d deskt
 - The walk path stays CI-dark by nature (needs a real desktop); the `#[ignore]`d test is the live gate.
   The granular design has the same boundedness profile as the long-shipped DFS, lowering the risk.
 
+### Review fixes — 2026-07-01 (PR #68)
+- **Stale doc-comments (5 bot-flagged + 2 adjacent).** Comments in `worker.rs`/`lib.rs`/`classify.rs`
+  still named the *rejected* `FindAllBuildCache` prototypes ("single-round-trip", "one tree level at a
+  time") instead of the shipped per-node `BuildUpdatedCache` walk. Reworded; comment-only.
+- **Raw-view cache filter (`chatgpt-codex-connector`, P2).** A cache request's `TreeFilter` defaults to
+  the **control-view** condition ("caching is performed only for elements that appear in the control
+  view" — MS docs). With `capture.uia_view_control_only` **off** the walk navigates via `RawViewWalker`,
+  so a raw-only node's requested properties were skipped by the default filter → `Cached*` empty →
+  text silently lost to OCR. Fix: `build_cache_request` now takes the view flag and calls
+  `SetTreeFilter(ControlViewCondition | RawViewCondition)` to stay in lock-step with the walker. The
+  control-view (default) path is unchanged — control view *is* the default filter, now set explicitly.
+  Verify: `fmt`/`clippy`/`cargo test -p uia` → EXIT 0; live `--ignored` control-view path non-regressed
+  (3× consecutive: **282 spans / 6316 chars / ~90 ms**, well inside the 300 ms ceiling). The raw-view
+  path is off-by-default and CI-dark like the rest of the walk; the fix is MS-doc-recommended.
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.
