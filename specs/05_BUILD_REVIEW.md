@@ -60,6 +60,37 @@ From a `/superpowers:brainstorming` design (plan approved): close reachable `07`
   under-count (bounded residual, `07` #8). Unobserved at the 10k-fixture scale; the ceiling is a tunable
   constant.
 
+### Review response — 2026-07-01 (PR #66, Codex P2 — count-capped escalation target)
+Codex flagged that for a **sparse** bounded window (fewer distinct embedded frames than `pool`) on a DB
+with more than `MAX_TIME_RANGE_KNN` vectors, neither the pool-fill (`ids.len() >= pool`) nor the
+exhaustion gate (`raw < k`) can ever fire, so every such query/report climbed to the 20 000 `k` ceiling
+even after already finding all in-window matches. Fixed by capping the escalation **target** at the
+count of distinct embedded frames actually in the window:
+- New `count_embedded_frames_in_range(conn, start, end, cap)` — an `EXISTS` semi-join, index-served
+  (`EXPLAIN QUERY PLAN` → `SEARCH fr USING COVERING INDEX idx_frames_captured_at` +
+  `SEARCH m EXISTS USING COVERING INDEX idx_embeddings_frame`), `LIMIT cap`-bounded so it stays O(pool)
+  even on a wide, densely-embedded window (the P2 addressed the residual per-query cost of an uncapped
+  count directly). `target = min(pool, count)`; `count == 0` skips the KNN entirely.
+- Extracted the loop into a pure, unit-testable `escalate_in_range_knn(pool, target, fetch)`.
+- TDD: 5 pure escalation unit tests (`escalating_knn_*`) written first — observed **3 red** (naive
+  single-pass: no escalation / no ceiling climb / no truncation) → green after the real loop; new
+  `count_embedded_frames_dedups_chunks_and_honors_cap` (distinct-frame count + `LIMIT` cap + empty
+  window); integration `sparse_time_window_returns_every_in_window_match`,
+  `dense_time_window_returns_the_pool_nearest_in_window_matches` (target caps to `pool`, nearest-first
+  preserved), `empty_time_window_returns_nothing_via_vector_arm`.
+- **Adversarial re-review (3-lens: target-correctness / SQL-race-index / edge-perf, refute-by-default
+  verify pass):** one **LOW** finding — the *uncapped* count's O(window) cost — which the `LIMIT` cap
+  above already resolves; no correctness findings.
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 2.28s` / exit 0
+- `cargo build --workspace` → `Finished … in 8.89s` / exit 0
+- `cargo test --workspace` → all suites **0 failed** (store 53 integration + 20 lib incl. the 5
+  escalation + count-cap unit tests)
+- `cargo test -p store --test perf -- --ignored` → `median = 27.3359ms, p95 = 65.8744ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.

@@ -47,6 +47,58 @@ fn candidate_pool(limit: usize) -> u32 {
     limit.saturating_mul(5).clamp(50, MAX_CANDIDATE_POOL) as u32
 }
 
+/// Runs the escalating time-window KNN. `fetch(k)` returns `(raw_row_count, in_range_frame_ids)`
+/// for the top-`k` KNN in distance order; this widens `k` geometrically until it has gathered
+/// `target` distinct in-range frames, the KNN exhausts the table (`raw < k`), or `k` reaches
+/// [`MAX_TIME_RANGE_KNN`], then returns the deduped in-range ids truncated to `pool`.
+fn escalate_in_range_knn(
+    pool: u32,
+    target: usize,
+    mut fetch: impl FnMut(u32) -> rusqlite::Result<(usize, Vec<i64>)>,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut k = pool;
+    loop {
+        let (raw, in_range) = fetch(k)?;
+        let mut ids = dedup_keep_order(in_range);
+        // Stop when the window's frames are all gathered (`target`, capped at the count of
+        // distinct embedded frames in the window), the KNN drained the table (`raw < k`), or
+        // `k` hit the ceiling. The `target` cap is what keeps a sparse window off the ceiling.
+        if ids.len() >= target || raw < k as usize || k >= MAX_TIME_RANGE_KNN {
+            ids.truncate(pool as usize);
+            return Ok(ids);
+        }
+        k = k
+            .saturating_mul(KNN_ESCALATION_FACTOR)
+            .min(MAX_TIME_RANGE_KNN);
+    }
+}
+
+/// Count of distinct **embedded** frames whose `captured_at` falls in `[start, end)`, **capped
+/// at `cap`**. This is the most in-range frames the KNN post-filter could ever return, so it caps
+/// the escalation target (`07` #8 review): a sparse window can't drag every query to
+/// [`MAX_TIME_RANGE_KNN`]. The caller only ever needs `min(pool, n)`, so the inner select is
+/// `LIMIT cap`-bounded — the count is O(`cap`) (≤ pool ≤ `MAX_CANDIDATE_POOL`) even on a wide,
+/// densely-embedded window, not O(frames-in-window) (`07` #8 review, P2 residual cost). Indexed
+/// via `idx_frames_captured_at` (range) + `idx_embeddings_frame` (the `EXISTS` semi-join).
+fn count_embedded_frames_in_range(
+    conn: &rusqlite::Connection,
+    start: i64,
+    end: i64,
+    cap: usize,
+) -> rusqlite::Result<usize> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT 1 FROM frames fr
+             WHERE fr.captured_at >= ?1 AND fr.captured_at < ?2
+               AND EXISTS (SELECT 1 FROM embeddings m WHERE m.frame_id = fr.id)
+             LIMIT ?3
+         )",
+        params![start, end, cap as i64],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n as usize)
+}
+
 /// Builds a safe FTS5 MATCH expression from free user text: each whitespace term
 /// is quoted (so FTS operators in the input can't inject), terms AND together.
 /// Returns `None` for blank input.
@@ -198,9 +250,14 @@ impl SqliteStore {
     /// time window. vec0 can't filter inside `MATCH`, so we fetch the `k` nearest vectors
     /// and post-filter the time window on the join. To avoid missing in-range matches that
     /// rank beyond the top-`pool` nearest (`07` #8), a bounded time range **escalates** `k`
-    /// geometrically until the pool fills with in-range hits, the vector table is exhausted
-    /// (the KNN returned `< k` rows), or `k` reaches [`MAX_TIME_RANGE_KNN`]. An unbounded
-    /// range keeps the single `k = pool` pass (the time filter is then a no-op).
+    /// geometrically until it has gathered its `target` in-range frames, the vector table is
+    /// exhausted (the KNN returned `< k` rows), or `k` reaches [`MAX_TIME_RANGE_KNN`]. The
+    /// `target` is capped at the count of distinct embedded frames actually in the window
+    /// (`07` #8 review): a **sparse** window — one with fewer embedded frames than `pool` —
+    /// then stops as soon as it has them all, instead of climbing to the ceiling on every
+    /// query when the DB holds more than [`MAX_TIME_RANGE_KNN`] vectors (neither the pool-fill
+    /// nor the exhaustion gate can fire in that case). An unbounded range keeps the single
+    /// `k = pool` pass (the time filter is then a no-op).
     async fn text_knn_in_range(
         &self,
         query: Vec<f32>,
@@ -212,6 +269,20 @@ impl SqliteStore {
         // A full `[i64::MIN, i64::MAX)` line means "no time filter": one pass, no escalation.
         let bounded = start != i64::MIN || end != i64::MAX;
         self.with_conn(move |conn| {
+            // Escalation target: for a bounded window, never chase more frames than the window
+            // holds — an indexed count of distinct in-window embedded frames, capped at `pool`
+            // (all we ever need is `min(pool, n)`). An empty window skips the KNN entirely; an
+            // unbounded window uses `pool` (single pass).
+            let target = if bounded {
+                let n = count_embedded_frames_in_range(conn, start, end, pool as usize)?;
+                if n == 0 {
+                    return Ok(Vec::new());
+                }
+                n // already == min(pool, distinct embedded frames in the window)
+            } else {
+                pool as usize
+            };
+
             // Return each KNN row's frame + capture time (distance order) and post-filter the
             // window in Rust, so we can see both the in-range count and the *raw* KNN row count
             // (the exhaustion signal — a KNN that returned `< k` rows has no more vectors).
@@ -224,9 +295,7 @@ impl SqliteStore {
                  JOIN frames fr ON fr.id = m.frame_id
                  ORDER BY knn.distance",
             )?;
-
-            let mut k = pool;
-            loop {
+            let mut fetch = |k: u32| -> rusqlite::Result<(usize, Vec<i64>)> {
                 let mut raw = 0_usize;
                 let mut in_range: Vec<i64> = Vec::new();
                 let rows = stmt.query_map(params![blob, k as i64], |r| {
@@ -239,23 +308,18 @@ impl SqliteStore {
                         in_range.push(frame_id);
                     }
                 }
-                let mut ids = dedup_keep_order(in_range);
+                Ok((raw, in_range))
+            };
 
-                // Stop when: no time filter (one pass); the pool is filled with in-range
-                // frames; the KNN exhausted the table (`raw < k`); or we hit the k ceiling.
-                if !bounded
-                    || ids.len() >= pool as usize
-                    || raw < k as usize
-                    || k >= MAX_TIME_RANGE_KNN
-                {
-                    ids.truncate(pool as usize);
-                    return Ok(ids);
-                }
-                // Widen and retry: a tight window buried in-range matches beyond the current k.
-                k = k
-                    .saturating_mul(KNN_ESCALATION_FACTOR)
-                    .min(MAX_TIME_RANGE_KNN);
+            if !bounded {
+                // No time filter: the pool nearest vectors are all in range, so one pass
+                // suffices (escalating could over-fetch when several vectors map to one frame).
+                let (_raw, in_range) = fetch(pool)?;
+                let mut ids = dedup_keep_order(in_range);
+                ids.truncate(pool as usize);
+                return Ok(ids);
             }
+            Ok(escalate_in_range_knn(pool, target, fetch)?)
         })
         .await
     }
@@ -399,6 +463,135 @@ mod tests {
             MAX_SEARCH_LIMIT,
             "an absurd limit clamps to the ceiling, never panics"
         );
+    }
+
+    /// `07` #8 review (P2): a *sparse* window — fewer distinct embedded frames than `pool` —
+    /// must stop as soon as it has gathered all of them, not climb to the k ceiling. Here the
+    /// mock KNN never exhausts (`raw == k` every pass) and never fills the pool, so only the
+    /// count-derived `target` can stop it. Without the target cap this ran a full 20k pass on
+    /// every sparse-window query/report.
+    #[test]
+    fn escalating_knn_stops_at_window_count_not_ceiling() {
+        let mut calls = 0;
+        let ids = escalate_in_range_knn(500, 2, |k| {
+            calls += 1;
+            Ok((k as usize, vec![10, 20])) // 2 in-range frames, KNN never exhausts
+        })
+        .unwrap();
+        assert_eq!(ids, vec![10, 20]);
+        assert_eq!(
+            calls, 1,
+            "a sparse window must not escalate past its own frame count"
+        );
+    }
+
+    /// Escalation still digs: when the in-range matches are buried beyond the first `k`, widen
+    /// (×`KNN_ESCALATION_FACTOR`) until `target` distinct in-range frames surface.
+    #[test]
+    fn escalating_knn_widens_until_target_reached() {
+        let mut calls = 0;
+        let ids = escalate_in_range_knn(50, 3, |k| {
+            calls += 1;
+            let found = if k <= 50 { vec![1] } else { vec![1, 2, 3] };
+            Ok((k as usize, found)) // raw == k → only the target gate can stop it
+        })
+        .unwrap();
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(
+            calls, 2,
+            "escalate once (50 → 400) to reach the buried matches"
+        );
+    }
+
+    /// A KNN that returns `< k` rows has no more vectors — stop even if `target` is unmet
+    /// (the window genuinely holds fewer embedded frames than the count suggested / a race).
+    #[test]
+    fn escalating_knn_stops_when_table_exhausted() {
+        let mut calls = 0;
+        let ids = escalate_in_range_knn(50, 10, |_k| {
+            calls += 1;
+            Ok((7, vec![1, 2])) // raw = 7 < k = 50 → exhausted; only 2 found
+        })
+        .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(calls, 1, "raw < k means the vector table is drained — stop");
+    }
+
+    /// Pathological: never exhausts, never reaches `target`. Escalation must terminate at
+    /// [`MAX_TIME_RANGE_KNN`] (50 → 400 → 3200 → 20000), never loop forever.
+    #[test]
+    fn escalating_knn_caps_at_the_k_ceiling() {
+        let mut ks = Vec::new();
+        let ids = escalate_in_range_knn(50, usize::MAX, |k| {
+            ks.push(k);
+            Ok((k as usize, vec![])) // nothing in range, never exhausts
+        })
+        .unwrap();
+        assert!(ids.is_empty());
+        assert_eq!(
+            ks,
+            vec![50, 400, 3_200, MAX_TIME_RANGE_KNN],
+            "geometric climb, capped"
+        );
+    }
+
+    /// The returned list is truncated to `pool`, nearest-first, even when the window holds
+    /// more in-range frames than the caller asked for.
+    #[test]
+    fn escalating_knn_truncates_to_pool() {
+        let ids = escalate_in_range_knn(3, 3, |k| Ok((k as usize, vec![1, 2, 3, 4, 5]))).unwrap();
+        assert_eq!(ids, vec![1, 2, 3], "never return more than the pool");
+    }
+
+    /// `07` #8 review (P2): the window-frame count is `LIMIT`-capped so it stays O(cap) on wide
+    /// windows. It counts *distinct* embedded frames (chunks deduped), honors the half-open
+    /// window, and never exceeds `cap`.
+    #[tokio::test]
+    async fn count_embedded_frames_dedups_chunks_and_honors_cap() {
+        let store = crate::SqliteStore::open_in_memory().unwrap();
+        let f1 = store.insert_frame(frame(100)).await.unwrap(); // in window, 2 chunks
+        let f2 = store.insert_frame(frame(150)).await.unwrap(); // in window, 1 chunk
+        let _f3 = store.insert_frame(frame(180)).await.unwrap(); // in window, NOT embedded
+        let f4 = store.insert_frame(frame(500)).await.unwrap(); // embedded, out of window
+
+        store
+            .with_conn(move |conn| {
+                for (fid, chunk) in [(f1, 0), (f1, 1), (f2, 0), (f4, 0)] {
+                    conn.execute(
+                        "INSERT INTO embeddings(frame_id, chunk_index, chunk_text, source, model, dim, content_hash)
+                         VALUES (?1, ?2, 't', 'ocr', 'm', 768, 'h')",
+                        params![fid, chunk],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Window [100, 200): f1 (2 chunks → counted once) + f2 = 2 distinct embedded frames;
+        // f3 has no embedding, f4 is out of window.
+        let n = store
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 10)?))
+            .await
+            .unwrap();
+        assert_eq!(
+            n, 2,
+            "distinct embedded frames, chunks deduped, un-embedded excluded"
+        );
+
+        // The `LIMIT` short-circuits — the caller only needs to know it reached the cap.
+        let capped = store
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 1)?))
+            .await
+            .unwrap();
+        assert_eq!(capped, 1, "the count is capped at `cap`");
+
+        // A window with no embedded frames counts zero (drives the KNN-skip fast path).
+        let empty = store
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 200, 300, 10)?))
+            .await
+            .unwrap();
+        assert_eq!(empty, 0, "no embedded frames in the window");
     }
 
     /// `include_chrome` searches `raw_text` via the raw FTS arm, independent of

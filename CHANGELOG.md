@@ -16,7 +16,13 @@ happened to rank just past the pool was silently missed. The vector arm now **wi
 adaptively** when a time range is set: it re-runs with a larger nearest-neighbour count until the pool
 fills with in-window matches or the index is exhausted. Unfiltered searches are unchanged. (sqlite-vec
 can't filter inside its nearest-neighbour query, so widening the pool is the fix.) Search latency stays
-well within budget (10k-frame fixture p95 ~80 ms, bar is 200 ms).
+well within budget (10k-frame fixture p95 ~66 ms, bar is 200 ms).
+Following review (PR #66, P2): the widening now stops as soon as it has gathered every embedded frame
+the window actually **holds**, bounded by a cheap, index-served count of in-window embedded frames
+(capped so it stays O(pool), not O(window)). Without that cap, a *sparse* window — one with fewer
+captures than the pool — on a database larger than the widening ceiling would have run the maximum
+20 000-neighbour pass on every query even after already finding all its matches. An empty window now
+skips the vector query entirely.
 
 ### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
 ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still

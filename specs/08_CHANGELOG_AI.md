@@ -34,6 +34,22 @@
   warnings` EXIT 0; `cargo build --workspace` EXIT 0; `cargo test --workspace` all green 0 failed; perf
   `p95 = 80.3555ms` < 200 ms; `git diff --exit-code -- ui/src/bindings` clean. Adversarial 3-lens review
   workflow: **no findings**.
+- **Review response (PR #66, Codex P2 — count-capped escalation target):** a *sparse* bounded window
+  (fewer distinct embedded frames than `pool`) on a DB with > `MAX_TIME_RANGE_KNN` vectors trips neither
+  the pool-fill nor the exhaustion gate, so it climbed to the 20 000 `k` ceiling on **every** query even
+  after finding all in-window matches. Now the escalation `target` is capped at
+  `count_embedded_frames_in_range(start, end, cap=pool)` — an index-served `EXISTS` semi-join
+  (`idx_frames_captured_at` range + `idx_embeddings_frame`), `LIMIT`-bounded so it stays O(pool) not
+  O(window) (resolves the reviewer's residual-cost concern). `target = min(pool, count)`; `count == 0`
+  skips the KNN. Loop extracted into pure `escalate_in_range_knn(pool, target, fetch)`. New tests:
+  5 `escalating_knn_*` unit tests (**3 observed red** on a naive single-pass first),
+  `count_embedded_frames_dedups_chunks_and_honors_cap`, and integration `sparse_/dense_/empty_time_window_*`.
+  Verbatim: `cargo test --workspace` all green **0 failed** (store 53 integration + 20 lib); `cargo fmt
+  --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo build --workspace`
+  all EXIT 0; perf `median = 27.3359ms, p95 = 65.8744ms` < 200 ms; bindings clean;
+  `EXPLAIN QUERY PLAN` → `COVERING INDEX idx_frames_captured_at` + `EXISTS … idx_embeddings_frame`.
+  Adversarial re-review (3-lens, refute-by-default verify): 1 **LOW** finding (uncapped-count cost)
+  already resolved by the `LIMIT`; no correctness findings.
 
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
