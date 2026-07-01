@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Semantic search could miss in-range results on tight time windows (gap #8)
+When a search combined a query with a narrow time filter, the vector (meaning-based) arm fetched a
+fixed pool of nearest matches and *then* dropped those outside the window — so an in-window match that
+happened to rank just past the pool was silently missed. The vector arm now **widens its search
+adaptively** when a time range is set: it re-runs with a larger nearest-neighbour count until the pool
+fills with in-window matches or the index is exhausted. Unfiltered searches are unchanged. (sqlite-vec
+can't filter inside its nearest-neighbour query, so widening the pool is the fix.) Search latency stays
+well within budget (10k-frame fixture p95 ~80 ms, bar is 200 ms).
+
 ### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
 ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still
 called for an "Inno Setup installer + portable ZIP"; all nine live references (project intake,

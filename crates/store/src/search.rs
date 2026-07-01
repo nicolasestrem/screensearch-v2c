@@ -25,6 +25,17 @@ const MAX_SEARCH_LIMIT: usize = 2_000;
 /// large report limit can't explode each arm's scan (UI search limits keep the pool small
 /// either way: `candidate_pool` only over-fetches `5×` the requested limit).
 const MAX_CANDIDATE_POOL: usize = 2_000;
+/// Vector-arm KNN escalation for time-windowed search (`07` #8). sqlite-vec can't filter
+/// inside `MATCH`, so a fixed `k = pool` KNN + time post-filter drops in-range matches that
+/// happen to rank beyond the top-`pool` nearest vectors. When a time range is set and the
+/// post-filter under-fills the pool, we re-run the KNN with a geometrically larger `k` until
+/// the pool fills, the vector table is exhausted, or `k` hits [`MAX_TIME_RANGE_KNN`].
+const KNN_ESCALATION_FACTOR: u32 = 8;
+/// Hard ceiling on the escalated KNN `k` (see [`KNN_ESCALATION_FACTOR`]). Bounds worst-case
+/// work for a pathologically tight window on a very large vector table; past it recall can
+/// still under-count (documented residual, `07` #8). Well above `MAX_CANDIDATE_POOL` so the
+/// escalation has real room to dig past a buried in-range match.
+const MAX_TIME_RANGE_KNN: u32 = 20_000;
 
 fn normalized_limit(limit: u32) -> usize {
     (limit as usize).clamp(1, MAX_SEARCH_LIMIT)
@@ -183,9 +194,13 @@ impl SqliteStore {
         .await
     }
 
-    /// Text-embedding cosine KNN, nearest-first, de-duped by frame, restricted to
-    /// the time window. (vec0 can't filter inside MATCH, so we over-fetch `pool`
-    /// vectors and post-filter on the join.)
+    /// Text-embedding cosine KNN, nearest-first, de-duped by frame, restricted to the
+    /// time window. vec0 can't filter inside `MATCH`, so we fetch the `k` nearest vectors
+    /// and post-filter the time window on the join. To avoid missing in-range matches that
+    /// rank beyond the top-`pool` nearest (`07` #8), a bounded time range **escalates** `k`
+    /// geometrically until the pool fills with in-range hits, the vector table is exhausted
+    /// (the KNN returned `< k` rows), or `k` reaches [`MAX_TIME_RANGE_KNN`]. An unbounded
+    /// range keeps the single `k = pool` pass (the time filter is then a no-op).
     async fn text_knn_in_range(
         &self,
         query: Vec<f32>,
@@ -194,23 +209,53 @@ impl SqliteStore {
         end: i64,
     ) -> Result<Vec<i64>> {
         let blob = f32_blob(&query);
+        // A full `[i64::MIN, i64::MAX)` line means "no time filter": one pass, no escalation.
+        let bounded = start != i64::MIN || end != i64::MAX;
         self.with_conn(move |conn| {
+            // Return each KNN row's frame + capture time (distance order) and post-filter the
+            // window in Rust, so we can see both the in-range count and the *raw* KNN row count
+            // (the exhaustion signal — a KNN that returned `< k` rows has no more vectors).
             let mut stmt = conn.prepare(
-                "SELECT m.frame_id FROM (
+                "SELECT fr.id, fr.captured_at FROM (
                      SELECT embedding_id AS vid, distance FROM embedding_vectors
                      WHERE embedding MATCH ?1 AND k = ?2 ORDER BY distance
                  ) knn
                  JOIN embeddings m ON m.id = knn.vid
                  JOIN frames fr ON fr.id = m.frame_id
-                 WHERE fr.captured_at >= ?3 AND fr.captured_at < ?4
                  ORDER BY knn.distance",
             )?;
-            let ids = stmt
-                .query_map(params![blob, pool as i64, start, end], |r| {
-                    r.get::<_, i64>(0)
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(dedup_keep_order(ids))
+
+            let mut k = pool;
+            loop {
+                let mut raw = 0_usize;
+                let mut in_range: Vec<i64> = Vec::new();
+                let rows = stmt.query_map(params![blob, k as i64], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                })?;
+                for row in rows {
+                    let (frame_id, captured_at) = row?;
+                    raw += 1;
+                    if captured_at >= start && captured_at < end {
+                        in_range.push(frame_id);
+                    }
+                }
+                let mut ids = dedup_keep_order(in_range);
+
+                // Stop when: no time filter (one pass); the pool is filled with in-range
+                // frames; the KNN exhausted the table (`raw < k`); or we hit the k ceiling.
+                if !bounded
+                    || ids.len() >= pool as usize
+                    || raw < k as usize
+                    || k >= MAX_TIME_RANGE_KNN
+                {
+                    ids.truncate(pool as usize);
+                    return Ok(ids);
+                }
+                // Widen and retry: a tight window buried in-range matches beyond the current k.
+                k = k
+                    .saturating_mul(KNN_ESCALATION_FACTOR)
+                    .min(MAX_TIME_RANGE_KNN);
+            }
         })
         .await
     }

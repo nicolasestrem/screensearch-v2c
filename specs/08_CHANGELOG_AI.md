@@ -17,6 +17,24 @@
 
 ---
 
+## 2026-07-01 — Vector-arm time-range recall: adaptive KNN escalation (#8) (`fix/vector-arm-time-range-recall`)
+- **Change:** `crates/store/src/search.rs::text_knn_in_range` now escalates the KNN `k` for time-windowed
+  search instead of running a single `k = pool` pass. A bounded `time_range` re-runs the cosine KNN with a
+  geometrically larger `k` (factor 8, ceiling 20 000) until the pool fills with in-range frames, the vector
+  table is exhausted (KNN returned `< k` rows), or the ceiling is hit; an unbounded range is unchanged
+  (one pass, the time filter a no-op). New constants `KNN_ESCALATION_FACTOR` / `MAX_TIME_RANGE_KNN`; the
+  time filter + frame de-dup moved from SQL into Rust so the loop can see the raw KNN row count (its
+  exhaustion signal). New test `vector_arm_finds_in_range_match_buried_beyond_pool` + `vec_at_angle` helper.
+- **Why:** `07` #8 — sqlite-vec 0.1.9 can't filter inside a KNN `MATCH` (0.1.10-alpha is broken), so the
+  old post-KNN time filter silently dropped in-range matches ranked beyond the top-`pool` nearest vectors
+  (recall under-count on tight windows). `03 §4/§13`.
+- **Verification — verbatim:** RED `vector_arm_finds_in_range_match_buried_beyond_pool` → `left: [] right: [56]`;
+  after fix `cargo test -p store` → `50 passed; 0 failed`. Full CI: `npm run lint` EXIT 0 / `npm run build`
+  `✓ built in 2.11s`; `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace --all-targets -- -D
+  warnings` EXIT 0; `cargo build --workspace` EXIT 0; `cargo test --workspace` all green 0 failed; perf
+  `p95 = 80.3555ms` < 200 ms; `git diff --exit-code -- ui/src/bindings` clean. Adversarial 3-lens review
+  workflow: **no findings**.
+
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
   the first):

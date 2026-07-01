@@ -20,6 +20,46 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-01 — Vector-arm time-range recall: adaptive KNN escalation (#8) (`fix/vector-arm-time-range-recall`)
+
+From a `/superpowers:brainstorming` design (plan approved): close reachable `07` gaps. First of three
+(then #73a, #71). TDD.
+
+### Implemented
+- **#8 — vector arm no longer misses in-range matches buried beyond the pool.** `text_knn_in_range`
+  (`crates/store/src/search.rs`) previously ran one KNN at `k = pool` then post-filtered the time
+  window on the join, silently dropping in-range vectors ranked beyond the top-`pool` nearest. Pushing
+  the filter into `MATCH` is impossible on sqlite-vec 0.1.9 (no in-KNN filtering; 0.1.10-alpha is
+  broken), so a **bounded** range now escalates `k` geometrically (`KNN_ESCALATION_FACTOR`=8, ceiling
+  `MAX_TIME_RANGE_KNN`=20 000) until the pool fills with in-range frames, the KNN exhausts the table
+  (returned `< k` rows), or `k` hits the ceiling; an **unbounded** range keeps the single `k = pool`
+  pass (the time filter is then a no-op). Wrote `vector_arm_finds_in_range_match_buried_beyond_pool`
+  first — 55 nearer out-of-window vectors bury the only in-window match at rank 56, past the `pool=50`
+  floor — observed **red** (`got []`, want `[56]`), then green after the fix. Added `vec_at_angle`
+  (graded cosine distances, unlike `one_hot`'s 0/1).
+- **Adversarial review clean.** A 3-lens workflow (loop-termination/bounds, semantic parity with the
+  old single-pass, exhaustion-signal + edge cases) returned **no findings**.
+
+### Verification (Windows, full CI sequence) — verbatim
+- `cd ui && npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 2.11s` / `BUILD_EXIT=0`
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 9.12s` / `CLIPPY_EXIT=0`
+- `cargo build --workspace` → `Finished … in 24.70s` / `BUILD_EXIT=0`
+- `cargo test --workspace` → all suites green, **0 failed** (store **50** integration incl. the new
+  test + 14 lib; traits 53; uia 16/2-ignored; sysmon 11; textfilter 12; kernel pipeline 6 / settings 6
+  / throttle 2; screensearch_lib 7; ocr 1; e2e/perf ignored)
+- `cargo test -p store --test perf -- --ignored` → `median = 31.3853ms, p95 = 80.3555ms` (< 200 ms bar)
+- `git diff --exit-code -- ui/src/bindings` → `BINDINGS_CLEAN_EXIT=0` (store-only change, no ts-rs types)
+
+### Skipped / deferred
+- Pushing the time filter into the KNN via a vec0 metadata/partition column — still blocked by
+  sqlite-vec 0.1.9 (documented in the `07` #8 row). The escalation is the schema-free close.
+
+### Still risky
+- A pathologically tight window on a very large vector table *past* the 20 000 `k` ceiling can still
+  under-count (bounded residual, `07` #8). Unobserved at the 10k-fixture scale; the ceiling is a tunable
+  constant.
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.

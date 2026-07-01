@@ -542,6 +542,72 @@ async fn hybrid_search_honors_time_range() {
     assert_eq!(hits[0].frame_id, recent);
 }
 
+/// Unit vector at angle `theta` (radians) in the (dim 0, dim 1) plane:
+/// `[cos θ, sin θ, 0, …]`. Cosine distance to the query `vec_at_angle(0.0)` grows
+/// monotonically with θ over `[0, π/2]`, so a series of increasing angles yields a
+/// deterministic KNN ordering with *graded* distances (unlike `one_hot`, whose only
+/// distances are ~0 and 1.0 — too coarse to rank a pool of near-neighbours).
+fn vec_at_angle(theta: f32) -> Embedding {
+    let mut v = vec![0.0_f32; EMBEDDING_DIM];
+    v[0] = theta.cos();
+    v[1] = theta.sin();
+    Embedding(v)
+}
+
+/// Regression for `07` #8: the vector arm must not miss an in-range match just because
+/// it is buried beyond the top-`pool` nearest vectors. We bury the *only* in-window
+/// vector-only match behind 55 nearer OUT-of-window vectors — more than the `pool = 50`
+/// floor — so a fixed-`k = pool` KNN + time post-filter fetches only out-of-window rows,
+/// drops them all, and returns nothing. Adaptive pool escalation must still surface it.
+#[tokio::test]
+async fn vector_arm_finds_in_range_match_buried_beyond_pool() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let query_vec = vec_at_angle(0.0);
+
+    // 55 out-of-window frames, each nearer to the query than the in-window one (rank 1..55).
+    // None contain the query term, so the FTS arm can't surface anything — the vector arm is
+    // the only path, isolating the recall behaviour under test.
+    for i in 1..=55 {
+        seed(
+            &store,
+            1_000 + i,
+            "filler noise unrelated",
+            Some(&vec_at_angle(0.001 * i as f32)),
+        )
+        .await;
+    }
+    // One in-window frame, farther than all 55 (rank 56 — beyond the k = 50 fetch), also
+    // vector-only (no query term in its text).
+    let in_range = seed(
+        &store,
+        55_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.060)),
+    )
+    .await;
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), query_vec);
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 1, // pool = max(1*5, 50) = 50; the in-window match sits at rank 56
+        time_range: Some(TimeRange {
+            start: 50_000,
+            end: 60_000,
+        }),
+        include_chrome: false,
+    };
+    let hits = store.hybrid_search(&q).await.unwrap();
+    let ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    assert_eq!(
+        ids,
+        vec![in_range],
+        "the in-window vector match must be found even when buried beyond the pool; got {ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn hybrid_search_respects_limit() {
     let store = SqliteStore::open_in_memory().unwrap();
