@@ -17,6 +17,27 @@
 
 ---
 
+## 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
+- **Change:** `crates/uia/src/worker.rs` — the foreground-window UIA walk now batches each node's ~5
+  separate `Current*` property reads into **one `BuildUpdatedCache`** call + cached getters
+  (`build_cache_request`: ControlType/Name/IsPassword/IsOffscreen/BoundingRectangle/ValueValue +
+  ValuePattern, `_Element` scope, `_Full` mode). Same walker DFS structure/bounds as the shipped code;
+  live `TextPattern` stays gated/capped; `Value`/`Name` read from the cache. ~2.5× fewer cross-process
+  COM calls per walk.
+- **Why:** `07` #71 efficiency lever (deferred from the 0.2.1 hang mitigation). The gap required live
+  verification. Two bulk-fetch designs were live-tested and **rejected** as unbounded: a single
+  `FindAllBuildCache(Subtree)` (~1.4 s on a large window) and a `FindAllBuildCache(Children)` BFS (a
+  single wide-node fetch overran the budget on VS Code-scale trees). The granular per-node
+  `BuildUpdatedCache` keeps small, deadline-interruptible calls — no wide-node cliff.
+- **Review fixes (3, adversarial):** cache the `ValueValue` property (else `CachedValue()` fails and
+  edit-field/omnibox text is silently dropped); descend past a `BuildUpdatedCache` failure (a transient
+  timeout must not prune a subtree); full coverage parity (descend into everything, like the old DFS).
+- **Verification — verbatim:** `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` EXIT 0; `cargo test --workspace` 0 failed (uia 16 + 2-ignored). Live:
+  `cargo test -p uia -- --ignored` passes **bounded** on a heavy window that timed out the bulk-fetch
+  variants; `npm run tauri dev` captured `primary_source='uia'` Chrome frames (1186–1748 chars, omnibox
+  URL present, no over-budget warnings).
+
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
   the first):

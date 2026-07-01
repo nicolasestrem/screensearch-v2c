@@ -18,8 +18,11 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern,
-    IUIAutomationValuePattern, UIA_TextPatternId, UIA_ValuePatternId,
+    AutomationElementMode_Full, CUIAutomation, IUIAutomation, IUIAutomation2,
+    IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationTextPattern,
+    IUIAutomationValuePattern, TreeScope_Element, UIA_BoundingRectanglePropertyId,
+    UIA_ControlTypePropertyId, UIA_IsOffscreenPropertyId, UIA_IsPasswordPropertyId,
+    UIA_NamePropertyId, UIA_TextPatternId, UIA_ValuePatternId, UIA_ValueValuePropertyId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic};
 
@@ -46,10 +49,10 @@ pub(crate) struct Request {
 }
 
 /// Hard caps so a pathological accessibility tree can't blow the latency budget or memory.
-/// (The node cap is now `budget.max_nodes`, a clamped setting — `07` #71.)
+/// (The node cap is `budget.max_nodes`, a clamped setting — `07` #71.)
 const MAX_DEPTH: u32 = 40;
 const MAX_SPANS: usize = 10_000;
-/// Upper bound on *pending* (pushed-but-not-yet-visited) elements. `MAX_NODES` only bounds
+/// Upper bound on *pending* (pushed-but-not-yet-visited) elements. `max_nodes` only bounds
 /// nodes popped; without this a single node with a huge sibling fan-out (virtualized
 /// lists/grids commonly expose tens of thousands) — or a malformed provider returning a
 /// *cyclic* sibling chain — could push unboundedly. Paired with the per-descent deadline
@@ -182,12 +185,20 @@ fn read_foreground(
 
     // SAFETY: ElementFromHandle on the foreground HWND; returns Err if it has no element.
     let root = unsafe { automation.ElementFromHandle(hwnd) }?;
-    // Control view (not raw view) is the load fix: a Chromium/Electron raw tree exposes one
-    // element per inline text-run, so a long page or a large grid (e.g. the qBittorrent web
-    // UI) explodes into tens of thousands of nodes — each a synchronous cross-process call
-    // that freezes the target's UI thread. Control view collapses those to the content/control
-    // elements that actually carry text, slashing node count while preserving the text we
-    // extract (Name / TextPattern visible ranges live on them). The view is a clamped setting.
+    // Granular DFS with **per-node cache batching** (`07` #71). The old DFS made ~5–8 separate
+    // synchronous cross-process COM calls PER NODE (one per property read, plus navigation), which
+    // is what froze heavy Chromium/Electron a11y trees. Here each node's properties (+ its
+    // `ValuePattern`) are fetched in ONE `BuildUpdatedCache` call and then read from the client
+    // cache in-process, cutting the per-node cost to ~1 property call + navigation. Unlike a single
+    // bulk `FindAllBuildCache(Subtree/Children)` pull — one *uninterruptible* call that overran the
+    // budget on a wide-node window (measured live) — every call here is small, and the node cap +
+    // soft deadline are checked between every node and sibling, so the walk always returns partial
+    // text within budget on any tree shape. The one uncacheable cost — a document/editor's live
+    // `TextPattern` visible ranges — stays live, gated, and capped.
+    let cache = build_cache_request(automation)?;
+    // Control view (not raw view) is the load fix: a Chromium/Electron raw tree exposes one element
+    // per inline text-run, so a long page or a large grid explodes into tens of thousands of nodes.
+    // Control view collapses those to the elements that actually carry text. A clamped setting.
     // SAFETY: *ViewWalker are property accessors returning the shared walker for that view.
     let walker = unsafe {
         if budget.control_view {
@@ -204,92 +215,101 @@ fn read_foreground(
     let mut spans: Vec<TextSpan> = Vec::new();
     let mut text = String::new();
     let mut line_index: u32 = 0;
+    // Live `TextPattern` reads are the one uncacheable, costliest UIA call; cap how many a single
+    // walk makes so a document-heavy page can't reopen the call storm (`07` #71).
+    let mut textpattern_calls: u32 = 0;
 
-    // Iterative DFS with an explicit stack (no recursion, no `.await`), bounded by node
-    // count, depth, span count, and the soft latency deadline checked every node.
+    // Iterative DFS with an explicit stack (no recursion, no `.await`), bounded by node count,
+    // depth, span count, and the soft latency deadline checked every node.
     let mut stack: Vec<(IUIAutomationElement, u32)> = vec![(root, 0)];
     let mut nodes: u32 = 0;
-    // Live `TextPattern` reads are the costliest UIA call and the one we can't cache; cap how
-    // many a single walk makes so a document-heavy page can't reopen the call storm (`07` #71).
-    let mut textpattern_calls: u32 = 0;
     while let Some((elem, depth)) = stack.pop() {
         if nodes >= budget.max_nodes || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
             break;
         }
         nodes += 1;
 
-        // Any property read can fail on a transient element; treat failures as "skip this
-        // element" rather than aborting the whole walk.
-        // SAFETY: property accessors on a live element on the COM thread.
-        let control_type = unsafe { elem.CurrentControlType() }
-            .map(|c| c.0)
-            .unwrap_or(0);
-        let is_password = unsafe { elem.CurrentIsPassword() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
-        let is_offscreen = unsafe { elem.CurrentIsOffscreen() }
-            .map(|b| b.as_bool())
-            .unwrap_or(false);
+        // ONE cross-process call fetches all of this node's properties (+ the `ValuePattern`)
+        // into a cached copy; every property read below is then in-process. On a transient
+        // failure (e.g. the per-call timeout firing on a busy provider) we skip only THIS node's
+        // own text — the descent below still runs, exactly as the old DFS did when a single
+        // property read failed, so one node's cache-build hiccup can't prune its whole subtree.
+        // SAFETY: BuildUpdatedCache on a live element on the COM thread.
+        if let Ok(cached) = unsafe { elem.BuildUpdatedCache(&cache) } {
+            // SAFETY: cached-property accessors on the freshly-cached element (in-process reads).
+            let control_type = unsafe { cached.CachedControlType() }
+                .map(|c| c.0)
+                .unwrap_or(0);
+            let is_password = unsafe { cached.CachedIsPassword() }
+                .map(|b| b.as_bool())
+                .unwrap_or(false);
+            let is_offscreen = unsafe { cached.CachedIsOffscreen() }
+                .map(|b| b.as_bool())
+                .unwrap_or(false);
 
-        if classify::should_emit(control_type, is_password, is_offscreen) {
-            // Only probe the live TextPattern on document/text controls and only while under
-            // the per-walk cap; everything else uses cached-free Name/Value (one fewer
-            // cross-process round-trip per non-text node — the bulk of a Chromium tree).
-            let allow_textpattern = classify::control_type_wants_textpattern(control_type)
-                && textpattern_calls < budget.max_textpattern_calls;
-            if allow_textpattern {
-                textpattern_calls += 1;
-            }
-            if let Some(raw) = extract_text(&elem, allow_textpattern) {
-                let trimmed = raw.trim();
-                if !trimmed.is_empty() {
-                    // SAFETY: bounding rect accessor; on failure the span gets a zero box.
-                    let (x, y, w, h) = match unsafe { elem.CurrentBoundingRectangle() } {
-                        Ok(r) => geometry::normalize_screen_rect(
-                            r.left,
-                            r.top,
-                            r.right,
-                            r.bottom,
-                            mon_origin,
-                            (req.width, req.height),
-                        ),
-                        Err(_) => (0.0, 0.0, 0.0, 0.0),
-                    };
-                    if within_target(target_rect, x, y, w, h) {
-                        let (words, next) = classify::split_words(trimmed, line_index);
-                        for (li, word) in words {
-                            spans.push(TextSpan {
-                                normalized_text: normalize_text(&word),
-                                text: word,
-                                source: TextSource::Uia,
-                                role: TextRole::Unknown,
-                                x,
-                                y,
-                                w,
-                                h,
-                                line_index: li,
-                                is_searchable: true,
-                                suppress_reason: None,
-                            });
-                        }
-                        if next > line_index {
-                            text.push_str(trimmed);
-                            text.push('\n');
-                            line_index = next;
+            if classify::should_emit(control_type, is_password, is_offscreen) {
+                // Only probe the live `TextPattern` on document/text controls and only under the
+                // per-walk cap; everything else uses the cached `Value`/`Name` (no round-trip).
+                let allow_textpattern = classify::control_type_wants_textpattern(control_type)
+                    && textpattern_calls < budget.max_textpattern_calls;
+                if allow_textpattern {
+                    textpattern_calls += 1;
+                }
+                if let Some(raw) = extract_text(&cached, allow_textpattern) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        // SAFETY: cached bounding rect; on failure the span gets a zero box.
+                        let (x, y, w, h) = match unsafe { cached.CachedBoundingRectangle() } {
+                            Ok(r) => geometry::normalize_screen_rect(
+                                r.left,
+                                r.top,
+                                r.right,
+                                r.bottom,
+                                mon_origin,
+                                (req.width, req.height),
+                            ),
+                            Err(_) => (0.0, 0.0, 0.0, 0.0),
+                        };
+                        if within_target(target_rect, x, y, w, h) {
+                            let (words, next) = classify::split_words(trimmed, line_index);
+                            for (li, word) in words {
+                                spans.push(TextSpan {
+                                    normalized_text: normalize_text(&word),
+                                    text: word,
+                                    source: TextSource::Uia,
+                                    role: TextRole::Unknown,
+                                    x,
+                                    y,
+                                    w,
+                                    h,
+                                    line_index: li,
+                                    is_searchable: true,
+                                    suppress_reason: None,
+                                });
+                            }
+                            if next > line_index {
+                                text.push_str(trimmed);
+                                text.push('\n');
+                                line_index = next;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Descend: push every child (bounded depth). Compute each next sibling before
-        // moving the current child onto the stack so no element is cloned. The caps are
-        // re-checked *inside* this loop: a single node can have a massive sibling fan-out,
-        // and a malformed provider can return a cyclic sibling chain (`GetNextSiblingElement`
-        // never yielding `None`), so the once-per-pop outer checks alone don't bound it. The
-        // deadline check here is what stops a cycle from spinning the COM thread forever.
+        // Descend: push every child (bounded depth) — navigating the live element via the walker.
+        // Runs for EVERY node, even one whose `BuildUpdatedCache` failed above: the lighter
+        // single-hop navigation calls can succeed where a batched property fetch timed out, so a
+        // transient cache-build failure must not drop the node's descendants (old-DFS parity).
+        // Compute each next sibling before moving the current child onto the stack so no element is
+        // cloned. The caps are re-checked *inside* this loop: a single node can have a massive
+        // sibling fan-out, and a malformed provider can return a cyclic sibling chain
+        // (`GetNextSiblingElement` never yielding `None`), so the once-per-pop outer checks alone
+        // don't bound it. Each navigation call is small and interruptible, so the deadline check
+        // here reliably stops a cycle or huge fan-out from spinning the COM thread past the budget.
         if depth < MAX_DEPTH {
-            // SAFETY: tree-walk accessors; Err just means "no (further) child".
+            // SAFETY: tree-walk accessors on the live element; Err just means "no (further) child".
             if let Ok(first) = unsafe { walker.GetFirstChildElement(&elem) } {
                 let mut child = first;
                 loop {
@@ -340,16 +360,51 @@ fn read_foreground(
     })
 }
 
+/// Builds the `IUIAutomationCacheRequest` the walk's single `FindAllBuildCache` uses to
+/// pre-fetch every property (and the `ValuePattern`) it reads per element, so the per-node
+/// loop reads `Cached*` getters in-process instead of making a cross-process COM call each
+/// (`07` #71). `_Full` element mode keeps a live backing so the cached `ValuePattern` is
+/// queryable and a document/editor's `TextPattern` visible ranges can still be read live.
+fn build_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
+    // SAFETY: cache-request construction/config on the automation object on the COM thread.
+    unsafe {
+        let cache = automation.CreateCacheRequest()?;
+        cache.AddProperty(UIA_ControlTypePropertyId)?;
+        cache.AddProperty(UIA_NamePropertyId)?;
+        cache.AddProperty(UIA_IsPasswordPropertyId)?;
+        cache.AddProperty(UIA_IsOffscreenPropertyId)?;
+        cache.AddProperty(UIA_BoundingRectanglePropertyId)?;
+        cache.AddPattern(UIA_ValuePatternId)?;
+        // Caching a *pattern* does NOT cache its properties — `CachedValue()` reads the Value
+        // *property* (`UIA_ValueValuePropertyId`), so it must be added explicitly or the cached
+        // read fails and single-line edit content (URL bars, search/form inputs) is dropped.
+        cache.AddProperty(UIA_ValueValuePropertyId)?;
+        // `_Element` scope: cache only each returned element's own properties. The walk fetches
+        // one tree *level* at a time via `FindAllBuildCache(TreeScope_Children, …)`, so it needs
+        // each child's props but not (yet) its descendants' — that keeps every fetch bounded to
+        // one level instead of an unbounded whole-subtree pull.
+        cache.SetTreeScope(TreeScope_Element)?;
+        cache.SetAutomationElementMode(AutomationElementMode_Full)?;
+        Ok(cache)
+    }
+}
+
 /// Extracts an element's text via the priority ladder: `TextPattern` **visible** ranges
 /// (documents/editors — viewport text only, never the scrolled-off document) → `ValuePattern`
 /// current value (inputs) → `Name` (labels, buttons, list items). Returns `None` when the
 /// element exposes no non-empty text. `allow_textpattern` is `false` for non-text controls and
 /// once the per-walk TextPattern cap is hit, so the costly live `TextPattern` probe is skipped
 /// and only `ValuePattern`/`Name` are read (`07` #71).
+///
+/// The **Value** and **Name** are read from the client-side cache (`GetCachedPattern` /
+/// `CachedName`, populated by the walk's single `FindAllBuildCache`) — no cross-process cost.
+/// Only the `TextPattern` visible ranges stay a live cross-process read: text ranges can't be
+/// cached (even a cached pattern object re-enters the provider on the range calls), so it is
+/// gated to document/editor controls and capped per walk.
 fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<String> {
-    // GetCurrentPattern returns Err when the pattern is unsupported (windows-rs maps the
+    // GetCurrent/CachedPattern returns Err when the pattern is unsupported (windows-rs maps the
     // documented S_OK+NULL result to E_POINTER), so each `if let Ok` cleanly skips.
-    // SAFETY: pattern/text accessors on a live element on the COM thread.
+    // SAFETY: pattern/text accessors on the COM thread; cached getters read the client cache.
     unsafe {
         if allow_textpattern {
             if let Ok(unknown) = elem.GetCurrentPattern(UIA_TextPatternId) {
@@ -383,9 +438,11 @@ fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<
                 }
             }
         }
-        if let Ok(unknown) = elem.GetCurrentPattern(UIA_ValuePatternId) {
+        // Cached ValuePattern value (inputs) — the pattern object was cached via `AddPattern`
+        // under `_Full` mode, so `CachedValue` reads in-process.
+        if let Ok(unknown) = elem.GetCachedPattern(UIA_ValuePatternId) {
             if let Ok(value_pattern) = unknown.cast::<IUIAutomationValuePattern>() {
-                if let Ok(bstr) = value_pattern.CurrentValue() {
+                if let Ok(bstr) = value_pattern.CachedValue() {
                     let s = bstr.to_string();
                     if !s.trim().is_empty() {
                         return Some(s);
@@ -393,7 +450,8 @@ fn extract_text(elem: &IUIAutomationElement, allow_textpattern: bool) -> Option<
                 }
             }
         }
-        if let Ok(bstr) = elem.CurrentName() {
+        // Cached Name (labels, buttons, list items).
+        if let Ok(bstr) = elem.CachedName() {
             let s = bstr.to_string();
             if !s.trim().is_empty() {
                 return Some(s);

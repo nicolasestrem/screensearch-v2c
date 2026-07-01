@@ -20,6 +20,44 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
+
+From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`
+#71 hang was already mitigated in 0.2.1; this closes the deferred **efficiency lever**, which the gap
+required be **live-verified** (the walk path runs only in the `#[ignore]`d desktop test — CI-dark).
+
+### Implemented — design shaped by live verification
+- **Rejected `FindAllBuildCache(TreeScope_Subtree)`** — one uninterruptible fetch; measured **~1.4 s**
+  on a large window, blew the hard timeout → OCR fallback. Live test caught it (would have shipped a
+  regression).
+- **Rejected `FindAllBuildCache(TreeScope_Children)` BFS** — 8× fewer calls and great on Chrome
+  (98 fetches, 63 ms), but a single **wide-node** child fetch still overran the budget on a VS Code-
+  scale window (429 spans, 924 ms full; timed out at 150 ms budget). Live test caught it.
+- **Shipped: granular DFS + per-node `BuildUpdatedCache`** (user-chosen). Same walker navigation as the
+  shipped DFS (small, deadline-interruptible calls; `MAX_DEPTH`/`MAX_STACK` restored), but each node's
+  ~5 `Current*` reads collapse into **one `BuildUpdatedCache`** + cached getters (~2.5× fewer COM
+  calls). `TextPattern` stays live/gated/capped; `Value`/`Name` from the cache.
+- **Three adversarial-review defects fixed** (7-agent + 6-agent reviews): (1) cache the `ValueValue`
+  *property* — caching the pattern object alone leaves `CachedValue()` failing, silently dropping
+  edit-field text (URL/omnibox, search boxes); (2) a text control past the `TextPattern` cap is
+  descended so its children's text isn't lost (moot in the final DFS — it descends into everything);
+  (3) a `BuildUpdatedCache` failure skips only that node's text but **still descends** (a transient
+  timeout must not prune a whole subtree — old-DFS parity).
+
+### Verification — verbatim
+- `cargo fmt --all -- --check` → EXIT 0; `cargo clippy --workspace --all-targets -- -D warnings` → EXIT 0
+- `cargo test --workspace` → all green, **0 failed** (uia 16 + 2-ignored; store/traits/kernel/etc.)
+- **`cargo test -p uia -- --ignored`** (real desktop) → passes **bounded** (312 ms on a heavy window
+  that timed out the bulk-fetch variants; 103 ms on a light one), spans normalized + `TextSource::Uia`.
+- **Live `npm run tauri dev`** (`RUST_LOG=info,uia=debug`, real captures): DB `frame_text.primary_source
+  = 'uia'` on **Chrome** frames (1186–1748 chars); every UIA Chrome frame's `content_text` contains a
+  URL (omnibox `ValuePattern` — the Finding-1 fix); **no over-budget warnings, no COM errors**; thin/
+  gated frames fall to OCR as designed.
+
+### Still risky
+- The walk path stays CI-dark by nature (needs a real desktop); the `#[ignore]`d test is the live gate.
+  The granular design has the same boundedness profile as the long-shipped DFS, lowering the risk.
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.

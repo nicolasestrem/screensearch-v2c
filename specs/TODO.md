@@ -6,9 +6,16 @@
 
 ---
 
-## TODO-1 — UIA `FindAllBuildCache` cached single-round-trip walk (deferred from `fix/uia-chromium-hang`, `07` #71)
+## TODO-1 — UIA cached walk (deferred from `fix/uia-chromium-hang`, `07` #71)
 
-**Status:** OPEN. Planned, API-verified, **not implemented**. Needs a real Windows desktop to verify.
+**Status: ✅ RESOLVED (2026-07-01, `fix/uia-findall-buildcache`).** Live verification rejected the
+`FindAllBuildCache(Subtree)` single-round-trip design below (one uninterruptible ~1.4 s fetch overran
+the budget) **and** a `FindAllBuildCache(Children)` BFS (a single wide-node fetch overran on VS Code-
+scale trees). Shipped instead: a granular DFS that keeps the old walker navigation but batches each
+node's property reads into one **`BuildUpdatedCache`** call (~2.5× fewer COM calls, same boundedness).
+See `07` #71 / `05` / `08`. The original single-round-trip write-up below is kept for history.
+
+**(historical)** Planned, API-verified, not-yet-implemented single-round-trip design:
 
 ### Why it's deferred (read this first)
 The Chromium/Electron UIA-hang fix shipped in PR #48 as a mitigation: don't walk on scroll/click,
