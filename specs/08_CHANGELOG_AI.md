@@ -21,9 +21,10 @@
 - **Change:** Degrade-to-text retention now shrinks the DB too. For a purged frame, the per-word
   `text_spans` are merged into per-line spans: new pure `merge_spans_to_lines` (group by `line_index`,
   union bbox, join text, content-wins role/searchable) + store `merge_frame_spans_to_lines` (one
-  transaction). Wired into `run_retention_once` (after `purge_frame_image`, non-fatal) and a one-time
-  watermark-gated backfill `merge_purged_spans_once` (`maintenance.purged_spans_merged`) over the
-  pre-existing purged backlog, backed by new cursor-batched `store::purged_frame_ids`.
+  transaction). Wired into `run_retention_once` (via the atomic `degrade_frame_to_text`, see the
+  PR #67 review fix below) and a one-time watermark-gated backfill `merge_purged_spans_once`
+  (`maintenance.purged_spans_merged`) over the pre-existing purged backlog, backed by new
+  cursor-batched `store::purged_frame_ids`.
 - **Why:** `07` #73 (a). The DB (~40% of growth) didn't shrink on retention. `text_spans` are the
   largest prunable artifact but power `FrameReconstruction` for purged frames (`MomentDetail.tsx`
   renders it in place of the purged image), so they're **merged** (keeps a line-level reconstruction),
@@ -32,13 +33,29 @@
   individual frames failed to merge, diverging from the `purge_self_captures` retry pattern. Now a
   `clean_drain` flag withholds the watermark on any list- or per-frame failure, so the idempotent
   backfill retries next launch. Covered by a new `screensearch_lib` test.
+- **PR #67 review fixes (2026-07-01):**
+  - **Codex P2 — stranded per-word rows after a mid-sweep merge failure (fixed).** The sweep degraded
+    a frame in two writes: `purge_frame_image` (sets `image_purged = 1`) then a non-fatal
+    `merge_frame_spans_to_lines`. If the merge failed *after* the flag was set, the frame — now
+    excluded from `frames_with_image_older_than` (`WHERE image_purged = 0`) and, once the backfill
+    watermark was set, from the backfill too — kept its per-word rows forever. Replaced with the
+    **atomic** `store::degrade_frame_to_text` (merge **and** flag in one transaction); on failure
+    nothing commits, `image_purged` stays `0`, the whole frame retries next sweep. New store tests
+    `degrade_frame_to_text_merges_spans_and_purges_atomically` / `_purges_even_without_spans`.
+  - **Gemini "N+1 / bulk `IN`" ×2 — declined, recorded (`TODO.md` TODO-2).** Embedded SQLite has no
+    network round-trip; neither the one-time backfill nor the hourly sweep is hot; and a single
+    `IN`-clause transaction would forfeit the per-frame failure isolation the `clean_drain` backfill
+    relies on to converge (one busy frame rolls back a whole 256-batch). Kept per-frame transactions
+    with a documented deferral + how to batch safely if it ever matters.
 - **Verification — verbatim:** RED then GREEN across `merge_spans_to_lines` (4 unit),
-  `merge_frame_spans_to_lines_*` / `purged_frame_ids_*` (store integration), and
-  `merge_purged_spans_once_*` (`screensearch_lib`). Full CI: `npm run lint` EXIT 0 / `npm run build`
-  `✓ built in 1.54s`; `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace --all-targets --
-  -D warnings` EXIT 0 (1.39s); `cargo build --workspace` EXIT 0; `cargo test --workspace` all green,
-  0 failed (store 18 lib + 52 integration; `screensearch_lib` 8); `git diff --exit-code -- ui/src/bindings`
-  clean. Adversarial 3-lens review: 1 low finding, fixed.
+  `merge_frame_spans_to_lines_*` / `degrade_frame_to_text_*` / `purged_frame_ids_*` (store
+  integration), and `merge_purged_spans_once_*` (`screensearch_lib`). Full CI (re-run after the
+  PR #67 review fix, 2026-07-01): `npm run lint` EXIT 0 / `npm run build` `✓ built in 1.70s`;
+  `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace --all-targets -- -D warnings` EXIT 0
+  (3.58s); `cargo build --workspace` EXIT 0; `cargo test --workspace` all green, 0 failed (store 18
+  lib + **54** integration incl. 2 new `degrade_frame_to_text_*`; `screensearch_lib` 16/18, 2 ignored);
+  `git diff --exit-code -- ui/src/bindings` clean. Adversarial 3-lens review: 1 low finding, fixed;
+  PR #67 external review: 1 P2 fixed (atomic degrade), 2 N+1 declined + recorded.
 
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught

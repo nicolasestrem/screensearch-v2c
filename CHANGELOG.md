@@ -17,6 +17,9 @@ for old frames. Rather than delete them (which would blank out the reconstructio
 while the reconstruction still reads correctly at the line level. Merging happens as frames expire,
 and a one-time pass on first launch cleans up frames that expired before this shipped. Search is
 unaffected. (Full-text and semantic search read separate stored text/vectors, not these positions.)
+Following PR review, an expired frame is now retired in a single atomic step, so a momentary
+database hiccup can never leave a frame half-degraded (marked expired but still carrying its
+per-word rows); if it fails, the frame is simply retried on the next sweep.
 
 ### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
 ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still

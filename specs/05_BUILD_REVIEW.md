@@ -42,15 +42,28 @@ From a `/superpowers:brainstorming` design (plan approved). Second of three (#8 
   retry pattern it cited). Fixed: track a `clean_drain` flag; the watermark is written only on a
   fully clean drain, so any list- or per-frame failure retries the whole (idempotent) backfill next
   launch. Added a happy-path + watermark + idempotency test in `screensearch_lib`.
+- **PR #67 external review fix (Codex P2, CONFIRMED).** The retention sweep degraded a frame in two
+  writes — `purge_frame_image` (sets `image_purged = 1`) then a non-fatal `merge_frame_spans_to_lines`.
+  A transient merge failure *after* the flag was set stranded the frame's per-word rows: the sweep
+  (`WHERE image_purged = 0`) and, once its watermark was set, the backfill both skip it forever. Fixed
+  by making degrade **atomic** — new `store::degrade_frame_to_text` merges spans **and** sets the flag
+  in one transaction; on failure nothing commits and the frame retries next sweep. Two new store tests
+  (`degrade_frame_to_text_merges_spans_and_purges_atomically` / `_purges_even_without_spans`). The two
+  Gemini "N+1 → bulk `IN`" comments were **declined** (embedded SQLite; cold paths; a bulk txn forfeits
+  the per-frame failure isolation the backfill needs to converge) and recorded as `TODO.md` TODO-2.
 
 ### Verification (Windows, full CI sequence) — verbatim
+_(original PR run below; re-verified verbatim after the PR #67 review fix, 2026-07-01: lint EXIT 0 /
+build `✓ built in 1.70s`; fmt EXIT 0; clippy EXIT 0 `Finished … in 3.58s`; build EXIT 0
+`Finished … in 16.26s`; `cargo test --workspace` **0 failed**, store integration now **54** incl. the 2
+new `degrade_frame_to_text_*`; bindings diff clean.)_
 - `cd ui && npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 1.54s`
 - `cargo fmt --all -- --check` → `FMT_EXIT=0`
 - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 1.39s` / `CLIPPY_EXIT=0`
 - `cargo build --workspace` → `Finished … in 20.90s` / `BUILD_EXIT=0`
 - `cargo test --workspace` → all suites green, **0 failed** — store **18** lib (4 new
-  `merge_spans_to_lines` unit) + **52** integration (`merge_frame_spans_to_lines_*`,
-  `purged_frame_ids_*`); `screensearch_lib` **8** (new
+  `merge_spans_to_lines` unit) + **54** integration (`merge_frame_spans_to_lines_*`,
+  `degrade_frame_to_text_*`, `purged_frame_ids_*`); `screensearch_lib` **8** (new
   `merge_purged_spans_once_merges_backlog_then_watermarks_and_is_idempotent`); traits 53; uia
   16/2-ignored; sysmon 11; textfilter 12; kernel; ocr 1
 - `git diff --exit-code -- ui/src/bindings` → `BINDINGS_CLEAN_EXIT=0` (no ts-rs types touched)

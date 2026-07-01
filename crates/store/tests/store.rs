@@ -624,6 +624,68 @@ async fn merge_frame_spans_to_lines_is_noop_without_spans() {
     assert!(store.frame_spans(id).await.unwrap().is_empty());
 }
 
+/// `degrade_frame_to_text` collapses the per-word spans **and** sets `image_purged` in one
+/// transaction (`07` #73a, Codex review). The atomicity is what keeps a mid-sweep failure from
+/// stranding per-word rows on a frame the sweep will never revisit: the flag is set iff the merge
+/// committed. Idempotent — a second call is a no-op merge plus an unchanged purge flag.
+#[tokio::test]
+async fn degrade_frame_to_text_merges_spans_and_purges_atomically() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(1_000)).await.unwrap();
+    store
+        .insert_ocr(
+            id,
+            OcrResult {
+                text: "quarterly invoice total due".to_string(),
+                mean_confidence: 0.9,
+                engine: "winrt".to_string(),
+                spans: vec![
+                    line_span("quarterly", 0, 0.0, 0.0, 0.12, 0.05),
+                    line_span("invoice", 0, 0.14, 0.0, 0.10, 0.05),
+                    line_span("total", 1, 0.0, 0.10, 0.08, 0.05),
+                    line_span("due", 1, 0.10, 0.10, 0.06, 0.05),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    // Pre: four per-word spans, image still present.
+    assert_eq!(store.frame_spans(id).await.unwrap().len(), 4);
+    assert!(!store.get_frame(id).await.unwrap().unwrap().image_purged);
+
+    store.degrade_frame_to_text(id).await.unwrap();
+
+    // Post: spans merged to per-line AND the frame is marked purged (both, in one commit).
+    assert_eq!(
+        store.frame_spans(id).await.unwrap().len(),
+        2,
+        "four words on two lines → two line spans"
+    );
+    assert!(
+        store.get_frame(id).await.unwrap().unwrap().image_purged,
+        "degrade marks the image purged"
+    );
+    // No longer an image-retention candidate — the sweep won't re-list it.
+    let cands = store.frames_with_image_older_than(2_000, 10).await.unwrap();
+    assert!(cands.iter().all(|f| f.frame_id != id));
+
+    // Idempotent: re-degrading an already-degraded frame keeps one span/line and stays purged.
+    store.degrade_frame_to_text(id).await.unwrap();
+    assert_eq!(store.frame_spans(id).await.unwrap().len(), 2);
+    assert!(store.get_frame(id).await.unwrap().unwrap().image_purged);
+}
+
+/// A frame with no spans still degrades (the purge flag is set even when there is nothing to
+/// merge) — the sweep must be able to retire a text-empty frame's image too.
+#[tokio::test]
+async fn degrade_frame_to_text_purges_even_without_spans() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(2_000)).await.unwrap();
+    store.degrade_frame_to_text(id).await.unwrap();
+    assert!(store.frame_spans(id).await.unwrap().is_empty());
+    assert!(store.get_frame(id).await.unwrap().unwrap().image_purged);
+}
+
 /// The one-time span-merge backfill (`07` #73a) lists **purged** frames only, id-ascending,
 /// cursor-batched — so it can drain the pre-existing purged backlog without a full scan.
 #[tokio::test]

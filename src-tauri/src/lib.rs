@@ -1451,15 +1451,15 @@ async fn run_retention_once(
                 }
             }
         }
-        if let Err(e) = store.purge_frame_image(frame.frame_id).await {
-            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not mark frame image purged");
+        // Degrade the frame in the DB atomically: collapse the now-permanent per-word
+        // `text_spans` to per-line AND mark `image_purged = 1` in one transaction (`07` #73a).
+        // Atomic so a transient failure never leaves the row flagged purged with its per-word rows
+        // stranded — the sweep only re-lists `image_purged = 0`, so on error we `continue` with the
+        // flag unset and the whole frame is retried next sweep (the file is already gone; the next
+        // `remove_file` tolerates NotFound). The FrameReconstruction stays intact (line-level).
+        if let Err(e) = store.degrade_frame_to_text(frame.frame_id).await {
+            tracing::error!(frame_id = frame.frame_id, error = %e, "retention could not degrade frame to text");
             continue;
-        }
-        // Shrink the DB too, not just disk: collapse the now-permanent per-word `text_spans`
-        // to per-line (`07` #73a). Non-fatal — a miss keeps the per-word rows and is caught by
-        // the one-time backfill; the FrameReconstruction stays intact (line-level layout).
-        if let Err(e) = store.merge_frame_spans_to_lines(frame.frame_id).await {
-            tracing::warn!(frame_id = frame.frame_id, error = %e, "retention: span merge failed (kept per-word)");
         }
         degraded += 1;
     }

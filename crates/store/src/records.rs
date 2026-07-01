@@ -874,6 +874,37 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// Atomically degrade a frame to text: in **one transaction**, collapse its per-word
+    /// `text_spans` to per-line (`merge_spans_to_lines`) **and** set `image_purged = 1`. The
+    /// caller deletes the on-disk image file first; this records the degrade in the DB.
+    ///
+    /// The atomicity is the point (`07` #73a, Codex review): the retention sweep only re-lists
+    /// frames with `image_purged = 0`, so if the span merge and the purge flag were two separate
+    /// writes and the merge failed *after* the flag was set, that frame would be excluded from
+    /// every future sweep with its per-word rows stranded — defeating the DB-shrink guarantee for
+    /// exactly the transient failures (SQLite busy/lock) the caller treats as recoverable. Merging
+    /// and flag-setting in the same transaction means the frame is marked purged **iff** its spans
+    /// were merged; on any failure nothing commits, `image_purged` stays `0`, and the next sweep
+    /// retries the whole frame. Idempotent: re-degrading a frame whose spans are already per-line
+    /// is a no-op merge plus an unchanged `image_purged = 1` UPDATE.
+    pub async fn degrade_frame_to_text(&self, frame_id: i64) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let spans = read_text_spans(&tx, frame_id)?;
+            if !spans.is_empty() {
+                let merged = merge_spans_to_lines(&spans);
+                replace_text_spans(&tx, frame_id, &merged)?;
+            }
+            tx.execute(
+                "UPDATE frames SET image_purged = 1 WHERE id = ?1",
+                params![frame_id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
