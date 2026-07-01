@@ -707,6 +707,218 @@ async fn purged_frame_ids_lists_only_purged_after_cursor() {
     assert!(store.purged_frame_ids(0, 0).await.unwrap().is_empty());
 }
 
+/// Unit vector at angle `theta` (radians) in the (dim 0, dim 1) plane:
+/// `[cos θ, sin θ, 0, …]`. Cosine distance to the query `vec_at_angle(0.0)` grows
+/// monotonically with θ over `[0, π/2]`, so a series of increasing angles yields a
+/// deterministic KNN ordering with *graded* distances (unlike `one_hot`, whose only
+/// distances are ~0 and 1.0 — too coarse to rank a pool of near-neighbours).
+fn vec_at_angle(theta: f32) -> Embedding {
+    let mut v = vec![0.0_f32; EMBEDDING_DIM];
+    v[0] = theta.cos();
+    v[1] = theta.sin();
+    Embedding(v)
+}
+
+/// Regression for `07` #8: the vector arm must not miss an in-range match just because
+/// it is buried beyond the top-`pool` nearest vectors. We bury the *only* in-window
+/// vector-only match behind 55 nearer OUT-of-window vectors — more than the `pool = 50`
+/// floor — so a fixed-`k = pool` KNN + time post-filter fetches only out-of-window rows,
+/// drops them all, and returns nothing. Adaptive pool escalation must still surface it.
+#[tokio::test]
+async fn vector_arm_finds_in_range_match_buried_beyond_pool() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let query_vec = vec_at_angle(0.0);
+
+    // 55 out-of-window frames, each nearer to the query than the in-window one (rank 1..55).
+    // None contain the query term, so the FTS arm can't surface anything — the vector arm is
+    // the only path, isolating the recall behaviour under test.
+    for i in 1..=55 {
+        seed(
+            &store,
+            1_000 + i,
+            "filler noise unrelated",
+            Some(&vec_at_angle(0.001 * i as f32)),
+        )
+        .await;
+    }
+    // One in-window frame, farther than all 55 (rank 56 — beyond the k = 50 fetch), also
+    // vector-only (no query term in its text).
+    let in_range = seed(
+        &store,
+        55_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.060)),
+    )
+    .await;
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), query_vec);
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 1, // pool = max(1*5, 50) = 50; the in-window match sits at rank 56
+        time_range: Some(TimeRange {
+            start: 50_000,
+            end: 60_000,
+        }),
+        include_chrome: false,
+    };
+    let hits = store.hybrid_search(&q).await.unwrap();
+    let ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    assert_eq!(
+        ids,
+        vec![in_range],
+        "the in-window vector match must be found even when buried beyond the pool; got {ids:?}"
+    );
+}
+
+/// `07` #8 review (P2): the escalation target is capped at the count of distinct embedded
+/// frames in the window, so a **sparse** window (fewer than `pool`) stops early instead of
+/// scanning to the k ceiling. This guards the correctness half of that change — the count cap
+/// must not drop real in-window matches (a mis-count of 0 would skip the KNN and return
+/// nothing). Every in-window frame, scattered across the KNN distance order, must come back.
+#[tokio::test]
+async fn sparse_time_window_returns_every_in_window_match() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let query_vec = vec_at_angle(0.0);
+
+    // 20 near out-of-window frames (ranks 1..20), then 3 in-window frames scattered farther
+    // out by distance (ranks ~21, ~26, ~31) — all vector-only (no query term in the text).
+    for i in 1..=20 {
+        seed(
+            &store,
+            1_000 + i,
+            "filler noise unrelated",
+            Some(&vec_at_angle(0.002 * i as f32)),
+        )
+        .await;
+    }
+    let w1 = seed(
+        &store,
+        50_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.042)),
+    )
+    .await;
+    let w2 = seed(
+        &store,
+        51_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.052)),
+    )
+    .await;
+    let w3 = seed(
+        &store,
+        52_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.062)),
+    )
+    .await;
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), query_vec);
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 10, // pool = 50; the window holds only 3 embedded frames → target = 3
+        time_range: Some(TimeRange {
+            start: 50_000,
+            end: 60_000,
+        }),
+        include_chrome: false,
+    };
+    let hits = store.hybrid_search(&q).await.unwrap();
+    let mut ids: Vec<i64> = hits.iter().map(|h| h.frame_id).collect();
+    ids.sort();
+    let mut want = vec![w1, w2, w3];
+    want.sort();
+    assert_eq!(
+        ids, want,
+        "every in-window match must be present under the count-capped target; got {ids:?}"
+    );
+}
+
+/// `07` #8 review (P2): a bounded window with **more** embedded frames than `pool` must behave
+/// exactly like the pre-review code — the count cap collapses `target` to `pool`, so escalation
+/// still returns the `pool` *nearest* in-window frames (never truncates to some arbitrary
+/// subset). We over-fill the window and assert the nearest match ranks first and the count is
+/// honored.
+#[tokio::test]
+async fn dense_time_window_returns_the_pool_nearest_in_window_matches() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let query_vec = vec_at_angle(0.0);
+
+    // 60 in-window frames at increasing distance (angles 0.001..0.060) — more than the
+    // pool floor of 50, so the count cap makes target = pool and only the 50 nearest return.
+    let mut in_window = Vec::new();
+    for i in 1..=60 {
+        let id = seed(
+            &store,
+            50_000 + i,
+            "filler noise unrelated",
+            Some(&vec_at_angle(0.001 * i as f32)),
+        )
+        .await;
+        in_window.push(id);
+    }
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), query_vec);
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 1, // pool = 50; window has 60 → target caps at 50, nearest-first
+        time_range: Some(TimeRange {
+            start: 50_000,
+            end: 60_000,
+        }),
+        include_chrome: false,
+    };
+    let hits = store.hybrid_search(&q).await.unwrap();
+    // limit=1 → one hit, and it must be the *nearest* in-window frame (angle 0.001, rank 1).
+    assert_eq!(
+        hits.first().map(|h| h.frame_id),
+        Some(in_window[0]),
+        "the nearest in-window match must rank first even when the window over-fills the pool"
+    );
+}
+
+/// The count cap must not swallow an empty window into a stale result: a bounded window with
+/// no embedded frames returns nothing (and, by design, skips the KNN altogether).
+#[tokio::test]
+async fn empty_time_window_returns_nothing_via_vector_arm() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    // One embedded frame, well outside the queried window.
+    seed(
+        &store,
+        1_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.01)),
+    )
+    .await;
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), vec_at_angle(0.0));
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 10,
+        time_range: Some(TimeRange {
+            start: 50_000,
+            end: 60_000,
+        }),
+        include_chrome: false,
+    };
+    assert!(
+        store.hybrid_search(&q).await.unwrap().is_empty(),
+        "a window with no embedded frames must yield nothing"
+    );
+}
+
 #[tokio::test]
 async fn hybrid_search_respects_limit() {
     let store = SqliteStore::open_in_memory().unwrap();

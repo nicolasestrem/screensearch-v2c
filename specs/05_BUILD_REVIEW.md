@@ -78,6 +78,110 @@ new `degrade_frame_to_text_*`; bindings diff clean.)_
 - Coarser `text_filter_stats` / `backfill_filter_version` granularity for already-purged, past-
   retention frames (accepted tradeoff; `reconcile` reclassifies line-level spans without error).
 
+## Pass — 2026-07-01 — Vector-arm time-range recall: adaptive KNN escalation (#8) (`fix/vector-arm-time-range-recall`)
+
+From a `/superpowers:brainstorming` design (plan approved): close reachable `07` gaps. First of three
+(then #73a, #71). TDD.
+
+### Implemented
+- **#8 — vector arm no longer misses in-range matches buried beyond the pool.** `text_knn_in_range`
+  (`crates/store/src/search.rs`) previously ran one KNN at `k = pool` then post-filtered the time
+  window on the join, silently dropping in-range vectors ranked beyond the top-`pool` nearest. Pushing
+  the filter into `MATCH` is impossible on sqlite-vec 0.1.9 (no in-KNN filtering; 0.1.10-alpha is
+  broken), so a **bounded** range now escalates `k` geometrically (`KNN_ESCALATION_FACTOR`=8, ceiling
+  `MAX_TIME_RANGE_KNN`=20 000) until the pool fills with in-range frames, the KNN exhausts the table
+  (returned `< k` rows), or `k` hits the ceiling; an **unbounded** range keeps the single `k = pool`
+  pass (the time filter is then a no-op). Wrote `vector_arm_finds_in_range_match_buried_beyond_pool`
+  first — 55 nearer out-of-window vectors bury the only in-window match at rank 56, past the `pool=50`
+  floor — observed **red** (`got []`, want `[56]`), then green after the fix. Added `vec_at_angle`
+  (graded cosine distances, unlike `one_hot`'s 0/1).
+- **Adversarial review clean.** A 3-lens workflow (loop-termination/bounds, semantic parity with the
+  old single-pass, exhaustion-signal + edge cases) returned **no findings**.
+
+### Verification (Windows, full CI sequence) — verbatim
+- `cd ui && npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 2.11s` / `BUILD_EXIT=0`
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 9.12s` / `CLIPPY_EXIT=0`
+- `cargo build --workspace` → `Finished … in 24.70s` / `BUILD_EXIT=0`
+- `cargo test --workspace` → all suites green, **0 failed** (store **50** integration incl. the new
+  test + 14 lib; traits 53; uia 16/2-ignored; sysmon 11; textfilter 12; kernel pipeline 6 / settings 6
+  / throttle 2; screensearch_lib 7; ocr 1; e2e/perf ignored)
+- `cargo test -p store --test perf -- --ignored` → `median = 31.3853ms, p95 = 80.3555ms` (< 200 ms bar)
+- `git diff --exit-code -- ui/src/bindings` → `BINDINGS_CLEAN_EXIT=0` (store-only change, no ts-rs types)
+
+### Skipped / deferred
+- Pushing the time filter into the KNN via a vec0 metadata/partition column — still blocked by
+  sqlite-vec 0.1.9 (documented in the `07` #8 row). The escalation is the schema-free close.
+
+### Still risky
+- A pathologically tight window on a very large vector table *past* the 20 000 `k` ceiling can still
+  under-count (bounded residual, `07` #8). Unobserved at the 10k-fixture scale; the ceiling is a tunable
+  constant.
+
+### Review response — 2026-07-01 (PR #66, Codex P2 — count-capped escalation target)
+Codex flagged that for a **sparse** bounded window (fewer distinct embedded frames than `pool`) on a DB
+with more than `MAX_TIME_RANGE_KNN` vectors, neither the pool-fill (`ids.len() >= pool`) nor the
+exhaustion gate (`raw < k`) can ever fire, so every such query/report climbed to the 20 000 `k` ceiling
+even after already finding all in-window matches. Fixed by capping the escalation **target** at the
+count of distinct embedded frames actually in the window:
+- New `count_embedded_frames_in_range(conn, start, end, cap)` — an `EXISTS` semi-join, index-served
+  (`EXPLAIN QUERY PLAN` → `SEARCH fr USING COVERING INDEX idx_frames_captured_at` +
+  `SEARCH m EXISTS USING COVERING INDEX idx_embeddings_frame`), `LIMIT cap`-bounded so it stays O(pool)
+  even on a wide, densely-embedded window (the P2 addressed the residual per-query cost of an uncapped
+  count directly). `target = min(pool, count)`; `count == 0` skips the KNN entirely.
+- Extracted the loop into a pure, unit-testable `escalate_in_range_knn(pool, target, fetch)`.
+- TDD: 5 pure escalation unit tests (`escalating_knn_*`) written first — observed **3 red** (naive
+  single-pass: no escalation / no ceiling climb / no truncation) → green after the real loop; new
+  `count_embedded_frames_dedups_chunks_and_honors_cap` (distinct-frame count + `LIMIT` cap + empty
+  window); integration `sparse_time_window_returns_every_in_window_match`,
+  `dense_time_window_returns_the_pool_nearest_in_window_matches` (target caps to `pool`, nearest-first
+  preserved), `empty_time_window_returns_nothing_via_vector_arm`.
+- **Adversarial re-review (3-lens: target-correctness / SQL-race-index / edge-perf, refute-by-default
+  verify pass):** one **LOW** finding — the *uncapped* count's O(window) cost — which the `LIMIT` cap
+  above already resolves; no correctness findings.
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 2.28s` / exit 0
+- `cargo build --workspace` → `Finished … in 8.89s` / exit 0
+- `cargo test --workspace` → all suites **0 failed** (store 53 integration + 20 lib incl. the 5
+  escalation + count-cap unit tests)
+- `cargo test -p store --test perf -- --ignored` → `median = 27.3359ms, p95 = 65.8744ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
+
+### Follow-up review response — 2026-07-01 (PR #66, Codex P2 — bound the pre-count scan)
+Codex's next review correctly refuted the claim above that the `LIMIT cap` kept the count O(pool). The
+`LIMIT` is on **matches**, so it only short-circuits after finding `cap` *embedded* frames. A window
+with many captured frames but few embedded ones (an `embed_text` backlog, or a wide multi-day range)
+never fills the `LIMIT`, so SQLite walked the whole `frames` range running the `EXISTS` probe per row —
+O(frames-in-window), not O(cap). The intended guard didn't hold in exactly the sparse regime it targets.
+Fixed by bounding the **frames examined**, not just the matches:
+- `count_embedded_frames_in_range` now takes `(pool, scan_cap)` and returns `Option<usize>`. The inner
+  select is `LIMIT scan_cap`; the outer query returns `(scanned, embedded)` via `COUNT(*)` +
+  `COALESCE(SUM(has_emb), 0)`. If `scanned == scan_cap` the window is too large to prove sparse within
+  budget, so it returns `Some(pool)` — the **dense** assumption, a safe over-estimate that can only
+  *raise* the escalation target, never stop it early on an in-range match. Otherwise the whole window
+  was scanned, so `embedded` is exact: `None` when zero (skip the KNN), else `Some(min(pool, embedded))`.
+- `COUNT_SCAN_CAP = MAX_TIME_RANGE_KNN` (20 000): the count never examines more frames than a single
+  ceiling KNN pass would examine vectors, and it still fully (exactly) scans any realistic short/medium
+  window. Net: the pre-count is now genuinely O(cap) even on a wide, sparsely-embedded window.
+- **Correctness argument (no missed matches):** the dense fallback only ever returns `pool ≥
+  min(pool, n)`, so `target` is never *below* the true window count — the `ids.len() >= target` stop
+  can't fire before every in-window frame is gathered. Escalation still terminates on `raw < k` or the
+  `k` ceiling. Output-equivalent to the prior code on every window that fits the scan budget.
+- TDD: rewrote `count_embedded_frames_dedups_chunks_caps_and_bounds_the_scan` with a scan-budget case
+  (scan_cap 2 < 4 in-window frames → asserts `Some(pool)`, not the small exact count). Observed **red**
+  (naive form returned `Some(2)`) → green after the scan-cap-hit branch. `escalate_in_range_knn` and all
+  its unit tests are unchanged (the target contract is identical).
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 4.58s` / exit 0
+- `cargo build --workspace` → `Finished … in 15.09s` / exit 0
+- `cargo test -p store` → lib **20 passed / 0 failed**, integration `store.rs` **53 passed / 0 failed**
+- `cargo test -p store --test perf -- --ignored` → `median = 26.9464ms, p95 = 68.57ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.
