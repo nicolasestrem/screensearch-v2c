@@ -197,8 +197,8 @@ mod tests {
 
     /// Real UI Automation against the live desktop's foreground window: must spawn, return
     /// `engine = "uia"` with the unknown-confidence sentinel, and every emitted span's bbox
-    /// normalized to `[0,1]` and tagged `TextSource::Uia`. Since the `FindAllBuildCache`
-    /// single-round-trip walk (`07` #71) is exercised **only** here (never in CI), this is the
+    /// normalized to `[0,1]` and tagged `TextSource::Uia`. Since the `BuildUpdatedCache`
+    /// cache-batched walk (`07` #71) is exercised **only** here (never in CI), this is the
     /// acceptance gate: it also asserts the walk returns well inside the hard timeout and prints
     /// the yield (span/char counts) for manual inspection. `#[ignore]`d in CI (needs a real
     /// desktop session); run locally with `cargo test -p uia -- --ignored --nocapture`.
@@ -222,7 +222,7 @@ mod tests {
         let elapsed = t0.elapsed();
         assert_eq!(result.engine, "uia");
         assert_eq!(result.mean_confidence, CONFIDENCE_UNKNOWN);
-        // The cached single-round-trip walk must complete comfortably within the hard ceiling
+        // The cache-batched per-node walk must complete comfortably within the hard ceiling
         // (`recognize` enforces 2× the latency budget); a generous slack keeps it non-flaky.
         assert!(
             elapsed < std::time::Duration::from_millis(latency_ms * 2 + 500),
@@ -238,7 +238,7 @@ mod tests {
             );
             assert!(matches!(span.source, TextSource::Uia));
         }
-        // The FindAllBuildCache path must actually yield text on a normal desktop foreground
+        // The BuildUpdatedCache path must actually yield text on a normal desktop foreground
         // window (this catches a silent cached-getter regression that returns nothing).
         println!(
             "uia live walk: {} spans, {} chars, elapsed {elapsed:?}",

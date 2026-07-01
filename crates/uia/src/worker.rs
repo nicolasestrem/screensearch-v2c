@@ -360,7 +360,7 @@ fn read_foreground(
     })
 }
 
-/// Builds the `IUIAutomationCacheRequest` the walk's single `FindAllBuildCache` uses to
+/// Builds the `IUIAutomationCacheRequest` the walk's per-node `BuildUpdatedCache` uses to
 /// pre-fetch every property (and the `ValuePattern`) it reads per element, so the per-node
 /// loop reads `Cached*` getters in-process instead of making a cross-process COM call each
 /// (`07` #71). `_Full` element mode keeps a live backing so the cached `ValuePattern` is
@@ -379,10 +379,10 @@ fn build_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheR
         // *property* (`UIA_ValueValuePropertyId`), so it must be added explicitly or the cached
         // read fails and single-line edit content (URL bars, search/form inputs) is dropped.
         cache.AddProperty(UIA_ValueValuePropertyId)?;
-        // `_Element` scope: cache only each returned element's own properties. The walk fetches
-        // one tree *level* at a time via `FindAllBuildCache(TreeScope_Children, …)`, so it needs
-        // each child's props but not (yet) its descendants' — that keeps every fetch bounded to
-        // one level instead of an unbounded whole-subtree pull.
+        // `_Element` scope: cache only this element's own properties, not its descendants'.
+        // Each `BuildUpdatedCache` call in the walk refreshes one element; its children are
+        // walked separately, so we only need the element's own props here — that keeps every
+        // fetch bounded to a single node instead of an unbounded whole-subtree pull.
         cache.SetTreeScope(TreeScope_Element)?;
         cache.SetAutomationElementMode(AutomationElementMode_Full)?;
         Ok(cache)
@@ -397,7 +397,7 @@ fn build_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheR
 /// and only `ValuePattern`/`Name` are read (`07` #71).
 ///
 /// The **Value** and **Name** are read from the client-side cache (`GetCachedPattern` /
-/// `CachedName`, populated by the walk's single `FindAllBuildCache`) — no cross-process cost.
+/// `CachedName`, populated by the walk's per-node `BuildUpdatedCache`) — no cross-process cost.
 /// Only the `TextPattern` visible ranges stay a live cross-process read: text ranges can't be
 /// cached (even a cached pattern object re-enters the provider on the range calls), so it is
 /// gated to document/editor controls and capped per walk.

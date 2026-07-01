@@ -80,8 +80,8 @@ pub struct UiaTriggerPolicy {
 /// tick that lands mid-scroll — bounded now (control view + node/`TextPattern` caps + the
 /// latency budget) but still synchronous cross-process COM against the foreground app. That
 /// residual is handled separately by [`input_gate_skips_uia`], which routes `Timer` frames
-/// captured during active input to OCR; the deeper single-round-trip `FindAllBuildCache`
-/// rewrite that would remove the per-node cost entirely is tracked in `07` #71.
+/// captured during active input to OCR; the per-node `BuildUpdatedCache` cache-batching that
+/// cut the walk's per-node cross-process cost shipped under `07` #71.
 pub fn trigger_runs_uia(trigger: traits::CaptureTrigger, policy: UiaTriggerPolicy) -> bool {
     use traits::CaptureTrigger::{
         Click, ClipboardChange, ForegroundChange, Idle, Manual, ScrollStop, Timer, TypingPause,
