@@ -36,6 +36,17 @@ const KNN_ESCALATION_FACTOR: u32 = 8;
 /// still under-count (documented residual, `07` #8). Well above `MAX_CANDIDATE_POOL` so the
 /// escalation has real room to dig past a buried in-range match.
 const MAX_TIME_RANGE_KNN: u32 = 20_000;
+/// Upper bound on frames the sparse-window pre-count ([`count_embedded_frames_in_range`]) will
+/// examine. The count exists only to detect a *sparse* window (fewer embedded frames than `pool`)
+/// so the KNN escalation doesn't climb to [`MAX_TIME_RANGE_KNN`] needlessly. But with sparse
+/// embeddings the inner `LIMIT` can't short-circuit — it only stops after `cap` *matches*, so a
+/// window with many captured frames but few embedded ones (embed backlog, or a wide multi-day
+/// range) would make the count walk the whole frame range: O(frames-in-window), not O(cap)
+/// (`07` #8 review, P2). Capping the frames scanned keeps it O(cap): past this budget we can't
+/// prove the window is sparse, so we assume it is dense (target = `pool`) — which can only
+/// *raise* the escalation target, never drop an in-range match. Matched to the KNN ceiling so the
+/// pre-count never costs more than a single ceiling pass would.
+const COUNT_SCAN_CAP: usize = MAX_TIME_RANGE_KNN as usize;
 
 fn normalized_limit(limit: u32) -> usize {
     (limit as usize).clamp(1, MAX_SEARCH_LIMIT)
@@ -73,30 +84,51 @@ fn escalate_in_range_knn(
     }
 }
 
-/// Count of distinct **embedded** frames whose `captured_at` falls in `[start, end)`, **capped
-/// at `cap`**. This is the most in-range frames the KNN post-filter could ever return, so it caps
-/// the escalation target (`07` #8 review): a sparse window can't drag every query to
-/// [`MAX_TIME_RANGE_KNN`]. The caller only ever needs `min(pool, n)`, so the inner select is
-/// `LIMIT cap`-bounded — the count is O(`cap`) (≤ pool ≤ `MAX_CANDIDATE_POOL`) even on a wide,
-/// densely-embedded window, not O(frames-in-window) (`07` #8 review, P2 residual cost). Indexed
-/// via `idx_frames_captured_at` (range) + `idx_embeddings_frame` (the `EXISTS` semi-join).
+/// The KNN escalation target for a bounded `[start, end)` window, or `None` when the window
+/// provably holds **no** embedded frames (the caller then skips the KNN entirely).
+///
+/// `Some(target)` is `min(pool, distinct_embedded_frames_in_window)` — the most in-range frames
+/// the KNN post-filter could ever return — so a *sparse* window (fewer embedded frames than
+/// `pool`) stops escalating as soon as it has them all instead of climbing to
+/// [`MAX_TIME_RANGE_KNN`] (`07` #8 review).
+///
+/// The scan is bounded to `scan_cap` frames. A `LIMIT` on *matches* can't short-circuit when the
+/// window is sparsely embedded (it only stops after `scan_cap` matches), so capping the frames
+/// *examined* is what keeps this O(cap) rather than O(frames-in-window) on a wide, backlog-sparse
+/// window (`07` #8 review, P2). If the scan hits its budget we can't prove the window is sparse,
+/// so we assume it is **dense** and return `Some(pool)` — a safe over-estimate that only *raises*
+/// the escalation target, never dropping an in-range match. Indexed via `idx_frames_captured_at`
+/// (range scan) + `idx_embeddings_frame` (the `EXISTS` semi-join).
 fn count_embedded_frames_in_range(
     conn: &rusqlite::Connection,
     start: i64,
     end: i64,
-    cap: usize,
-) -> rusqlite::Result<usize> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM (
-             SELECT 1 FROM frames fr
+    pool: usize,
+    scan_cap: usize,
+) -> rusqlite::Result<Option<usize>> {
+    // `scanned` = frames examined (≤ scan_cap); `embedded` = how many of those hold an embedding.
+    let (scanned, embedded): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(has_emb), 0) FROM (
+             SELECT EXISTS (SELECT 1 FROM embeddings m WHERE m.frame_id = fr.id) AS has_emb
+             FROM frames fr
              WHERE fr.captured_at >= ?1 AND fr.captured_at < ?2
-               AND EXISTS (SELECT 1 FROM embeddings m WHERE m.frame_id = fr.id)
              LIMIT ?3
          )",
-        params![start, end, cap as i64],
-        |r| r.get::<_, i64>(0),
-    )
-    .map(|n| n as usize)
+        params![start, end, scan_cap as i64],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let (scanned, embedded) = (scanned as usize, embedded as usize);
+    if scanned >= scan_cap {
+        // Scan budget exhausted: `embedded` is only a lower bound on the window's true count, so
+        // we can't conclude it's sparse. Assume dense — target `pool`. Safe: it can only widen the
+        // escalation, never stop it early on an in-range match still out there.
+        return Ok(Some(pool));
+    }
+    // Whole window scanned: `embedded` is exact. No embeddings ⇒ skip the KNN.
+    if embedded == 0 {
+        return Ok(None);
+    }
+    Ok(Some(embedded.min(pool)))
 }
 
 /// Builds a safe FTS5 MATCH expression from free user text: each whitespace term
@@ -274,11 +306,19 @@ impl SqliteStore {
             // (all we ever need is `min(pool, n)`). An empty window skips the KNN entirely; an
             // unbounded window uses `pool` (single pass).
             let target = if bounded {
-                let n = count_embedded_frames_in_range(conn, start, end, pool as usize)?;
-                if n == 0 {
-                    return Ok(Vec::new());
+                match count_embedded_frames_in_range(
+                    conn,
+                    start,
+                    end,
+                    pool as usize,
+                    COUNT_SCAN_CAP,
+                )? {
+                    // Provably no embedded frames in the window — nothing for the KNN to find.
+                    None => return Ok(Vec::new()),
+                    // min(pool, embedded-in-window), or `pool` when the window was too large to
+                    // prove sparse within the scan budget (safe dense assumption).
+                    Some(target) => target,
                 }
-                n // already == min(pool, distinct embedded frames in the window)
             } else {
                 pool as usize
             };
@@ -543,20 +583,23 @@ mod tests {
         assert_eq!(ids, vec![1, 2, 3], "never return more than the pool");
     }
 
-    /// `07` #8 review (P2): the window-frame count is `LIMIT`-capped so it stays O(cap) on wide
-    /// windows. It counts *distinct* embedded frames (chunks deduped), honors the half-open
-    /// window, and never exceeds `cap`.
+    /// `07` #8 review (P2): the escalation target counts *distinct* embedded frames (chunks
+    /// deduped), honors the half-open window, is capped at `pool`, returns `None` for a window
+    /// with no embeddings (KNN-skip fast path), and — the fix for the residual cost — never scans
+    /// more than `scan_cap` frames: a window too large to prove sparse within budget falls back to
+    /// the dense assumption (`Some(pool)`) instead of walking every frame.
     #[tokio::test]
-    async fn count_embedded_frames_dedups_chunks_and_honors_cap() {
+    async fn count_embedded_frames_dedups_chunks_caps_and_bounds_the_scan() {
         let store = crate::SqliteStore::open_in_memory().unwrap();
         let f1 = store.insert_frame(frame(100)).await.unwrap(); // in window, 2 chunks
         let f2 = store.insert_frame(frame(150)).await.unwrap(); // in window, 1 chunk
-        let _f3 = store.insert_frame(frame(180)).await.unwrap(); // in window, NOT embedded
+        let _f3 = store.insert_frame(frame(160)).await.unwrap(); // in window, NOT embedded
+        let f3e = store.insert_frame(frame(170)).await.unwrap(); // in window, embedded
         let f4 = store.insert_frame(frame(500)).await.unwrap(); // embedded, out of window
 
         store
             .with_conn(move |conn| {
-                for (fid, chunk) in [(f1, 0), (f1, 1), (f2, 0), (f4, 0)] {
+                for (fid, chunk) in [(f1, 0), (f1, 1), (f2, 0), (f3e, 0), (f4, 0)] {
                     conn.execute(
                         "INSERT INTO embeddings(frame_id, chunk_index, chunk_text, source, model, dim, content_hash)
                          VALUES (?1, ?2, 't', 'ocr', 'm', 768, 'h')",
@@ -568,30 +611,46 @@ mod tests {
             .await
             .unwrap();
 
-        // Window [100, 200): f1 (2 chunks → counted once) + f2 = 2 distinct embedded frames;
-        // f3 has no embedding, f4 is out of window.
+        // Window [100, 200): f1 (2 chunks → counted once) + f2 + f3e = 3 distinct embedded frames;
+        // the un-embedded f3 and out-of-window f4 don't count. Scan budget far exceeds the 4
+        // in-window frames, so the count is exact.
         let n = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 10)?))
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 50, 1_000)?))
             .await
             .unwrap();
         assert_eq!(
-            n, 2,
+            n,
+            Some(3),
             "distinct embedded frames, chunks deduped, un-embedded excluded"
         );
 
-        // The `LIMIT` short-circuits — the caller only needs to know it reached the cap.
+        // Capped at `pool`: the caller only ever needs min(pool, n).
         let capped = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 1)?))
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 1, 1_000)?))
             .await
             .unwrap();
-        assert_eq!(capped, 1, "the count is capped at `cap`");
+        assert_eq!(capped, Some(1), "the target is capped at `pool`");
 
-        // A window with no embedded frames counts zero (drives the KNN-skip fast path).
-        let empty = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 200, 300, 10)?))
+        // Scan budget hit (scan_cap = 2 < 4 in-window frames): the window can't be proven sparse
+        // within budget, so it falls back to the dense assumption (`pool`) instead of returning
+        // the small exact count — this is what keeps the pre-count O(cap) on a wide, sparsely
+        // embedded window (the P2 residual). Without the bound this returned Some(2).
+        let bounded = store
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 500, 2)?))
             .await
             .unwrap();
-        assert_eq!(empty, 0, "no embedded frames in the window");
+        assert_eq!(
+            bounded,
+            Some(500),
+            "over-budget window assumes dense (pool), never walks every frame"
+        );
+
+        // A window with no embedded frames returns `None` (drives the KNN-skip fast path).
+        let empty = store
+            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 200, 300, 50, 1_000)?))
+            .await
+            .unwrap();
+        assert_eq!(empty, None, "no embedded frames in the window");
     }
 
     /// `include_chrome` searches `raw_text` via the raw FTS arm, independent of

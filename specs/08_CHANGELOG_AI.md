@@ -50,6 +50,19 @@
   `EXPLAIN QUERY PLAN` → `COVERING INDEX idx_frames_captured_at` + `EXISTS … idx_embeddings_frame`.
   Adversarial re-review (3-lens, refute-by-default verify): 1 **LOW** finding (uncapped-count cost)
   already resolved by the `LIMIT`; no correctness findings.
+- **Follow-up review response (PR #66, Codex P2 — bound the pre-count scan):** Codex refuted the
+  "O(pool) via `LIMIT`" claim above — the `LIMIT` caps *matches*, so a window with many captured frames
+  but few embedded ones (embed backlog / wide range) never fills it and the count walked the whole frame
+  range (O(frames-in-window)). Fixed by bounding frames *examined*: `count_embedded_frames_in_range` now
+  takes `(pool, scan_cap)` and returns `Option<usize>`; the inner select is `LIMIT scan_cap`, the outer
+  returns `(scanned, embedded)`. `scanned == scan_cap` → too large to prove sparse → `Some(pool)` (dense
+  assumption; only *raises* the target, never drops a match); else exact → `None` if zero (skip KNN) or
+  `Some(min(pool, embedded))`. `COUNT_SCAN_CAP = MAX_TIME_RANGE_KNN` (20 000) — the count never examines
+  more frames than a ceiling KNN examines vectors, so it is now genuinely O(pool) even on a sparse wide
+  window. `escalate_in_range_knn` + its unit tests unchanged. TDD: rewrote the count test with a
+  scan-budget case (**observed red** `Some(2)` → green `Some(pool)`). Verbatim: `cargo test -p store`
+  lib **20**/integration **53** all `ok`; fmt/clippy/build EXIT 0; perf `median = 26.9464ms, p95 =
+  68.57ms` < 200 ms; bindings clean.
 
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught

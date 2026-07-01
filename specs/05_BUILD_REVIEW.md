@@ -91,6 +91,39 @@ Verification — verbatim (Windows, full CI):
 - `cargo test -p store --test perf -- --ignored` → `median = 27.3359ms, p95 = 65.8744ms` (< 200 ms)
 - `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
 
+### Follow-up review response — 2026-07-01 (PR #66, Codex P2 — bound the pre-count scan)
+Codex's next review correctly refuted the claim above that the `LIMIT cap` kept the count O(pool). The
+`LIMIT` is on **matches**, so it only short-circuits after finding `cap` *embedded* frames. A window
+with many captured frames but few embedded ones (an `embed_text` backlog, or a wide multi-day range)
+never fills the `LIMIT`, so SQLite walked the whole `frames` range running the `EXISTS` probe per row —
+O(frames-in-window), not O(cap). The intended guard didn't hold in exactly the sparse regime it targets.
+Fixed by bounding the **frames examined**, not just the matches:
+- `count_embedded_frames_in_range` now takes `(pool, scan_cap)` and returns `Option<usize>`. The inner
+  select is `LIMIT scan_cap`; the outer query returns `(scanned, embedded)` via `COUNT(*)` +
+  `COALESCE(SUM(has_emb), 0)`. If `scanned == scan_cap` the window is too large to prove sparse within
+  budget, so it returns `Some(pool)` — the **dense** assumption, a safe over-estimate that can only
+  *raise* the escalation target, never stop it early on an in-range match. Otherwise the whole window
+  was scanned, so `embedded` is exact: `None` when zero (skip the KNN), else `Some(min(pool, embedded))`.
+- `COUNT_SCAN_CAP = MAX_TIME_RANGE_KNN` (20 000): the count never examines more frames than a single
+  ceiling KNN pass would examine vectors, and it still fully (exactly) scans any realistic short/medium
+  window. Net: the pre-count is now genuinely O(cap) even on a wide, sparsely-embedded window.
+- **Correctness argument (no missed matches):** the dense fallback only ever returns `pool ≥
+  min(pool, n)`, so `target` is never *below* the true window count — the `ids.len() >= target` stop
+  can't fire before every in-window frame is gathered. Escalation still terminates on `raw < k` or the
+  `k` ceiling. Output-equivalent to the prior code on every window that fits the scan budget.
+- TDD: rewrote `count_embedded_frames_dedups_chunks_caps_and_bounds_the_scan` with a scan-budget case
+  (scan_cap 2 < 4 in-window frames → asserts `Some(pool)`, not the small exact count). Observed **red**
+  (naive form returned `Some(2)`) → green after the scan-cap-hit branch. `escalate_in_range_knn` and all
+  its unit tests are unchanged (the target contract is identical).
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 4.58s` / exit 0
+- `cargo build --workspace` → `Finished … in 15.09s` / exit 0
+- `cargo test -p store` → lib **20 passed / 0 failed**, integration `store.rs` **53 passed / 0 failed**
+- `cargo test -p store --test perf -- --ignored` → `median = 26.9464ms, p95 = 68.57ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
+
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
 From a `/superpowers:brainstorming` design (plan approved): close three ready `07` gaps.
