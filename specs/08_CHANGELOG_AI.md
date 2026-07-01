@@ -17,6 +17,53 @@
 
 ---
 
+## 2026-07-01 — Vector-arm time-range recall: adaptive KNN escalation (#8) (`fix/vector-arm-time-range-recall`)
+- **Change:** `crates/store/src/search.rs::text_knn_in_range` now escalates the KNN `k` for time-windowed
+  search instead of running a single `k = pool` pass. A bounded `time_range` re-runs the cosine KNN with a
+  geometrically larger `k` (factor 8, ceiling 20 000) until the pool fills with in-range frames, the vector
+  table is exhausted (KNN returned `< k` rows), or the ceiling is hit; an unbounded range is unchanged
+  (one pass, the time filter a no-op). New constants `KNN_ESCALATION_FACTOR` / `MAX_TIME_RANGE_KNN`; the
+  time filter + frame de-dup moved from SQL into Rust so the loop can see the raw KNN row count (its
+  exhaustion signal). New test `vector_arm_finds_in_range_match_buried_beyond_pool` + `vec_at_angle` helper.
+- **Why:** `07` #8 — sqlite-vec 0.1.9 can't filter inside a KNN `MATCH` (0.1.10-alpha is broken), so the
+  old post-KNN time filter silently dropped in-range matches ranked beyond the top-`pool` nearest vectors
+  (recall under-count on tight windows). `03 §4/§13`.
+- **Verification — verbatim:** RED `vector_arm_finds_in_range_match_buried_beyond_pool` → `left: [] right: [56]`;
+  after fix `cargo test -p store` → `50 passed; 0 failed`. Full CI: `npm run lint` EXIT 0 / `npm run build`
+  `✓ built in 2.11s`; `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace --all-targets -- -D
+  warnings` EXIT 0; `cargo build --workspace` EXIT 0; `cargo test --workspace` all green 0 failed; perf
+  `p95 = 80.3555ms` < 200 ms; `git diff --exit-code -- ui/src/bindings` clean. Adversarial 3-lens review
+  workflow: **no findings**.
+- **Review response (PR #66, Codex P2 — count-capped escalation target):** a *sparse* bounded window
+  (fewer distinct embedded frames than `pool`) on a DB with > `MAX_TIME_RANGE_KNN` vectors trips neither
+  the pool-fill nor the exhaustion gate, so it climbed to the 20 000 `k` ceiling on **every** query even
+  after finding all in-window matches. Now the escalation `target` is capped at
+  `count_embedded_frames_in_range(start, end, cap=pool)` — an index-served `EXISTS` semi-join
+  (`idx_frames_captured_at` range + `idx_embeddings_frame`), `LIMIT`-bounded so it stays O(pool) not
+  O(window) (resolves the reviewer's residual-cost concern). `target = min(pool, count)`; `count == 0`
+  skips the KNN. Loop extracted into pure `escalate_in_range_knn(pool, target, fetch)`. New tests:
+  5 `escalating_knn_*` unit tests (**3 observed red** on a naive single-pass first),
+  `count_embedded_frames_dedups_chunks_and_honors_cap`, and integration `sparse_/dense_/empty_time_window_*`.
+  Verbatim: `cargo test --workspace` all green **0 failed** (store 53 integration + 20 lib); `cargo fmt
+  --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo build --workspace`
+  all EXIT 0; perf `median = 27.3359ms, p95 = 65.8744ms` < 200 ms; bindings clean;
+  `EXPLAIN QUERY PLAN` → `COVERING INDEX idx_frames_captured_at` + `EXISTS … idx_embeddings_frame`.
+  Adversarial re-review (3-lens, refute-by-default verify): 1 **LOW** finding (uncapped-count cost)
+  already resolved by the `LIMIT`; no correctness findings.
+- **Follow-up review response (PR #66, Codex P2 — bound the pre-count scan):** Codex refuted the
+  "O(pool) via `LIMIT`" claim above — the `LIMIT` caps *matches*, so a window with many captured frames
+  but few embedded ones (embed backlog / wide range) never fills it and the count walked the whole frame
+  range (O(frames-in-window)). Fixed by bounding frames *examined*: `count_embedded_frames_in_range` now
+  takes `(pool, scan_cap)` and returns `Option<usize>`; the inner select is `LIMIT scan_cap`, the outer
+  returns `(scanned, embedded)`. `scanned == scan_cap` → too large to prove sparse → `Some(pool)` (dense
+  assumption; only *raises* the target, never drops a match); else exact → `None` if zero (skip KNN) or
+  `Some(min(pool, embedded))`. `COUNT_SCAN_CAP = MAX_TIME_RANGE_KNN` (20 000) — the count never examines
+  more frames than a ceiling KNN examines vectors, so it is now genuinely O(pool) even on a sparse wide
+  window. `escalate_in_range_knn` + its unit tests unchanged. TDD: rewrote the count test with a
+  scan-budget case (**observed red** `Some(2)` → green `Some(pool)`). Verbatim: `cargo test -p store`
+  lib **20**/integration **53** all `ok`; fmt/clippy/build EXIT 0; perf `median = 26.9464ms, p95 =
+  68.57ms` < 200 ms; bindings clean.
+
 ## 2026-06-30 — PR #63 review fixes: NavRail tab-stop sync + palette focus-on-navigate (#42)
 - **Change:** Two real bugs in the #42 a11y work, flagged by reviewers (Gemini/Claude/Codex all caught
   the first):
