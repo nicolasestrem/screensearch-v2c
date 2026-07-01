@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
+- **Change:** `crates/uia/src/worker.rs` — the foreground-window UIA walk now batches each node's ~5
+  separate `Current*` property reads into **one `BuildUpdatedCache`** call + cached getters
+  (`build_cache_request`: ControlType/Name/IsPassword/IsOffscreen/BoundingRectangle/ValueValue +
+  ValuePattern, `_Element` scope, `_Full` mode). Same walker DFS structure/bounds as the shipped code;
+  live `TextPattern` stays gated/capped; `Value`/`Name` read from the cache. ~2.5× fewer cross-process
+  COM calls per walk.
+- **Why:** `07` #71 efficiency lever (deferred from the 0.2.1 hang mitigation). The gap required live
+  verification. Two bulk-fetch designs were live-tested and **rejected** as unbounded: a single
+  `FindAllBuildCache(Subtree)` (~1.4 s on a large window) and a `FindAllBuildCache(Children)` BFS (a
+  single wide-node fetch overran the budget on VS Code-scale trees). The granular per-node
+  `BuildUpdatedCache` keeps small, deadline-interruptible calls — no wide-node cliff.
+- **Review fixes (3, adversarial):** cache the `ValueValue` property (else `CachedValue()` fails and
+  edit-field/omnibox text is silently dropped); descend past a `BuildUpdatedCache` failure (a transient
+  timeout must not prune a subtree); full coverage parity (descend into everything, like the old DFS).
+- **Verification — verbatim:** `cargo fmt --all -- --check` EXIT 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` EXIT 0; `cargo test --workspace` 0 failed (uia 16 + 2-ignored). Live:
+  `cargo test -p uia -- --ignored` passes **bounded** on a heavy window that timed out the bulk-fetch
+  variants; `npm run tauri dev` captured `primary_source='uia'` Chrome frames (1186–1748 chars, omnibox
+  URL present, no over-budget warnings).
+- **PR #68 review fixes (2026-07-01):** (1) reworded 7 stale `FindAllBuildCache` doc-comments to the
+  shipped `BuildUpdatedCache` design (comment-only). (2) **Raw-view cache filter** — a cache request's
+  `TreeFilter` defaults to control-view, so with `capture.uia_view_control_only` off the `RawViewWalker`
+  navigated to raw-only nodes whose properties the filter skipped (`Cached*` empty → text lost to OCR).
+  `build_cache_request` now takes the view flag and `SetTreeFilter(Control|Raw ViewCondition)` in
+  lock-step with the walker; control-view default unchanged. Verify: `fmt`/`clippy`/`cargo test -p uia`
+  EXIT 0; live `--ignored` control-view path non-regressed (3×: 282 spans / 6316 chars / ~90 ms).
+  (3) **Don't cache field values before the privacy guard (Codex P2).** Caching `ValueValue` meant
+  `BuildUpdatedCache` prefetched every node's field value — including password/offscreen fields —
+  *before* `should_emit` runs, a visible-only/"password fields are never read" regression vs. the
+  pre-#71 live walk (which read `Value` only after the guard). Removed `ValueValue`/`ValuePattern`
+  from the batched cache; `extract_text` now reads `Value` **live** via `GetCurrentPattern`, and it is
+  only called after the guard passes — so a masked/hidden value is never fetched. `Name`/metadata stay
+  batched (the bulk of nodes are static text), and value-bearing inputs are a small live-read fraction.
+  Verify: `cargo fmt -p uia -- --check` EXIT 0; `cargo clippy -p uia --all-targets -- -D warnings`
+  EXIT 0; `cargo test -p uia` 16 passed/2 ignored; live `--ignored` walk yields text (4 spans / 30 chars).
+
 ## 2026-07-01 — Degrade-to-text DB shrink: merge purged spans to lines (#73a) (`fix/degrade-to-text-db-growth`)
 - **Change:** Degrade-to-text retention now shrinks the DB too. For a purged frame, the per-word
   `text_spans` are merged into per-line spans: new pure `merge_spans_to_lines` (group by `line_index`,

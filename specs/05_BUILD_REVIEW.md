@@ -20,6 +20,72 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
+
+From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`
+#71 hang was already mitigated in 0.2.1; this closes the deferred **efficiency lever**, which the gap
+required be **live-verified** (the walk path runs only in the `#[ignore]`d desktop test — CI-dark).
+
+### Implemented — design shaped by live verification
+- **Rejected `FindAllBuildCache(TreeScope_Subtree)`** — one uninterruptible fetch; measured **~1.4 s**
+  on a large window, blew the hard timeout → OCR fallback. Live test caught it (would have shipped a
+  regression).
+- **Rejected `FindAllBuildCache(TreeScope_Children)` BFS** — 8× fewer calls and great on Chrome
+  (98 fetches, 63 ms), but a single **wide-node** child fetch still overran the budget on a VS Code-
+  scale window (429 spans, 924 ms full; timed out at 150 ms budget). Live test caught it.
+- **Shipped: granular DFS + per-node `BuildUpdatedCache`** (user-chosen). Same walker navigation as the
+  shipped DFS (small, deadline-interruptible calls; `MAX_DEPTH`/`MAX_STACK` restored), but each node's
+  ~5 `Current*` reads collapse into **one `BuildUpdatedCache`** + cached getters (~2.5× fewer COM
+  calls). `TextPattern` stays live/gated/capped; `Value`/`Name` from the cache.
+- **Three adversarial-review defects fixed** (7-agent + 6-agent reviews): (1) cache the `ValueValue`
+  *property* — caching the pattern object alone leaves `CachedValue()` failing, silently dropping
+  edit-field text (URL/omnibox, search boxes); (2) a text control past the `TextPattern` cap is
+  descended so its children's text isn't lost (moot in the final DFS — it descends into everything);
+  (3) a `BuildUpdatedCache` failure skips only that node's text but **still descends** (a transient
+  timeout must not prune a whole subtree — old-DFS parity).
+
+### Verification — verbatim
+- `cargo fmt --all -- --check` → EXIT 0; `cargo clippy --workspace --all-targets -- -D warnings` → EXIT 0
+- `cargo test --workspace` → all green, **0 failed** (uia 16 + 2-ignored; store/traits/kernel/etc.)
+- **`cargo test -p uia -- --ignored`** (real desktop) → passes **bounded** (312 ms on a heavy window
+  that timed out the bulk-fetch variants; 103 ms on a light one), spans normalized + `TextSource::Uia`.
+- **Live `npm run tauri dev`** (`RUST_LOG=info,uia=debug`, real captures): DB `frame_text.primary_source
+  = 'uia'` on **Chrome** frames (1186–1748 chars); every UIA Chrome frame's `content_text` contains a
+  URL (omnibox `ValuePattern` — the Finding-1 fix); **no over-budget warnings, no COM errors**; thin/
+  gated frames fall to OCR as designed.
+
+### Still risky
+- The walk path stays CI-dark by nature (needs a real desktop); the `#[ignore]`d test is the live gate.
+  The granular design has the same boundedness profile as the long-shipped DFS, lowering the risk.
+
+### Review fixes — 2026-07-01 (PR #68)
+- **Stale doc-comments (5 bot-flagged + 2 adjacent).** Comments in `worker.rs`/`lib.rs`/`classify.rs`
+  still named the *rejected* `FindAllBuildCache` prototypes ("single-round-trip", "one tree level at a
+  time") instead of the shipped per-node `BuildUpdatedCache` walk. Reworded; comment-only.
+- **Raw-view cache filter (`chatgpt-codex-connector`, P2).** A cache request's `TreeFilter` defaults to
+  the **control-view** condition ("caching is performed only for elements that appear in the control
+  view" — MS docs). With `capture.uia_view_control_only` **off** the walk navigates via `RawViewWalker`,
+  so a raw-only node's requested properties were skipped by the default filter → `Cached*` empty →
+  text silently lost to OCR. Fix: `build_cache_request` now takes the view flag and calls
+  `SetTreeFilter(ControlViewCondition | RawViewCondition)` to stay in lock-step with the walker. The
+  control-view (default) path is unchanged — control view *is* the default filter, now set explicitly.
+  Verify: `fmt`/`clippy`/`cargo test -p uia` → EXIT 0; live `--ignored` control-view path non-regressed
+  (3× consecutive: **282 spans / 6316 chars / ~90 ms**, well inside the 300 ms ceiling). The raw-view
+  path is off-by-default and CI-dark like the rest of the walk; the fix is MS-doc-recommended.
+- **Don't prefetch field values before the privacy guard (`chatgpt-codex-connector`, P2).** Caching
+  `UIA_ValueValuePropertyId` made `BuildUpdatedCache` prefetch every walked node's field value —
+  password/offscreen fields included — **before** `should_emit` runs, so a masked/hidden value was
+  pulled into-process even though it's never emitted. That regressed the crate's visible-only /
+  "password fields are never read" guarantee vs. the pre-#71 live walk, which read `Value` only after
+  the guard. Fix: dropped `ValueValue`/`ValuePattern` from the batched cache; `extract_text` reads
+  `Value` **live** via `GetCurrentPattern(UIA_ValuePatternId)` + `CurrentValue()`, and it is only
+  reached after `should_emit` — so masked/hidden values are never fetched (exact pre-#71 parity).
+  `Name`/metadata stay batched (the bulk of nodes are static text); value-bearing inputs are a small
+  live-read fraction, and `_Full` cache mode already keeps the live backing `GetCurrentPattern` needs.
+  This supersedes the earlier "cache the `ValueValue` property" defect fix. Verify: `cargo fmt -p uia
+  -- --check` EXIT 0; `cargo clippy -p uia --all-targets -- -D warnings` EXIT 0; `cargo test -p uia`
+  16 passed / 2 ignored; live `--ignored` walk still yields text (4 spans / 30 chars, foreground app).
+
 ## Pass — 2026-07-01 — Degrade-to-text DB shrink: merge purged spans to lines (#73a) (`fix/degrade-to-text-db-growth`)
 
 From a `/superpowers:brainstorming` design (plan approved). Second of three (#8 shipped, #71 next). TDD.

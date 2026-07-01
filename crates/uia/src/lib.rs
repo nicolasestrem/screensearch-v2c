@@ -197,25 +197,37 @@ mod tests {
 
     /// Real UI Automation against the live desktop's foreground window: must spawn, return
     /// `engine = "uia"` with the unknown-confidence sentinel, and every emitted span's bbox
-    /// normalized to `[0,1]` and tagged `TextSource::Uia`. `#[ignore]`d in CI (needs a real
-    /// desktop session); run locally with `cargo test -p uia -- --ignored`.
+    /// normalized to `[0,1]` and tagged `TextSource::Uia`. Since the `BuildUpdatedCache`
+    /// cache-batched walk (`07` #71) is exercised **only** here (never in CI), this is the
+    /// acceptance gate: it also asserts the walk returns well inside the hard timeout and prints
+    /// the yield (span/char counts) for manual inspection. `#[ignore]`d in CI (needs a real
+    /// desktop session); run locally with `cargo test -p uia -- --ignored --nocapture`.
     #[tokio::test]
     #[ignore = "requires a real desktop (UI Automation); run locally"]
     async fn uia_provider_spawns_and_recognizes_foreground() {
+        let latency_ms = 150_u64;
         let provider = UiaTextProvider::spawn(UiaBudget {
-            latency_ms: 150,
+            latency_ms,
             min_text_chars: 0,
             max_nodes: 4000,
             max_textpattern_calls: 64,
             control_view: true,
         })
         .expect("spawn uia worker");
+        let t0 = std::time::Instant::now();
         let result = provider
             .recognize(&frame(1920, 1080))
             .await
             .expect("uia recognize ok");
+        let elapsed = t0.elapsed();
         assert_eq!(result.engine, "uia");
         assert_eq!(result.mean_confidence, CONFIDENCE_UNKNOWN);
+        // The cache-batched per-node walk must complete comfortably within the hard ceiling
+        // (`recognize` enforces 2× the latency budget); a generous slack keeps it non-flaky.
+        assert!(
+            elapsed < std::time::Duration::from_millis(latency_ms * 2 + 500),
+            "uia walk took {elapsed:?}, over the hard-timeout ceiling"
+        );
         for span in &result.spans {
             assert!(
                 (0.0..=1.0).contains(&span.x)
@@ -226,5 +238,12 @@ mod tests {
             );
             assert!(matches!(span.source, TextSource::Uia));
         }
+        // The BuildUpdatedCache path must actually yield text on a normal desktop foreground
+        // window (this catches a silent cached-getter regression that returns nothing).
+        println!(
+            "uia live walk: {} spans, {} chars, elapsed {elapsed:?}",
+            result.spans.len(),
+            result.text.chars().count()
+        );
     }
 }

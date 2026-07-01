@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Faster UIA text capture on heavy windows (gap #71)
+Reading a foreground window's accessibility text now fetches each element's properties in a **single
+batched call** instead of ~5 separate cross-process calls, cutting the per-walk overhead ~2.5× on the
+heavy Chromium/Electron windows the capture targets — while keeping the same small, interruptible steps
+that bound the walk to its latency budget (two bulkier single-fetch designs were tried and dropped for
+overrunning the budget on very large windows). Editable-field **values** are deliberately kept off the
+batch and read only after the password/offscreen privacy guard passes, so a masked or hidden field's
+text is never fetched. Live-verified capturing real Chrome pages. The earlier 0.2.1 hang mitigation is
+unchanged.
+
 ### Changed — Expired screenshots now shrink the database too, not just disk (gap #73a)
 When a screenshot expires under retention, the app keeps a text + layout reconstruction of it. That
 reconstruction is drawn from per-word text positions, which are the biggest remaining database cost
