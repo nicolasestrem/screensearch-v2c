@@ -542,6 +542,171 @@ async fn hybrid_search_honors_time_range() {
     assert_eq!(hits[0].frame_id, recent);
 }
 
+/// A per-word span on `line` at the given normalized bbox (role `unknown`, the shape OCR
+/// emits pre-classification).
+fn line_span(text: &str, line: u32, x: f32, y: f32, w: f32, h: f32) -> TextSpan {
+    TextSpan {
+        line_index: line,
+        ..span(text, x, y, w, h)
+    }
+}
+
+/// Degrade-to-text DB shrink (`07` #73a): merging a frame's per-word spans to per-line spans
+/// must reclaim rows **without** breaking search (FTS `content_text` + the vector arm) or the
+/// `FrameReconstruction` (which needs each line's text at its box).
+#[tokio::test]
+async fn merge_frame_spans_to_lines_shrinks_rows_but_keeps_search_and_reconstruction() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(1_000)).await.unwrap();
+    // Four words across two lines — the per-word shape OCR emits.
+    store
+        .insert_ocr(
+            id,
+            OcrResult {
+                text: "quarterly invoice total due".to_string(),
+                mean_confidence: 0.9,
+                engine: "winrt".to_string(),
+                spans: vec![
+                    line_span("quarterly", 0, 0.0, 0.0, 0.12, 0.05),
+                    line_span("invoice", 0, 0.14, 0.0, 0.10, 0.05),
+                    line_span("total", 1, 0.0, 0.10, 0.08, 0.05),
+                    line_span("due", 1, 0.10, 0.10, 0.06, 0.05),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .upsert_text_embedding(
+            id,
+            0,
+            "quarterly invoice",
+            ChunkSource::Ocr,
+            &one_hot(0),
+            "gemma",
+        )
+        .await
+        .unwrap();
+
+    // Pre-merge: four per-word spans on disk.
+    assert_eq!(store.frame_spans(id).await.unwrap().len(), 4);
+
+    store.merge_frame_spans_to_lines(id).await.unwrap();
+
+    // Post-merge: one span per line, still carrying non-empty text + a box (reconstruction).
+    let merged = store.frame_spans(id).await.unwrap();
+    assert_eq!(merged.len(), 2, "four words on two lines → two line spans");
+    assert_eq!(merged[0].text, "quarterly invoice");
+    assert!(
+        merged
+            .iter()
+            .all(|s| !s.text.is_empty() && s.w > 0.0 && s.h > 0.0),
+        "each line keeps text + geometry for the reconstruction: {merged:?}"
+    );
+
+    // content_text + FTS untouched → content search still matches (FTS-only, no embedder).
+    let hits = store.hybrid_search(&query("invoice", 10)).await.unwrap();
+    assert!(
+        hits.iter().any(|h| h.frame_id == id),
+        "content search still finds the frame after the span merge"
+    );
+    // Text embedding untouched → the vector KNN still returns it.
+    let vids = store.nearest_text_frames(&one_hot(0), 5).await.unwrap();
+    assert!(vids.contains(&id), "text embedding survives the span merge");
+}
+
+/// Merging a frame that has no spans is a safe no-op (never errors).
+#[tokio::test]
+async fn merge_frame_spans_to_lines_is_noop_without_spans() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(2_000)).await.unwrap();
+    store.merge_frame_spans_to_lines(id).await.unwrap();
+    assert!(store.frame_spans(id).await.unwrap().is_empty());
+}
+
+/// `degrade_frame_to_text` collapses the per-word spans **and** sets `image_purged` in one
+/// transaction (`07` #73a, Codex review). The atomicity is what keeps a mid-sweep failure from
+/// stranding per-word rows on a frame the sweep will never revisit: the flag is set iff the merge
+/// committed. Idempotent — a second call is a no-op merge plus an unchanged purge flag.
+#[tokio::test]
+async fn degrade_frame_to_text_merges_spans_and_purges_atomically() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(1_000)).await.unwrap();
+    store
+        .insert_ocr(
+            id,
+            OcrResult {
+                text: "quarterly invoice total due".to_string(),
+                mean_confidence: 0.9,
+                engine: "winrt".to_string(),
+                spans: vec![
+                    line_span("quarterly", 0, 0.0, 0.0, 0.12, 0.05),
+                    line_span("invoice", 0, 0.14, 0.0, 0.10, 0.05),
+                    line_span("total", 1, 0.0, 0.10, 0.08, 0.05),
+                    line_span("due", 1, 0.10, 0.10, 0.06, 0.05),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    // Pre: four per-word spans, image still present.
+    assert_eq!(store.frame_spans(id).await.unwrap().len(), 4);
+    assert!(!store.get_frame(id).await.unwrap().unwrap().image_purged);
+
+    store.degrade_frame_to_text(id).await.unwrap();
+
+    // Post: spans merged to per-line AND the frame is marked purged (both, in one commit).
+    assert_eq!(
+        store.frame_spans(id).await.unwrap().len(),
+        2,
+        "four words on two lines → two line spans"
+    );
+    assert!(
+        store.get_frame(id).await.unwrap().unwrap().image_purged,
+        "degrade marks the image purged"
+    );
+    // No longer an image-retention candidate — the sweep won't re-list it.
+    let cands = store.frames_with_image_older_than(2_000, 10).await.unwrap();
+    assert!(cands.iter().all(|f| f.frame_id != id));
+
+    // Idempotent: re-degrading an already-degraded frame keeps one span/line and stays purged.
+    store.degrade_frame_to_text(id).await.unwrap();
+    assert_eq!(store.frame_spans(id).await.unwrap().len(), 2);
+    assert!(store.get_frame(id).await.unwrap().unwrap().image_purged);
+}
+
+/// A frame with no spans still degrades (the purge flag is set even when there is nothing to
+/// merge) — the sweep must be able to retire a text-empty frame's image too.
+#[tokio::test]
+async fn degrade_frame_to_text_purges_even_without_spans() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let id = store.insert_frame(frame_at(2_000)).await.unwrap();
+    store.degrade_frame_to_text(id).await.unwrap();
+    assert!(store.frame_spans(id).await.unwrap().is_empty());
+    assert!(store.get_frame(id).await.unwrap().unwrap().image_purged);
+}
+
+/// The one-time span-merge backfill (`07` #73a) lists **purged** frames only, id-ascending,
+/// cursor-batched — so it can drain the pre-existing purged backlog without a full scan.
+#[tokio::test]
+async fn purged_frame_ids_lists_only_purged_after_cursor() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = store.insert_frame(frame_at(1_000)).await.unwrap();
+    let _b = store.insert_frame(frame_at(2_000)).await.unwrap();
+    let c = store.insert_frame(frame_at(3_000)).await.unwrap();
+    store.purge_frame_image(a).await.unwrap();
+    store.purge_frame_image(c).await.unwrap();
+
+    // From cursor 0: both purged ids ascending; the unpurged `_b` is excluded.
+    assert_eq!(store.purged_frame_ids(0, 10).await.unwrap(), vec![a, c]);
+    // Cursor past `a`: only `c` remains.
+    assert_eq!(store.purged_frame_ids(a, 10).await.unwrap(), vec![c]);
+    // Limit is respected (drives the batch cursor).
+    assert_eq!(store.purged_frame_ids(0, 1).await.unwrap(), vec![a]);
+    // Zero limit → empty (never a full scan).
+    assert!(store.purged_frame_ids(0, 0).await.unwrap().is_empty());
+}
+
 /// Unit vector at angle `theta` (radians) in the (dim 0, dim 1) plane:
 /// `[cos θ, sin θ, 0, …]`. Cosine distance to the query `vec_at_angle(0.0)` grows
 /// monotonically with θ over `[0, π/2]`, so a series of increasing angles yields a

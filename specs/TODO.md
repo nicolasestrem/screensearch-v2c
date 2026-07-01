@@ -6,6 +6,52 @@
 
 ---
 
+## TODO-2 — Bulk span-merge for the purged-span backfill (deferred from `fix/degrade-to-text-db-growth`, `07` #73a)
+
+**Status:** OPEN. Deferred **by decision**, not by time. Reviewer suggestion from PR #67
+(gemini-code-assist, flagged "high" against its N+1 guideline). Low value here; recorded so the
+deferral is deliberate.
+
+### The suggestion
+Replace the per-frame `store.merge_frame_spans_to_lines(id)` calls in the one-time backfill
+(`src-tauri/src/lib.rs::merge_purged_spans_once`) with a single bulk method
+`merge_batch_frame_spans_to_lines(frame_ids)` that fetches all spans for a 256-id batch with one
+`WHERE frame_id IN (…)` query and merges them inside one transaction — turning N per-frame
+round-trips into ~1 per batch.
+
+### Why it's deferred (the trade-offs the guideline misses for this codebase)
+- **Embedded SQLite, no network hop.** The N+1 "round-trip" cost the guideline targets is a
+  networked-DB concern. Here every query is an in-process `rusqlite` call against a local file; the
+  per-call overhead is a prepared-statement step, not a network round-trip.
+- **Neither path is hot.** `merge_purged_spans_once` is a one-time backfill that drains the
+  pre-existing purged backlog once, then watermarks off forever (`maintenance.purged_spans_merged`).
+  The inline degrade is one frame per retention-sweep iteration (hourly). No steady-state cost.
+- **Per-frame transactions are intentional.** They keep each write-lock window tiny so the sweep /
+  backfill never blocks live capture writes, and — critically — they give **per-frame failure
+  isolation**: the current `clean_drain` logic skips a single busy frame and retries just that frame
+  next launch. A single `IN`-clause transaction rolls back the **whole** 256-batch on one busy
+  frame; since the same frame poisons the batch on every retry, the backfill could **never
+  converge**. A naive bulk rewrite is strictly worse resilience.
+
+### If ever implemented — do it without regressing resilience
+- Bound the batch inside one transaction, but keep per-frame error isolation: a failed
+  `replace_text_spans` for one id must not abort the others' commits (e.g. `SAVEPOINT` per id, or
+  collect failures and still commit the good ones while withholding the watermark). Verify a
+  poisoned frame can't strand the whole batch's progress.
+- Keep the retention sweep's atomic `degrade_frame_to_text` per-frame regardless — it interleaves
+  with per-frame file deletion + the `image_purged` flag and can't be batched.
+
+### Files
+- `crates/store/src/records.rs` (new `merge_batch_frame_spans_to_lines`; `read_text_spans` already
+  exists — add a batched read or loop reads inside one tx)
+- `src-tauri/src/lib.rs::merge_purged_spans_once` (call the batch method per 256-id page)
+
+### References
+- PR #67 review threads (gemini-code-assist on `records.rs` `merge_frame_spans_to_lines` and on
+  `lib.rs` `merge_purged_spans_once`) · `07_KNOWN_GAPS.md` #73a · `08_CHANGELOG_AI.md` (2026-07-01).
+
+---
+
 ## TODO-1 — UIA `FindAllBuildCache` cached single-round-trip walk (deferred from `fix/uia-chromium-hang`, `07` #71)
 
 **Status:** OPEN. Planned, API-verified, **not implemented**. Needs a real Windows desktop to verify.

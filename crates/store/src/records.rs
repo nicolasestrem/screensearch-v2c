@@ -111,6 +111,76 @@ fn read_text_spans(conn: &rusqlite::Connection, frame_id: i64) -> rusqlite::Resu
     Ok(spans)
 }
 
+/// Collapses per-word spans into one span **per line** (`line_index`), preserving each
+/// line's first-appearance order. The DB-shrink lever for degrade-to-text retention
+/// (`07` #73a): a purged frame's ~100 per-word rows become ~10-20 per-line rows while
+/// keeping everything `FrameReconstruction` needs — the line's words joined in reading
+/// order, positioned at the union of their boxes. A line reads at `Content` strength if it
+/// holds any content word (else it keeps a recessive role) and is searchable if any word
+/// was. Idempotent: already line-level spans pass through unchanged.
+fn merge_spans_to_lines(spans: &[TextSpan]) -> Vec<TextSpan> {
+    // Group by line_index, remembering the order each line first appears so the merged
+    // output stays in reading order regardless of the input's ordering.
+    let mut order: Vec<u32> = Vec::new();
+    let mut groups: HashMap<u32, Vec<&TextSpan>> = HashMap::new();
+    for s in spans {
+        groups
+            .entry(s.line_index)
+            .or_insert_with(|| {
+                order.push(s.line_index);
+                Vec::new()
+            })
+            .push(s);
+    }
+    order
+        .into_iter()
+        .map(|li| {
+            let line = &groups[&li];
+            let min_x = line.iter().map(|s| s.x).fold(f32::INFINITY, f32::min);
+            let min_y = line.iter().map(|s| s.y).fold(f32::INFINITY, f32::min);
+            let max_right = line
+                .iter()
+                .map(|s| s.x + s.w)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let max_bottom = line
+                .iter()
+                .map(|s| s.y + s.h)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let text = line
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let is_searchable = line.iter().any(|s| s.is_searchable);
+            // Content wins the line's tone (keeps it legible in the reconstruction); an
+            // all-chrome/system line keeps its first span's recessive role.
+            let role = line
+                .iter()
+                .find(|s| s.role == TextRole::Content)
+                .map_or(line[0].role, |s| s.role);
+            TextSpan {
+                normalized_text: traits::normalize_text(&text),
+                text,
+                source: line[0].source,
+                role,
+                x: min_x,
+                y: min_y,
+                w: (max_right - min_x).max(0.0),
+                h: (max_bottom - min_y).max(0.0),
+                line_index: li,
+                is_searchable,
+                // A searchable (content-bearing) line has no suppress reason; an all-recessive
+                // line carries its first span's, matching the metric's role accounting.
+                suppress_reason: if is_searchable {
+                    None
+                } else {
+                    line[0].suppress_reason
+                },
+            }
+        })
+        .collect()
+}
+
 /// Replaces a frame's `text_spans` wholesale (idempotent re-OCR / re-filter). Shared by
 /// [`SqliteStore::insert_ocr`] (passthrough, roles `unknown`) and
 /// [`SqliteStore::insert_ocr_filtered`] (classified roles). Carries `line_index` so PR3
@@ -782,6 +852,59 @@ impl SqliteStore {
         self.with_conn(move |conn| Ok(read_text_spans(conn, frame_id)?))
             .await
     }
+
+    /// Collapses a frame's per-word `text_spans` into per-line spans, in place (`07` #73a).
+    /// Called after a frame's screenshot is retention-purged (and by the one-time backfill)
+    /// so degrade-to-text shrinks the **DB** too, not just disk: ~100 per-word rows become
+    /// ~10-20 per-line rows. Non-destructive to search (FTS reads `frame_text.content_text`,
+    /// the vector arm reads `embeddings` — both untouched) and to `FrameReconstruction`,
+    /// which still gets each line's text at its on-screen box. Idempotent; a spanless frame
+    /// is a no-op. One transaction so a reader never sees a half-merged frame.
+    pub async fn merge_frame_spans_to_lines(&self, frame_id: i64) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let spans = read_text_spans(&tx, frame_id)?;
+            if spans.is_empty() {
+                return Ok(());
+            }
+            let merged = merge_spans_to_lines(&spans);
+            replace_text_spans(&tx, frame_id, &merged)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Atomically degrade a frame to text: in **one transaction**, collapse its per-word
+    /// `text_spans` to per-line (`merge_spans_to_lines`) **and** set `image_purged = 1`. The
+    /// caller deletes the on-disk image file first; this records the degrade in the DB.
+    ///
+    /// The atomicity is the point (`07` #73a, Codex review): the retention sweep only re-lists
+    /// frames with `image_purged = 0`, so if the span merge and the purge flag were two separate
+    /// writes and the merge failed *after* the flag was set, that frame would be excluded from
+    /// every future sweep with its per-word rows stranded — defeating the DB-shrink guarantee for
+    /// exactly the transient failures (SQLite busy/lock) the caller treats as recoverable. Merging
+    /// and flag-setting in the same transaction means the frame is marked purged **iff** its spans
+    /// were merged; on any failure nothing commits, `image_purged` stays `0`, and the next sweep
+    /// retries the whole frame. Idempotent: re-degrading a frame whose spans are already per-line
+    /// is a no-op merge plus an unchanged `image_purged = 1` UPDATE.
+    pub async fn degrade_frame_to_text(&self, frame_id: i64) -> Result<()> {
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let spans = read_text_spans(&tx, frame_id)?;
+            if !spans.is_empty() {
+                let merged = merge_spans_to_lines(&spans);
+                replace_text_spans(&tx, frame_id, &merged)?;
+            }
+            tx.execute(
+                "UPDATE frames SET image_purged = 1 WHERE id = ?1",
+                params![frame_id],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -827,6 +950,124 @@ mod tests {
             engine: engine.to_string(),
             spans: Vec::new(),
         }
+    }
+
+    /// Builds a per-word span on `line` at the given normalized `(x, y, w, h)` box/role.
+    fn sp(
+        text: &str,
+        line: u32,
+        bbox: (f32, f32, f32, f32),
+        role: TextRole,
+        searchable: bool,
+    ) -> TextSpan {
+        let (x, y, w, h) = bbox;
+        TextSpan {
+            normalized_text: traits::normalize_text(text),
+            text: text.to_string(),
+            source: TextSource::Ocr,
+            role,
+            x,
+            y,
+            w,
+            h,
+            line_index: line,
+            is_searchable: searchable,
+            suppress_reason: None,
+        }
+    }
+
+    /// `merge_spans_to_lines` collapses the per-word spans of a purged frame into one span
+    /// per line (the DB-shrink lever for degrade-to-text, `07` #73a) while keeping enough for
+    /// `FrameReconstruction`: each line's words joined in order, at the union of their boxes.
+    #[test]
+    fn merge_spans_to_lines_collapses_words_and_unions_boxes() {
+        let spans = vec![
+            sp("hello", 0, (0.0, 0.0, 0.10, 0.05), TextRole::Content, true),
+            sp("world", 0, (0.12, 0.0, 0.10, 0.05), TextRole::Content, true),
+            sp("footer", 1, (0.0, 0.20, 0.10, 0.04), TextRole::Chrome, true),
+        ];
+        let merged = merge_spans_to_lines(&spans);
+        assert_eq!(merged.len(), 2, "two lines → two spans");
+        assert_eq!(merged[0].text, "hello world");
+        assert_eq!(merged[0].line_index, 0);
+        assert_eq!(merged[0].x, 0.0);
+        assert_eq!(merged[0].y, 0.0);
+        // union width = rightmost edge (0.12 + 0.10) − leftmost x (0.0)
+        assert!(
+            (merged[0].w - 0.22).abs() < 1e-6,
+            "union width, got {}",
+            merged[0].w
+        );
+        assert!((merged[0].h - 0.05).abs() < 1e-6);
+        assert_eq!(merged[1].text, "footer");
+        assert_eq!(merged[1].line_index, 1);
+    }
+
+    /// Merging is idempotent: applying it to already line-level spans returns them unchanged
+    /// (so a re-run at purge time / in the backfill never degrades an already-merged frame).
+    #[test]
+    fn merge_spans_to_lines_is_idempotent() {
+        let spans = vec![
+            sp(
+                "hello world",
+                0,
+                (0.0, 0.0, 0.22, 0.05),
+                TextRole::Content,
+                true,
+            ),
+            sp("footer", 1, (0.0, 0.20, 0.10, 0.04), TextRole::Chrome, true),
+        ];
+        let once = merge_spans_to_lines(&spans);
+        let twice = merge_spans_to_lines(&once);
+        assert_eq!(once.len(), twice.len());
+        for (a, b) in once.iter().zip(&twice) {
+            assert_eq!(a.text, b.text);
+            assert_eq!(a.line_index, b.line_index);
+            assert!((a.x - b.x).abs() < 1e-6 && (a.w - b.w).abs() < 1e-6);
+        }
+    }
+
+    /// Empty in → empty out (a frame with no recognized text).
+    #[test]
+    fn merge_spans_to_lines_empty_is_empty() {
+        assert!(merge_spans_to_lines(&[]).is_empty());
+    }
+
+    /// Role/searchable precedence: a line reads at Content strength if it holds any content
+    /// word (so the reconstruction keeps it legible), and is searchable if any word was; an
+    /// all-chrome line keeps a recessive role.
+    #[test]
+    fn merge_spans_to_lines_prefers_content_role() {
+        let spans = vec![
+            sp("Inbox", 0, (0.0, 0.0, 0.08, 0.04), TextRole::Chrome, false),
+            sp(
+                "quarterly",
+                0,
+                (0.10, 0.0, 0.12, 0.04),
+                TextRole::Content,
+                true,
+            ),
+            sp(
+                "Settings",
+                1,
+                (0.0, 0.20, 0.08, 0.04),
+                TextRole::Chrome,
+                false,
+            ),
+        ];
+        let merged = merge_spans_to_lines(&spans);
+        assert_eq!(
+            merged[0].role,
+            TextRole::Content,
+            "content word lifts the line to Content"
+        );
+        assert!(merged[0].is_searchable, "line is searchable if any word is");
+        assert_eq!(
+            merged[1].role,
+            TextRole::Chrome,
+            "all-chrome line stays recessive"
+        );
+        assert!(!merged[1].is_searchable);
     }
 
     /// `insert_ocr_filtered` must record `frame_text.primary_source` from the recognizer's

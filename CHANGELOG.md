@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Expired screenshots now shrink the database too, not just disk (gap #73a)
+When a screenshot expires under retention, the app keeps a text + layout reconstruction of it. That
+reconstruction is drawn from per-word text positions, which are the biggest remaining database cost
+for old frames. Rather than delete them (which would blank out the reconstruction), the app now
+**merges each expired frame's words into per-line entries** — reclaiming roughly 80% of those rows
+while the reconstruction still reads correctly at the line level. Merging happens as frames expire,
+and a one-time pass on first launch cleans up frames that expired before this shipped. Search is
+unaffected. (Full-text and semantic search read separate stored text/vectors, not these positions.)
+Following PR review, an expired frame is now retired in a single atomic step, so a momentary
+database hiccup can never leave a frame half-degraded (marked expired but still carrying its
+per-word rows); if it fails, the frame is simply retried on the next sweep.
+
 ### Fixed — Semantic search could miss in-range results on tight time windows (gap #8)
 When a search combined a query with a narrow time filter, the vector (meaning-based) arm fetched a
 fixed pool of nearest matches and *then* dropped those outside the window — so an in-window match that
