@@ -19,6 +19,39 @@ batch and read only after the password/offscreen privacy guard passes, so a mask
 text is never fetched. Live-verified capturing real Chrome pages. The earlier 0.2.1 hang mitigation is
 unchanged.
 
+### Changed — Expired screenshots now shrink the database too, not just disk (gap #73a)
+When a screenshot expires under retention, the app keeps a text + layout reconstruction of it. That
+reconstruction is drawn from per-word text positions, which are the biggest remaining database cost
+for old frames. Rather than delete them (which would blank out the reconstruction), the app now
+**merges each expired frame's words into per-line entries** — reclaiming roughly 80% of those rows
+while the reconstruction still reads correctly at the line level. Merging happens as frames expire,
+and a one-time pass on first launch cleans up frames that expired before this shipped. Search is
+unaffected. (Full-text and semantic search read separate stored text/vectors, not these positions.)
+Following PR review, an expired frame is now retired in a single atomic step, so a momentary
+database hiccup can never leave a frame half-degraded (marked expired but still carrying its
+per-word rows); if it fails, the frame is simply retried on the next sweep.
+
+### Fixed — Semantic search could miss in-range results on tight time windows (gap #8)
+When a search combined a query with a narrow time filter, the vector (meaning-based) arm fetched a
+fixed pool of nearest matches and *then* dropped those outside the window — so an in-window match that
+happened to rank just past the pool was silently missed. The vector arm now **widens its search
+adaptively** when a time range is set: it re-runs with a larger nearest-neighbour count until the pool
+fills with in-window matches or the index is exhausted. Unfiltered searches are unchanged. (sqlite-vec
+can't filter inside its nearest-neighbour query, so widening the pool is the fix.) Search latency stays
+well within budget (10k-frame fixture p95 ~66 ms, bar is 200 ms).
+Following review (PR #66, P2): the widening now stops as soon as it has gathered every embedded frame
+the window actually **holds**, bounded by a cheap, index-served count of in-window embedded frames.
+Without that cap, a *sparse* window — one with fewer captures than the pool — on a database larger than
+the widening ceiling would have run the maximum 20 000-neighbour pass on every query even after already
+finding all its matches. An empty window now skips the vector query entirely.
+Following the follow-up review (PR #66, P2): that count itself is now hard-bounded. A `LIMIT` on
+*matches* can't stop early when a window has many captured frames but few embedded ones (an embedding
+backlog, or a wide multi-day range), so the count would have walked the whole frame range — O(window),
+not O(pool). The count now examines at most a fixed budget of frames; a window too large to prove
+sparse within that budget falls back to assuming it is dense (widen up to the pool), which can only
+*raise* the target and never drops an in-window match. The count is now O(pool) even on a wide,
+sparsely-embedded window.
+
 ### Changed — Packaging spec re-scoped to NSIS (Inno / portable ZIP / MSI dropped)
 ScreenSearch ships an unsigned **NSIS** installer (Tauri 2 native, since v0.1.0). The specs had still
 called for an "Inno Setup installer + portable ZIP"; all nine live references (project intake,

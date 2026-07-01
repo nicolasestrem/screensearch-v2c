@@ -72,6 +72,181 @@ required be **live-verified** (the walk path runs only in the `#[ignore]`d deskt
   Verify: `fmt`/`clippy`/`cargo test -p uia` → EXIT 0; live `--ignored` control-view path non-regressed
   (3× consecutive: **282 spans / 6316 chars / ~90 ms**, well inside the 300 ms ceiling). The raw-view
   path is off-by-default and CI-dark like the rest of the walk; the fix is MS-doc-recommended.
+- **Don't prefetch field values before the privacy guard (`chatgpt-codex-connector`, P2).** Caching
+  `UIA_ValueValuePropertyId` made `BuildUpdatedCache` prefetch every walked node's field value —
+  password/offscreen fields included — **before** `should_emit` runs, so a masked/hidden value was
+  pulled into-process even though it's never emitted. That regressed the crate's visible-only /
+  "password fields are never read" guarantee vs. the pre-#71 live walk, which read `Value` only after
+  the guard. Fix: dropped `ValueValue`/`ValuePattern` from the batched cache; `extract_text` reads
+  `Value` **live** via `GetCurrentPattern(UIA_ValuePatternId)` + `CurrentValue()`, and it is only
+  reached after `should_emit` — so masked/hidden values are never fetched (exact pre-#71 parity).
+  `Name`/metadata stay batched (the bulk of nodes are static text); value-bearing inputs are a small
+  live-read fraction, and `_Full` cache mode already keeps the live backing `GetCurrentPattern` needs.
+  This supersedes the earlier "cache the `ValueValue` property" defect fix. Verify: `cargo fmt -p uia
+  -- --check` EXIT 0; `cargo clippy -p uia --all-targets -- -D warnings` EXIT 0; `cargo test -p uia`
+  16 passed / 2 ignored; live `--ignored` walk still yields text (4 spans / 30 chars, foreground app).
+
+## Pass — 2026-07-01 — Degrade-to-text DB shrink: merge purged spans to lines (#73a) (`fix/degrade-to-text-db-growth`)
+
+From a `/superpowers:brainstorming` design (plan approved). Second of three (#8 shipped, #71 next). TDD.
+
+### Implemented
+- **#73a — degrade-to-text now shrinks the DB, not just disk.** Discovery that reshaped the plan:
+  `text_spans` are **not** dead weight for purged frames — they are the sole data source for
+  `FrameReconstruction` (`MomentDetail.tsx` renders it in place of the image when `image_purged`). So
+  instead of *pruning* spans (which would gut the just-shipped feature) we **merge** per-word spans to
+  per-line for purged frames: new pure `merge_spans_to_lines` (group by `line_index`, union bbox,
+  join text, content-wins role, any-searchable) + store `merge_frame_spans_to_lines` (one txn:
+  read→merge→`replace_text_spans`). Wired into the retention sweep (`run_retention_once`, after
+  `purge_frame_image`, non-fatal) + a one-time watermark-gated backfill `merge_purged_spans_once`
+  (`maintenance.purged_spans_merged`) for the pre-existing backlog, backed by new
+  `store::purged_frame_ids` (cursor-batched). Reclaims ~80% of span rows; search untouched (FTS reads
+  `content_text`, vector arm reads `embeddings`).
+- **Adversarial review fix (low, CONFIRMED).** The 3-lens review confirmed merge correctness, wiring,
+  and consumer-safety, and found one real defect: `merge_purged_spans_once` set the completion
+  watermark even when *individual* frames failed to merge (a divergence from the `purge_self_captures`
+  retry pattern it cited). Fixed: track a `clean_drain` flag; the watermark is written only on a
+  fully clean drain, so any list- or per-frame failure retries the whole (idempotent) backfill next
+  launch. Added a happy-path + watermark + idempotency test in `screensearch_lib`.
+- **PR #67 external review fix (Codex P2, CONFIRMED).** The retention sweep degraded a frame in two
+  writes — `purge_frame_image` (sets `image_purged = 1`) then a non-fatal `merge_frame_spans_to_lines`.
+  A transient merge failure *after* the flag was set stranded the frame's per-word rows: the sweep
+  (`WHERE image_purged = 0`) and, once its watermark was set, the backfill both skip it forever. Fixed
+  by making degrade **atomic** — new `store::degrade_frame_to_text` merges spans **and** sets the flag
+  in one transaction; on failure nothing commits and the frame retries next sweep. Two new store tests
+  (`degrade_frame_to_text_merges_spans_and_purges_atomically` / `_purges_even_without_spans`). The two
+  Gemini "N+1 → bulk `IN`" comments were **declined** (embedded SQLite; cold paths; a bulk txn forfeits
+  the per-frame failure isolation the backfill needs to converge) and recorded as `TODO.md` TODO-2.
+
+### Verification (Windows, full CI sequence) — verbatim
+_(original PR run below; re-verified verbatim after the PR #67 review fix, 2026-07-01: lint EXIT 0 /
+build `✓ built in 1.70s`; fmt EXIT 0; clippy EXIT 0 `Finished … in 3.58s`; build EXIT 0
+`Finished … in 16.26s`; `cargo test --workspace` **0 failed**, store integration now **54** incl. the 2
+new `degrade_frame_to_text_*`; bindings diff clean.)_
+- `cd ui && npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 1.54s`
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 1.39s` / `CLIPPY_EXIT=0`
+- `cargo build --workspace` → `Finished … in 20.90s` / `BUILD_EXIT=0`
+- `cargo test --workspace` → all suites green, **0 failed** — store **18** lib (4 new
+  `merge_spans_to_lines` unit) + **54** integration (`merge_frame_spans_to_lines_*`,
+  `degrade_frame_to_text_*`, `purged_frame_ids_*`); `screensearch_lib` **8** (new
+  `merge_purged_spans_once_merges_backlog_then_watermarks_and_is_idempotent`); traits 53; uia
+  16/2-ignored; sysmon 11; textfilter 12; kernel; ocr 1
+- `git diff --exit-code -- ui/src/bindings` → `BINDINGS_CLEAN_EXIT=0` (no ts-rs types touched)
+
+### Skipped / deferred
+- Live Moment-render confirmation (optional in the plan): `FrameReconstruction` is unchanged and pure
+  — it renders whatever `get_frame_spans` returns, which the integration test verifies is line-level
+  with intact text + geometry. Not staged live (would need a rebuilt binary + a forced-purged frame).
+- Row #73 (b) lossy codec and (c) vision-on-degraded-frames remain deferred (unchanged).
+
+### Still risky
+- Coarser `text_filter_stats` / `backfill_filter_version` granularity for already-purged, past-
+  retention frames (accepted tradeoff; `reconcile` reclassifies line-level spans without error).
+
+## Pass — 2026-07-01 — Vector-arm time-range recall: adaptive KNN escalation (#8) (`fix/vector-arm-time-range-recall`)
+
+From a `/superpowers:brainstorming` design (plan approved): close reachable `07` gaps. First of three
+(then #73a, #71). TDD.
+
+### Implemented
+- **#8 — vector arm no longer misses in-range matches buried beyond the pool.** `text_knn_in_range`
+  (`crates/store/src/search.rs`) previously ran one KNN at `k = pool` then post-filtered the time
+  window on the join, silently dropping in-range vectors ranked beyond the top-`pool` nearest. Pushing
+  the filter into `MATCH` is impossible on sqlite-vec 0.1.9 (no in-KNN filtering; 0.1.10-alpha is
+  broken), so a **bounded** range now escalates `k` geometrically (`KNN_ESCALATION_FACTOR`=8, ceiling
+  `MAX_TIME_RANGE_KNN`=20 000) until the pool fills with in-range frames, the KNN exhausts the table
+  (returned `< k` rows), or `k` hits the ceiling; an **unbounded** range keeps the single `k = pool`
+  pass (the time filter is then a no-op). Wrote `vector_arm_finds_in_range_match_buried_beyond_pool`
+  first — 55 nearer out-of-window vectors bury the only in-window match at rank 56, past the `pool=50`
+  floor — observed **red** (`got []`, want `[56]`), then green after the fix. Added `vec_at_angle`
+  (graded cosine distances, unlike `one_hot`'s 0/1).
+- **Adversarial review clean.** A 3-lens workflow (loop-termination/bounds, semantic parity with the
+  old single-pass, exhaustion-signal + edge cases) returned **no findings**.
+
+### Verification (Windows, full CI sequence) — verbatim
+- `cd ui && npm run lint` → `LINT_EXIT=0`; `npm run build` → `✓ built in 2.11s` / `BUILD_EXIT=0`
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 9.12s` / `CLIPPY_EXIT=0`
+- `cargo build --workspace` → `Finished … in 24.70s` / `BUILD_EXIT=0`
+- `cargo test --workspace` → all suites green, **0 failed** (store **50** integration incl. the new
+  test + 14 lib; traits 53; uia 16/2-ignored; sysmon 11; textfilter 12; kernel pipeline 6 / settings 6
+  / throttle 2; screensearch_lib 7; ocr 1; e2e/perf ignored)
+- `cargo test -p store --test perf -- --ignored` → `median = 31.3853ms, p95 = 80.3555ms` (< 200 ms bar)
+- `git diff --exit-code -- ui/src/bindings` → `BINDINGS_CLEAN_EXIT=0` (store-only change, no ts-rs types)
+
+### Skipped / deferred
+- Pushing the time filter into the KNN via a vec0 metadata/partition column — still blocked by
+  sqlite-vec 0.1.9 (documented in the `07` #8 row). The escalation is the schema-free close.
+
+### Still risky
+- A pathologically tight window on a very large vector table *past* the 20 000 `k` ceiling can still
+  under-count (bounded residual, `07` #8). Unobserved at the 10k-fixture scale; the ceiling is a tunable
+  constant.
+
+### Review response — 2026-07-01 (PR #66, Codex P2 — count-capped escalation target)
+Codex flagged that for a **sparse** bounded window (fewer distinct embedded frames than `pool`) on a DB
+with more than `MAX_TIME_RANGE_KNN` vectors, neither the pool-fill (`ids.len() >= pool`) nor the
+exhaustion gate (`raw < k`) can ever fire, so every such query/report climbed to the 20 000 `k` ceiling
+even after already finding all in-window matches. Fixed by capping the escalation **target** at the
+count of distinct embedded frames actually in the window:
+- New `count_embedded_frames_in_range(conn, start, end, cap)` — an `EXISTS` semi-join, index-served
+  (`EXPLAIN QUERY PLAN` → `SEARCH fr USING COVERING INDEX idx_frames_captured_at` +
+  `SEARCH m EXISTS USING COVERING INDEX idx_embeddings_frame`), `LIMIT cap`-bounded so it stays O(pool)
+  even on a wide, densely-embedded window (the P2 addressed the residual per-query cost of an uncapped
+  count directly). `target = min(pool, count)`; `count == 0` skips the KNN entirely.
+- Extracted the loop into a pure, unit-testable `escalate_in_range_knn(pool, target, fetch)`.
+- TDD: 5 pure escalation unit tests (`escalating_knn_*`) written first — observed **3 red** (naive
+  single-pass: no escalation / no ceiling climb / no truncation) → green after the real loop; new
+  `count_embedded_frames_dedups_chunks_and_honors_cap` (distinct-frame count + `LIMIT` cap + empty
+  window); integration `sparse_time_window_returns_every_in_window_match`,
+  `dense_time_window_returns_the_pool_nearest_in_window_matches` (target caps to `pool`, nearest-first
+  preserved), `empty_time_window_returns_nothing_via_vector_arm`.
+- **Adversarial re-review (3-lens: target-correctness / SQL-race-index / edge-perf, refute-by-default
+  verify pass):** one **LOW** finding — the *uncapped* count's O(window) cost — which the `LIMIT` cap
+  above already resolves; no correctness findings.
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 2.28s` / exit 0
+- `cargo build --workspace` → `Finished … in 8.89s` / exit 0
+- `cargo test --workspace` → all suites **0 failed** (store 53 integration + 20 lib incl. the 5
+  escalation + count-cap unit tests)
+- `cargo test -p store --test perf -- --ignored` → `median = 27.3359ms, p95 = 65.8744ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
+
+### Follow-up review response — 2026-07-01 (PR #66, Codex P2 — bound the pre-count scan)
+Codex's next review correctly refuted the claim above that the `LIMIT cap` kept the count O(pool). The
+`LIMIT` is on **matches**, so it only short-circuits after finding `cap` *embedded* frames. A window
+with many captured frames but few embedded ones (an `embed_text` backlog, or a wide multi-day range)
+never fills the `LIMIT`, so SQLite walked the whole `frames` range running the `EXISTS` probe per row —
+O(frames-in-window), not O(cap). The intended guard didn't hold in exactly the sparse regime it targets.
+Fixed by bounding the **frames examined**, not just the matches:
+- `count_embedded_frames_in_range` now takes `(pool, scan_cap)` and returns `Option<usize>`. The inner
+  select is `LIMIT scan_cap`; the outer query returns `(scanned, embedded)` via `COUNT(*)` +
+  `COALESCE(SUM(has_emb), 0)`. If `scanned == scan_cap` the window is too large to prove sparse within
+  budget, so it returns `Some(pool)` — the **dense** assumption, a safe over-estimate that can only
+  *raise* the escalation target, never stop it early on an in-range match. Otherwise the whole window
+  was scanned, so `embedded` is exact: `None` when zero (skip the KNN), else `Some(min(pool, embedded))`.
+- `COUNT_SCAN_CAP = MAX_TIME_RANGE_KNN` (20 000): the count never examines more frames than a single
+  ceiling KNN pass would examine vectors, and it still fully (exactly) scans any realistic short/medium
+  window. Net: the pre-count is now genuinely O(cap) even on a wide, sparsely-embedded window.
+- **Correctness argument (no missed matches):** the dense fallback only ever returns `pool ≥
+  min(pool, n)`, so `target` is never *below* the true window count — the `ids.len() >= target` stop
+  can't fire before every in-window frame is gathered. Escalation still terminates on `raw < k` or the
+  `k` ceiling. Output-equivalent to the prior code on every window that fits the scan budget.
+- TDD: rewrote `count_embedded_frames_dedups_chunks_caps_and_bounds_the_scan` with a scan-budget case
+  (scan_cap 2 < 4 in-window frames → asserts `Some(pool)`, not the small exact count). Observed **red**
+  (naive form returned `Some(2)`) → green after the scan-cap-hit branch. `escalate_in_range_knn` and all
+  its unit tests are unchanged (the target contract is identical).
+
+Verification — verbatim (Windows, full CI):
+- `cargo fmt --all -- --check` → clean (exit 0)
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 4.58s` / exit 0
+- `cargo build --workspace` → `Finished … in 15.09s` / exit 0
+- `cargo test -p store` → lib **20 passed / 0 failed**, integration `store.rs` **53 passed / 0 failed**
+- `cargo test -p store --test perf -- --ignored` → `median = 26.9464ms, p95 = 68.57ms` (< 200 ms)
+- `git diff --exit-code -- ui/src/bindings` → clean (store-only change, no ts-rs types)
 
 ## Pass — 2026-06-30 — Cancel Inno (#26) + single-instance focus + a11y matrix (#42) (`chore/cancel-inno-and-a11y-matrix`)
 
