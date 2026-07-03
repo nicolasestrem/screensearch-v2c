@@ -46,13 +46,13 @@ plan and spec build on a fixed base:
 - **Processing model:** **capture-cheap, enrich-deferred** — a durable **SQLite job queue** with
   worker pools triggered **on-demand / on-timer / when-idle**.
 - **Capture:** Windows.Graphics.Capture (WGC). **OCR:** WinRT `Media.Ocr` (in-process, STA).
-- **Embeddings:** fastembed (in-process ONNX) — EmbeddingGemma-300M text (768-dim),
-  nomic-embed-vision-v1.5 image (768-dim).
+- **Embeddings:** fastembed (in-process ONNX) — EmbeddingGemma-300M text (768-dim). *(0.3.0 removed
+  the optional nomic-embed-vision image lane — `02 §5c`.)*
 - **Inference:** a single supervised, **model-agnostic llama.cpp sidecar** (Vulkan + CPU) that
   loads the user-selected tier on demand across two lanes — **vision** (Default Qwen3-VL-4B /
-  Quality Qwen3-VL-8B / Beta Qwen3.5-9B-VLM) and **answer** (Default Ministral-3-3B-Reasoning /
-  Quality Qwen3-4B-Thinking-2507 / Beta Nemotron-3-Nano-4B). The child is **bound to the app via
-  a Windows Job Object** so it cannot orphan after a crash.
+  Quality Qwen3-VL-8B) and **answer** (Default Ministral-3-3B-Reasoning / Quality
+  Qwen3-4B-Thinking-2507). *(0.3.0 retired the Beta tier — `02 §5c`.)* The child is **bound to the
+  app via a Windows Job Object** so it cannot orphan after a crash.
 - **Data:** SQLite (WAL) + FTS5 (porter) + sqlite-vec (`vec0`, cosine); hybrid retrieval via RRF.
 
 ## 5. Inherited knowledge from V1 (reference only — what's true about the problem space)

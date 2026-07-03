@@ -7,10 +7,13 @@ A standalone, **Windows-only**, local-first desktop app (Rust + Tauri 2) that ca
 makes it searchable by text and meaning, and answers questions about it — fully on-device. This is
 a **clean-slate** project; it shares no code or data with any prior version.
 
-**Current state: v0.1.0 shipped 2026-06-24; the active arc is 0.2.x (attention-first text signal +
-recall reports). PR1–PR3, PR6, PR7, and PR8 are merged.** The full app exists — a 9-crate Rust
-workspace + a React/TS UI. The specs remain the contract; the build-loop docs (`05`/`06`/`07`/`08`)
-are the live status of record. Packaging is still the deferred follow-up.
+**Current state: v0.1.0 shipped 2026-06-24; the 0.2.x arc (attention-first text signal + recall
+reports) is shipped. The active arc is 0.3.0 — "P7: surface reduction + flow recall + local API"
+(`docs/0.3.0.md`, `02 §5c`): subtract event-triggers/Beta-tier/image-lane, add a Flow overlay,
+where-was-i + marks, an opt-in localhost API + MCP wrapper. PR1 (the specs contract) is the entry
+point.** The full app exists — a 9-crate Rust workspace + a React/TS UI. The specs remain the
+contract; the build-loop docs (`05`/`06`/`07`/`08`) are the live status of record. Packaging is
+still the deferred follow-up.
 
 ## ⛔ Read the spec before doing anything (mandatory order)
 1. `specs/01_PROJECT_CONTEXT.md` — what is true today (env, constraints, non-goals)

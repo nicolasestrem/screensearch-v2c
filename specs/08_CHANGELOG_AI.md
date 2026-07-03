@@ -17,6 +17,50 @@
 
 ---
 
+## 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
+- **Change:** Normalized the 0.3.0 roadmap (`docs/0.3.0.md`, decisions D1–D15) into the spec contract
+  so PR2–PR9 are implementable from the specs alone. **No code / no schema code / no UI** — only
+  `specs/`, `docs/`, `CLAUDE.md`, `AGENTS.md`, `CHANGELOG.md`.
+  - `02`: new **§5c** (0.3.0 arc — problem/thesis/additions/ships-in/deferred); two-tier §2/§3; §6 risk
+    rows (drop the Nemotron row; add hotkey-conflict + API-token-leak rows); §7 non-goals (+ proactive
+    nudges, audio *for now*); §8 Status → 0.3.0 active.
+  - `03`: §8 removed the 5 retired event keys + `enrich.image_embeddings`; added `overlay.*`/`resume.*`/
+    `marks.*`/`api.*` groups + the `beta`→`quality` load mapping (D3/D4) + the settings-load-tolerance /
+    no-schema-change contract (D1/D2). §4 added the `marks` table + documented **both** forward-only
+    migrations (PR4 image-lane drop, PR6 marks; D5/D10/D15) with the relative-version rule, and removed
+    the image-embedding DDL + `embed_image` refs across §3/§4/§5. New **§7b** (where-was-i + marks +
+    `capture_now` — D7/D8/D9) and **§7c** (localhost HTTP API + export + SSE + MCP — D11/D12/D13).
+    §12/§13 reconciled to two tiers; new **§13b** DoD (PR2–PR9 acceptance).
+  - `UI_REFERENCE`: Overlay screen (identity / five states / keyboard / <150 ms perf / reduced-motion /
+    self-exclude), Deck where-was-i card + Intentions strip, Settings hotkeys + Local API row (threat
+    model + loud port-in-use), `ModelTierPicker` → Default/Quality, `Domain (0.3.0)` components.
+  - `MODEL_REGISTRY`: deleted both Beta rows + the image-embedding row + the Nemotron invariant.
+  - `00`/`01`: two-tier consistency (**required** — `04 §2` routes model-tiers to `00`) + image-model
+    strike; `00 §D` flags (image embeddings removed / reranker never implemented).
+  - `04`: 0.3.0 reading-order line, source-of-truth row, PR1→PR9 build-order sequence.
+  - `07`: five deferrals (#75–#79), the resolved API port-bind UX (#80 — "loud + guided change"), and a
+    doc-sweep tracking row (#81 — `docs/ARCHITECTURE.md`/`TESTING.md` assigned to PR2/PR4/PR9).
+  - `CLAUDE.md`/`AGENTS.md`: current-state paragraph → 0.3.0.
+- **Why:** the arc ships specs-first (same method as the 0.2.x PR1); `docs/0.3.0.md` "What PR1 must
+  change, file by file" + its acceptance ("a fresh agent can implement PR2 from the specs alone").
+- **New ambiguity (not in D1–D15):** API port-bind failure UX — surfaced to the user, resolved to
+  **"loud + guided port change"**, contract written into `03 §7c` + `UI_REFERENCE`, recorded in `07` #80.
+- **PR #70 review round (bot comments; not replied to per user instruction; each verified vs. real
+  code first):** `03 §2` moved the `capture_now` note outside the `CaptureSource` trait ("not a trait
+  method"); `03 §7`/`§7c`/`§4` settled one canonical `list_marks` order (all marks, unresolved first
+  then newest-first) + fixed `idx_marks_open` to `created_at DESC`; `03 §7b` anchors where-was-i on the
+  **last non-ScreenSearch foreground** (overlay-focus bug) and absorbs transient excursions via the D9
+  dwell threshold; `03 §7b` pins `capture_now` to the **foreground-window monitor** (multi-monitor
+  determinism); `03 §7c` cancels `/v1/ask` inference on client disconnect and streams `/v1/export`
+  (flat memory, bounded window). A `CHECK` on `jobs.kind` was **declined** (live `schema.rs` has none;
+  would force an unplanned PR4 rebuild) and recorded as opt-in hardening in `07` #82. Full mapping: `05`.
+- **Verification — verbatim** (specs-only PR — the untouched tree must still build):
+  - `cargo fmt --all -- --check` → `FMT_EXIT=0`
+  - `cargo build --workspace` → `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 19.79s` / `BUILD_EXIT=0`
+  - `git status --short` diff limited to `specs/*`, `docs/0.3.0.md`, `CLAUDE.md`, `AGENTS.md`,
+    `CHANGELOG.md`, `.gitignore` — **no `.rs`/`.ts`/`.tsx`/`.toml`/`ui/` files touched** (bindings
+    untouched by construction).
+
 ## 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
 - **Change:** `crates/uia/src/worker.rs` — the foreground-window UIA walk now batches each node's ~5
   separate `Current*` property reads into **one `BuildUpdatedCache`** call + cached getters

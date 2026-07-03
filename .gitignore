@@ -49,3 +49,4 @@ desktop.ini
 !.vscode/extensions.json
 /.codex
 custom-llm-training.md
+docs/0.3.0-kickoff-prompt.md

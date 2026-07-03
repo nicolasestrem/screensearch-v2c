@@ -34,8 +34,9 @@ everything down). **V2c changes the shape, not the engines:**
    orphan; a failed enrichment **job retries** instead of crashing capture.
 3. **Modular kernel over ad-hoc channels.** Trait-bounded modules communicate over a typed event
    bus — any module is swappable and testable in isolation.
-4. **Tiered models, user-selectable.** Vision and answer each offer **Default / Quality / Beta**,
-   so users trade footprint vs. quality explicitly (see `00 §E`).
+4. **Tiered models, user-selectable.** Vision and answer each offer **Default / Quality**,
+   so users trade footprint vs. quality explicitly (see `00 §E`). *(0.3.0 retired the Beta tier —
+   `§5c`; the answer lane's non-Apache Nemotron went with it.)*
 
 ## 3. What stays vs. changes (vs. the V1 reference baseline)
 
@@ -47,7 +48,7 @@ everything down). **V2c changes the shape, not the engines:**
 | Shell/IPC | Axum localhost HTTP + rust-embed | **Change → Tauri 2 typed IPC** |
 | Structure | monolith, ad-hoc channels | **Change → modular kernel + event bus** |
 | ML runtime | flirted with Python ML sidecar (failed) | **Rust-only runtime** (no Python *ML sidecar*; Python OK for tooling) |
-| Models | single defaults | **Change → 3-tier per lane** |
+| Models | single defaults | **Change → 2-tier per lane** (Default / Quality; 0.3.0 retired Beta) |
 | Automation | present | **Drop for v1.0** (later) |
 
 ## 4. Future-state architecture (high level)
@@ -104,9 +105,45 @@ app, **not** a retrofit of the v1.0 phases above. It is tracked in detail in `do
   in `07`. **0.2.0 keeps timer/idle capture; no raw keystrokes or clipboard text are ever stored.**
 - **Realized on 0.2.1.** The **smart enrichment throttle** (the roadmap's former PR5, `07` gap #49)
   now ships on the 0.2.1 line: opt-in, default-OFF, CPU/GPU-pressure-aware backpressure that pauses
-  heavy enrichment (`vision_tag` / `embed_image`, and at the deepest level floors `embed_text`
-  concurrency) under *sustained* load, while **capture / OCR / storage never pause** (they sit
-  outside the worker pool). Contract in `03 §5/§7/§8`.
+  heavy enrichment (`vision_tag` — and `embed_image` until 0.3.0 PR4 removed that lane — and at the
+  deepest level floors `embed_text` concurrency) under *sustained* load, while **capture / OCR /
+  storage never pause** (they sit outside the worker pool). Contract in `03 §5/§7/§8`.
+
+## 5c. Post-1.0 arc — 0.3.0 (subtraction + flow recall + open surface)
+
+The 0.2.x line is shipped and tagged; **0.3.0 (P7)** is the next **separate arc** layered on the
+shipped app, **not** a retrofit of the phases above. It is tracked in detail in `docs/0.3.0.md`
+(roadmap) and `03` (contract); this section states only the strategic *what/why*.
+
+- **The problem.** Two forces, pulling the same way. (1) **Too much surface for a solo project to
+  carry** — six event-capture triggers (two riding a global `WH_MOUSE_LL` mouse hook the 0.2.0
+  roadmap deliberately avoided), three model tiers per lane (one, Nemotron, the only non-Apache
+  license and the only unproven hybrid arch), and a dark, flag-off image-embedding lane
+  (`enrich.image_embeddings`) nobody turns on. Each is user config surface, maintainer decision
+  surface, and audit surface for a privacy-first product. (2) **Recall is still friction-gated** —
+  recalling means switching *to* ScreenSearch, a context switch to recover from a context switch;
+  and the app is a silo with no API for the open-source audience to build on.
+- **P7 — Surface reduction + flow recall + local API.** **Subtract:** cut the six triggers to
+  **foreground + idle** (deleting the mouse hook, the clipboard listener, and typing-pause), retire
+  the **Beta** model tier (Default/Quality only — a uniformly Apache story), and remove the
+  image-embedding lane (text embeddings + vision tags already cover semantic reach). **Add** — each
+  reusing infrastructure that already exists (the store, hybrid search, the sidecar, the capture
+  pipeline; no new subsystem is invented): a **global-hotkey Flow overlay** (instant
+  search-as-you-type / ask over whatever you're doing), a **where-was-i + mark-this-moment**
+  workflow (the ADHD core — pull-based, never nagging), and an **opt-in localhost HTTP API +
+  export** with a thin **stdio MCP wrapper**. Every removal deletes a decision; every addition
+  reuses infrastructure.
+- **Ships in 0.3.0** (build order): PR1 specs → PR2 trigger trim → PR3 Beta-tier removal → PR4
+  image-lane removal → PR5 Flow overlay → PR6 where-was-i + marks → PR7 local API + export → PR8
+  MCP server → PR9 audit + release. The three subtractions (PR2–PR4) are independent of each other
+  and of PR5–PR8; PR5 precedes the overlay half of PR6; PR7 precedes PR8. Existing DBs are
+  supported — migrations are forward-only and destroy **only** derived, re-derivable data
+  (image-embedding vectors and dead jobs).
+- **Deferred (recorded in `07` during PR1, not built this arc):** audio capture / transcription
+  (the most-requested capability in the category — a full arc of its own; revisit 0.4.x), a
+  custom-GGUF "bring-your-own-model" path (replaces the Beta tier for tinkerers), **proactive
+  nudges** (0.3.0's surfaces are **pull-based only** — no notifications, no shame-analytics), marks
+  inside Recall reports, and API write scopes beyond `POST /v1/marks`.
 
 ## 6. Risks & mitigations
 
@@ -115,18 +152,21 @@ app, **not** a retrofit of the v1.0 phases above. It is tracked in detail in `do
 | Tauri 2 + WebView2 packaging friction (new) | Spike in P0; keep the shell thin; the kernel is shell-agnostic behind traits. |
 | WGC capture integration (new code path) | `CaptureSource` trait + an early P2 spike; fall back to a simpler capture if WGC misbehaves. |
 | Sidecar orphan/hang | Job Object KILL_ON_JOB_CLOSE + startup reap + heartbeat/restart (hard requirement). |
-| Beta answer model (Nemotron) hybrid arch on llama.cpp/Vulkan | It's **Beta only**, never the default; Default/Quality are vanilla-arch + Apache. |
 | Resource spikes surprising users | On-demand/timed by default; explicit schedule UI; idle-only option; per-job budgets. |
+| Global hotkey conflicts (PowerToys, IMEs, games) — 0.3.0 | Non-default combos (`Ctrl+Alt+Space` / `Ctrl+Alt+M`), both configurable; a failed registration is a **visible Settings warning + toast**, never a silent no-op (`§5c`; `03 §7b`/§8). |
+| API token leakage → full-history read by local malware — 0.3.0 | API **off by default**, binds `127.0.0.1` only (hard-coded, not a setting); plain-language threat model in Settings + docs; a regenerate-token button (`03 §7c`). |
 | Scope creep | Automation + nice-to-haves are explicitly **out of v1.0**. |
 
 ## 7. Non-goals (reaffirmed)
 macOS/Linux · OS automation (v1.0) · cloud/telemetry · accounts/multi-user · real-time vision ·
-V1 data import.
+V1 data import · **proactive nudges / notifications** (0.3.0 recall is pull-based only) · **audio
+capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
 
 ## 8. Status
 - **License decided: MIT.** No open strategic questions.
-- **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24). Active arc: **0.2.x — attention-first text
-  signal + recall workflows** (see `§5b` and `docs/0.2.0.md`).
+- **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24); the **0.2.x arc shipped** (attention-first text
+  signal + recall workflows; `§5b`, `docs/0.2.0.md`). Active arc: **0.3.0 (P7) — surface reduction
+  + flow recall + local API** (see `§5c` and `docs/0.3.0.md`).
 
 ---
 

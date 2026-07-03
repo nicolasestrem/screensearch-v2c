@@ -19,6 +19,9 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 **For any frontend work (P5):** also read `UI_REFERENCE.md` — it is authoritative for the UI.
 **For 0.2.x work:** also read `docs/0.2.0.md` (the attention-first roadmap) plus `02 §5b` and
 `03 §3b`/`§8b` — the content-text + reports contract.
+**For 0.3.0 work:** also read `docs/0.3.0.md` (surface reduction + flow recall + local API) plus
+`02 §5c` and `03 §7b`/`§7c` — the flow-recall + API contract. The **specs are the contract**, the
+roadmap is context (PR1 already normalized decisions D1–D15 into the specs).
 
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
@@ -27,6 +30,7 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 |---|---|
 | Why are we doing this / scope / phases | `02` |
 | 0.2.x arc scope / PR order / content-text rationale | `docs/0.2.0.md` (+ `02 §5b`) |
+| 0.3.0 arc scope / PR order (subtraction + flow recall + local API) | `docs/0.3.0.md` (+ `02 §5c`) |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
 | UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
@@ -48,6 +52,13 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   **PR7 Integration audit**. Each PR is its own branch, runs the full PR7 verification suite, updates
   `05`–`08`, and **recycles this file (`04`) as its operating prompt**. (Former PR4/PR5 —
   event-driven capture, UIA text, smart enrichment throttle — are deferred to 0.2.1; see `07`.)
+- **0.3.0 arc (P7, `02 §5c` / `docs/0.3.0.md`):** **PR1 Specs contract** → **PR2 Trigger trim** →
+  **PR3 Beta-tier removal** → **PR4 Image-lane removal** → **PR5 Flow overlay** → **PR6 Where-was-i +
+  marks** → **PR7 Local API + export** → **PR8 MCP server** → **PR9 Audit + release**. PR2–PR4 (the
+  subtractions) are order-independent among themselves; PR5 precedes the overlay half of PR6; PR7
+  precedes PR8. Schema-changing PRs (PR4, PR6) bump `schema_version` by one with a populated-DB
+  migration test (`03 §4`, D15). Each PR is its own branch, runs the full verification suite, updates
+  `05`–`08`, and **recycles this file (`04`) as its operating prompt**.
 
 ## 4. Guardrails (hard rules — violating any = stop)
 - **No destructive git.** Feature branches only; never force-push or reset shared history; never

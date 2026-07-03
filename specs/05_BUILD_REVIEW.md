@@ -20,6 +20,76 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
+
+From `docs/0.3.0.md` (roadmap, decisions D1–D15) + a Plan-agent adversarial validation of the edit
+map. Specs-first: PR1 pre-writes the whole-arc contract so PR2–PR9 implement from the specs alone.
+
+### Implemented
+- **Contract normalized across `00`–`04` + `UI_REFERENCE` + `MODEL_REGISTRY` + `07` + `CLAUDE.md`/
+  `AGENTS.md` + `CHANGELOG.md`.** Subtractions (trigger trim / Beta retire / image-lane drop) and
+  additions (Flow overlay §7b / where-was-i + marks §7b / localhost API + export §7c + MCP) are now
+  contract language; every D1–D15 has a home (matrix in the plan file). Details: `08` entry above.
+- **New ambiguity resolved:** API port-bind UX (not a D-decision) → "loud + guided port change"
+  (`03 §7c`, `UI_REFERENCE`, `07` #80), surfaced to the user first.
+
+### Verification (specs-only — the untouched tree must still build) — verbatim
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo build --workspace` → `Finished \`dev\` profile … in 19.79s` / `BUILD_EXIT=0`
+- `git status --short` → only `specs/*` + `docs/0.3.0.md` + `CLAUDE.md`/`AGENTS.md`/`CHANGELOG.md`/
+  `.gitignore`; **no `.rs`/`.ts`/`.tsx`/`.toml`/`ui/`** touched → `ts-rs` bindings untouched by
+  construction (no `cargo test` regen needed for a docs-only change).
+
+### Skipped / deferred (intentional — out of PR1 scope)
+- **Pre-existing `03 §4` ↔ `crates/store/src/schema.rs` DDL drift** (mostly deferred): `§4`'s
+  "authoritative DDL" predates the `capture_trigger` (v5/v6) and `image_purged` (v7) columns and still
+  carries a stale "schema_version 2 → 3" comment (actual `LATEST_SCHEMA_VERSION = 8`). PR1's D2 contract
+  is written against the **real** schema. Because a fresh PR2 implementer reads `§4` to ground D2, the
+  verification workflow flagged the undocumented `capture_trigger` column, so PR1 **added it to the `§4`
+  frames DDL verbatim from `schema.rs` (incl. its widened CHECK)** — the one targeted reconciliation D2
+  directly needs. The rest of the drift (`image_purged`, the stale version comment, `frame_text`
+  nuances) stays a future cleanup. The new `marks` DDL + the two 0.3.0 migration notes use the
+  **relative** "+1, confirm against `LATEST_SCHEMA_VERSION`" rule so they stay correct regardless.
+- `docs/ARCHITECTURE.md` / `docs/TESTING.md` (live docs naming removed subsystems) are **not** edited —
+  PR1 is specs-only; assigned to PR2/PR4/PR9 via `07` #81.
+
+### Still risky
+- Nothing runtime (docs-only). The risk is contract completeness — mitigated by the Plan-agent map
+  validation (High/Medium findings folded in: `03 §3` trait signatures, residual `embed_image` prose,
+  D7 in `03`, `00 §E`/`01` image-model refs, `02 §8` Status). A whole-arc completeness sweep should run
+  before PR2 (an adversarial grep that no live `specs/` reference to a removed subsystem survives).
+
+### PR #70 review round (2026-07-03) — bot comments folded in (specs-only, still no code)
+Three PR reviewers (claude/gemini/codex; all bots, not replied to per user instruction). Each inline
+comment verified against the **real** code before acting — several made claims about the tree:
+- **`capture_now` note misplaced inside the `CaptureSource` trait block** (claude) → moved outside the
+  `}`, reworded "**NOT** a method on this trait — a per-request flag to the capture worker" (`03 §2`).
+- **`list_marks` ordering stated 3 ways** (claude: IPC "unresolved-first" vs `§7b` "newest-first" vs
+  the index comment) → settled one canonical order (**all marks, unresolved first then newest-first
+  within each group**) in the `§7` IPC row, `§7c` `GET /v1/marks`, and fixed `idx_marks_open` to
+  `(resolved_at, created_at DESC)` so "newest-first" is actually index-served.
+- **where-was-i anchors on the wrong foreground** (codex P2): from the overlay the OS foreground *is*
+  ScreenSearch, so "current foreground" would pick the detour, not the work context → `§7b` now
+  anchors on the **last non-ScreenSearch foreground context**, derived core-side (no `where_was_i()`
+  signature change); mirrored in `UI_REFERENCE`.
+- **where-was-i fragile to transient focus switches** (gemini) → `§7b` absorbs brief excursions; an
+  interruption breaks a run only if the interrupting context is **itself sustained** (≥
+  `resume.min_dwell_secs`) — reuses the one D9 threshold, adds no new knob.
+- **`capture_now` frame nondeterministic on multi-monitor** (codex P2): `capture_cycle` yields one
+  frame per monitor → `§7b` pins the mark to the **foreground-window monitor** (the frame whose
+  `target_rect` resolves, `crates/capture/src/lib.rs:302-309`), primary as fallback.
+- **`POST /v1/ask` doesn't cancel on client disconnect** (gemini) → `§7c` now requires PR7 to
+  propagate cancellation on disconnect (**abort the sidecar `stream_task`**, free GPU/CPU), spelled out
+  because `AnswerProvider::answer` is driven by the sidecar stream and discards downstream `tx.send`
+  errors today — so merely dropping the SSE receiver would *not* stop generation (caught by the
+  review-round verification reading `crates/inference/src/answer.rs:118-137`).
+- **`GET /v1/export` unbounded → OOM** (gemini) → `§7c` specifies streaming serialization (flat
+  memory) + optional `from`/`to` bound; same for the Settings "Export…" file path.
+- **Add `CHECK` to `jobs.kind`** (gemini) → **declined + recorded** (`07` #82): live `schema.rs:132`
+  has no such `CHECK`; adding one would diverge the spec from code and force an unplanned jobs-table
+  rebuild in PR4 (beyond D5). Kept as opt-in future hardening as its own migration.
+- Verbatim re-verification below.
+
 ## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
 
 From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`

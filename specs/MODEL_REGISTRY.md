@@ -4,6 +4,10 @@
 > below were confirmed to exist. **Per-file GGUF/mmproj names are not hardcoded here on purpose** —
 > resolve them at download time with the `hf` command in §4 so quant/mmproj names always match the
 > repo's current contents. Wrong mmproj = llama-server crash (see §5), so follow §4 exactly.
+>
+> **0.3.0 retired the Beta tier** (both lanes) and the optional image-embedding model — each lane is
+> now **Default / Quality**, uniformly Apache-2.0 (`02 §5c`, `docs/0.3.0.md` PR3/PR4). History for the
+> removed rows lives in git.
 
 All models download at runtime to the app models dir (never committed). Recommended quant for all
 GGUF: **Q4_K_M** (2026 default balance); offer Q5_K_M/Q6_K as a higher-quality option in settings.
@@ -14,7 +18,6 @@ GGUF: **Q4_K_M** (2026 default balance); offer Q5_K_M/Q6_K as a higher-quality o
 |---|---|---|---|
 | **Default** | `Qwen/Qwen3-VL-4B-Instruct-GGUF` | Apache-2.0 | Official Qwen. Light on-demand tagging. |
 | **Quality** | `Qwen/Qwen3-VL-8B-Instruct-GGUF` | Apache-2.0 | Official Qwen. Higher-fidelity descriptions. |
-| **Beta** | `jc-builds/Qwen3.5-9B-VLM-Q4_K_M-GGUF` | Apache-2.0 | Newest gen; `llama.cpp`-native repo; experimental. |
 
 > Use the **Instruct** variants (not `*-Thinking`) for vision tagging. Each repo ships its matching
 > `mmproj-*.gguf` — always take the projector from the **same repo** as the model weights.
@@ -25,17 +28,16 @@ GGUF: **Q4_K_M** (2026 default balance); offer Q5_K_M/Q6_K as a higher-quality o
 |---|---|---|---|---|
 | **Default** | `unsloth/Ministral-3-3B-Reasoning-2512-GGUF` | 256K | Apache-2.0 | Lightest (3B), vanilla `mistral3` arch — rock-solid in llama.cpp. |
 | **Quality** | `unsloth/Qwen3-4B-Thinking-2507-GGUF` | 256K | Apache-2.0 | Top small reasoner; same family as vision. |
-| **Beta** | `nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF` | ~49K | ⚠️ **NVIDIA OML** (`license: other`) | Strong reasoner, **hybrid Mamba-Transformer** — verify llama.cpp/Vulkan behavior; Beta only, never the default. Confirm OML terms before redistribution. |
 
 ## 3. Embeddings (in-process **fastembed**, not the sidecar — no manual GGUF)
 
 | Role | Model | Dim | Notes |
 |---|---|---|---|
 | Text | EmbeddingGemma-300M (fastembed variant `EmbeddingGemma300MQ`) | 768 | fastembed downloads it on first use. **Cannot batch** — embed one input at a time. |
-| Image (optional) | nomic-embed-vision-v1.5 | 768 | fastembed; enables OCR-less visual recall. |
 
-> Do **not** use Qwen3-VL-Embedding via llama.cpp — it ignores images (proven). Image vectors come
-> from fastembed only.
+> The optional **image-embedding** row (nomic-embed-vision-v1.5) was **removed in 0.3.0** (PR4) — the
+> flag-off lane carried a second vec0 table + model download for no live use; text embeddings + vision
+> tags cover semantic reach (`02 §5c`, `03 §4`). Text vectors are the only embedding lane now.
 
 ## 4. Resolve exact filenames at download time (do this, don't hardcode)
 ```bash
@@ -56,6 +58,7 @@ resolved files. Launch flags: `-ngl <sidecar.ngl>`; vision adds `--mmproj <mmpro
 - **mmproj must be same-family** as the active vision model (mismatch crashes llama-server).
 - **Vision uses Instruct variants**, not Thinking.
 - **EmbeddingGemma-Q cannot batch** — one input per embed call.
-- **Nemotron is Beta-only** (hybrid arch + non-Apache license); Default/Quality stay vanilla-arch +
-  Apache so the common path is always proven.
+- **Every tier is Apache-2.0** — the 0.3.0 Beta retirement removed the only non-Apache model
+  (Nemotron OML) and the only unproven hybrid arch; Default/Quality are vanilla-arch so the common
+  path is always proven.
 - Defaults on first run: **vision = Qwen3-VL-4B-Instruct**, **answer = Ministral-3-3B-Reasoning**.

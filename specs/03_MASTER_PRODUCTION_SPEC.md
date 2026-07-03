@@ -64,6 +64,10 @@ pub struct CapturedFrame { pub monitor_index: u32, pub width: u32, pub height: u
     /// Yields the next *changed* frame (diff-gated) or None on shutdown.
     async fn next_frame(&mut self) -> Result<Option<CapturedFrame>>;
 }
+// 0.3.0: `capture_now` (§7b) is NOT a method on this trait. It is a per-request flag handed to the
+// **capture worker** that drives `next_frame()`, telling it to emit exactly one frame *past* the diff
+// gate — a demanded frame (mark-this-moment) must never be dropped as "unchanged" (D8). The diff gate
+// lives in the worker, not in `CaptureSource`.
 
 pub struct OcrResult { pub text: String, pub mean_confidence: f32, pub engine: String,
                        pub spans: Vec<TextSpan> }   // 0.2.x: per-line/word geometry — see §3b
@@ -76,7 +80,7 @@ pub struct Embedding(pub Vec<f32>); // len == dim()
     fn dim(&self) -> usize;                 // 768
     /// NOTE: quantized text model cannot batch — impl embeds one input at a time.
     async fn embed_texts(&self, inputs: &[String]) -> Result<Vec<Embedding>>;
-    async fn embed_image(&self, image: &RgbaImage) -> Result<Embedding>;
+    // 0.3.0 (PR4) removed `embed_image` — the image-embedding lane is gone (§4/§5).
 }
 
 pub struct VisionAnalysis { pub description: String, pub activity_type: Option<String>,
@@ -101,7 +105,8 @@ pub struct AnswerOpts { pub thinking: bool, pub max_tokens: u32 }
     // embeddings
     async fn upsert_text_embedding(&self, frame_id: i64, chunk_index: i32, chunk_text: &str,
                                    source: ChunkSource, emb: &Embedding, model: &str) -> Result<()>;
-    async fn upsert_image_embedding(&self, frame_id: i64, emb: &Embedding, model: &str) -> Result<()>;
+    // 0.3.0 (PR4) removed `upsert_image_embedding` — the image-embedding lane is gone (§4/§5).
+    // marks (§4, §7b): insert_mark / list_marks / resolve_mark — see §7 command table.
     // retrieval
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>>;
     // job queue (see §5)
@@ -198,7 +203,15 @@ CREATE TABLE frames (
   content_hash  TEXT    NOT NULL,
   app_hint      TEXT, window_title TEXT, browser_url TEXT,  -- context (nullable)
   activity_type TEXT,                       -- filled by vision (nullable)
-  created_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000),
+  -- 0.2.1 event-capture label (`07` #47). 0.3.0 (PR2) keeps this **widened CHECK** unchanged so legacy
+  -- tokens stay readable (D2 — no schema change); new frames only ever emit 'timer'/'idle'/
+  -- 'foreground_change' after the trigger trim, but 'clipboard_change'/'typing_pause'/'click'/
+  -- 'scroll_stop' remain valid for old rows (the Moment "Captured via" row still renders them).
+  capture_trigger TEXT
+    CHECK (capture_trigger IS NULL
+           OR capture_trigger IN ('timer','idle','foreground_change','clipboard_change',
+                                  'typing_pause','click','scroll_stop','manual'))
 );
 CREATE INDEX idx_frames_captured_at ON frames(captured_at);
 
@@ -287,21 +300,26 @@ CREATE VIRTUAL TABLE embedding_vectors USING vec0(
   embedding    FLOAT[768] distance_metric=cosine
 );
 
--- image embeddings (optional visual recall): metadata + sqlite-vec index
-CREATE TABLE image_embeddings (
-  id        INTEGER PRIMARY KEY,
-  frame_id  INTEGER NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
-  model     TEXT NOT NULL, dim INTEGER NOT NULL
+-- image embeddings — REMOVED in 0.3.0 (PR4). The `image_embeddings` + `image_embedding_vectors`
+-- tables and their `AFTER DELETE` trigger are DROPped by the PR4 migration (see "0.3.0 migrations"
+-- below); text embeddings + vision tags cover semantic reach. A fresh 0.3.0+ DB never creates them
+-- (`02 §5c`, `MODEL_REGISTRY §3`).
+
+-- 0.3.0 marks (mark-this-moment; §7b): user-flagged frames + optional intention note. One row per
+-- mark; CASCADEs with the frame like every per-frame table (authored by PR6 — see "0.3.0 migrations").
+CREATE TABLE marks (
+  id          INTEGER PRIMARY KEY,
+  frame_id    INTEGER NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+  created_at  INTEGER NOT NULL,
+  note        TEXT,                          -- optional one-line intention (nullable)
+  resolved_at INTEGER                        -- NULL = unresolved; set on resolve/dismiss
 );
-CREATE VIRTUAL TABLE image_embedding_vectors USING vec0(
-  image_embedding_id INTEGER PRIMARY KEY,   -- == image_embeddings.id
-  embedding          FLOAT[768] distance_metric=cosine
-);
+CREATE INDEX idx_marks_open ON marks(resolved_at, created_at DESC);  -- list_marks order: unresolved first (resolved_at NULLs sort first), newest-first within each group (§7/§7b)
 
 -- durable job queue (the heart of enrich-deferred) — see §5
 CREATE TABLE jobs (
   id           INTEGER PRIMARY KEY,
-  kind         TEXT NOT NULL,               -- 'embed_text' | 'embed_image' | 'vision_tag'
+  kind         TEXT NOT NULL,               -- 'embed_text' | 'vision_tag' (0.3.0 PR4 removed 'embed_image'). No CHECK — matches schema.rs; a value CHECK is optional hardening tracked in 07 #82.
   frame_id     INTEGER REFERENCES frames(id) ON DELETE CASCADE,
   state        TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed|dead
   priority     INTEGER NOT NULL DEFAULT 0,  -- higher first
@@ -326,13 +344,27 @@ CREATE TABLE schema_version (version INTEGER NOT NULL);
 **Vector sync:** on `upsert_text_embedding`, insert into `embeddings` then
 `embedding_vectors(embedding_id, embedding)` with the new rowid; on frame delete, the cascade
 removes `embeddings`, and an `AFTER DELETE` trigger (or app-side txn) removes the matching
-`embedding_vectors` rows. Same for image embeddings.
+`embedding_vectors` rows. *(0.3.0 removed the image-embedding lane, so there is no second vec0 sync.)*
+
+**0.3.0 migrations** (forward-only; each bumps `schema_version` by **exactly one** — D15 — and must
+confirm the next integer against `crates/store/src/schema.rs::LATEST_SCHEMA_VERSION` rather than a
+hardcoded number, and ship a populated-DB migration test, the 0.2.1 `frames`-rebuild test as the
+pattern):
+- **PR4 — image-lane drop:** `DROP TABLE image_embedding_vectors; DROP TABLE image_embeddings;` (the
+  `AFTER DELETE` trigger goes with its table) and `DELETE FROM jobs WHERE kind = 'embed_image';` (in
+  any state). This destroys **derived, re-derivable** vectors only — frames, stored images, text, and
+  text embeddings are untouched. Acceptance: fresh-DB and migrated-DB schemas agree, and hybrid search
+  is unchanged on the 10k-frame fixture (the image arm was flag-off, so parity is expected and shown).
+- **PR6 — marks:** creates the `marks` table above. **Retention (D10):** a marked frame follows
+  **normal** retention — its image still expires like any other frame (the mark keeps the text
+  reconstruction reachable); an unresolved mark never pins a frame or blocks retention. No retention
+  pinning in 0.3.0.
 
 ## 5. Job queue & worker model (the core change)
 
 **Producers**
 - After `insert_ocr` succeeds → enqueue `embed_text` (priority normal).
-- If image embeddings enabled → enqueue `embed_image`.
+  *(0.3.0 PR4 removed the `embed_image` producer with the image-embedding lane — §4.)*
 - `vision_tag` is **never auto-enqueued per frame.** It is enqueued only by:
   1. **On-demand** — a UI command for a frame or a time range.
   2. **Timer** — a scheduler enqueues up to *N* untagged frames every *interval*.
@@ -352,8 +384,8 @@ removes `embeddings`, and an `AFTER DELETE` trigger (or app-side txn) removes th
   on-demand/timer/idle mode strictly.
 - **Smart enrichment throttle (0.2.1, opt-in, default OFF).** When `throttle.enabled` is on, the
   pool reacts to *sustained* CPU/GPU pressure with graded backpressure: at level ≥ 1 (High) the
-  claim-kind gate drops `vision_tag` + `embed_image` from the claimable set (heavy enrichment
-  pauses); at level 2 (Sustained) an in-flight gate additionally floors concurrent `embed_text` to
+  claim-kind gate drops `vision_tag` from the claimable set (heavy enrichment
+  pauses; 0.3.0 PR4 removed `embed_image`); at level 2 (Sustained) an in-flight gate additionally floors concurrent `embed_text` to
   `throttle.embed_text_floor` (≥1). **Capture / OCR / storage never throttle** — they are
   structurally outside the worker pool. Pressure is read through a `PressureProbe` seam injected by
   the composition root (the kernel forbids `unsafe`, mirroring the `IdleSource` / `BackfillControl`
@@ -408,6 +440,14 @@ duplicates). **Commands** (UI → core):
 | `set_model_tier` | `{lane, tier}` → `()` |
 | `capture_control` | `{start\|stop}` → `()` |
 | `get_readiness` | `()` → `Readiness` (capture, db, embed model, sidecar) |
+| `where_was_i` | `()` → `Option<ResumeContext>` (0.3.0; last sustained context — `§7b`) |
+| `add_mark` | `{ frame_id? \| capture_now, note? }` → `MarkId` (0.3.0; `capture_now` bypasses the diff gate — `§7b`/D8) |
+| `list_marks` | `()` → `Mark[]` (0.3.0; **all** marks, unresolved first then newest-first within each group — `§7b`; the Intentions strip renders the unresolved head) |
+| `resolve_mark` | `mark_id` → `()` (0.3.0; resolve = done, dismiss = resolve-no-action — `§7b`) |
+| `export_data` | `ExportRequest` → `ExportResult` (0.3.0; Settings "Export…"; same code path as `GET /v1/export`, works with the API off — `§7c`/D12) |
+| `set_api_config` | `{ enabled, port? }` → `ApiStatus` (0.3.0; enable/disable + port; bind failure is loud + guided-change — `§7c`) |
+| `get_api_status` | `()` → `ApiStatus` (0.3.0; enabled, bound port, token-present — `§7c`) |
+| `regenerate_api_token` | `()` → `ApiStatus` (0.3.0; new bearer token — `§7c`) |
 
 **Events** (core → UI): `capture_tick`, `job_progress`, `answer_delta`, `sidecar_status`,
 `readiness_changed`, `toast`, `throttle_changed` (0.2.1; payload `ThrottleStatus`, broadcast each
@@ -424,16 +464,118 @@ then runs CPU-only.
 `status ∈ { unknown, disabled, initializing, ready, unavailable, error }` and `detail` is an
 optional human-readable explanation.
 
+## 7b. Flow recall mechanics (0.3.0): where-was-i, marks, capture_now
+
+Core-side contracts behind the Flow overlay (PR5) and the where-was-i / mark-this-moment workflow
+(PR6). Exposed to the UI as the `where_was_i` / `add_mark` / `list_marks` / `resolve_mark` commands
+(§7); the overlay and the local API (§7c) reuse them — **no new retrieval code is invented**.
+
+**Where-was-i (context resume) — D9.** A pure, unit-tested heuristic (a store query + a small pure
+function; no new crate). The **anchor** is the **current context** — but because where-was-i is almost
+always invoked *from the overlay* (which holds the OS foreground while it is up, with its input focused
+on show), "current" must mean the **last non-ScreenSearch foreground context**: the app/domain active
+immediately *before* ScreenSearch or its overlay took focus, derived core-side from recent frames —
+ScreenSearch and its overlay never count as the anchor. The **last sustained context** = the most
+recent run of frames, ending *before* that anchor context began, in which the same **context key**
+persisted for at least `resume.min_dwell_secs` (default **120**, a setting like every threshold, §8).
+Context key = `app_hint`, refined by browser domain (from `browser_url`) when present. **Transient
+excursions are absorbed:** a run of one context key is *not* split by a brief switch away (a 2-second
+alt-tab, a notification, a frame whose `app_hint` fails to resolve) — an interruption breaks the run
+only if the interrupting context key is **itself sustained** (persists ≥ `resume.min_dwell_secs`);
+shorter excursions fold into the surrounding run. This reuses the one dwell threshold rather than
+adding a second knob (subtraction thesis, `02 §5c`). Excluded from candidacy: the **anchor context**,
+**ScreenSearch itself**, and any app on `privacy.excluded_apps`. Returns the run's **representative
+(last) frame** + app, window title, URL, and span start/end (a `ResumeContext`). Surfaced in the
+overlay's empty state (PR5) and as a Deck "Jump back" card (PR6); `Enter`/click opens the Moment, from
+which the existing frame context gets the user back.
+
+**Mark-this-moment (intention capture) — D8/D10.** The mark hotkey (`marks.hotkey`, default
+`Ctrl+Alt+M`; §8) issues **`capture_now`**: a request into the *existing* capture worker that
+**bypasses the diff gate for that one frame** (D8 — a demanded frame must never be dropped as
+"unchanged"; it is serialized like any capture cycle, a per-request flag, **not** a mode), inserts the
+frame, then inserts a **mark** (§4). **Multi-monitor is deterministic:** a capture cycle yields one
+frame per monitor, so `capture_now` marks the frame on the **monitor holding the foreground window** —
+the one whose `target_rect` resolves (`crates/capture`), i.e. the screen the user is actually on —
+falling back to the primary monitor if none resolves. One `capture_now` → one mark, never the
+ambiguous "first queued monitor". A brief, quiet overlay toast confirms ("Marked ✓ — note?") with an
+optional one-line note; ignoring it costs nothing. The Deck **Intentions** strip lists unresolved marks
+newest-first (thumbnail/reconstruction, note, age); resolve = done, dismiss = resolve-with-no-action.
+**No badge counts anywhere** (D14 — pull-based, never nagging). Marked frames follow normal retention
+(§4 — images expire; the mark keeps the reconstruction reachable; no retention pinning).
+
+**Overlay window (PR5) is capture-safe — D7.** The overlay is a second Tauri window,
+**hidden-not-destroyed** (show/hide, so summon latency is window-show latency, not a webview boot),
+always-on-top, frameless, transparent, skip-taskbar. Because it is the app's own window, the existing
+**self-exclude capture gate must cover it** — the overlay must never appear in its own capture history;
+the privacy-gate tests assert the second window is never captured (§8 privacy prose). Hotkey
+registration failure (conflict with another app) is a **visible Settings warning + toast**, never a
+silent no-op (D6). Exclusive-fullscreen apps may suppress the overlay (accepted; documented) — the
+overlay never steals focus without the hotkey.
+
+## 7c. Local HTTP API + export (0.3.0, opt-in — a separate external surface, NOT a Tauri IPC surface)
+
+A new crate `crates/api` (axum; behind a trait, wired in the composition root, **not constructed at
+all** unless enabled) exposes the same core queries over HTTP for local scripts/agents. It reuses
+`hybrid_search`, the ask pipeline, the where-was-i heuristic (§7b), and marks — no new retrieval code.
+
+**Posture (D11).** Default **OFF** (`api.enabled` = false). When enabled it binds **`127.0.0.1` only,
+hard-coded** (not a setting — a `0.0.0.0` bind must be impossible by construction: shown in code review,
+asserted in a test). Every request requires a **bearer token**, generated on first enable, stored in
+settings, shown/copyable/regenerable in Settings; a request without or with a wrong token gets **401**.
+Default port **43210** (`api.port`, configurable). **Port-bind failure = loud + guided change:** if the
+port is already in use on enable, the API does **not** start, a visible Settings warning + toast fire,
+and the Settings API panel offers an inline "port in use — pick another" retry (mirrors the D6 hotkey
+pattern; never a silent no-op — resolved gap, `07`). Threat model stated plainly in the spec, the
+Settings UI, and docs: *any local process holding the token can read your entire screen history —
+enabling this is an explicit trust decision.*
+
+**Endpoints (v1):**
+- `GET /v1/health` — version, uptime, capture state.
+- `GET /v1/search?q=&from=&to=&limit=&include_chrome=` — hybrid search, content-text default, same
+  semantics as the UI.
+- `POST /v1/ask` — grounded answer, **SSE stream**, cited frame ids. Reuses the ask pipeline; the API
+  layer adapts the pipeline's `answer_delta` stream (§7) to SSE (the sidecar client already speaks SSE).
+  **Client disconnect cancels inference:** a half-read `/v1/ask` must never leave the sidecar
+  generating into a closed socket. This is **not free today** — `AnswerProvider::answer`
+  (`crates/inference/src/answer.rs`) is driven by the *sidecar* stream (`prx.recv()`) and discards
+  downstream `tx.send` errors, so merely dropping the SSE receiver keeps the sidecar generating to
+  `Done`. PR7 must add the cancellation path: detect the closed downstream (send failure /
+  `tx.is_closed()`) — or cancel a task/token the API layer owns — then **stop consuming and abort the
+  sidecar `stream_task`** so GPU/CPU is actually freed.
+- `GET /v1/frames/{id}` — metadata + text; `?image=1` returns the stored image (WebP; the §4
+  `image_path` comment predates the native-WebP switch, `07` #73).
+- `GET /v1/context/where-was-i` — the §7b heuristic.
+- `GET /v1/marks` (same order as `list_marks`: all marks, unresolved first then newest-first — §7) ·
+  `POST /v1/marks` (body: `frame_id` **or** `"now"` → `capture_now`) · `POST /v1/marks/{id}/resolve` —
+  the **only write surface** in v1 (D11; write scopes beyond marks are deferred, `07`).
+- `GET /v1/export?from=&to=&format=json` — frames + content text (+ marks), **no images** in v1 (D12).
+  **Serialized as a stream** (frames written incrementally to the response body — memory stays flat)
+  and bounded by the optional `from`/`to` window, so exporting months of history never buffers the
+  whole result set or risks OOM on the local box. A Settings **"Export…"** button calls the *same* code
+  path internally (streaming to a file), so export works even with the API disabled.
+
+Docs: a hand-written `docs/API.md` (OpenAPI-lite; v1 is small, no codegen), authored by PR7.
+
+**MCP server (PR8, D13).** A separate workspace **binary** crate `crates/mcp` → `screensearch-mcp.exe`,
+shipped in the NSIS installer — a thin **stdio** wrapper over this HTTP API, with **no store access and
+no app coupling**: it is purely an HTTP client of `127.0.0.1:<port>` with the bearer token from
+args/env (`SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`). Tools: `search_screen_history`,
+`ask_screen_history`, `get_moment`, `where_was_i`, `list_marks`, `add_mark`. If the API is off, every
+tool returns a clear "enable the API in ScreenSearch Settings" error. Docs: `docs/MCP.md` (copy-paste
+client config for Claude Desktop / Claude Code + the same threat-model paragraph), authored by PR8.
+
 ## 8. Configuration / settings (keys in `settings`)
 
 `capture.interval_ms` (3000) · `capture.monitors` ([]=all) · `capture.diff_threshold` (0.006) ·
 `storage.jpeg_quality` (80) · `storage.max_width` (1280) · `storage.retention_days` (0=keep) ·
-`enrich.embed_text` (true) · `enrich.image_embeddings` (false) ·
+`enrich.embed_text` (true) · *(0.3.0 PR4 removed `enrich.image_embeddings`)* ·
 `enrich.vision_timer_enabled` (false) · `enrich.vision_timer_interval_ms` (3600000) ·
 `enrich.vision_idle_enabled` (false) · `enrich.vision_idle_secs` (300) ·
 `enrich.vision_batch_size` (20, clamped 1–500 — max still-untagged frames a timer/idle tick enqueues) ·
 `enrich.worker_concurrency` (2) ·
-`models.vision_tier` (`default`) · `models.answer_tier` (`default`) ·
+`models.vision_tier` (`default`) · `models.answer_tier` (`default`; each ∈ {`default`,`quality`} —
+0.3.0 retired `beta`: a persisted `beta` selection **maps to `quality` on load**, logged once + the
+mapping persisted, and any Beta GGUF already on disk is left alone with no cleanup logic — D3/D4) ·
 `answer.thinking` (true) · `sidecar.idle_ttl_secs` (180) · `sidecar.ngl` (99) ·
 `sidecar.ctx_size` (0=auto → per-lane default vision 4096 / answer 8192, else clamped 512–32768 —
 the dominant VRAM lever) · `sidecar.kv_cache_type` (`q8_0`; one of `f16`/`q8_0`/`q4_0`, quantized
@@ -471,16 +613,22 @@ thresholds are settings, never hardcoded — same guardrail as the text-signal k
 `throttle.sample_interval_ms` (1000, clamp 250..=10000 — governor probe/sample cadence) ·
 `throttle.embed_text_floor` (1, clamp 1..=16 — min concurrent `embed_text` workers at level 2).
 
-**0.2.1 event-driven-capture keys** (opt-in `CaptureTrigger` source, `§5`/`07` #47; thresholds are
-settings, never hardcoded — same guardrail as above): `capture.event_driven_enabled` (false — master
-switch; off = timer cadence, every frame tagged `Timer`) · `capture.event_on_foreground` (true) ·
-`capture.event_on_clipboard` (true) · `capture.event_on_idle` (false) ·
-`capture.event_on_typing_pause` (false) · `capture.event_on_click` (false — needs the `WH_MOUSE_LL`
-hook) · `capture.event_on_scroll_stop` (false — needs the `WH_MOUSE_LL` hook) ·
+**Event-driven-capture keys** (opt-in `CaptureTrigger` source, `§5`/`07` #47; thresholds are settings,
+never hardcoded — same guardrail as above). **0.3.0 (PR2) trimmed the six triggers to foreground +
+idle**: `capture.event_driven_enabled` (false — master switch; off = timer cadence, every frame tagged
+`Timer`) · `capture.event_on_foreground` (true) · `capture.event_on_idle` (false) ·
 `capture.event_debounce_ms` (500, clamp 100..=10000) · `capture.event_min_interval_ms` (1000, clamp
-250..=60000 — the rate ceiling) · `capture.event_typing_pause_ms` (1500, clamp 500..=10000) ·
-`capture.event_idle_threshold_ms` (5000, clamp 1000..=60000) · `capture.event_fallback_interval_ms`
-(30000, clamp 1000..=3600000 — a static screen is still sampled at least this often, tagged `Timer`).
+250..=60000 — the rate ceiling) · `capture.event_idle_threshold_ms` (5000, clamp 1000..=60000) ·
+`capture.event_fallback_interval_ms` (30000, clamp 1000..=3600000 — a static screen is still sampled at
+least this often, tagged `Timer`). **Removed in 0.3.0 (PR2):** `capture.event_on_clipboard`,
+`capture.event_on_typing_pause`, `capture.event_on_click`, `capture.event_on_scroll_stop`,
+`capture.event_typing_pause_ms` — click / scroll-stop were the **only** consumers of the global
+`WH_MOUSE_LL` mouse hook (deleted with them), the clipboard listener was a privacy-optics landmine, and
+typing-pause was redundant with idle (D1). **Settings load tolerates + drops unknown keys** (log once,
+no error), so a config persisted with any retired key still loads. **No schema change** (D2):
+`frames.capture_trigger` keeps its widened CHECK, so legacy `clipboard`/`typing_pause`/`click`/
+`scroll_stop` tokens stay readable (the Moment "Captured via" row still renders them); new frames simply
+never emit them again.
 
 **0.2.1 UIA text-source keys** (target-window accessibility text with OCR fallback, `07` #48/#71;
 thresholds are settings, never hardcoded): `capture.uia_text_enabled` (true — default ON, OCR carries
@@ -498,8 +646,23 @@ former hardcoded constant) · `capture.uia_max_textpattern_calls` (64, clamp 1..
 many ms of the last keyboard/mouse input skip UIA → OCR, closing the freeze gap the trigger gate
 leaves in default timer-only capture; `0` disables, bypassed when `uia_run_on_interactive` is on).
 
+**0.3.0 flow-recall + API keys** (all hotkeys/thresholds/ports are settings, never hardcoded — same
+guardrail as above; `§7b`/`§7c`):
+`overlay.hotkey` (`Ctrl+Alt+Space` — global summon; a failed registration is a **visible Settings
+warning + toast**, never silent — D6) · `overlay.max_results` (8 — top-N results in the overlay) ·
+`resume.min_dwell_secs` (120 — min sustained-context dwell for where-was-i, `§7b`; D9) ·
+`marks.hotkey` (`Ctrl+Alt+M` — mark-this-moment; same loud registration-failure handling as
+`overlay.hotkey` — D6) ·
+`api.enabled` (false — master switch; the API crate is **not constructed** unless on — D11) ·
+`api.port` (43210, clamp 1024..=65535 — the bind is `127.0.0.1` only, **hard-coded, not a setting**; a
+bind failure is **loud + guided-change**, `§7c`) ·
+`api.token` (generated on first enable; the bearer token, regenerable in Settings — never blank while
+enabled).
+
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
-`privacy.pause_on_lock`. OCR runs on the **full-res** frame before JPEG resize/storage.
+`privacy.pause_on_lock`; the **self-exclude capture gate also covers the 0.3.0 overlay window** (D7 —
+the app's own overlay must never appear in its own capture history; asserted by the privacy-gate tests,
+`§7b`). OCR runs on the **full-res** frame before JPEG resize/storage.
 
 ## 8b. Recall reports (0.2.x)
 
@@ -553,20 +716,56 @@ GitHub Actions on `windows-latest`: `cargo fmt --check`, `cargo clippy --workspa
   Default tier.
 - **Corrupt/oversized frame** → mark + skip; capture continues.
 - **DB busy** → WAL + bounded retry.
-- **Beta model incompatibility** (e.g., hybrid-arch quirk) → confined to Beta; Default/Quality
-  unaffected.
+- **Model tier** — both surviving tiers (Default/Quality) are vanilla-arch + Apache; the 0.3.0 Beta
+  retirement removed the only hybrid-arch / non-Apache incompatibility risk (`02 §5c`).
 
 ## 13. Definition of done (v1.0)
 1. Always-on capture → OCR → store works across multiple monitors; honors privacy settings.
-2. Deferred embeddings populate text (and optional image) vectors via the job queue.
+2. Deferred embeddings populate text vectors via the job queue. *(0.3.0 removed the optional
+   image-vector lane — §4.)*
 3. Vision tagging runs **only** on-demand/timer/idle per setting — never real-time.
 4. Hybrid search (FTS5 + vec → RRF) returns correct frames < ~200 ms on a realistic DB.
 5. `ask` streams a grounded, *thinking* answer with citations to frames.
-6. Model tiers (vision + answer: Default/Quality/Beta) selectable in settings and take effect via
-   sidecar reload.
+6. Model tiers (vision + answer: Default/Quality) selectable in settings and take effect via
+   sidecar reload. *(0.3.0 retired Beta — `§8`, `02 §5c`.)*
 7. **No orphaned `llama-server` after a forced app crash** — verified by test and manually.
 8. `cargo clippy -D warnings` clean; all non-ignored tests green.
 9. **NSIS installer builds successfully** (shipped v0.1.0; Inno/MSI/portable ZIP dropped — `07` #26); code-signing pending.
+
+## 13b. Definition of done (0.3.0 arc)
+Each item is demonstrated with verbatim command output or a described-and-performed live check
+(`04 §6`); the per-PR acceptance detail lives in `docs/0.3.0.md`.
+1. **Trigger trim (PR2).** `WH_MOUSE_LL`, `AddClipboardFormatListener`, and `typing_pause` appear
+   nowhere in the tree (except CHANGELOG/specs history + the `capture_trigger` CHECK); event mode
+   live-fires on alt-tab and on idle; a legacy `capture_trigger='click'` frame still renders in Moment;
+   settings load drops the retired keys without error.
+2. **Beta retired (PR3).** `Nemotron` / `Qwen3.5-9B` appear only in history docs; a settings file
+   persisted with a `beta` tier loads cleanly as `quality`; both remaining tiers of both lanes still
+   download/resolve per `MODEL_REGISTRY §4`.
+3. **Image-lane removal (PR4).** `nomic` / `image_embedding` / `EmbedImage` appear nowhere outside
+   history; fresh-DB and migrated-DB schemas agree; hybrid search is unchanged on the 10k-frame fixture
+   (image arm was flag-off — parity shown). Forward-only schema bump +1 with a populated-DB migration test.
+4. **Flow overlay (PR5).** Hotkey works while an unrelated app is fullscreen-focused; overlay visible
+   **< 150 ms** (warm) and first results within the **< 200 ms** search budget, measured + shown; the
+   overlay never appears in its own capture history after a live capture session (D7); a colliding
+   hotkey shows the visible warning (D6).
+5. **Where-was-i + marks (PR6).** where-was-i returns the correct run on a scripted fixture (unit) and
+   live (work app → browser detour → hotkey → the work app's context offered); a mark from a fullscreen
+   third-party app lands a frame captured at press time even on a static screen (diff-gate bypass shown
+   — D8); the Intentions strip is live-verified. Forward-only schema bump +1 with a migration test.
+6. **Local API + export (PR7).** API off by default (fresh profile: nothing listens); with it on, a
+   request without / with a wrong token gets 401; a `0.0.0.0` bind is impossible by construction
+   (asserted in a test); a port-bind conflict surfaces **loud + guided-change**; every endpoint is
+   exercised against a fixture DB; Settings "Export…" produces a valid JSON file with the API disabled.
+7. **MCP server (PR8).** `screensearch-mcp.exe` speaks the MCP handshake + tool listing over stdio; each
+   tool round-trips against a live app with the API on; the API-off error path is clean; the NSIS
+   installer includes the binary.
+8. **Audit + release (PR9).** Every acceptance line above is verified end-to-end on a real Windows
+   desktop (`docs/TESTING.md` 0.3.0 sections); `05`–`08` swept current; **v0.3.0** tagged and archived
+   per `04 §7`; release notes lead with the **removals** + a one-line rationale each.
+9. Full verification suite green for every PR: `cargo fmt --check` · `cargo clippy --workspace
+   --all-targets -D warnings` · `cargo build --workspace` · `cargo test --workspace` · `ui`
+   `npm run lint && npm run build` · `git diff --exit-code -- ui/src/bindings` clean.
 
 ---
 
