@@ -71,6 +71,16 @@ Three commits: (1) a test-only parity baseline on the 10k fixture, (2) the atomi
   (`diff` empty); `p95 = 72.8 ms` after (< 200 ms). The image arm was never fused into
   `hybrid_search` (`git diff main...HEAD -- crates/store/src/search.rs` is empty), so parity is
   structural — and now shown.
+- **Live runtime (real desktop).** (a) `cargo test -p embeddings -- --ignored` downloads + loads the
+  **real** EmbeddingGemma-300M ONNX model and embeds text on the trimmed fastembed build
+  (`default-features = false`) → `loads_and_embeds_text ... ok` — the feature trim does not break the
+  text lane. (b) `npm run tauri dev` on a fresh profile: the log shows the full migration chain
+  `applied store migration schema_version=1..9` then `store opened … schema_version=9`,
+  `fastembed provider loaded` / `embedding model loaded; attaching to kernel`, `enrichment workers
+  started` / `inference providers attached`. A read-only copy of the created on-disk DB:
+  `schema_version = 9`, **zero** image-lane objects (`image_embeddings` / `image_embedding_vectors` /
+  `image_embeddings_ad` / `image_embedding_vectors_%` shadows all absent — only the text
+  `embedding_vectors` + its shadows remain).
 
 ### Skipped / deferred (intentional)
 - **On-disk nomic GGUF cleanup** — not done (D5 is DB-only; the model lives outside the DB and users
@@ -84,10 +94,13 @@ Three commits: (1) a test-only parity baseline on the 10k fixture, (2) the atomi
   before editing root `Cargo.toml`, and the build + full test run confirm the text lane still loads.
 
 ### Still risky
-- **Live desktop pass pending** — the migration-on-boot / retired-key-drop / post-migration text
-  search were exercised by unit + integration tests; the manual acceptance (`docs/TESTING.md` PR4
-  section, against a populated real profile) is the remaining confirmation, run before requesting
-  review (and re-swept in PR9).
+- **Populated-profile migration not live-exercised** — no pre-existing real DB was present on this
+  machine, so the on-disk *upgrade* of an old (v8, image-populated) profile was proven by the
+  populated-DB unit test through the production `bootstrap_and_migrate` runner rather than a GUI boot;
+  the live GUI boot exercised the *fresh* v1→v9 chain on disk (schema_version=9, no image lane). The
+  retired-key-drops-once path (`enrich.image_embeddings`) reuses PR2's proven `drop_retired_settings`
+  mechanism but was likewise not exercised on a real persisted key. Both are in the `docs/TESTING.md`
+  PR4 manual section for the PR9 pass against a populated profile.
 
 ## Pass — 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
 
