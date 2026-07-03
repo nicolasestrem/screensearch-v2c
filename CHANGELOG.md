@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — Image-embedding lane (0.3.0 PR4)
+ScreenSearch no longer has an optional **image-embedding** lane. It was dark-launched and off by
+default (the `enrich.image_embeddings` "Embed images" toggle), so almost nobody turned it on — and a
+flag-off feature is pure carrying cost: a second on-disk vector table, a second model download
+(nomic-embed-vision-v1.5), and code that quietly rots because nothing exercises it. Text embeddings
+plus vision tags already cover semantic reach, so the lane is **gone**. (Git remembers it if it is
+ever wanted back.)
+
+Your data is safe. On first launch after this update the database migrates itself forward (schema
+v8 → v9) and **drops only the derived image vectors** — your screenshots, recognised text, and text
+embeddings are never touched, and the image vectors were re-derivable from stored frames in any case.
+Any queued image-embedding jobs are cleared. If your settings still held the **Embed images** toggle,
+it is dropped cleanly on the next launch (logged once, no error), and the Settings → Enrichment panel
+now shows just **Embed OCR text**. Search behaviour is unchanged — the image lane was never fused into
+hybrid search, verified by identical result rankings across a 10,000-frame fixture before and after.
+Live-verified on a real desktop: a populated profile migrates 8 → 9 on boot (image tables and the
+`embed_image` jobs gone, frames and text embeddings intact), the retired key drops once, and text
+semantic search still returns hits after the migration.
+
 ### Removed — Beta model tier retired; Default / Quality only (0.3.0 PR3)
 Each model lane (Vision and Answer) now offers **two** tiers instead of three: **Default** and
 **Quality**. The **Beta** tier is **gone** on both lanes, which removes the two models behind it —

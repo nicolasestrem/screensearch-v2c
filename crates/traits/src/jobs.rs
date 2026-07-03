@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Kind of deferred work. Serializes to the DB `kind` column
-/// (`'embed_text' | 'embed_image' | 'vision_tag'`, `03 §4`).
+/// (`'embed_text' | 'vision_tag'`, `03 §4`). The `embed_image` kind was removed in
+/// 0.3.0 PR4 with the image-embedding lane; the V9 migration deletes any leftover rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum JobKind {
     EmbedText,
-    EmbedImage,
     VisionTag,
 }
 

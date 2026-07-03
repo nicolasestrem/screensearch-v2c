@@ -146,3 +146,27 @@ idle-threshold — plus the fallback interval).
   fetches it per `MODEL_REGISTRY §4` (a multi-GB download — allow time). *(Downloading both Quality
   GGUFs end-to-end is the PR9 pass; the tier→repo resolution for all four `(lane, tier)` pairs is
   pinned by the `repo_mapping_matches_registry` unit test.)*
+
+## 🎛️ Manual acceptance — image-embedding lane removal (0.3.0 PR4)
+
+**0.3.0 PR4** removed the dark-launched, flag-off nomic-embed-vision **image-embedding lane**: the
+`enrich.image_embeddings` setting, the second vec0 table, and the `embed_image` job kind are gone,
+proven by a forward-only **v8 → v9** migration that drops *only derived, re-derivable* vectors
+(`docs/0.3.0.md` PR4, D5/D15). Quick live check on a real Windows desktop with `npm run tauri dev`,
+against a **backed-up copy** of a populated 0.2.x/PR3 profile (`<app-data>\screensearch.db`).
+
+- **Seed the legacy state (app closed).** In the backed-up DB:
+  `INSERT INTO settings VALUES('enrich.image_embeddings','true');` and one leftover job —
+  `INSERT INTO jobs (kind, frame_id, state) VALUES ('embed_image', <an existing frame id>, 'pending');`
+- **Migration on boot.** Launch → the log reaches `applied store migration … schema_version=9` and
+  the app boots normally. Verify with sqlite3:
+  `SELECT name FROM sqlite_master WHERE name LIKE 'image_embedding%' OR name='image_embeddings_ad';`
+  → **empty**; `SELECT count(*) FROM jobs WHERE kind='embed_image';` → **0**; the `frames` and
+  `embeddings` (text) counts are **unchanged** from before launch.
+- **Retired key drops once.** First launch logs **one** `settings: dropped retired keys` warn naming
+  `enrich.image_embeddings`; the next launch logs **none**.
+- **Settings UI.** Settings → Enrichment shows only **Embed OCR text** (no **Embed images** toggle);
+  the Performance-throttle hint no longer mentions image embeds.
+- **Text embeddings still work post-migration.** Start capture: `embed_text` jobs drain (job stats),
+  `embed_model` readiness reaches **Ready**, and a semantic search over freshly captured content
+  returns hits — confirming the trimmed fastembed build still loads and runs the text model.

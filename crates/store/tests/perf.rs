@@ -112,9 +112,6 @@ impl EmbeddingProvider for LcgEmbedder {
             .map(|s| Embedding(pseudo_vec(hash_str(s))))
             .collect())
     }
-    async fn embed_image(&self, _image: &image::RgbaImage) -> Result<Embedding> {
-        anyhow::bail!("image embedding unused in the perf fixture")
-    }
 }
 
 #[tokio::test]
@@ -215,6 +212,20 @@ async fn hybrid_search_under_200ms_on_realistic_db() {
             "query {:?} returned nothing — the vector arm should always surface candidates",
             q.text
         );
+        // Parity digest: FNV-1a over the ranked `frame_id`s. The fixture is
+        // LCG-deterministic, so this digest is stable run-to-run and pins the exact
+        // hybrid-search ranking. 0.3.0 PR4 (image-lane removal) uses it to *show* that
+        // removing the flag-off image lane leaves results unchanged — the image arm was
+        // never fused into `hybrid_search`, so every digest here must match verbatim
+        // before and after the removal (`docs/0.3.0.md` PR4, `03 §13b.3`).
+        let mut digest = 0xcbf29ce484222325u64;
+        for hit in &hits {
+            for byte in hit.frame_id.to_le_bytes() {
+                digest ^= u64::from(byte);
+                digest = digest.wrapping_mul(0x100000001b3);
+            }
+        }
+        println!("parity-digest {:?}: {digest:016x}", q.text);
     }
 
     timings.sort();

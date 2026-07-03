@@ -65,9 +65,6 @@ impl EmbeddingProvider for FakeEmbedder {
             })
             .collect()
     }
-    async fn embed_image(&self, _image: &image::RgbaImage) -> traits::Result<Embedding> {
-        anyhow::bail!("image embedding unused in these tests")
-    }
 }
 
 /// A unit basis vector of the embedding dimension with `1.0` at `hot`. Cosine
@@ -352,27 +349,6 @@ async fn upsert_text_embedding_replaces_vector_in_place() {
 }
 
 #[tokio::test]
-async fn image_embedding_knn_returns_frame() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let a = store.insert_frame(frame_at(10)).await.unwrap();
-    let b = store.insert_frame(frame_at(20)).await.unwrap();
-    store
-        .upsert_image_embedding(a, &one_hot(3), "nomic-vision")
-        .await
-        .unwrap();
-    store
-        .upsert_image_embedding(b, &one_hot(7), "nomic-vision")
-        .await
-        .unwrap();
-
-    assert_eq!(
-        store.nearest_image_frames(&one_hot(3), 5).await.unwrap(),
-        vec![a, b]
-    );
-    assert_eq!(store.image_embedding_count().await.unwrap(), 2);
-}
-
-#[tokio::test]
 async fn wrong_dimension_embedding_is_rejected() {
     let store = SqliteStore::open_in_memory().unwrap();
     let f = store.insert_frame(frame_at(10)).await.unwrap();
@@ -403,24 +379,14 @@ async fn delete_frame_cascades_and_purges_vectors() {
         .upsert_text_embedding(f, 0, "doomed", ChunkSource::Ocr, &one_hot(0), "gemma")
         .await
         .unwrap();
-    store
-        .upsert_image_embedding(f, &one_hot(0), "nomic-vision")
-        .await
-        .unwrap();
 
     store.delete_frame(f).await.unwrap();
 
     assert!(store.get_frame(f).await.unwrap().is_none());
-    // the AFTER DELETE triggers must have purged the vec0 shadow rows
+    // the AFTER DELETE trigger must have purged the vec0 shadow row
     assert_eq!(store.text_embedding_count().await.unwrap(), 0);
-    assert_eq!(store.image_embedding_count().await.unwrap(), 0);
     assert!(store
         .nearest_text_frames(&one_hot(0), 5)
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(store
-        .nearest_image_frames(&one_hot(0), 5)
         .await
         .unwrap()
         .is_empty());

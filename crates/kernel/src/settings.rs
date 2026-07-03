@@ -23,12 +23,6 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         storage_retention_days: num(store, "storage.retention_days", d.storage_retention_days)
             .await,
         enrich_embed_text: boolean(store, "enrich.embed_text", d.enrich_embed_text).await,
-        enrich_image_embeddings: boolean(
-            store,
-            "enrich.image_embeddings",
-            d.enrich_image_embeddings,
-        )
-        .await,
         enrich_vision_timer_enabled: boolean(
             store,
             "enrich.vision_timer_enabled",
@@ -224,14 +218,16 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
 
 /// Settings keys retired by past versions, purged from the DB on startup so a config
 /// persisted with any of them still loads and the stale rows don't linger (`03 §8`,
-/// `docs/0.3.0.md` PR2). Grows per arc: 0.3.0 PR2 removed the four extra event triggers
-/// (clipboard / typing-pause / click / scroll-stop) and the typing-pause threshold.
+/// `docs/0.3.0.md` PR2/PR4). Grows per arc: 0.3.0 PR2 removed the four extra event triggers
+/// (clipboard / typing-pause / click / scroll-stop) and the typing-pause threshold; PR4
+/// removed the image-embedding lane toggle (`enrich.image_embeddings`).
 pub const RETIRED_SETTINGS_KEYS: &[&str] = &[
     "capture.event_on_clipboard",
     "capture.event_on_typing_pause",
     "capture.event_on_click",
     "capture.event_on_scroll_stop",
     "capture.event_typing_pause_ms",
+    "enrich.image_embeddings",
 ];
 
 /// Deletes any [`RETIRED_SETTINGS_KEYS`] left in the `settings` table by an older
@@ -293,10 +289,6 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         (
             "enrich.embed_text".into(),
             bool_str(s.enrich_embed_text).into(),
-        ),
-        (
-            "enrich.image_embeddings".into(),
-            bool_str(s.enrich_image_embeddings).into(),
         ),
         (
             "enrich.vision_timer_enabled".into(),

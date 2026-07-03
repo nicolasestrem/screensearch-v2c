@@ -663,12 +663,6 @@ export function Component() {
             onChange={(v) => set("enrich_embed_text", v)}
             hint={`Index recognised text as vectors for semantic search. Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
           />
-          <Toggle
-            label="Embed images"
-            checked={draft.enrich_image_embeddings}
-            onChange={(v) => set("enrich_image_embeddings", v)}
-            hint={`Also embed frame images (more compute). Worker claiming updates after save; capture enqueueing changes on the next capture start.`}
-          />
           <Field
             label="Worker concurrency"
             type="number"
@@ -695,7 +689,7 @@ export function Component() {
             label="Throttle enrichment under load"
             checked={draft.throttle_enabled}
             onChange={(v) => set("throttle_enabled", v)}
-            hint={`Pause heavy enrichment (vision tagging, image embeds) and ease text-embed concurrency when the machine is under sustained CPU/GPU pressure, so your foreground work stays responsive. Capture, OCR, and storage never pause. ${APPLY_NOW}`}
+            hint={`Pause heavy enrichment (vision tagging) and ease text-embed concurrency when the machine is under sustained CPU/GPU pressure, so your foreground work stays responsive. Capture, OCR, and storage never pause. ${APPLY_NOW}`}
           />
           <ThrottleReadout />
           {draft.throttle_enabled && (

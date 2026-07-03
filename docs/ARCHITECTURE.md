@@ -100,7 +100,7 @@ WgcCapture.next_frame()           # diff-gated + privacy-gated; only *changed* f
   → WinRtOcr.recognize()          # on full-res pixels, before storage downscale
   → write JPEG (downscaled)       # <app-data>/frames/day-<n>/<captured_at>-<monitor>.jpg
   → store.insert_frame + insert_ocr
-  → enqueue embed_text job        # if enrich.embed_text  (+ embed_image if enabled)
+  → enqueue embed_text job        # if enrich.embed_text
   → emit KernelEvent::CaptureTick # drives the live timeline
 ```
 
@@ -149,12 +149,11 @@ State machine `pending → running → done`, or `running →` (fail) `→ pendi
 ### 5.2 Embedding provider (`embeddings::FastEmbedProvider`)
 
 `fastembed` 5.17.2 (in-process ONNX, no Python). Text = `EmbeddingModel::EmbeddingGemma300MQ`
-(768-dim, quantized → **embeds one input at a time**, it cannot batch); optional image =
-`ImageEmbeddingModel::NomicEmbedVisionV15`, loaded only when `enrich.image_embeddings` is on. Each
-lane is an `Arc<Mutex<…>>` whose lock is taken **inside** a `spawn_blocking` closure (the models
-are plain `Send` ONNX handles with no thread affinity, unlike COM-bound OCR). Models load eagerly
-in `FastEmbedProvider::new` — called off the launch thread — into `<app-data>/models/fastembed`,
-downloading from HuggingFace on first run.
+(768-dim, quantized → **embeds one input at a time**, it cannot batch) — the only embedding lane
+(0.3.0 PR4 removed the optional nomic-embed-vision image lane). The lane is an `Arc<Mutex<…>>` whose
+lock is taken **inside** a `spawn_blocking` closure (the model is a plain `Send` ONNX handle with no
+thread affinity, unlike COM-bound OCR). It loads eagerly in `FastEmbedProvider::new` — called off the
+launch thread — into `<app-data>/models/fastembed`, downloading from HuggingFace on first run.
 
 ### 5.3 Worker pool (`kernel::worker_pool`)
 
@@ -168,16 +167,15 @@ Both call the same idempotent `start_workers`, so the pool can start from either
 claim_jobs(dynamic provider-backed lanes, 1, now)
   → process_job:                       # public, so tests drive one job deterministically
       embed_text:  read OCR text → embed_texts → upsert_text_embedding(chunk 0, source=ocr)
-      embed_image: load JPEG → embed_image → upsert_image_embedding
       vision_tag:  load JPEG → VisionProvider.analyze → insert_vision   (P4)
   → complete_job / fail_job(backoff) / dead-letter
   → emit KernelEvent::JobProgress(job_stats)
 ```
 
-Workers build the claim-kind list on every poll. `EmbedText` / `EmbedImage` are claimed only when an
-embedder is attached and the matching setting is enabled; `VisionTag` is claimed once the sidecar
-vision provider is attached. Both providers live in `Arc<RwLock<Option<…>>>` **slots** that are
-snapshotted per job, so `vision_tag` backlogs drain even when embeddings are disabled or unavailable.
+Workers build the claim-kind list on every poll. `EmbedText` is claimed only when an embedder is
+attached and `enrich.embed_text` is enabled; `VisionTag` is claimed once the sidecar vision provider
+is attached. Both providers live in `Arc<RwLock<Option<…>>>` **slots** that are snapshotted per job,
+so `vision_tag` backlogs drain even when embeddings are disabled or unavailable.
 If a claimed job somehow lacks its provider because of a race, it **retries** (not fails) so the
 backlog drains when the provider appears.
 
@@ -336,17 +334,15 @@ maps live — `Starting`→Initializing, `Ready`→Ready, `Evicted`→Ready ("re
 key/value `settings` table; a missing/unparsable value falls back to the per-key default (never an
 error), and numeric values are backend-sanitized on both load and save so direct IPC or hand-edited DB
 rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_text` (true),
-`enrich.image_embeddings` (false),
 `enrich.worker_concurrency` (2). **P4 keys:** `enrich.vision_timer_enabled` (false) +
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
 `answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
 `sidecar.device`. Model tiers and sidecar launch options are applied live for the next request that
 needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool from current
-settings after save. If image embeddings are newly enabled, the composition root reloads the
-FastEmbed provider with the optional image lane before workers claim `embed_image` jobs. Capture's
-enqueue decisions for new `embed_*` jobs are still captured when a capture session starts, so
-changing those toggles affects capture enqueueing on the next capture start. Captures are stored as **lossless WebP** at `storage.max_width` (default `0` = native, no
+settings after save. Capture's enqueue decisions for new `embed_text` jobs are still captured when a
+capture session starts, so changing that toggle affects capture enqueueing on the next capture start.
+Captures are stored as **lossless WebP** at `storage.max_width` (default `0` = native, no
 downscale — keeps ultra-wide text legible); `storage.jpeg_quality` is inert for the lossless encoder.
 `storage.retention_days` (default `30`) is a **degrade-to-text** window, not a hard delete: a startup
 and hourly sweeper removes the **screenshot file** of frames past the window and marks

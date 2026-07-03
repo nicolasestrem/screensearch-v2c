@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 8;
+pub const LATEST_SCHEMA_VERSION: i32 = 9;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -40,6 +40,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (6, MIGRATION_V6),
     (7, MIGRATION_V7),
     (8, MIGRATION_V8),
+    (9, MIGRATION_V9),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -344,4 +345,24 @@ ALTER TABLE frames ADD COLUMN image_purged INTEGER NOT NULL DEFAULT 0
 const MIGRATION_V8: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_frames_image_retention
   ON frames(captured_at) WHERE image_purged = 0;
+"#;
+
+/// v9 — 0.3.0 PR4: remove the image-embedding lane (`03 §4` "0.3.0 migrations",
+/// `docs/0.3.0.md` PR4, D5). The lane was dark-launched and flag-off
+/// (`enrich.image_embeddings`, default false), so this destroys **derived,
+/// re-derivable vectors only** — frames, stored images, text, and text embeddings are
+/// untouched. Dropping `image_embeddings` takes its `image_embeddings_ad` vec0-sync
+/// trigger with it (a `DROP TABLE` fires no `AFTER DELETE` triggers), and dropping the
+/// `image_embedding_vectors` vec0 virtual table also removes its shadow tables (sqlite-vec
+/// is loaded on every connection before open — [`crate::register_vec_extension`]).
+/// `embed_image` jobs are deleted in **any** state: the kind no longer exists and
+/// [`traits::JobKind`] can no longer parse it, so a leftover row would fail
+/// `kind_from_token` at claim/list time. Deliberately **no** `jobs.kind` CHECK and **no**
+/// jobs-table rebuild (`07` #82 — D5 is drop-tables + delete-jobs only). The V1 image DDL
+/// stays frozen in place (append-only migrations, `MIGRATION_V1` is never edited); a fresh
+/// DB creates the tables in V1 and drops them here, ending at the same schema as an upgrade.
+const MIGRATION_V9: &str = r#"
+DROP TABLE image_embedding_vectors;
+DROP TABLE image_embeddings;
+DELETE FROM jobs WHERE kind = 'embed_image';
 "#;

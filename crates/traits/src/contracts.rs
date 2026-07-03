@@ -42,14 +42,9 @@ pub trait EmbeddingProvider: Send + Sync {
     fn dim(&self) -> usize;
     /// NOTE: the quantized text model cannot batch — the impl embeds one input at a time.
     async fn embed_texts(&self, inputs: &[String]) -> Result<Vec<Embedding>>;
-    async fn embed_image(&self, image: &RgbaImage) -> Result<Embedding>;
     /// Identifier of the active text model, recorded in `embeddings.model` for
     /// provenance (`03 §4`). Defaults to `"unknown"` for providers that don't track it.
     fn text_model_name(&self) -> &str {
-        "unknown"
-    }
-    /// Identifier of the active image model, recorded in `image_embeddings.model`.
-    fn image_model_name(&self) -> &str {
         "unknown"
     }
 }
@@ -174,12 +169,6 @@ pub trait Store: Send + Sync {
         chunk_index: i32,
         chunk_text: &str,
         source: ChunkSource,
-        emb: &Embedding,
-        model: &str,
-    ) -> Result<()>;
-    async fn upsert_image_embedding(
-        &self,
-        frame_id: i64,
         emb: &Embedding,
         model: &str,
     ) -> Result<()>;

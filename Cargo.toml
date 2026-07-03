@@ -87,10 +87,15 @@ blake3 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 # in-process embeddings: fastembed (ONNX via `ort`, no Python — 01 §5, 03 §3).
-# 5.17 ships the `EmbeddingGemma300MQ` text variant (768-dim, quantized) and the
-# `NomicEmbedVisionV15` image variant (MODEL_REGISTRY §3). Pulls a prebuilt ONNX
-# Runtime at build time and downloads models from HuggingFace on first use.
-fastembed = "5.17"
+# 5.17 ships the `EmbeddingGemma300MQ` text variant (768-dim, quantized), the only
+# embedding lane (MODEL_REGISTRY §3). `default-features = false` drops the `image-models`
+# default feature (0.3.0 PR4 removed the image lane), keeping only the ORT + hf-hub
+# download stack fastembed needs; a prebuilt ONNX Runtime is pulled at build time and
+# models download from HuggingFace on first use.
+fastembed = { version = "5.17", default-features = false, features = [
+    "ort-download-binaries-native-tls",
+    "hf-hub-native-tls",
+] }
 
 # Windows-native APIs (P2: WGC capture, WinRT Media.Ocr, foreground/lock probes).
 # Version only here; each crate enables the feature modules it needs, under a

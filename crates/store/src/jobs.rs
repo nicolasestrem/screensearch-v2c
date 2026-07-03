@@ -15,7 +15,6 @@ use crate::SqliteStore;
 fn kind_token(kind: JobKind) -> &'static str {
     match kind {
         JobKind::EmbedText => "embed_text",
-        JobKind::EmbedImage => "embed_image",
         JobKind::VisionTag => "vision_tag",
     }
 }
@@ -23,7 +22,6 @@ fn kind_token(kind: JobKind) -> &'static str {
 fn kind_from_token(s: &str) -> rusqlite::Result<JobKind> {
     match s {
         "embed_text" => Ok(JobKind::EmbedText),
-        "embed_image" => Ok(JobKind::EmbedImage),
         "vision_tag" => Ok(JobKind::VisionTag),
         other => Err(rusqlite::Error::FromSqlConversionFailure(
             0,

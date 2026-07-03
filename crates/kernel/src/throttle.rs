@@ -2,9 +2,9 @@
 //! testable level state machine plus the kernel governor loop that drives it.
 //!
 //! Under sustained CPU/GPU pressure the throttle steps the worker pool down a level at a
-//! time — L1 pauses `vision_tag` + `embed_image`, L2 additionally floors `embed_text`
-//! concurrency — and steps back up as pressure recovers. Capture / OCR / storage are
-//! structurally outside the worker pool and never throttle (`03 §5`).
+//! time — L1 pauses `vision_tag`, L2 additionally floors `embed_text` concurrency — and
+//! steps back up as pressure recovers. Capture / OCR / storage are structurally outside
+//! the worker pool and never throttle (`03 §5`).
 //!
 //! Like `capture::trigger`, the [`ThrottleMachine`] is the testable core: **no Win32, no
 //! `unsafe`, no real clock** — the [`PressureSample`] and `now_ms` are passed in. The
@@ -22,7 +22,7 @@ use crate::events::KernelEvent;
 use crate::settings;
 
 /// How throttled enrichment currently is. The `u8` value is what the worker pool reads
-/// from the shared atomic: `0` claims everything, `>= 1` pauses the heavy kinds, `2` also
+/// from the shared atomic: `0` claims everything, `>= 1` pauses `vision_tag`, `2` also
 /// floors `embed_text` concurrency.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ThrottleLevel {

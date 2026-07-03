@@ -58,7 +58,7 @@ Tauri 2 app  ──typed IPC──  Rust kernel (event bus + trait modules)
    │                              │
    │   always-on (cheap):  WGC capture → WinRT OCR → Store
    │   deferred (controlled):  SQLite JobQueue → workers:
-   │        • fastembed (text+image vectors, in-process)
+   │        • fastembed (text vectors, in-process)
    │        • llama.cpp sidecar (vision tag / RAG answer, Job-Object-bound)
    │   query:  FTS5 + vec KNN → RRF → (sidecar answer, thinking) → stream to UI
 ```

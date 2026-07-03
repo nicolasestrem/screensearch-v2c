@@ -266,14 +266,6 @@ impl Store for SqliteStore {
         )
         .await
     }
-    async fn upsert_image_embedding(
-        &self,
-        frame_id: i64,
-        emb: &Embedding,
-        model: &str,
-    ) -> Result<()> {
-        SqliteStore::upsert_image_embedding(self, frame_id, emb, model).await
-    }
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
         SqliteStore::hybrid_search(self, q).await
     }
@@ -422,8 +414,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 8,
-            "latest schema is v8 (degrade-to-text retention: image_purged + sweep index)"
+            version, 9,
+            "latest schema is v9 (0.3.0 PR4 removed the image-embedding lane)"
         );
 
         let frame_rows: i64 = conn
@@ -556,6 +548,163 @@ mod migration_tests {
         assert!(
             plan.contains("idx_frames_image_retention"),
             "sweep must use the partial retention index, got plan: {plan}"
+        );
+    }
+
+    /// v9 (0.3.0 PR4) removes the dark-launched image-embedding lane: it DROPs the
+    /// `image_embeddings` + `image_embedding_vectors` tables (the `image_embeddings_ad`
+    /// vec0-sync trigger goes with its table) and deletes `embed_image` jobs in **any**
+    /// state. Seeded at v8 with a frame carrying BOTH embedding lanes plus a mixed jobs
+    /// queue, this proves the drop is surgical: the text lane, the surviving job kinds,
+    /// the frame, and FK integrity all remain; no image-lane schema object is left behind
+    /// (`docs/0.3.0.md` PR4, `03 §4`/`§13b.3`, D5).
+    #[test]
+    fn migration_v9_drops_image_lane_and_embed_image_jobs() {
+        let mut conn = open_at_version(8);
+        conn.execute(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, capture_trigger)
+             VALUES (1, 100, 0, 10, 10, 'p', 'h', 'timer')",
+            [],
+        )
+        .expect("insert frame");
+        // A valid FLOAT[768] blob (all zeros) — vec0 only stores the bytes here; no KNN runs.
+        let zeros = vec![0u8; schema::EMBEDDING_DIM * 4];
+        // Text lane (must survive v9): metadata row + vec0 shadow row.
+        conn.execute(
+            "INSERT INTO embeddings (id, frame_id, chunk_index, chunk_text, source, model, dim, content_hash)
+             VALUES (1, 1, 0, 't', 'ocr', 'gemma', 768, 'ch')",
+            [],
+        )
+        .expect("insert text embedding");
+        conn.execute(
+            "INSERT INTO embedding_vectors (embedding_id, embedding) VALUES (1, ?1)",
+            rusqlite::params![zeros],
+        )
+        .expect("insert text vector");
+        // Image lane (must vanish): metadata row + vec0 shadow row.
+        conn.execute(
+            "INSERT INTO image_embeddings (id, frame_id, model, dim)
+             VALUES (1, 1, 'nomic-embed-vision-v1.5', 768)",
+            [],
+        )
+        .expect("insert image embedding");
+        conn.execute(
+            "INSERT INTO image_embedding_vectors (image_embedding_id, embedding) VALUES (1, ?1)",
+            rusqlite::params![zeros],
+        )
+        .expect("insert image vector");
+        // embed_image jobs across the whole state machine, plus one survivor of each other kind.
+        for (id, kind, state) in [
+            (1, "embed_image", "pending"),
+            (2, "embed_image", "running"),
+            (3, "embed_image", "done"),
+            (4, "embed_image", "dead"),
+            (5, "embed_text", "pending"),
+            (6, "vision_tag", "pending"),
+        ] {
+            conn.execute(
+                "INSERT INTO jobs (id, kind, frame_id, state) VALUES (?1, ?2, 1, ?3)",
+                rusqlite::params![id, kind, state],
+            )
+            .expect("insert job");
+        }
+
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+        assert_eq!(
+            version, 9,
+            "latest schema is v9 (image-embedding lane removed)"
+        );
+
+        // No image-lane object survives — tables, trigger, or vec0 shadow tables.
+        let leftovers: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE name IN ('image_embeddings', 'image_embedding_vectors', 'image_embeddings_ad')
+                    OR name LIKE 'image_embedding_vectors_%'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read sqlite_master");
+        assert_eq!(
+            leftovers, 0,
+            "the image lane must leave no schema objects behind"
+        );
+
+        // embed_image jobs gone in every state; the other kinds intact.
+        let gone: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM jobs WHERE kind = 'embed_image'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count embed_image jobs");
+        assert_eq!(gone, 0, "embed_image jobs must be deleted in any state");
+        let survivors: Vec<String> = conn
+            .prepare("SELECT kind FROM jobs ORDER BY kind")
+            .expect("prepare survivors")
+            .query_map([], |r| r.get(0))
+            .expect("query survivors")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect survivors");
+        assert_eq!(
+            survivors,
+            ["embed_text", "vision_tag"],
+            "other job kinds must survive the image-lane drop"
+        );
+
+        // Frame + text lane untouched; integrity holds.
+        let frames: i64 = conn
+            .query_row("SELECT count(*) FROM frames", [], |r| r.get(0))
+            .expect("count frames");
+        assert_eq!(frames, 1, "the frame must survive");
+        let text_meta: i64 = conn
+            .query_row("SELECT count(*) FROM embeddings", [], |r| r.get(0))
+            .expect("count text embeddings");
+        let text_vecs: i64 = conn
+            .query_row("SELECT count(*) FROM embedding_vectors", [], |r| r.get(0))
+            .expect("count text vectors");
+        assert_eq!(
+            (text_meta, text_vecs),
+            (1, 1),
+            "the text embedding lane must survive v9"
+        );
+        assert_eq!(fk_violation_count(&conn), 0, "no FK violations after v9");
+    }
+
+    /// Acceptance (`03 §13b.3`): a fresh DB (V1..V9 in one bootstrap) and a v8 DB upgraded
+    /// by the same runner must agree on the final schema — identical object set and
+    /// identical DDL text. Both paths execute the same forward-only migration chain, so
+    /// the removed image lane (created in V1, dropped in V9) leaves no trace in either.
+    #[test]
+    fn fresh_and_migrated_schemas_agree_at_latest() {
+        fn schema_objects(conn: &Connection) -> Vec<(String, String, String)> {
+            conn.prepare(
+                "SELECT type, name, COALESCE(sql, '') FROM sqlite_master
+                 WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+            )
+            .expect("prepare schema query")
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("query sqlite_master")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect schema objects")
+        }
+
+        register_vec_extension();
+        let mut fresh = Connection::open_in_memory().expect("open fresh in-memory db");
+        bootstrap_and_migrate(&mut fresh).expect("fresh bootstrap to latest");
+
+        let mut migrated = open_at_version(8);
+        bootstrap_and_migrate(&mut migrated).expect("migrate v8 db to latest");
+
+        assert_eq!(
+            schema_objects(&fresh),
+            schema_objects(&migrated),
+            "fresh-DB and migrated-DB schemas must agree at LATEST (03 §13b.3)"
         );
     }
 }

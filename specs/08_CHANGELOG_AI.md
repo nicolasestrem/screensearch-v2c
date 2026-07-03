@@ -17,6 +17,58 @@
 
 ---
 
+## 2026-07-03 — 0.3.0 PR4: image-embedding lane removal (`feat/pr4-image-lane-removal`)
+- **Change:** Removed the dark-launched, flag-off **nomic-embed-vision image-embedding lane**, with a
+  forward-only **schema v8 → v9** migration (D5/D15).
+  - `crates/store/src/schema.rs`: `LATEST_SCHEMA_VERSION` 8 → 9; new `MIGRATION_V9`
+    (`DROP TABLE image_embedding_vectors; DROP TABLE image_embeddings; DELETE FROM jobs WHERE
+    kind = 'embed_image';`). `MIGRATION_V1` left frozen (append-only doctrine) — a fresh DB creates the
+    image tables in V1 and drops them in V9, ending at the same schema as an upgraded DB. **No** `jobs.kind`
+    CHECK, **no** jobs rebuild (`07` #82).
+  - `crates/store/src/lib.rs`: two populated-DB migration tests patterned on the v6 frames-rebuild test —
+    `migration_v9_drops_image_lane_and_embed_image_jobs` (seed a frame with **both** embedding lanes + a
+    mixed jobs queue; assert the image tables/trigger/vec0-shadows are gone, `embed_image` jobs deleted in
+    every state, the text lane + other job kinds + FK integrity survive) and
+    `fresh_and_migrated_schemas_agree_at_latest` (compare `sqlite_master` object+DDL sets between a fresh
+    bootstrap and a v8→v9 upgrade — `03 §13b.3`). Updated the v6 test's `version == 8` literal to `9`.
+  - `crates/traits`: dropped `EmbeddingProvider::embed_image` + `image_model_name`,
+    `Store::upsert_image_embedding`, `JobKind::EmbedImage`, and `Settings.enrich_image_embeddings`.
+  - `crates/embeddings`: `FastEmbedProvider` is text-only (`new(cache_dir)`, no `with_image`/image lane/
+    `IMAGE_MODEL_NAME`). `Cargo.toml` drops the `image` dep; root `Cargo.toml` sets fastembed
+    `default-features = false` (drops the `image-models` default feature — verified against fastembed
+    5.17.2's manifest; keeps only the ORT + hf-hub download stack).
+  - `crates/store`: removed `upsert_image_embedding` / `nearest_image_frames` / `image_embedding_count`
+    and the `EmbedImage` token arms; `knn_frames` (shared with text) stays. Hybrid search already had no
+    image arm — untouched.
+  - `crates/kernel`: removed the `EmbedImage` capture-enqueue arm, the worker-pool claim/dispatch arm +
+    `embed_image_outcome`, `Shared.enable_embed_image`; the throttle now pauses `vision_tag` only (the
+    level-2 `embed_text` floor gate is unchanged). Added `enrich.image_embeddings` to
+    `RETIRED_SETTINGS_KEYS` (reuses PR2's `drop_retired_settings` drop-once mechanism). Redesigned the
+    throttle integration test around `vision_tag`, preserving the L1-pause / recovery / disabled-inert
+    proof shape; pruned the two `embed_image` enrichment tests.
+  - `src-tauri`: removed the `embedder_with_image` flag + the `needs_image_embedder` reload branch;
+    `init_embeddings` gates on `enrich_embed_text` only and calls `FastEmbedProvider::new(models_dir)`.
+  - UI: deleted the "Embed images" Settings toggle + the dead `embed_image` job-completion arm; ts-rs
+    regenerated `ui/src/bindings/Settings.ts` + `JobKind.ts`.
+  - Docs: `README.md`, `docs/ARCHITECTURE.md` (§5.2/§5.3/data-flow/settings), `docs/TESTING.md` (new PR4
+    manual-acceptance section), `CHANGELOG.md`; `specs/02 §4` diagram caption fixed
+    (`text+image vectors` → `text vectors`, recorded in `06`); `07` #81 image-lane doc sweep marked done.
+- **Why:** `docs/0.3.0.md` PR4 + `02 §5c` / `03 §4`/`§13b.3` — a flag-off lane is pure carrying cost
+  (a second vec0 table, a second model download, code that rots untested); text embeddings + vision tags
+  cover semantic reach. D5 (drop derived vectors + dead jobs), D15 (+1 schema bump with a populated-DB
+  test) settled in the roadmap.
+- **Verification:** `cargo fmt --check` / `clippy --workspace --all-targets -D warnings` /
+  `build --workspace` / `test --workspace` all exit 0 (store migration tests 5/5 incl. the 2 new; full
+  workspace 0 failed); `npm run lint` (clean) / `npm run build` (`✓ built`); `git diff -- ui/src/bindings`
+  = only `Settings.ts` + `JobKind.ts` (regenerated, committed). **Grep gate:** `nomic` / `EmbedImage` /
+  `image_embedding` / `embed_image` appear only in history/rationale (CHANGELOG, archives, `docs/0.3.0.md`,
+  specs) and the enumerated live-code exceptions — the frozen `MIGRATION_V1` DDL, the new `MIGRATION_V9`,
+  the migration-test seed, and the `enrich.image_embeddings` retired-key literal; zero elsewhere in
+  `crates/`, `src-tauri/`, `ui/src/`, README, ARCHITECTURE, TESTING. **Parity:** `parity-digest` lines
+  identical on the 10k-frame fixture before (commit 1) and after (p95 < 200 ms both runs) — the image
+  arm was never in hybrid search, so parity is structural and shown. Full verbatim in `05`
+  (Pass 2026-07-03 PR4).
+
 ## 2026-07-03 — 0.3.0 PR3: Beta model tier removal (`feat/pr3-beta-tier-removal`)
 - **Change:** Retired the **Beta** tier from both inference lanes — **Default / Quality only** (D3/D4).
   Deleted the two Beta models (vision `jc-builds/Qwen3.5-9B-VLM-Q4_K_M-GGUF`, answer
