@@ -7,11 +7,4 @@ import type { ModelLane } from "./ModelLane";
  * not be probed (the UI then shows bytes-downloaded without a percentage). `error` is set
  * only on the `Failed` phase.
  */
-export type ModelDownloadStatus = {
-  lane: ModelLane;
-  model: string | null;
-  phase: ModelDownloadPhase;
-  downloaded_bytes: number;
-  total_bytes: number | null;
-  error: string | null;
-};
+export type ModelDownloadStatus = { lane: ModelLane, model: string | null, phase: ModelDownloadPhase, downloaded_bytes: number, total_bytes: number | null, error: string | null, };

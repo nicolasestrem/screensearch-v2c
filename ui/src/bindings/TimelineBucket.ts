@@ -3,4 +3,4 @@
 /**
  * One bucket of the timeline histogram (`get_timeline` output).
  */
-export type TimelineBucket = { start: number; end: number; count: number };
+export type TimelineBucket = { start: number, end: number, count: number, };

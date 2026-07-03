@@ -8,27 +8,20 @@
  * CASCADEs with the frame. A retention-degraded frame keeps its row (image_purged =
  * true, "text kept"), so a mark survives image expiry (`03 §4`, D10).
  */
-export type Mark = {
-  mark_id: number;
-  frame_id: number;
-  /**
-   * When the mark was created, unix epoch ms.
-   */
-  created_at: number;
-  /**
-   * Optional one-line intention note (attached via `set_mark_note` after the fact).
-   */
-  note: string | null;
-  /**
-   * `null` while unresolved; set when the user resolves or dismisses the mark.
-   */
-  resolved_at: number | null;
-  /**
-   * The marked frame's capture time, unix epoch ms (joined for display "age").
-   */
-  captured_at: number;
-  image_path: string;
-  image_purged: boolean;
-  app_hint: string | null;
-  window_title: string | null;
-};
+export type Mark = { mark_id: number, frame_id: number, 
+/**
+ * When the mark was created, unix epoch ms.
+ */
+created_at: number, 
+/**
+ * Optional one-line intention note (attached via `set_mark_note` after the fact).
+ */
+note: string | null, 
+/**
+ * `null` while unresolved; set when the user resolves or dismisses the mark.
+ */
+resolved_at: number | null, 
+/**
+ * The marked frame's capture time, unix epoch ms (joined for display "age").
+ */
+captured_at: number, image_path: string, image_purged: boolean, app_hint: string | null, window_title: string | null, };

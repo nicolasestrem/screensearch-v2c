@@ -4,4 +4,4 @@
  * One row of the [`InsightsSummary`] top-apps breakdown. `app` is `None` for
  * frames with no resolved foreground app.
  */
-export type AppCount = { app: string | null; count: number };
+export type AppCount = { app: string | null, count: number, };

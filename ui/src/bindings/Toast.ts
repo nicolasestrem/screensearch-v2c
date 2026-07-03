@@ -4,4 +4,4 @@ import type { ToastLevel } from "./ToastLevel";
 /**
  * A transient user-facing notification (`toast` event).
  */
-export type Toast = { level: ToastLevel; message: string };
+export type Toast = { level: ToastLevel, message: string, };

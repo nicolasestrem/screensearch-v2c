@@ -5,9 +5,4 @@
  * 0.3.0 PR5). `registered=false` is a first-class UI state so conflicts surface
  * loudly in Settings instead of silently disabling the shortcut (D6).
  */
-export type HotkeyStatus = {
-  id: string;
-  chord: string;
-  registered: boolean;
-  error: string | null;
-};
+export type HotkeyStatus = { id: string, chord: string, registered: boolean, error: string | null, };

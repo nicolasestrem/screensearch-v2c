@@ -3,10 +3,4 @@
 /**
  * A connected monitor the capture source can see.
  */
-export type MonitorInfo = {
-  index: number;
-  name: string;
-  width: number;
-  height: number;
-  is_primary: boolean;
-};
+export type MonitorInfo = { index: number, name: string, width: number, height: number, is_primary: boolean, };

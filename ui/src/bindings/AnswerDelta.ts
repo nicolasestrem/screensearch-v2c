@@ -3,9 +3,4 @@
 /**
  * A streamed chunk of an answer (`answer_delta` event / `AnswerProvider` channel).
  */
-export type AnswerDelta =
-  | { type: "thinking"; text: string }
-  | { type: "token"; text: string }
-  | { type: "citation"; frame_id: number }
-  | { type: "done" }
-  | { type: "error"; message: string };
+export type AnswerDelta = { "type": "thinking", text: string, } | { "type": "token", text: string, } | { "type": "citation", frame_id: number, } | { "type": "done" } | { "type": "error", message: string, };

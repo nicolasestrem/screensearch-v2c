@@ -7,8 +7,4 @@ import type { SidecarState } from "./SidecarState";
  * last) resident — vision vs. answer — so the UI can label the engine truthfully instead
  * of guessing from the filename. `None` when no model has loaded yet.
  */
-export type SidecarStatus = {
-  state: SidecarState;
-  model: string | null;
-  lane: ModelLane | null;
-};
+export type SidecarStatus = { state: SidecarState, model: string | null, lane: ModelLane | null, };

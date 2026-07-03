@@ -4,4 +4,4 @@
  * One row of the [`InsightsSummary`] activity-type breakdown. `activity` is the
  * vision-assigned label (only tagged frames are counted).
  */
-export type ActivityCount = { activity: string | null; count: number };
+export type ActivityCount = { activity: string | null, count: number, };

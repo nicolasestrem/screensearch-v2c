@@ -9,12 +9,4 @@
  * surfaced in [`crate::ipc::FrameDetail`] so the Moment view can show why a frame was
  * captured. It is a **label, never input content** — no keystrokes or clipboard text.
  */
-export type CaptureTrigger =
-  | "timer"
-  | "idle"
-  | "foreground_change"
-  | "clipboard_change"
-  | "typing_pause"
-  | "click"
-  | "scroll_stop"
-  | "manual";
+export type CaptureTrigger = "timer" | "idle" | "foreground_change" | "clipboard_change" | "typing_pause" | "click" | "scroll_stop" | "manual";

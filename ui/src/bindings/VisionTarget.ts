@@ -3,6 +3,4 @@
 /**
  * Target of an `enqueue_vision` request: a single frame or a time range.
  */
-export type VisionTarget =
-  | { kind: "frame"; frame_id: number }
-  | { kind: "range"; start: number; end: number };
+export type VisionTarget = { "kind": "frame", frame_id: number, } | { "kind": "range", start: number, end: number, };

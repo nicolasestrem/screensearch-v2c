@@ -8,9 +8,4 @@ import type { TimeRange } from "./TimeRange";
  * the awaited command. `prompt` (Custom only) steers the summary via semantic
  * retrieval; Daily/Weekly/Custom-without-prompt use temporal-coverage sampling.
  */
-export type ReportRequest = {
-  kind: ReportKind;
-  time_range: TimeRange;
-  prompt: string | null;
-  request_id: string | null;
-};
+export type ReportRequest = { kind: ReportKind, time_range: TimeRange, prompt: string | null, request_id: string | null, };

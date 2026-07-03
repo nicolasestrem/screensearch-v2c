@@ -5,9 +5,4 @@ import type { ComponentReadiness } from "./ComponentReadiness";
  * Aggregate readiness of the four subsystems (`get_readiness` output /
  * `readiness_changed` event, `03 §7`). [`Default`] is every component `Unknown`.
  */
-export type Readiness = {
-  capture: ComponentReadiness;
-  db: ComponentReadiness;
-  embed_model: ComponentReadiness;
-  sidecar: ComponentReadiness;
-};
+export type Readiness = { capture: ComponentReadiness, db: ComponentReadiness, embed_model: ComponentReadiness, sidecar: ComponentReadiness, };

@@ -3,10 +3,4 @@
 /**
  * Deferred vision-tagging output for a frame.
  */
-export type VisionAnalysis = {
-  description: string;
-  activity_type: string | null;
-  app_hint: string | null;
-  confidence: number;
-  model: string;
-};
+export type VisionAnalysis = { description: string, activity_type: string | null, app_hint: string | null, confidence: number, model: string, };

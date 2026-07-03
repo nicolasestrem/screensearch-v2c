@@ -8,15 +8,10 @@
  * Drives the Timeline hover thumbnails, the Deck "jump back in" recents, and a
  * Moment's neighbour context; open one with `get_frame(frame_id)` for full detail.
  */
-export type FrameMeta = {
-  frame_id: number;
-  captured_at: number;
-  image_path: string;
-  app_hint: string | null;
-  /**
-   * `true` once this frame's screenshot has been retention-degraded — the JPEG/WebP
-   * file is gone but the text proof remains (`storage.retention_days`). The UI shows a
-   * "screenshot expired, text kept" state instead of a broken thumbnail.
-   */
-  image_purged: boolean;
-};
+export type FrameMeta = { frame_id: number, captured_at: number, image_path: string, app_hint: string | null, 
+/**
+ * `true` once this frame's screenshot has been retention-degraded — the JPEG/WebP
+ * file is gone but the text proof remains (`storage.retention_days`). The UI shows a
+ * "screenshot expired, text kept" state instead of a broken thumbnail.
+ */
+image_purged: boolean, };

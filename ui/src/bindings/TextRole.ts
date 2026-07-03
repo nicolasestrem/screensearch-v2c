@@ -5,5 +5,4 @@
  * (`03 §4` CHECK). PR2 emits every span as [`TextRole::Unknown`]; PR3's classifier
  * assigns the real roles and drops non-`content` spans from `content_text`.
  */
-export type TextRole =
-  "content" | "chrome" | "background" | "system" | "unknown";
+export type TextRole = "content" | "chrome" | "background" | "system" | "unknown";

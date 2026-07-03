@@ -11,37 +11,30 @@ import type { TextSource } from "./TextSource";
  * stored geometry + role is enough to redraw what was on screen — "text is enough" as
  * durable proof).
  */
-export type TextSpan = {
-  /**
-   * The recognized text, verbatim.
-   */
-  text: string;
-  /**
-   * Normalized form used for chrome-signature matching (`03 §3b`,
-   * [`normalize_text`]).
-   */
-  normalized_text: string;
-  source: TextSource;
-  role: TextRole;
-  /**
-   * Normalized `[0,1]` bounding box (origin top-left), relative to the
-   * full-resolution frame the OCR ran on.
-   */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  /**
-   * Zero-based index of the OCR line this word belongs to (`Lines()` order). The
-   * engine groups words into lines; carrying the index lets PR3's classifier group
-   * spans back into lines exactly (no geometry heuristic) for line-level chrome
-   * signatures and `content_text` reassembly (`03 §3b`).
-   */
-  line_index: number;
-  /**
-   * Whether the span is included in searchable text. PR2 marks every span
-   * searchable; PR3 sets this from the classified role.
-   */
-  is_searchable: boolean;
-  suppress_reason: SuppressReason | null;
-};
+export type TextSpan = { 
+/**
+ * The recognized text, verbatim.
+ */
+text: string, 
+/**
+ * Normalized form used for chrome-signature matching (`03 §3b`,
+ * [`normalize_text`]).
+ */
+normalized_text: string, source: TextSource, role: TextRole, 
+/**
+ * Normalized `[0,1]` bounding box (origin top-left), relative to the
+ * full-resolution frame the OCR ran on.
+ */
+x: number, y: number, w: number, h: number, 
+/**
+ * Zero-based index of the OCR line this word belongs to (`Lines()` order). The
+ * engine groups words into lines; carrying the index lets PR3's classifier group
+ * spans back into lines exactly (no geometry heuristic) for line-level chrome
+ * signatures and `content_text` reassembly (`03 §3b`).
+ */
+line_index: number, 
+/**
+ * Whether the span is included in searchable text. PR2 marks every span
+ * searchable; PR3 sets this from the classified role.
+ */
+is_searchable: boolean, suppress_reason: SuppressReason | null, };

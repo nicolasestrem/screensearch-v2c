@@ -6,7 +6,4 @@ import type { ComponentStatus } from "./ComponentStatus";
  * `detail` (e.g. "model downloading 40%", "sidecar evicted (idle)", "WebView2
  * runtime missing") so the UI can explain *why* without a separate lookup.
  */
-export type ComponentReadiness = {
-  status: ComponentStatus;
-  detail: string | null;
-};
+export type ComponentReadiness = { status: ComponentStatus, detail: string | null, };

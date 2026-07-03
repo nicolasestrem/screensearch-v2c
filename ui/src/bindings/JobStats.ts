@@ -3,10 +3,4 @@
 /**
  * Aggregate queue counts surfaced to the UI (`get_job_stats`, `03 §7`).
  */
-export type JobStats = {
-  pending: number;
-  running: number;
-  done: number;
-  failed: number;
-  dead: number;
-};
+export type JobStats = { pending: number, running: number, done: number, failed: number, dead: number, };

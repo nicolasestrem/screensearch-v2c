@@ -18,5 +18,4 @@
  *   binary absent, no capturable monitor). Actionable by the user.
  * - `Error` — a failure occurred; see `detail`.
  */
-export type ComponentStatus =
-  "unknown" | "disabled" | "initializing" | "ready" | "unavailable" | "error";
+export type ComponentStatus = "unknown" | "disabled" | "initializing" | "ready" | "unavailable" | "error";
