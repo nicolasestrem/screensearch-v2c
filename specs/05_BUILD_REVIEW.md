@@ -177,6 +177,97 @@ L616–631, `§13b.1`); code map from two Explore agents + a Plan-agent design p
   stay readable and Moment keeps rendering them"; `docs/0.3.0.md` itself asserts both, so it's an
   interpretation, not a contradiction (no `06` entry). Recorded under Interpretation in `07`.
 
+## Pass — 2026-07-03 — 0.3.0 PR3: Beta model tier removal (`feat/pr3-beta-tier-removal`)
+
+Second 0.3.0 subtraction (D3/D4). Retired the **Beta** tier from both inference lanes → **Default /
+Quality** only, deleting the two Beta models (vision `Qwen3.5-9B-VLM`, answer `Nemotron-3-Nano-4B` —
+the only non-Apache/OML license and the only hybrid-arch row). **No schema change** (tiers live in
+the `settings` table). Implemented against the PR1 contract (`03 §8` L576–578, `§13b.2`); code map
+from two Explore agents + a Plan-agent design pass that validated the one design decision (the remap
+seam). TDD: RED (`left: Beta, right: Quality`) → GREEN.
+
+### Implemented
+- **`crates/traits/src/ipc.rs`** — `ModelTier` → `{ Default, Quality }` (dropped `Beta`); doc comment
+  records the retirement + load-remap. ts-rs regenerated `ui/src/bindings/ModelTier.ts` →
+  `"default" | "quality"` (committed; drift guard clean).
+- **`crates/inference/src/models.rs`** — deleted the two `repo_for` Beta arms + the `tier_slug` `Beta`
+  arm (the **only** two exhaustive matches on the enum in the workspace; everything else is
+  tier-generic). Extended `repo_mapping_matches_registry` to all **four** surviving `(lane, tier)` →
+  repo + `needs_mmproj` pairs per `MODEL_REGISTRY §1/§2`.
+- **`crates/kernel/src/settings.rs`** — new `load_tier(store, key, default)` replaces the generic
+  `json()` read for the two `models.*_tier` keys: a persisted `"beta"` maps to `Quality`, is
+  **persisted** via `set_setting` (best-effort, warn-and-swallow on error), and returned — so it logs
+  **once** (retired token leaves the DB; next load reads `"quality"`), the same mechanism as
+  `drop_retired_settings`. **The remap lives in the load path, not the startup-maintenance sweep**,
+  because the composition root builds the sidecars straight from `load_settings`' output (`src-tauri/
+  src/lib.rs:1167→1210/1217`); a sweep-side remap would race it and the first post-upgrade session
+  would run `Default` — a D3 violation. Any *other* unparsable tier keeps the old behavior (fall to
+  default, no rewrite).
+- **Tests** — `crates/kernel/tests/settings.rs`: `persisted_beta_tier_remaps_to_quality_and_persists`
+  (seed `"beta"` both lanes → load = Quality, DB rewritten to `"quality"`, second load idempotent);
+  `unknown_tier_falls_back_to_default_without_rewrite` (a non-Beta bad value is **not** migrated —
+  pins the tolerant-load boundary); fixed `round_trips_non_default_values` (`Beta` → `Quality`).
+- **UI** — `ModelTierPicker.tsx` (TIERS + MODEL_NAMES beta rows + two header comments) and
+  `Settings.tsx` (`TIER_LABEL`) lose Beta; TypeScript's `Record<ModelTier, …>` is the tripwire that
+  forces both (no UI unit tests exist). `Settings.ts` / `SetModelTier.ts` bindings unchanged.
+- **Docs** — `README.md` (3-tier → 2-tier table), `docs/ARCHITECTURE.md` §7.3, `docs/TESTING.md`
+  (new model-tier manual-acceptance section), `CHANGELOG.md`. Specs `MODEL_REGISTRY`/`UI_REFERENCE`/
+  `00`/`02`/`03` already carried the "0.3.0 retired Beta" language from PR1 — no PR3 spec edits.
+
+### Verification — verbatim (Windows, full CI sequence)
+- RED first: `cargo test -p kernel --test settings persisted_beta_tier_remaps_to_quality_and_persists`
+  → `FAILED … assertion left == right failed  left: Beta  right: Quality`.
+- `cargo test -p kernel --test settings` → `ok. 10 passed; 0 failed` (incl. the 2 new).
+- `cargo test -p inference --lib models` → `ok. 6 passed; 0 failed` (incl. extended
+  `repo_mapping_matches_registry`).
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished … in 10.23s` / exit 0.
+- `cargo build --workspace` → `Finished … in 19.95s` / exit 0.
+- `cargo test --workspace` → all suites green, **0 failed** (kernel 27 + settings 10 + enrichment 11 +
+  pipeline 6 + throttle 2; inference **102**; traits 53; store 24+58; capture 22/1-ign; uia 16/2-ign;
+  sysmon 11; textfilter 12; screensearch_lib 8; embeddings 1; ocr 1; e2e/perf/smoke ignored).
+- `cd ui && npm run lint` → clean (exit 0); `npm run build` → `✓ built in 2.27s`.
+- `git diff -- ui/src/bindings` → only `ModelTier.ts` (regenerated to the two-variant union, committed).
+- **Grep gate:** `Nemotron` / `Qwen3.5-9B` appear only in history/rationale docs (CHANGELOG entries,
+  `CHANGELOG-ARCHIVE`, `specs/archive`, `docs/0.3.0.md`, `custom-llm-training.md`, `docs/audits`, specs
+  `00/02/03/08/MODEL_REGISTRY` retirement language, `.remember/*`) — **zero** in `crates/`,
+  `src-tauri/`, `ui/src/`, README, ARCHITECTURE. `beta` survives in source only as the `load_tier`
+  migration literal (`s == "beta"`) + doc comments + incidental fixtures (`"alpha beta"`,
+  `"beta banana"`).
+
+### Live checks (real desktop, `npm run tauri dev`) — verbatim
+- **Fresh DB created at `schema_version=8`** (unchanged — this PR has no migration), confirming tiers
+  are a `settings`-table concern, not schema.
+- **beta→quality remap:** seeded the fresh dev DB
+  (`%APPDATA%\app.screensearchv2c.desktop\screensearch.db`) with
+  `models.vision_tier = models.answer_tier = '"beta"'`, relaunched → the DB rows were rewritten to
+  `'"quality"'` within ~2 s of boot, and the log carried exactly two lines:
+  `WARN kernel::settings: settings: retired \`beta\` tier mapped to \`quality\` key="models.vision_tier"`
+  and `… key="models.answer_tier"` — one per lane, **once** (no repeat despite the many in-session
+  `load_settings` calls from the hot loops, because the first load persisted `quality`). The app then
+  ran on the remapped tiers (`INFO … inference providers attached` / `sidecar ready (lazy spawn)`).
+- **Tier resolution (line 3):** the extended `repo_mapping_matches_registry` pins all four surviving
+  `(lane, tier)` → repo mappings; `download.rs`/`resolve_spec` are tier-generic and untouched by this
+  pure subtraction, so Default and Quality traverse identical logic (only the pinned repo string
+  differs). The live app ran on Quality for both lanes without a resolution error.
+
+### Skipped / deferred (intentional)
+- **End-to-end multi-GB download of both Quality GGUFs** — the fresh app-data had no vision/answer
+  weights on disk (only the fastembed text model auto-downloads at boot), so a live tier download
+  would be a several-GB fetch. It is the PR9 manual-acceptance pass (`docs/TESTING.md`); the
+  resolution mapping is unit-pinned and the download machinery is unchanged, so the risk is nil.
+- **Settings-UI visual** (picker shows only Default/Quality; a remapped lane reads Quality) — the DB
+  is at `"quality"` and the binding has no `"beta"`, so the render is forced; the pixel check is the
+  PR9 manual pass.
+
+### Still risky
+- A **stale IPC client** sending `set_model_tier` with `"beta"` now fails serde at the Tauri boundary
+  (command error before the handler) — only our own UI calls it, so acceptable.
+- The first post-upgrade session can emit a **bounded handful** of duplicate remap warns if several
+  concurrent `load_settings` callers (composition root, embeddings init, throttle tick) race the
+  read→write window — once ever, matching PR2's "log once = silent next launch" semantics; observed as
+  exactly one-per-lane in this run. No process-local `Once` added (would over-engineer the precedent).
+
 ## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
 
 From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`

@@ -69,20 +69,12 @@ pub fn repo_for(lane: ModelLane, tier: ModelTier) -> ModelRepo {
             repo_id: "Qwen/Qwen3-VL-8B-Instruct-GGUF",
             needs_mmproj: true,
         },
-        (ModelLane::Vision, ModelTier::Beta) => ModelRepo {
-            repo_id: "jc-builds/Qwen3.5-9B-VLM-Q4_K_M-GGUF",
-            needs_mmproj: true,
-        },
         (ModelLane::Answer, ModelTier::Default) => ModelRepo {
             repo_id: "unsloth/Ministral-3-3B-Reasoning-2512-GGUF",
             needs_mmproj: false,
         },
         (ModelLane::Answer, ModelTier::Quality) => ModelRepo {
             repo_id: "unsloth/Qwen3-4B-Thinking-2507-GGUF",
-            needs_mmproj: false,
-        },
-        (ModelLane::Answer, ModelTier::Beta) => ModelRepo {
-            repo_id: "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF",
             needs_mmproj: false,
         },
     }
@@ -99,7 +91,6 @@ fn tier_slug(tier: ModelTier) -> &'static str {
     match tier {
         ModelTier::Default => "default",
         ModelTier::Quality => "quality",
-        ModelTier::Beta => "beta",
     }
 }
 
@@ -231,16 +222,28 @@ mod tests {
 
     #[test]
     fn repo_mapping_matches_registry() {
+        // All four surviving `(lane, tier)` pairs after the 0.3.0 Beta retirement
+        // (`MODEL_REGISTRY §1/§2`): vision needs an mmproj projector, answer does not.
         assert_eq!(
             repo_for(ModelLane::Vision, ModelTier::Default).repo_id,
             "Qwen/Qwen3-VL-4B-Instruct-GGUF"
         );
         assert!(repo_for(ModelLane::Vision, ModelTier::Default).needs_mmproj);
         assert_eq!(
+            repo_for(ModelLane::Vision, ModelTier::Quality).repo_id,
+            "Qwen/Qwen3-VL-8B-Instruct-GGUF"
+        );
+        assert!(repo_for(ModelLane::Vision, ModelTier::Quality).needs_mmproj);
+        assert_eq!(
             repo_for(ModelLane::Answer, ModelTier::Default).repo_id,
             "unsloth/Ministral-3-3B-Reasoning-2512-GGUF"
         );
         assert!(!repo_for(ModelLane::Answer, ModelTier::Default).needs_mmproj);
+        assert_eq!(
+            repo_for(ModelLane::Answer, ModelTier::Quality).repo_id,
+            "unsloth/Qwen3-4B-Thinking-2507-GGUF"
+        );
+        assert!(!repo_for(ModelLane::Answer, ModelTier::Quality).needs_mmproj);
     }
 
     #[test]

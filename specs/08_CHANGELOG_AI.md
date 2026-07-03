@@ -17,6 +17,51 @@
 
 ---
 
+## 2026-07-03 — 0.3.0 PR3: Beta model tier removal (`feat/pr3-beta-tier-removal`)
+- **Change:** Retired the **Beta** tier from both inference lanes — **Default / Quality only** (D3/D4).
+  Deleted the two Beta models (vision `jc-builds/Qwen3.5-9B-VLM-Q4_K_M-GGUF`, answer
+  `nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF`). **No schema change** (tiers live in the `settings` table,
+  not the schema).
+  - `crates/traits/src/ipc.rs`: `ModelTier` → `{ Default, Quality }` (dropped `Beta`); doc comment
+    records the retirement + load-remap. ts-rs regenerated `ui/src/bindings/ModelTier.ts` to
+    `"default" | "quality"`.
+  - `crates/inference/src/models.rs`: deleted the two `repo_for` Beta arms + the `tier_slug` `Beta`
+    arm (the only two exhaustive matches on the enum in the workspace). Extended
+    `repo_mapping_matches_registry` to assert all **four** surviving `(lane, tier)` → repo + mmproj
+    pairs per `MODEL_REGISTRY §1/§2` (supports acceptance line 3).
+  - `crates/kernel/src/settings.rs`: new `load_tier(store, key, default)` helper replaces the generic
+    `json()` read for the two `models.*_tier` keys. A persisted `"beta"` is mapped to `Quality`,
+    **persisted** via `set_setting` (best-effort, warn-and-swallow on error), and returned — so it
+    logs **once** (the retired token leaves the DB; next load reads `"quality"`), the same mechanism
+    as `drop_retired_settings`. The remap lives in the **load path**, not the startup-maintenance
+    sweep, because the composition root builds the sidecars straight from `load_settings`' output; a
+    sweep-side remap would race it and the first post-upgrade session would run `Default`. Any *other*
+    unparsable tier value keeps the old behavior (fall back to default, no rewrite).
+  - Tests: `crates/kernel/tests/settings.rs` — new `persisted_beta_tier_remaps_to_quality_and_persists`
+    (seed `"beta"` both lanes → load = Quality, DB rewritten to `"quality"`, second load idempotent)
+    and `unknown_tier_falls_back_to_default_without_rewrite` (a non-Beta bad value is not migrated);
+    fixed `round_trips_non_default_values` (`Beta` → `Quality`).
+  - UI: `ModelTierPicker.tsx` (TIERS + MODEL_NAMES beta rows + header comments) and `Settings.tsx`
+    (`TIER_LABEL`) lose Beta — TypeScript's `Record<ModelTier, …>` is the tripwire that forced them.
+  - Docs: `README.md` (2-tier table), `docs/ARCHITECTURE.md` §7.3, `docs/TESTING.md` (new model-tier
+    manual-acceptance section), `CHANGELOG.md`.
+- **Why:** `docs/0.3.0.md` PR3 + `02 §5c`/`03 §8`/`§13b.2` — cut the model-testing matrix by a third
+  and make licensing uniformly Apache-2.0; Nemotron (OML license, hybrid arch) was the single riskiest
+  registry row. D3 (beta→quality on load), D4 (leave on-disk GGUFs) settled in the roadmap.
+- **Verification:** `cargo fmt --check` / `clippy --workspace --all-targets -D warnings` /
+  `build --workspace` / `test --workspace` all exit 0 (kernel settings **10** incl. the 2 new; inference
+  **102** incl. the extended registry test; traits 53; store 24+58; full workspace 0 failed);
+  `npm run lint` (clean) / `npm run build` (`✓ built`); `git diff -- ui/src/bindings` = only
+  `ModelTier.ts` (regenerated, committed). **Grep gate:** `Nemotron` / `Qwen3.5-9B` appear only in
+  history/rationale docs (CHANGELOG entries, archives, `docs/0.3.0.md`, specs retirement language) —
+  zero in `crates/`, `src-tauri/`, `ui/src/`, README, ARCHITECTURE; `beta` survives in source only as
+  the `load_tier` migration literal + incidental test fixtures. **Live (real desktop, `npm run tauri
+  dev`):** seeded the fresh dev DB with `models.vision_tier=models.answer_tier='"beta"'`, relaunched →
+  two `WARN kernel::settings: settings: retired \`beta\` tier mapped to \`quality\`` lines (one per
+  lane), the DB rows persisted to `'"quality"'`, and a second in-session load emits no further warn
+  ("logged once"); the app ran on the remapped Quality tiers (`inference providers attached; sidecar
+  ready`). Full verbatim in `05` (Pass 2026-07-03 PR3).
+
 ## 2026-07-03 — 0.3.0 PR2: event-trigger trim (`feat/pr2-trigger-trim`)
 - **Change:** Cut the six opt-in event-capture triggers to **foreground + idle** (D1), deleting the
   `WH_MOUSE_LL` global mouse hook (click/scroll-stop), the `AddClipboardFormatListener` clipboard

@@ -124,3 +124,25 @@ idle-threshold — plus the fallback interval).
   with no behavior regression.
 - **Privacy.** Nothing typed is stored — only the timing/change signal. Existing gates (self-exclude
   own window, excluded apps, pause-on-lock) still apply in event mode.
+
+## 🎛️ Manual acceptance — model tiers (0.3.0 PR3)
+
+**0.3.0 PR3** retired the **Beta** model tier: each lane (Vision, Answer) now offers **Default** and
+**Quality** only (`docs/0.3.0.md`, D3/D4). Quick live check on a real Windows desktop with
+`npm run tauri dev`.
+
+- **Two tiers per lane.** Settings → Models shows the tier picker with exactly **Default** and
+  **Quality** for both the Vision and Answer models — no **Beta** button. Hovering a tier shows the
+  resolved model name (e.g. Vision Quality → *Qwen3-VL-8B-Instruct*).
+- **Persisted `beta` loads as Quality.** With the app closed, set a lane's persisted tier to the
+  retired value (`UPDATE settings SET value='"beta"' WHERE key IN ('models.vision_tier',
+  'models.answer_tier')` in `<app-data>\screensearch.db`), then launch. The app logs **one** warn per
+  lane (`settings: retired \`beta\` tier mapped to \`quality\``) on first launch and **nothing** on
+  the next; Settings shows **Quality** on that lane; the DB row is rewritten to `"quality"`.
+- **On-disk Beta files untouched.** Any previously downloaded Beta GGUF stays on disk (no automatic
+  cleanup); it can be removed from the existing model-management surface.
+- **Both surviving tiers resolve.** Switching a lane between **Default** and **Quality** hot-applies
+  (toast) and the sidecar reloads that lane's model; the first use of an as-yet-undownloaded tier
+  fetches it per `MODEL_REGISTRY §4` (a multi-GB download — allow time). *(Downloading both Quality
+  GGUFs end-to-end is the PR9 pass; the tier→repo resolution for all four `(lane, tier)` pairs is
+  pinned by the `repo_mapping_matches_registry` unit test.)*

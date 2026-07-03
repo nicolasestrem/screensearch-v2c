@@ -322,14 +322,15 @@ pub enum ModelLane {
     Answer,
 }
 
-/// User-selectable model tier per lane (`00 §E`).
+/// User-selectable model tier per lane (`00 §E`). 0.3.0 retired the `Beta` tier
+/// (both lanes uniformly Apache-2.0); a persisted `beta` selection maps to `quality`
+/// on load, logged once + persisted (`03 §8`, `docs/0.3.0.md` PR3, D3/D4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum ModelTier {
     Default,
     Quality,
-    Beta,
 }
 
 /// KV-cache element type for the llama.cpp sidecar (`--cache-type-k`/`--cache-type-v`).

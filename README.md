@@ -103,13 +103,13 @@ real DB/frame storage usage.
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the as-built design and data flow.
 
-### Models (user-selectable, 3 tiers per lane)
+### Models (user-selectable, 2 tiers per lane)
 
-| Lane | Default | Quality | Beta |
-|---|---|---|---|
-| **Vision** (P4) | Qwen3-VL-4B-Instruct | Qwen3-VL-8B-Instruct | Qwen3.5-9B-VLM |
-| **Answer** (P4) | Ministral-3-3B-Reasoning-2512 | Qwen3-4B-Thinking-2507 | NVIDIA-Nemotron-3-Nano-4B |
-| **Embeddings** | EmbeddingGemma-300M (text) · nomic-embed-vision-v1.5 (image) | | |
+| Lane | Default | Quality |
+|---|---|---|
+| **Vision** (P4) | Qwen3-VL-4B-Instruct | Qwen3-VL-8B-Instruct |
+| **Answer** (P4) | Ministral-3-3B-Reasoning-2512 | Qwen3-4B-Thinking-2507 |
+| **Embeddings** | EmbeddingGemma-300M (text) · nomic-embed-vision-v1.5 (image) | |
 
 Exact HF repos / quants are pinned in [`specs/MODEL_REGISTRY.md`](./specs/MODEL_REGISTRY.md).
 Embedding models auto-download on first use into `<app-data>/models/fastembed`.
