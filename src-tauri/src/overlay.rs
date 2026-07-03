@@ -112,14 +112,12 @@ pub fn reregister_overlay_hotkey<R: Runtime>(app: &AppHandle<R>, chord: &str) {
         .expect("registered hotkey lock")
         .clone();
 
-    if old.as_deref() == Some(chord)
-        && state
-            .hotkeys
-            .lock()
-            .expect("hotkey status lock")
-            .iter()
-            .any(|s| s.id == OVERLAY_HOTKEY_ID && s.registered)
-    {
+    // `registered_overlay_chord` only advances on a successful (re)register, so when it
+    // already names `chord` the OS still holds that shortcut. Re-registering it would
+    // fail as a duplicate — so refresh the status to OK (this also clears a stale
+    // warning from an earlier failed save that reverted to this chord) and return.
+    if old.as_deref() == Some(chord) {
+        set_status(app, ok_status(OVERLAY_HOTKEY_ID, chord));
         return;
     }
 
@@ -200,14 +198,12 @@ pub fn reregister_marks_hotkey<R: Runtime>(app: &AppHandle<R>, chord: &str) {
         .expect("registered hotkey lock")
         .clone();
 
-    if old.as_deref() == Some(chord)
-        && state
-            .hotkeys
-            .lock()
-            .expect("hotkey status lock")
-            .iter()
-            .any(|s| s.id == MARKS_HOTKEY_ID && s.registered)
-    {
+    // `registered_marks_chord` only advances on a successful (re)register, so when it
+    // already names `chord` the OS still holds that shortcut. Re-registering it would
+    // fail as a duplicate — so refresh the status to OK (this also clears a stale
+    // warning from an earlier failed save that reverted to this chord) and return.
+    if old.as_deref() == Some(chord) {
+        set_status(app, ok_status(MARKS_HOTKEY_ID, chord));
         return;
     }
 

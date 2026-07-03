@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import { Providers } from "./app/providers";
@@ -19,6 +19,9 @@ type View = { mode: "flow" } | { mode: "mark"; payload: MarkToastPayload };
 export function OverlayRuntime() {
   useLiveEvents();
   const [view, setView] = useState<View>({ mode: "flow" });
+  // Stable so MarkToast's auto-dismiss timer keys only on its `paused` state, not on a
+  // fresh closure each render (see MarkToast's useCallback'd `dismiss`).
+  const backToFlow = useCallback(() => setView({ mode: "flow" }), []);
 
   useEffect(() => {
     let active = true;
@@ -46,10 +49,7 @@ export function OverlayRuntime() {
   }, []);
 
   return view.mode === "mark" ? (
-    <MarkToast
-      payload={view.payload}
-      onDone={() => setView({ mode: "flow" })}
-    />
+    <MarkToast payload={view.payload} onDone={backToFlow} />
   ) : (
     <FlowOverlay />
   );

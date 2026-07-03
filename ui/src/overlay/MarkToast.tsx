@@ -3,7 +3,13 @@
 // the window non-focusable), so the user keeps typing in their app; clicking the note
 // field focuses the overlay (focusOverlayForNote) so the note can be typed. Ignoring it
 // costs nothing — it auto-dismisses. Tokens only; role="status" for a polite announce.
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 
 import { IconMark } from "../components/icons";
 import { cn } from "../lib/cn";
@@ -29,10 +35,10 @@ export function MarkToast({ payload, onDone }: MarkToastProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const success = payload.level === "success" && payload.mark_id != null;
 
-  const dismiss = () => {
+  const dismiss = useCallback(() => {
     void dismissMarkToast().catch(() => undefined);
     onDone();
-  };
+  }, [onDone]);
 
   const saveAndDismiss = () => {
     const trimmed = note.trim();
@@ -49,8 +55,7 @@ export function MarkToast({ payload, onDone }: MarkToastProps) {
     if (paused) return;
     const t = setTimeout(dismiss, MARK_TOAST_DISMISS_MS);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused]);
+  }, [paused, dismiss]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {

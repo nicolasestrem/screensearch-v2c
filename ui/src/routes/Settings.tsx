@@ -24,6 +24,7 @@ import {
 } from "../components/primitives";
 import {
   DEFAULT_OVERLAY_HOTKEY,
+  DEFAULT_MARKS_HOTKEY,
   HotkeyField,
   ModelPanel,
   ModelTierPicker,
@@ -184,6 +185,10 @@ function sanitizeSettings(s: Settings): Settings {
     ),
     overlay_hotkey: s.overlay_hotkey.trim() || DEFAULT_OVERLAY_HOTKEY,
     overlay_max_results: clampInt(s.overlay_max_results, 1, 50),
+    // PR6 where-was-i + marks — mirror the backend clamps (kernel settings.rs):
+    // dwell clamps to 10..=86400s; an empty mark chord falls back to the default.
+    marks_hotkey: s.marks_hotkey.trim() || DEFAULT_MARKS_HOTKEY,
+    resume_min_dwell_secs: clampInt(s.resume_min_dwell_secs, 10, 86_400),
     // 0.2.1 enrichment throttle — mirror the backend clamps (03 §8); each exit % is kept
     // strictly below its enter % so the hysteresis band is always valid.
     throttle_cpu_enter_pct: clampInt(s.throttle_cpu_enter_pct, 1, 100),
@@ -585,7 +590,7 @@ export function Component() {
             label="Mark this moment"
             value={draft.marks_hotkey}
             onChange={(v) => set("marks_hotkey", v)}
-            defaultValue="Ctrl+Alt+M"
+            defaultValue={DEFAULT_MARKS_HOTKEY}
             error={marksHotkeyWarning}
             hint={`Captures the current screen and flags it as an intention. Default is Ctrl+Alt+M. ${APPLY_NOW}`}
           />

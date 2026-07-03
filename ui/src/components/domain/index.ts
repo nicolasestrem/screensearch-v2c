@@ -36,6 +36,7 @@ export { CapturesTrend, type CapturesTrendProps } from "./CapturesTrend";
 export {
   HotkeyField,
   DEFAULT_OVERLAY_HOTKEY,
+  DEFAULT_MARKS_HOTKEY,
   type HotkeyFieldProps,
 } from "./HotkeyField";
 export { WhereWasICard, type WhereWasICardProps } from "./WhereWasICard";

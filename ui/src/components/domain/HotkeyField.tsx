@@ -4,6 +4,7 @@ import { Button } from "../primitives";
 import { cn } from "../../lib/cn";
 
 export const DEFAULT_OVERLAY_HOTKEY = "Ctrl+Alt+Space";
+export const DEFAULT_MARKS_HOTKEY = "Ctrl+Alt+M";
 
 const MODIFIER_CODES = new Set([
   "AltLeft",
