@@ -80,7 +80,6 @@ function sanitizeSettings(s: Settings): Settings {
     // Event-driven capture timing knobs — mirror the backend clamps exactly.
     capture_event_debounce_ms: clampInt(s.capture_event_debounce_ms, 100, 10_000),
     capture_event_min_interval_ms: clampInt(s.capture_event_min_interval_ms, 250, 60_000),
-    capture_event_typing_pause_ms: clampInt(s.capture_event_typing_pause_ms, 500, 10_000),
     capture_event_idle_threshold_ms: clampInt(s.capture_event_idle_threshold_ms, 1_000, 60_000),
     capture_event_fallback_interval_ms: clampInt(
       s.capture_event_fallback_interval_ms,
@@ -473,7 +472,7 @@ export function Component() {
             label="Enable event-driven capture"
             checked={draft.capture_event_driven_enabled}
             onChange={(v) => set("capture_event_driven_enabled", v)}
-            hint={`Also capture on app-switch / clipboard change / idle, not just the timer. Your keystrokes and clipboard text are never recorded. ${APPLY_CAPTURE}`}
+            hint={`Also capture on app-switch / idle, not just the timer. Your keystrokes are never recorded. ${APPLY_CAPTURE}`}
           />
           {draft.capture_event_driven_enabled && (
             <div className="flex flex-col gap-4 border-t border-line pt-3">
@@ -484,34 +483,10 @@ export function Component() {
                 hint={`Capture when the foreground app or window changes. ${APPLY_CAPTURE}`}
               />
               <Toggle
-                label="Capture on clipboard change"
-                checked={draft.capture_event_on_clipboard}
-                onChange={(v) => set("capture_event_on_clipboard", v)}
-                hint={`Reacts to clipboard changes; contents are never read. ${APPLY_CAPTURE}`}
-              />
-              <Toggle
                 label="Capture when idle"
                 checked={draft.capture_event_on_idle}
                 onChange={(v) => set("capture_event_on_idle", v)}
                 hint={`Capture once after you stop interacting for the idle threshold. ${APPLY_CAPTURE}`}
-              />
-              <Toggle
-                label="Capture on typing pause"
-                checked={draft.capture_event_on_typing_pause}
-                onChange={(v) => set("capture_event_on_typing_pause", v)}
-                hint={`Capture when typing pauses; keystrokes are never recorded. ${APPLY_CAPTURE}`}
-              />
-              <Toggle
-                label="Capture on click"
-                checked={draft.capture_event_on_click}
-                onChange={(v) => set("capture_event_on_click", v)}
-                hint={`Capture when you click. Uses a system-wide low-level mouse hook; only the fact of a click is used — never the position, button, or any content. ${APPLY_CAPTURE}`}
-              />
-              <Toggle
-                label="Capture when scrolling stops"
-                checked={draft.capture_event_on_scroll_stop}
-                onChange={(v) => set("capture_event_on_scroll_stop", v)}
-                hint={`Capture once after a scroll burst settles. Uses the same low-level mouse hook; only that scrolling happened is used — never the amount or position. ${APPLY_CAPTURE}`}
               />
               <Field
                 label="Debounce (ms)"
@@ -530,15 +505,6 @@ export function Component() {
                 value={draft.capture_event_min_interval_ms}
                 onChange={intHandler("capture_event_min_interval_ms")}
                 hint={`Minimum time between event-triggered captures (rate limit). ${APPLY_CAPTURE}`}
-              />
-              <Field
-                label="Typing-pause threshold (ms)"
-                type="number"
-                min={500}
-                max={10000}
-                value={draft.capture_event_typing_pause_ms}
-                onChange={intHandler("capture_event_typing_pause_ms")}
-                hint={`How long typing must pause to count as a typing-pause event. ${APPLY_CAPTURE}`}
               />
               <Field
                 label="Idle threshold (ms)"

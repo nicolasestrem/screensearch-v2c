@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — Event-capture triggers trimmed to foreground + idle (0.3.0 PR2)
+Opt-in event-driven capture now offers **two** triggers instead of six: **foreground/app-switch**
+and **idle**. Four triggers are **gone**:
+- **Capture on click** and **Capture when scrolling stops** — these were the only users of a
+  *system-wide low-level mouse hook* (`WH_MOUSE_LL`), the one input-latency/invasiveness risk the
+  0.2.0 design had deliberately avoided; removing them deletes that hook and a whole `unsafe` code
+  path.
+- **Capture on clipboard change** — a clipboard listener is a privacy-optics liability in an app
+  built for the privacy-conscious, and app-switch already fires at nearly the same moments (people
+  switch windows around copy/paste). Contents were never read; now nothing listens at all.
+- **Capture on typing pause** — redundant with **idle** (both derive from the same idle-time poll,
+  differing only in threshold).
+
+Everything that carried the value stays: foreground, idle, the fallback interval, the debounce, and
+the min-interval rate ceiling. Event mode remains **opt-in, default off**; timer capture is
+unchanged. **No database change** — screenshots you captured before this update that were tagged
+Click / Scroll stop / Clipboard change / Typing pause **still show that label** in the Moment view;
+new captures simply never use those tags again. If your settings still held the removed toggles, they
+are **dropped cleanly on the next launch** (logged once, no error). Live-verified: the retired keys
+drop on load (one log line, none on relaunch); the app boots clean; the foreground hook thread
+starts/stops cleanly 50× on a real desktop; the v8 schema still accepts a legacy `click` frame.
+
 ### Docs — 0.3.0 arc specs contract (PR1, specs-only; no code / schema / UI)
 The 0.3.0 roadmap (`docs/0.3.0.md`) is normalized into the specs so every later PR (PR2–PR9) is
 implementable from the specs alone, without reopening the roadmap. **This change touches only specs

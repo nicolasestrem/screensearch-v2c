@@ -343,6 +343,9 @@ impl Store for SqliteStore {
     async fn set_settings_batch(&self, kvs: &[(String, String)]) -> Result<()> {
         SqliteStore::set_settings_batch(self, kvs).await
     }
+    async fn delete_settings(&self, keys: &[&str]) -> Result<Vec<String>> {
+        SqliteStore::delete_settings(self, keys).await
+    }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);
     }

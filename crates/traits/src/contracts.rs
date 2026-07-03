@@ -299,6 +299,12 @@ pub trait Store: Send + Sync {
         Ok(())
     }
 
+    /// Deletes the given settings keys and returns those that actually existed (were
+    /// removed). Used by `kernel::settings::drop_retired_settings` to purge keys that a
+    /// version retired (e.g. the 0.3.0 PR2 event triggers), so a config persisted with a
+    /// removed key still loads and the stale row does not linger. Absent keys are no-ops.
+    async fn delete_settings(&self, keys: &[&str]) -> Result<Vec<String>>;
+
     /// Injects (or replaces) the query-embedding provider that lights up the vector
     /// arm of [`Self::hybrid_search`]. Set once the model has finished loading off
     /// the launch thread (`03 §5`). Default is a no-op for stores that never embed.

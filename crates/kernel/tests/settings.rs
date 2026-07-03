@@ -67,14 +67,9 @@ async fn round_trips_non_default_values() {
         // sanitize clamps, so the round-trip exercises the new load/save encodings.
         capture_event_driven_enabled: true,
         capture_event_on_foreground: false,
-        capture_event_on_clipboard: false,
         capture_event_on_idle: true,
-        capture_event_on_typing_pause: true,
-        capture_event_on_click: true,
-        capture_event_on_scroll_stop: true,
         capture_event_debounce_ms: 750,
         capture_event_min_interval_ms: 2000,
-        capture_event_typing_pause_ms: 2000,
         capture_event_idle_threshold_ms: 8000,
         capture_event_fallback_interval_ms: 60_000,
         // UIA text — every field away from its default, within the sanitize clamps.
@@ -273,4 +268,65 @@ async fn sidecar_device_round_trips_empty_as_none() {
             .as_deref(),
         Some("null")
     );
+}
+
+#[tokio::test]
+async fn load_drops_retired_event_keys_without_error() {
+    // 0.3.0 PR2: a config persisted by an older version still carries the four extra
+    // event-trigger keys + the typing-pause threshold. `drop_retired_settings` purges
+    // them (so the row doesn't linger) and load must not error or be perturbed by them.
+    use kernel::settings::{drop_retired_settings, RETIRED_SETTINGS_KEYS};
+
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    // A real (surviving) key alongside the retired ones, to prove only the retired go.
+    save_settings(dyn_store, &Settings::default())
+        .await
+        .expect("seed defaults");
+    for key in RETIRED_SETTINGS_KEYS {
+        store.set_setting(key, "true").await.unwrap();
+    }
+
+    drop_retired_settings(dyn_store).await;
+
+    for key in RETIRED_SETTINGS_KEYS {
+        assert_eq!(
+            store.get_setting(key).await.unwrap(),
+            None,
+            "retired key {key} must be dropped"
+        );
+    }
+    // A surviving key is untouched, and load still yields the defaults (no error).
+    assert!(store
+        .get_setting("capture.event_on_foreground")
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(load_settings(dyn_store).await, Settings::default());
+
+    // Idempotent: a second run finds nothing to drop (so it logs nothing — "once").
+    drop_retired_settings(dyn_store).await;
+}
+
+#[tokio::test]
+async fn save_settings_never_writes_retired_keys() {
+    // The save path must not resurrect a retired key: after saving defaults, none of the
+    // retired keys exist. This pins `save_settings`' key set against the retired list.
+    use kernel::settings::RETIRED_SETTINGS_KEYS;
+
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    save_settings(dyn_store, &Settings::default())
+        .await
+        .expect("save settings");
+
+    for key in RETIRED_SETTINGS_KEYS {
+        assert_eq!(
+            store.get_setting(key).await.unwrap(),
+            None,
+            "save_settings must not write retired key {key}"
+        );
+    }
 }

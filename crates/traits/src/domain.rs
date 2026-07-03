@@ -39,17 +39,20 @@ pub enum CaptureTrigger {
     Idle,
     /// The foreground window / app changed (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`).
     ForegroundChange,
-    /// The clipboard contents changed (`AddClipboardFormatListener`) — change event only.
+    /// **Legacy** — the clipboard changed (change event only, never contents). Retired
+    /// by 0.3.0 PR2 (`docs/0.3.0.md`); no longer emitted, but the token stays readable
+    /// for frames captured before the trim so the Moment "Captured via" row still renders.
     ClipboardChange,
-    /// Typing/input paused for the configured quiet period (`GetLastInputInfo` timing).
+    /// **Legacy** — typing/input paused for the quiet period. Retired by 0.3.0 PR2
+    /// (redundant with `Idle`); kept only to read pre-trim frames (see `ClipboardChange`).
     TypingPause,
-    /// A mouse button was pressed (`WH_MOUSE_LL`, button-down). The *fact* of a click
-    /// only — never the cursor position, button, or any content (`docs/0.2.0.md`; `07`
-    /// #47).
+    /// **Legacy** — a mouse button was pressed (the *fact* of a click only, never
+    /// position/button/content). Retired by 0.3.0 PR2 with the global mouse hook; kept
+    /// only to read pre-trim frames (see `ClipboardChange`).
     Click,
-    /// Scrolling stopped: a mouse-wheel burst settled past the debounce window
-    /// (`WH_MOUSE_LL` wheel + the trailing-edge debounce). Never the scroll position or
-    /// amount — only that scrolling paused (`docs/0.2.0.md`; `07` #47).
+    /// **Legacy** — scrolling stopped after a wheel burst settled (never the position or
+    /// amount). Retired by 0.3.0 PR2 with the global mouse hook; kept only to read
+    /// pre-trim frames (see `ClipboardChange`).
     ScrollStop,
     /// An explicit user-initiated "capture now" (reserved; no UI affordance yet).
     Manual,
@@ -390,32 +393,17 @@ pub struct CaptureConfig {
     /// user-activity triggers below, with a long fallback timer so a static screen is
     /// still sampled (`docs/0.2.0.md` event-driven capture; `07` #47).
     pub event_driven_enabled: bool,
-    /// Capture on foreground/app switch (`capture.event_on_foreground`).
+    /// Capture on foreground/app switch (`capture.event_on_foreground`). *(0.3.0 PR2
+    /// trimmed the six event triggers to foreground + idle — `docs/0.3.0.md`.)*
     pub event_on_foreground: bool,
-    /// Capture on clipboard change — change event only, never contents
-    /// (`capture.event_on_clipboard`).
-    pub event_on_clipboard: bool,
     /// Capture when the user goes idle past the threshold (`capture.event_on_idle`).
     pub event_on_idle: bool,
-    /// Capture when typing/input pauses for the quiet period
-    /// (`capture.event_on_typing_pause`).
-    pub event_on_typing_pause: bool,
-    /// Capture on a mouse click — the *fact* of a click only, never position/button/
-    /// content (`capture.event_on_click`). Requires the `WH_MOUSE_LL` low-level mouse
-    /// hook (`docs/0.2.0.md`; `07` #47).
-    pub event_on_click: bool,
-    /// Capture when scrolling stops after a wheel burst settles
-    /// (`capture.event_on_scroll_stop`). Requires the `WH_MOUSE_LL` low-level mouse hook.
-    pub event_on_scroll_stop: bool,
     /// Collapse a burst of triggers within this window into one capture, ms
     /// (`capture.event_debounce_ms`).
     pub event_debounce_ms: u32,
     /// Minimum gap between any two event-driven captures, ms — the rate ceiling that
     /// stops a trigger storm (`capture.event_min_interval_ms`).
     pub event_min_interval_ms: u32,
-    /// Quiet period after the last input that counts as a typing pause, ms
-    /// (`capture.event_typing_pause_ms`).
-    pub event_typing_pause_ms: u32,
     /// Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
     pub event_idle_threshold_ms: u32,
     /// Fallback capture interval in event mode, ms — guarantees a static screen is

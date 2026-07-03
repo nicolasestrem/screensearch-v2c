@@ -17,6 +17,40 @@
 
 ---
 
+## 2026-07-03 — 0.3.0 PR2: event-trigger trim (`feat/pr2-trigger-trim`)
+- **Change:** Cut the six opt-in event-capture triggers to **foreground + idle** (D1), deleting the
+  `WH_MOUSE_LL` global mouse hook (click/scroll-stop), the `AddClipboardFormatListener` clipboard
+  listener, and the typing-pause edge — plus their five `capture.event_*` settings fields. **No schema
+  change** (D2); the `CaptureTrigger` enum, its DB-token maps, the `frames.capture_trigger` CHECK, and
+  the Moment `TRIGGER_LABEL` all stay so legacy frames still render their trigger.
+  - `crates/capture/src/trigger.rs`: `InputEventKind`→`{Foreground}`; `TriggerConfig`→5 surviving
+    fields; `poll()` idle-only; 14 tests → 9 (retired-only deleted; two surviving-logic tests rewritten
+    off the retired `Clipboard` kind; typing-pause test → idle-edge).
+  - `crates/capture/src/events.rs`: **deleted the message-only window + the whole mouse-hook `unsafe`
+    path + the clipboard listener**; `start()` is now param-less; the hook thread forces its message
+    queue with `PeekMessageW(PM_NOREMOVE)` before signaling ready (the window used to guarantee it,
+    which `Drop`'s `WM_QUIT` post depends on), installs one out-of-context foreground WinEvent hook.
+  - `crates/traits`: 5 fields removed from `Settings` + `CaptureConfig`; new required Store method
+    `delete_settings`; `CaptureTrigger` retired variants reworded **legacy — no longer emitted**.
+  - `crates/store`: `delete_settings` impl + delegation (no schema change).
+  - `crates/kernel/src/settings.rs`: retired reads/writes/clamp/maps removed; new
+    `RETIRED_SETTINGS_KEYS` + `drop_retired_settings` (one `warn!`, error-swallowing).
+    `src-tauri/src/lib.rs`: call it once at startup (before the maintenance sweep).
+  - UI: `Settings.tsx` event panel → master + app-switch + idle + 3 thresholds; `Settings.ts` binding
+    regenerated (5 fields gone); `CaptureTrigger.ts` unchanged.
+  - Docs: `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `README.md`, `CHANGELOG.md`.
+- **Why:** `docs/0.3.0.md` PR2 + `02 §5c` — remove the invasive global mouse hook the 0.2.0 design
+  avoided, the clipboard privacy-optics liability, and the idle-redundant typing-pause; every removal
+  deletes user config surface, maintainer decision surface, and audit surface (`03 §8` L616–631,
+  `§13b.1`; settings-load-tolerance = D1's "drop + log once, never crash").
+- **Verification:** `npm run lint`/`build` (exit 0 / `✓ built`); `cargo fmt --check`/`clippy -D
+  warnings`/`build`/`test --workspace` all exit 0 (capture 22+1ign, kernel settings 8, store 24+58);
+  `git diff -- ui/src/bindings` = only `Settings.ts`. Grep gate clean (retired symbols only in
+  history notes + the read-path exemptions). **Live (real desktop):** window-less foreground hook 50×
+  start/drop `ok`; seeded dev DB with the 5 retired keys → dropped on load with one `warn` line, none
+  on relaunch, boots clean; live DB `schema_version=8` (unchanged) accepts + reads back a
+  `capture_trigger='click'` frame. Full verbatim in `05` (Pass 2026-07-03).
+
 ## 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
 - **Change:** Normalized the 0.3.0 roadmap (`docs/0.3.0.md`, decisions D1–D15) into the spec contract
   so PR2–PR9 are implementable from the specs alone. **No code / no schema code / no UI** — only

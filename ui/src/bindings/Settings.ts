@@ -126,33 +126,14 @@ reports_map_reduce_min_frames: number,
 capture_event_driven_enabled: boolean, 
 /**
  * Capture on foreground/app switch when event-driven capture is on
- * (`capture.event_on_foreground`).
+ * (`capture.event_on_foreground`). *(0.3.0 PR2 trimmed the six event triggers to
+ * foreground + idle — `docs/0.3.0.md`.)*
  */
 capture_event_on_foreground: boolean, 
-/**
- * Capture on clipboard change — change event only, never contents
- * (`capture.event_on_clipboard`).
- */
-capture_event_on_clipboard: boolean, 
 /**
  * Capture when the user goes idle past the threshold (`capture.event_on_idle`).
  */
 capture_event_on_idle: boolean, 
-/**
- * Capture when typing/input pauses for the quiet period
- * (`capture.event_on_typing_pause`).
- */
-capture_event_on_typing_pause: boolean, 
-/**
- * Capture on a mouse click — the *fact* of a click only, never position/button/
- * content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
- */
-capture_event_on_click: boolean, 
-/**
- * Capture when scrolling stops after a wheel burst settles
- * (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
- */
-capture_event_on_scroll_stop: boolean, 
 /**
  * Collapse a burst of triggers within this window into one capture, ms
  * (`capture.event_debounce_ms`). A threshold, never hardcoded.
@@ -163,11 +144,6 @@ capture_event_debounce_ms: number,
  * (`capture.event_min_interval_ms`).
  */
 capture_event_min_interval_ms: number, 
-/**
- * Quiet period after the last input that counts as a typing pause, ms
- * (`capture.event_typing_pause_ms`).
- */
-capture_event_typing_pause_ms: number, 
 /**
  * Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
  */
