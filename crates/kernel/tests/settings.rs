@@ -43,7 +43,7 @@ async fn round_trips_non_default_values() {
         enrich_vision_batch_size: 50,
         enrich_worker_concurrency: 4,
         models_vision_tier: ModelTier::Quality,
-        models_answer_tier: ModelTier::Beta,
+        models_answer_tier: ModelTier::Quality,
         answer_thinking: false,
         sidecar_idle_ttl_secs: 600,
         sidecar_ngl: 35,
@@ -307,6 +307,78 @@ async fn load_drops_retired_event_keys_without_error() {
 
     // Idempotent: a second run finds nothing to drop (so it logs nothing — "once").
     drop_retired_settings(dyn_store).await;
+}
+
+#[tokio::test]
+async fn persisted_beta_tier_remaps_to_quality_and_persists() {
+    // 0.3.0 PR3 (D3): the Beta tier is retired. A config persisted by an older version
+    // still carries `"beta"` for either lane; load must map it to Quality (never fall
+    // back to Default) and persist the mapping — so the retired token leaves the DB and
+    // a later load is clean ("logged once", the `drop_retired_settings` mechanism).
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    store
+        .set_setting("models.vision_tier", "\"beta\"")
+        .await
+        .unwrap();
+    store
+        .set_setting("models.answer_tier", "\"beta\"")
+        .await
+        .unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.models_vision_tier, ModelTier::Quality);
+    assert_eq!(loaded.models_answer_tier, ModelTier::Quality);
+
+    // The mapping is persisted: the retired token is gone, replaced by canonical JSON.
+    assert_eq!(
+        store
+            .get_setting("models.vision_tier")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"quality\"")
+    );
+    assert_eq!(
+        store
+            .get_setting("models.answer_tier")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"quality\"")
+    );
+
+    // Idempotent: a second load reads `"quality"` and neither remaps nor rewrites.
+    let reloaded = load_settings(dyn_store).await;
+    assert_eq!(reloaded.models_vision_tier, ModelTier::Quality);
+    assert_eq!(reloaded.models_answer_tier, ModelTier::Quality);
+}
+
+#[tokio::test]
+async fn unknown_tier_falls_back_to_default_without_rewrite() {
+    // A genuinely unparsable tier value is not the retired Beta token: it falls back to
+    // the field default (Default), like any unparsable JSON, and — unlike Beta — is NOT
+    // rewritten. Only the known-legacy `"beta"` value is migrated.
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    store
+        .set_setting("models.vision_tier", "\"turbo\"")
+        .await
+        .unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.models_vision_tier, ModelTier::Default);
+    // The unknown value is left as-is (not migrated).
+    assert_eq!(
+        store
+            .get_setting("models.vision_tier")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"turbo\"")
+    );
 }
 
 #[tokio::test]

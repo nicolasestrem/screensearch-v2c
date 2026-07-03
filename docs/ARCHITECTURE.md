@@ -264,7 +264,8 @@ so the idle-evictor can't pull a model out from under it. Lifecycle:
 
 ### 7.3 Tiered models, runtime-downloaded (`inference::models`, `inference::download`)
 
-Vision and answer each offer **Default / Quality / Beta** (`MODEL_REGISTRY`). Nothing is bundled —
+Vision and answer each offer **Default / Quality** (`MODEL_REGISTRY`; 0.3.0 retired the Beta tier).
+Nothing is bundled —
 everything downloads on first use, Rust-only (no Python in the runtime):
 
 - **Binary** — `ensure_binary` fetches a prebuilt llama.cpp **Vulkan** Windows release zip

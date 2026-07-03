@@ -8,7 +8,7 @@
 
 use serde::de::DeserializeOwned;
 use std::str::FromStr;
-use traits::{CaptureConfig, Result, Settings, Store};
+use traits::{CaptureConfig, ModelTier, Result, Settings, Store};
 
 /// Reads every `03 §8` setting, falling back to [`Settings::default`] per key.
 pub async fn load_settings(store: &dyn Store) -> Settings {
@@ -61,8 +61,8 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.enrich_worker_concurrency,
         )
         .await,
-        models_vision_tier: json(store, "models.vision_tier", d.models_vision_tier).await,
-        models_answer_tier: json(store, "models.answer_tier", d.models_answer_tier).await,
+        models_vision_tier: load_tier(store, "models.vision_tier", d.models_vision_tier).await,
+        models_answer_tier: load_tier(store, "models.answer_tier", d.models_answer_tier).await,
         answer_thinking: boolean(store, "answer.thinking", d.answer_thinking).await,
         sidecar_idle_ttl_secs: num(store, "sidecar.idle_ttl_secs", d.sidecar_idle_ttl_secs).await,
         sidecar_ngl: num(store, "sidecar.ngl", d.sidecar_ngl).await,
@@ -686,6 +686,47 @@ async fn json<T: DeserializeOwned>(store: &dyn Store, key: &str, default: T) -> 
             default
         }
     }
+}
+
+/// Reads a `models.*_tier` setting, migrating the retired `beta` value to `quality`.
+///
+/// 0.3.0 retired the Beta tier (D3): a config persisted by an older version still holds
+/// `"beta"` for a lane. Rather than let the generic [`json`] fallback silently drop it to
+/// the field default (`Default`), this maps `beta` → `Quality`, **persists** the mapping,
+/// and returns `Quality`. Persisting means the retired token leaves the DB, so the warn
+/// logs **once** — the next load reads `"quality"` and this branch never fires again (the
+/// same "log once" mechanism as [`drop_retired_settings`]). The write is best-effort: a
+/// failure is logged and swallowed (load must never error — `04 §4`) and the next load
+/// simply retries. Any *other* unparsable value falls back to `default` and is left
+/// untouched, exactly like [`json`] — only the known-legacy `beta` token is migrated.
+///
+/// The remap lives here in the load path (not the startup-maintenance sweep like
+/// [`drop_retired_settings`]) because the composition root builds the sidecars straight
+/// from `load_settings`' output; a sweep-side remap would race it and the first
+/// post-upgrade session would run `Default` instead of `Quality`.
+async fn load_tier(store: &dyn Store, key: &str, default: ModelTier) -> ModelTier {
+    let raw = match store.get_setting(key).await {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return default,
+        Err(e) => {
+            tracing::warn!(key, error = %e, "settings: read failed; using default");
+            return default;
+        }
+    };
+    if let Ok(tier) = serde_json::from_str::<ModelTier>(&raw) {
+        return tier;
+    }
+    if serde_json::from_str::<String>(&raw).is_ok_and(|s| s == "beta") {
+        tracing::warn!(key, "settings: retired `beta` tier mapped to `quality`");
+        let quality = serde_json::to_string(&ModelTier::Quality)
+            .expect("ModelTier always serializes to JSON");
+        if let Err(e) = store.set_setting(key, &quality).await {
+            tracing::warn!(key, error = %e, "settings: failed to persist beta→quality mapping");
+        }
+        return ModelTier::Quality;
+    }
+    tracing::warn!(key, raw = %raw, "settings: unparsable tier; using default");
+    default
 }
 
 #[cfg(test)]

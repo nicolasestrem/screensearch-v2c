@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — Beta model tier retired; Default / Quality only (0.3.0 PR3)
+Each model lane (Vision and Answer) now offers **two** tiers instead of three: **Default** and
+**Quality**. The **Beta** tier is **gone** on both lanes, which removes the two models behind it —
+the vision `Qwen3.5-9B-VLM` and the answer `NVIDIA-Nemotron-3-Nano-4B`. Nemotron was the only
+non-Apache-licensed model (NVIDIA OML) and the only unproven hybrid Mamba-Transformer architecture
+in the set, so the remaining line-up is **uniformly Apache-2.0 and vanilla-arch** — a smaller,
+better-tested matrix and a cleaner licensing story.
+
+If you had **Beta** selected for a lane, it now loads as **Quality** automatically — mapped once on
+the next launch, logged, and saved (no error, no reset to Default). Any Beta model files already
+downloaded are **left on disk**; you can remove them from the existing model-management surface if
+you want the space back. Live-verified on a real desktop: a profile persisted with `beta` for both
+lanes boots straight to Quality (one log line per lane, none on relaunch), the change is persisted
+to the database, and the app runs on the remapped tiers with inference attached.
+
 ### Removed — Event-capture triggers trimmed to foreground + idle (0.3.0 PR2)
 Opt-in event-driven capture now offers **two** triggers instead of six: **foreground/app-switch**
 and **idle**. Four triggers are **gone**:

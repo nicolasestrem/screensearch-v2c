@@ -31,7 +31,6 @@ import type { ModelTier } from "../bindings/ModelTier";
 const TIER_LABEL: Record<ModelTier, string> = {
   default: "Default",
   quality: "Quality",
-  beta: "Beta",
 };
 
 // When each setting takes effect (the backend applies them at different points).

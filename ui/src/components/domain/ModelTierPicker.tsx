@@ -1,5 +1,5 @@
 // ModelTierPicker (UI_REFERENCE §5) — a per-lane segmented control for the model
-// tier (Default / Quality / Beta, `00 §E`). It owns the choice, not the persistence:
+// tier (Default / Quality, `00 §E`; 0.3.0 retired Beta). It owns the choice, not the persistence:
 // the parent decides what a change means (Settings fires `set_model_tier` for an
 // immediate hot-apply, then folds the value into the saved form). Mirrors the
 // segmented range presets used on the Timeline so the instrument language is shared.
@@ -13,7 +13,6 @@ import { cn } from "../../lib/cn";
 const TIERS: { value: ModelTier; label: string }[] = [
   { value: "default", label: "Default" },
   { value: "quality", label: "Quality" },
-  { value: "beta", label: "Beta" },
 ];
 
 const LANE_LABEL: Record<ModelLane, string> = {
@@ -22,19 +21,17 @@ const LANE_LABEL: Record<ModelLane, string> = {
 };
 
 // The actual model behind each (lane, tier), so a hover/focus tooltip tells the user what
-// "Default / Quality / Beta" resolve to. Mirrors the source of truth in
+// "Default / Quality" resolve to. Mirrors the source of truth in
 // `crates/inference/src/models.rs::repo_for` (and `specs/MODEL_REGISTRY.md`) — display
 // names only (repo org + `-GGUF` suffix dropped); keep in sync if the registry changes.
 const MODEL_NAMES: Record<ModelLane, Record<ModelTier, string>> = {
   vision: {
     default: "Qwen3-VL-4B-Instruct",
     quality: "Qwen3-VL-8B-Instruct",
-    beta: "Qwen3.5-9B-VLM",
   },
   answer: {
     default: "Ministral-3-3B-Reasoning",
     quality: "Qwen3-4B-Thinking",
-    beta: "NVIDIA-Nemotron-3-Nano-4B",
   },
 };
 
