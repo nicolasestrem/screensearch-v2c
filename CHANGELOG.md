@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
+Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing
+before this detour?" — open the Flow overlay with an empty query (or look at the Deck) and, when it can,
+it offers the last context you stayed in for a while before your current detour: the app, the window,
+and when you were last there, one click from reopening that Moment. It never nags — if there's nothing
+worth resuming, it says so honestly.
+
+**Mark this moment** captures the current screen the instant you press `Ctrl+Alt+M` — even on a static
+screen that hasn't changed — and flags it as an intention to come back to. A quiet toast confirms
+("Marked ✓") **without stealing focus**, so you keep typing; click it to add an optional one-line note.
+Your open intentions live in a new **Intentions** strip on the Deck (newest first, with a thumbnail or
+text reconstruction and its age) where you can open, resolve, or dismiss them. There are no badge
+counts anywhere — nothing to shame you into acting.
+
+Both hotkeys are configurable in Settings alongside the overlay hotkey, with the same loud
+registration-conflict warning. The where-was-i sensitivity ("how long a context must persist to count")
+is a setting too. If capture is off, the mark hotkey tells you plainly instead of silently doing
+nothing, and a mark taken in an excluded app is refused with a reason. Existing databases migrate
+forward (schema v9 → v10) by adding a `marks` table; nothing else is touched, and a marked frame keeps
+its text reconstruction reachable even after its screenshot expires under retention.
+
 ### Added — Flow overlay (0.3.0 PR5)
 ScreenSearch now has a global-hotkey **Flow overlay** for quick recall without leaving the app you
 are working in. Press `Ctrl+Alt+Space` to open a second, pre-created Tauri window over the foreground
