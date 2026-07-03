@@ -3,8 +3,8 @@
 //!
 //! Text: EmbeddingGemma-300M (768-dim, quantized) — *cannot batch*, so the impl
 //! embeds one input at a time (`01 §6`, `MODEL_REGISTRY §3/§5`). Text is the only
-//! embedding lane; the optional image lane (nomic-embed-vision) was removed in
-//! 0.3.0 PR4 (`docs/0.3.0.md`, `MODEL_REGISTRY §3`).
+//! embedding lane; the optional image lane was removed in 0.3.0 PR4
+//! (`docs/0.3.0.md`, `MODEL_REGISTRY §3`).
 //!
 //! ## Concurrency
 //! fastembed's `TextEmbedding` is a plain `Send` ONNX handle with no thread affinity

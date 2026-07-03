@@ -20,6 +20,75 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-03 — 0.3.0 PR4: image-embedding lane removal (`feat/pr4-image-lane-removal`)
+
+Delete the dark-launched, flag-off nomic-embed-vision image-embedding lane, with a forward-only
+v8 → v9 migration that drops only derived vectors (`docs/0.3.0.md` PR4, `03 §4`/`§13b.3`, D5/D15).
+Three commits: (1) a test-only parity baseline on the 10k fixture, (2) the atomic removal + migration
++ its RED-first tests, (3) docs + build-loop.
+
+### Implemented
+- **Migration v9 (schema 8 → 9).** `crates/store/src/schema.rs`: `MIGRATION_V9` drops
+  `image_embedding_vectors` + `image_embeddings` (the `image_embeddings_ad` trigger goes with its
+  table; dropping the vec0 virtual table removes its shadow tables) and `DELETE FROM jobs WHERE
+  kind = 'embed_image'`. `LATEST_SCHEMA_VERSION` bumped in lockstep (the runner `debug_assert` guards
+  it). `MIGRATION_V1` left frozen — verified by `fresh_and_migrated_schemas_agree_at_latest`: a fresh
+  V1..V9 bootstrap and a v8→v9 upgrade produce byte-identical `sqlite_master` object+DDL sets. **No**
+  `jobs.kind` CHECK / **no** jobs rebuild (`07` #82 honored).
+- **Populated-DB migration test** (TDD: written RED, failed on `version == 8`, went GREEN after the
+  bump). `migration_v9_drops_image_lane_and_embed_image_jobs`: a frame with both embedding lanes + a
+  mixed jobs queue (`embed_image` × {pending,running,done,dead} + `embed_text` + `vision_tag`) →
+  after migrate, zero image-lane schema objects (incl. `image_embedding_vectors_%` shadows), zero
+  `embed_image` jobs, surviving kinds `[embed_text, vision_tag]`, frame + text lane intact,
+  `fk_violation_count == 0`.
+- **Workspace sweep.** traits (`embed_image`/`image_model_name`/`upsert_image_embedding`/
+  `JobKind::EmbedImage`/`enrich_image_embeddings` gone), embeddings (text-only provider; fastembed
+  `default-features = false` drops `image-models`), store (image APIs + token arms gone; hybrid search
+  untouched — it never had an image arm), kernel (enqueue/claim/dispatch/`embed_image_outcome` gone;
+  throttle pauses `vision_tag` only; retired key added), src-tauri (`embedder_with_image` +
+  `needs_image_embedder` branch gone), UI (toggle + dead job arm gone; bindings regenerated).
+- **Throttle test redesign.** `crates/kernel/tests/throttle.rs` reframed around `vision_tag` as the
+  single heavy kind, preserving the exact proof shape (L1 pauses heavy while `embed_text` drains →
+  recovery drains it → disabled-throttle inert). The level-2 `embed_text` floor is unchanged by this
+  PR and stays covered by the pure `ThrottleMachine` unit tests + the untouched worker gate.
+
+### Verification — verbatim
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo clippy --workspace --all-targets -- -D warnings` → `Finished` / `CLIPPY_EXIT=0`
+- `cargo test -p store --lib migration` → migration_v6/v7/v8/**v9**/**fresh_and_migrated** all `ok`;
+  `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out`
+- `cargo test --workspace` → **39** `test result: ok` suites, **0** `test result: FAILED`
+- `npm run lint` → clean (`LINT EXIT 0`); `npm run build` → `✓ built`
+- `git diff -- ui/src/bindings` → only `JobKind.ts` + `Settings.ts` (ts-rs regenerated, committed)
+- **Grep gate.** `rg -i "nomic"` / `rg "EmbedImage"` over `crates src-tauri ui/src README.md
+  docs/ARCHITECTURE.md docs/TESTING.md` → empty. `rg "embed_image|image_embedding" crates` → only the
+  enumerated live-code exceptions: the frozen `MIGRATION_V1` DDL + jobs-kind comment (never edited,
+  PR2/V3 append-only precedent), the new `MIGRATION_V9` + its doc, the `migration_tests` seed SQL, and
+  the `"enrich.image_embeddings"` `RETIRED_SETTINGS_KEYS` literal + doc. The `JobKind`/settings doc
+  notes that *mention* the removal are history, like the CHANGELOG.
+- **Hybrid-search parity (acceptance).** `cargo test -p store --test perf -- --ignored --nocapture`
+  before (commit 1) and after (HEAD): the 20 `parity-digest <query>: <hex>` lines are **identical**
+  (`diff` empty); `p95 = 72.8 ms` after (< 200 ms). The image arm was never fused into
+  `hybrid_search` (`git diff main...HEAD -- crates/store/src/search.rs` is empty), so parity is
+  structural — and now shown.
+
+### Skipped / deferred (intentional)
+- **On-disk nomic GGUF cleanup** — not done (D5 is DB-only; the model lives outside the DB and users
+  can delete it from the model cache). No cleanup logic added.
+- **A new level-2 `embed_text`-floor integration test** — out of a *removal* PR's scope; existing unit
+  + gate coverage is unchanged by this PR (noted above).
+
+### Hallucinated / corrected
+- None. Every contract line-reference (specs 02/03/MODEL_REGISTRY/00, `07` #81/#82) matched the tree;
+  the fastembed `image-models` default feature was confirmed trimmable against the 5.17.2 manifest
+  before editing root `Cargo.toml`, and the build + full test run confirm the text lane still loads.
+
+### Still risky
+- **Live desktop pass pending** — the migration-on-boot / retired-key-drop / post-migration text
+  search were exercised by unit + integration tests; the manual acceptance (`docs/TESTING.md` PR4
+  section, against a populated real profile) is the remaining confirmation, run before requesting
+  review (and re-swept in PR9).
+
 ## Pass — 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
 
 From `docs/0.3.0.md` (roadmap, decisions D1–D15) + a Plan-agent adversarial validation of the edit

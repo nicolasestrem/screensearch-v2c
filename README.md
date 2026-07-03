@@ -95,8 +95,8 @@ real DB/frame storage usage.
 - **Text source:** foreground-window text via **UI Automation** with automatic fallback to native
   **WinRT OCR**, then an attention-first filter that keeps content over chrome.
 - **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine); forward-only migrations.
-- **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text, optional
-  nomic-embed-vision-v1.5 image. **No Python in the runtime.**
+- **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text.
+  **No Python in the runtime.**
 - **Inference (P4):** a single supervised, model-agnostic **llama.cpp sidecar** (Vulkan GPU + CPU
   fallback), **bound to the app via a Windows Job Object** so it can never orphan after a crash;
   advanced users can list/select llama.cpp devices when the default Vulkan device is wrong.
@@ -109,7 +109,7 @@ See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the as-built design and
 |---|---|---|
 | **Vision** (P4) | Qwen3-VL-4B-Instruct | Qwen3-VL-8B-Instruct |
 | **Answer** (P4) | Ministral-3-3B-Reasoning-2512 | Qwen3-4B-Thinking-2507 |
-| **Embeddings** | EmbeddingGemma-300M (text) · nomic-embed-vision-v1.5 (image) | |
+| **Embeddings** | EmbeddingGemma-300M (text) | |
 
 Exact HF repos / quants are pinned in [`specs/MODEL_REGISTRY.md`](./specs/MODEL_REGISTRY.md).
 Embedding models auto-download on first use into `<app-data>/models/fastembed`.
