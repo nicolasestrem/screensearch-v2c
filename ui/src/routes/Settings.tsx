@@ -394,6 +394,11 @@ export function Component() {
     overlayHotkeyStatus && !overlayHotkeyStatus.registered
       ? `${overlayHotkeyStatus.error ?? "Windows did not register this shortcut."} Try a different combination.`
       : null;
+  const marksHotkeyStatus = (hotkeyStatus.data ?? []).find((h) => h.id === "marks.hotkey");
+  const marksHotkeyWarning =
+    marksHotkeyStatus && !marksHotkeyStatus.registered
+      ? `${marksHotkeyStatus.error ?? "Windows did not register this shortcut."} Try a different combination.`
+      : null;
 
   // Partial state — surface that models may still be starting: while the readiness
   // probe is in flight, or either lane is still "unknown" (pre-init) / "initializing".
