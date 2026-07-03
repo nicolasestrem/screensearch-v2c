@@ -44,7 +44,7 @@ async fn capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs() {
 
     let ocr: Arc<dyn OcrProvider> = Arc::new(WinRtOcr::spawn().expect("spawn OCR"));
     let factory: CaptureFactory =
-        Arc::new(|cfg| Ok(Box::new(WgcCapture::new(cfg)?) as Box<dyn CaptureSource>));
+        Arc::new(|cfg, rx| Ok(Box::new(WgcCapture::new(cfg, rx)?) as Box<dyn CaptureSource>));
 
     let kernel = Kernel::new(
         dyn_store,

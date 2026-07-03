@@ -45,9 +45,16 @@ pub struct FrameData {
     pub content_hash: String,
 }
 
-/// One "capture now" request; the worker replies with the changed frames.
+/// One capture request; the worker replies with the changed frames.
+///
+/// `bypass_for` is the 0.3.0 mark-this-moment demand (`03 §7b`, D8): the monitor index
+/// (if any) whose diff gate must be bypassed for this one cycle so a demanded frame is
+/// never dropped as "unchanged". `None` = the normal diff-gated cycle. Only that one
+/// monitor bypasses; every other monitor stays changed-only, so one `capture_now`
+/// yields exactly one guaranteed frame plus any genuinely-changed others.
 pub struct CaptureRequest {
     pub resp: oneshot::Sender<Result<Vec<FrameData>>>,
+    pub bypass_for: Option<u32>,
 }
 
 /// Worker thread entry point. Initializes COM, sets up per-monitor capture, reports
@@ -75,7 +82,10 @@ pub fn worker_main(
     while let Ok(req) = req_rx.recv() {
         let mut changed = Vec::new();
         for ms in monitors.iter_mut() {
-            match ms.capture_changed() {
+            // The demanded monitor (if this is a capture_now) bypasses its diff gate; all
+            // others stay changed-only (`03 §7b`, D8).
+            let bypass = req.bypass_for == Some(ms.info.index);
+            match ms.capture_changed(bypass) {
                 Ok(Some(fd)) => changed.push(fd),
                 Ok(None) => {}
                 Err(e) => {
@@ -121,8 +131,13 @@ struct MonitorState {
     info: MonitorInfo,
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    // Kept alive for the session's lifetime (WGC holds it internally).
-    _d3d_device: IDirect3DDevice,
+    // Kept alive for the session's lifetime (WGC holds it internally); also used to
+    // recreate the frame pool for a `capture_now` demand on a static screen.
+    d3d_device: IDirect3DDevice,
+    // The capture item (the monitor). Retained so the pool can be recreated at the
+    // monitor's current size to force a fresh full frame when the pool is empty
+    // (static-screen `capture_now`, `03 §7b`).
+    item: GraphicsCaptureItem,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     prev: Option<Fingerprint>,
@@ -155,7 +170,8 @@ impl MonitorState {
             info: em.info,
             device,
             context,
-            _d3d_device: d3d_device,
+            d3d_device,
+            item,
             pool,
             session,
             prev: None,
@@ -163,17 +179,27 @@ impl MonitorState {
         })
     }
 
-    /// Reads the latest frame and returns it only if it changed past the threshold.
-    fn capture_changed(&mut self) -> Result<Option<FrameData>> {
-        let Some(img) = self.grab_latest()? else {
-            return Ok(None);
+    /// Reads the latest frame and returns it only if it changed past the threshold —
+    /// unless `bypass` is set (a `capture_now` demand for this monitor, `03 §7b`/D8),
+    /// in which case the frame is always returned. Either way `prev` is updated so the
+    /// next diff is relative to this frame.
+    ///
+    /// On a truly static screen the WGC pool is empty (nothing changed since the last
+    /// read), so a plain `grab_latest` returns `None`. A demanded frame must never be
+    /// dropped, so under `bypass` we recreate the pool — which makes WGC redeliver the
+    /// current desktop content as a fresh full frame — and retry briefly; only a real
+    /// device failure then yields an error.
+    fn capture_changed(&mut self, bypass: bool) -> Result<Option<FrameData>> {
+        let img = match self.grab_latest()? {
+            Some(img) => img,
+            None if bypass => match self.grab_after_recreate()? {
+                Some(img) => img,
+                None => bail!("no frame available from the capture device"),
+            },
+            None => return Ok(None),
         };
         let fp = diff::fingerprint(&img);
-        let changed = match &self.prev {
-            None => true,
-            Some(prev) => diff::difference(prev, &fp) > self.diff_threshold,
-        };
-        if !changed {
+        if !diff::gate_passes(bypass, self.prev.as_ref(), &fp, self.diff_threshold) {
             return Ok(None);
         }
         self.prev = Some(fp);
@@ -184,6 +210,26 @@ impl MonitorState {
             content_hash: diff::content_hash(&img),
             rgba: img.into_raw(),
         }))
+    }
+
+    /// Recreates the frame pool at the monitor's current size (forcing WGC to redeliver
+    /// a fresh full frame) and polls briefly for it — the static-screen `capture_now`
+    /// path (`03 §7b`, D8). Returns `None` if no frame arrives within the budget.
+    fn grab_after_recreate(&self) -> Result<Option<RgbaImage>> {
+        let size = self.item.Size()?;
+        self.pool.Recreate(
+            &self.d3d_device,
+            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2,
+            size,
+        )?;
+        for _ in 0..10 {
+            if let Some(img) = self.grab_latest()? {
+                return Ok(Some(img));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(None)
     }
 
     /// Drains the frame pool to the most recent frame and reads it back to RGBA.

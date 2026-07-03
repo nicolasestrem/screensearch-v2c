@@ -1810,7 +1810,9 @@ impl OcrProvider for UiaWithOcrFallback {
 /// Builds a WGC capture source from the current config — the seam that keeps the
 /// kernel impl-agnostic (`03 §2`).
 fn capture_factory() -> CaptureFactory {
-    Arc::new(|config| Ok(Box::new(capture::WgcCapture::new(config)?) as Box<dyn CaptureSource>))
+    Arc::new(|config, capture_now_rx| {
+        Ok(Box::new(capture::WgcCapture::new(config, capture_now_rx)?) as Box<dyn CaptureSource>)
+    })
 }
 
 /// Defensive fallback used only when the WinRT engine can't be created. The kernel

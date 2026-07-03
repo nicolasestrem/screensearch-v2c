@@ -465,7 +465,10 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             "resume.min_dwell_secs".into(),
             s.resume_min_dwell_secs.to_string(),
         ),
-        ("marks.hotkey".into(), serde_json::to_string(&s.marks_hotkey)?),
+        (
+            "marks.hotkey".into(),
+            serde_json::to_string(&s.marks_hotkey)?,
+        ),
         (
             "throttle.enabled".into(),
             bool_str(s.throttle_enabled).into(),

@@ -25,7 +25,9 @@ async fn wgc_captures_a_frame_from_the_primary_monitor() {
         event_fallback_interval_ms: 30_000,
     };
 
-    let mut cap = WgcCapture::new(config).expect("create WgcCapture");
+    // No marks in this smoke test — drop the demand sender so the channel stays closed.
+    let (_capture_now_tx, capture_now_rx) = tokio::sync::mpsc::channel(1);
+    let mut cap = WgcCapture::new(config, capture_now_rx).expect("create WgcCapture");
     assert!(!cap.monitors().is_empty(), "at least one monitor");
 
     let frame = tokio::time::timeout(Duration::from_secs(10), cap.next_frame())

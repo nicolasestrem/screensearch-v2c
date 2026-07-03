@@ -157,9 +157,18 @@ mod tests {
     #[tokio::test]
     async fn list_orders_unresolved_first_then_newest_first() {
         let store = SqliteStore::open_in_memory().unwrap();
-        let f1 = store.insert_frame(frame(10, "VS Code", "repo")).await.unwrap();
-        let f2 = store.insert_frame(frame(20, "Firefox", "docs")).await.unwrap();
-        let f3 = store.insert_frame(frame(30, "Slack", "team")).await.unwrap();
+        let f1 = store
+            .insert_frame(frame(10, "VS Code", "repo"))
+            .await
+            .unwrap();
+        let f2 = store
+            .insert_frame(frame(20, "Firefox", "docs"))
+            .await
+            .unwrap();
+        let f3 = store
+            .insert_frame(frame(30, "Slack", "team"))
+            .await
+            .unwrap();
 
         // Two unresolved (created at 100 then 200) and one resolved.
         let m_old = store.insert_mark(f1, 100, None).await.unwrap();
@@ -183,7 +192,10 @@ mod tests {
     #[tokio::test]
     async fn set_note_round_trips_and_rejects_unknown() {
         let store = SqliteStore::open_in_memory().unwrap();
-        let f = store.insert_frame(frame(10, "VS Code", "repo")).await.unwrap();
+        let f = store
+            .insert_frame(frame(10, "VS Code", "repo"))
+            .await
+            .unwrap();
         let m = store.insert_mark(f, 100, None).await.unwrap();
         store.set_mark_note(m, "call the plumber").await.unwrap();
 
@@ -197,7 +209,10 @@ mod tests {
     #[tokio::test]
     async fn resolve_is_idempotent_but_errors_on_unknown() {
         let store = SqliteStore::open_in_memory().unwrap();
-        let f = store.insert_frame(frame(10, "VS Code", "repo")).await.unwrap();
+        let f = store
+            .insert_frame(frame(10, "VS Code", "repo"))
+            .await
+            .unwrap();
         let m = store.insert_mark(f, 100, None).await.unwrap();
 
         store.resolve_mark(m, 200).await.unwrap();
@@ -214,8 +229,14 @@ mod tests {
     #[tokio::test]
     async fn mark_survives_image_purge_with_text_kept() {
         let store = SqliteStore::open_in_memory().unwrap();
-        let f = store.insert_frame(frame(10, "VS Code", "repo")).await.unwrap();
-        let m = store.insert_mark(f, 100, Some("finish PR6".to_string())).await.unwrap();
+        let f = store
+            .insert_frame(frame(10, "VS Code", "repo"))
+            .await
+            .unwrap();
+        let m = store
+            .insert_mark(f, 100, Some("finish PR6".to_string()))
+            .await
+            .unwrap();
 
         // Retention degrades the frame's image to text: the row survives (D10).
         store.degrade_frame_to_text(f).await.unwrap();

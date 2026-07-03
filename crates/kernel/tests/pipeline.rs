@@ -15,8 +15,8 @@ use tokio::sync::{broadcast, watch};
 use kernel::{run_capture_loop, CaptureFactory, Kernel, KernelEvent, LoopCtx};
 use store::SqliteStore;
 use traits::{
-    CaptureSource, CapturedFrame, ComponentStatus, JobKind, MonitorInfo, OcrProvider, OcrResult,
-    Readiness, Result, Store,
+    CaptureNowReceiver, CaptureSource, CaptureTrigger, CapturedFrame, ComponentStatus, JobKind,
+    MonitorInfo, OcrProvider, OcrResult, Readiness, Result, Store,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +49,48 @@ impl CaptureSource for FakeCapture {
         match self.after_frames {
             AfterFrames::Shutdown => Ok(None),
             AfterFrames::Pending => std::future::pending().await,
+        }
+    }
+}
+
+/// A capture source that services `capture_now` demands (`03 §7b`, D8): it waits on the
+/// demand channel and, per demand, either emits one `demanded` Manual frame + acks `Ok`
+/// (the happy path), or denies with a reason (`deny`). Timer/event cycles are inert — it
+/// only ever produces demanded frames — so the kernel-level marks tests are deterministic.
+struct DemandCapture {
+    rx: CaptureNowReceiver,
+    next_at: i64,
+    deny: Option<&'static str>,
+}
+
+#[async_trait]
+impl CaptureSource for DemandCapture {
+    fn monitors(&self) -> Vec<MonitorInfo> {
+        vec![MonitorInfo {
+            index: 0,
+            name: "FAKE".to_string(),
+            width: 4,
+            height: 4,
+            is_primary: true,
+        }]
+    }
+    async fn next_frame(&mut self) -> Result<Option<CapturedFrame>> {
+        match self.rx.recv().await {
+            Some(req) => {
+                if let Some(reason) = self.deny {
+                    let _ = req.ack.send(Err(anyhow::anyhow!(reason)));
+                    // No frame produced; keep waiting for the next demand.
+                    return std::future::pending().await;
+                }
+                let _ = req.ack.send(Ok(()));
+                let mut f = frame(self.next_at);
+                self.next_at += 1;
+                f.trigger = CaptureTrigger::Manual;
+                f.demanded = true;
+                Ok(Some(f))
+            }
+            // Channel closed (capture stopped) → go idle.
+            None => std::future::pending().await,
         }
     }
 }
@@ -143,6 +185,7 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
         chrome_suppress_min_seen: 12,
         chrome_protect_min_chars: 48,
         chrome_region_buckets: 8,
+        pending_demand: Arc::new(std::sync::Mutex::new(None)),
     };
 
     run_capture_loop(
@@ -228,6 +271,7 @@ async fn capture_loop_skips_embed_jobs_when_disabled() {
         chrome_suppress_min_seen: 12,
         chrome_protect_min_chars: 48,
         chrome_region_buckets: 8,
+        pending_demand: Arc::new(std::sync::Mutex::new(None)),
     };
 
     run_capture_loop(
@@ -252,7 +296,7 @@ async fn kernel_start_then_stop_flips_capture_readiness() {
     let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
 
     // factory yields a fresh fake source each Start (drains 2 frames, then ends)
-    let factory: CaptureFactory = Arc::new(|_cfg| {
+    let factory: CaptureFactory = Arc::new(|_cfg, _rx| {
         let caps: VecDeque<CapturedFrame> = (0..2).map(|i| frame(2_000 + i)).collect();
         Ok(Box::new(FakeCapture {
             frames: caps,
@@ -294,7 +338,7 @@ async fn kernel_clears_capture_and_marks_error_when_source_shuts_down() {
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
 
-    let factory: CaptureFactory = Arc::new(|_cfg| {
+    let factory: CaptureFactory = Arc::new(|_cfg, _rx| {
         Ok(Box::new(FakeCapture {
             frames: VecDeque::new(),
             after_frames: AfterFrames::Shutdown,
@@ -339,7 +383,7 @@ async fn reload_capture_restarts_loop_with_fresh_config() {
     let configs: Arc<std::sync::Mutex<Vec<traits::CaptureConfig>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = configs.clone();
-    let factory: CaptureFactory = Arc::new(move |cfg| {
+    let factory: CaptureFactory = Arc::new(move |cfg, _rx| {
         seen.lock().unwrap().push(cfg);
         Ok(Box::new(FakeCapture {
             frames: VecDeque::new(),
@@ -387,7 +431,7 @@ async fn kernel_refuses_to_start_capture_when_ocr_is_unavailable() {
     let store: Arc<dyn Store> = db.clone();
     let ocr: Arc<dyn OcrProvider> = Arc::new(ErrorOcr);
     let factory: CaptureFactory =
-        Arc::new(|_cfg| panic!("capture factory should not run without OCR"));
+        Arc::new(|_cfg, _rx| panic!("capture factory should not run without OCR"));
 
     let kernel = Kernel::new_with_ocr_unavailable(
         store.clone(),
@@ -411,4 +455,170 @@ async fn kernel_refuses_to_start_capture_when_ocr_is_unavailable() {
     assert!(!kernel.is_capturing().await);
     assert!(db.get_frame(1).await.unwrap().is_none());
     assert_eq!(store.job_stats().await.unwrap().pending, 0);
+}
+
+// ── Mark-this-moment: capture_now + add_mark (03 §7b, D8, 0.3.0 PR6) ──────────────
+
+/// A `capture_now` mark from a running session inserts a `manual` frame past the diff
+/// gate and a mark referencing it — one demand, one frame, one mark.
+#[tokio::test]
+async fn add_mark_capture_now_inserts_manual_frame_and_mark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+    let factory: CaptureFactory = Arc::new(|_cfg, rx| {
+        Ok(Box::new(DemandCapture {
+            rx,
+            next_at: 7_000,
+            deny: None,
+        }) as Box<dyn CaptureSource>)
+    });
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+    kernel.start_capture().await.unwrap();
+
+    let mark_id = kernel
+        .add_mark(None, true, Some("call the plumber".to_string()))
+        .await
+        .expect("capture_now mark succeeds");
+
+    // The demanded frame is stored with capture_trigger = 'manual'.
+    let marks = store.list_marks().await.unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].mark_id, mark_id);
+    assert_eq!(marks[0].note.as_deref(), Some("call the plumber"));
+    let detail = db
+        .get_frame(marks[0].frame_id)
+        .await
+        .unwrap()
+        .expect("frame stored");
+    assert_eq!(detail.capture_trigger, Some(CaptureTrigger::Manual));
+
+    kernel.stop_capture().await;
+}
+
+/// With capture off, a `capture_now` mark fails honestly (no mark, a clear reason) —
+/// the "Capture is off — mark not saved" path (user decision D-capture-off).
+#[tokio::test]
+async fn add_mark_capture_now_fails_when_capture_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+    let factory: CaptureFactory = Arc::new(|_cfg, rx| {
+        Ok(Box::new(DemandCapture {
+            rx,
+            next_at: 1,
+            deny: None,
+        }) as Box<dyn CaptureSource>)
+    });
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+    // Capture never started.
+    let err = kernel.add_mark(None, true, None).await.unwrap_err();
+    assert!(err.to_string().contains("capture is off"), "got: {err}");
+    assert!(
+        store.list_marks().await.unwrap().is_empty(),
+        "no mark inserted"
+    );
+}
+
+/// A privacy-gate / device denial from the capture source propagates its reason and
+/// inserts **nothing** (no orphan mark).
+#[tokio::test]
+async fn add_mark_capture_now_propagates_denial_and_inserts_no_mark() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+    let factory: CaptureFactory = Arc::new(|_cfg, rx| {
+        Ok(Box::new(DemandCapture {
+            rx,
+            next_at: 1,
+            deny: Some("the focused app is excluded from capture"),
+        }) as Box<dyn CaptureSource>)
+    });
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+    kernel.start_capture().await.unwrap();
+
+    let err = kernel.add_mark(None, true, None).await.unwrap_err();
+    assert!(
+        err.to_string().contains("excluded from capture"),
+        "got: {err}"
+    );
+    assert!(
+        store.list_marks().await.unwrap().is_empty(),
+        "denied demand inserts no mark"
+    );
+
+    kernel.stop_capture().await;
+}
+
+/// `add_mark` with an existing `frame_id` (no capture) marks that frame directly, and
+/// requires exactly one source.
+#[tokio::test]
+async fn add_mark_by_frame_id_marks_directly_and_validates_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn Store> = db.clone();
+    let ocr: Arc<dyn OcrProvider> = Arc::new(FakeOcr);
+    let factory: CaptureFactory = Arc::new(|_cfg, rx| {
+        Ok(Box::new(DemandCapture {
+            rx,
+            next_at: 1,
+            deny: None,
+        }) as Box<dyn CaptureSource>)
+    });
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    let fid = store
+        .insert_frame(traits::NewFrame {
+            captured_at: 42,
+            monitor_index: 0,
+            width: 4,
+            height: 4,
+            image_path: "frames/42.webp".to_string(),
+            content_hash: "h42".to_string(),
+            app_hint: Some("VS Code".to_string()),
+            window_title: Some("repo".to_string()),
+            browser_url: None,
+            capture_trigger: Some(CaptureTrigger::Timer),
+        })
+        .await
+        .unwrap();
+
+    let mark_id = kernel
+        .add_mark(Some(fid), false, None)
+        .await
+        .expect("mark by id");
+    let marks = store.list_marks().await.unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!((marks[0].mark_id, marks[0].frame_id), (mark_id, fid));
+
+    // Neither / both sources is a usage error.
+    assert!(kernel.add_mark(None, false, None).await.is_err());
+    assert!(kernel.add_mark(Some(fid), true, None).await.is_err());
 }

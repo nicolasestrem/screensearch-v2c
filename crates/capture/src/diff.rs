@@ -62,6 +62,23 @@ pub fn content_hash(img: &RgbaImage) -> String {
     blake3::hash(img.as_raw()).to_hex().to_string()
 }
 
+/// Whether a frame passes the diff gate: `bypass` forces it through (a `capture_now`
+/// demand — a demanded frame must never be dropped, `03 §7b`/D8); otherwise the first
+/// frame on a monitor (`prev` is `None`) always passes, and a subsequent frame passes
+/// only if its normalized difference exceeds `threshold`. Pure — unit-tested directly.
+pub fn gate_passes(
+    bypass: bool,
+    prev: Option<&Fingerprint>,
+    fp: &Fingerprint,
+    threshold: f32,
+) -> bool {
+    bypass
+        || match prev {
+            None => true,
+            Some(prev) => difference(prev, fp) > threshold,
+        }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +124,25 @@ mod tests {
         let c = solid(8, 8, [9, 9, 9]);
         assert_eq!(content_hash(&a), content_hash(&b));
         assert_ne!(content_hash(&a), content_hash(&c));
+    }
+
+    #[test]
+    fn gate_passes_bypass_forces_unchanged_frame_through() {
+        let fp = fingerprint(&solid(200, 100, [50, 50, 50]));
+        // Identical to prev → normally gated out…
+        assert!(!gate_passes(false, Some(&fp), &fp, 0.006));
+        // …but a capture_now demand (bypass) forces it through (D8).
+        assert!(gate_passes(true, Some(&fp), &fp, 0.006));
+    }
+
+    #[test]
+    fn gate_passes_first_frame_and_real_change() {
+        let a = fingerprint(&solid(200, 100, [0, 0, 0]));
+        let b = fingerprint(&solid(200, 100, [255, 255, 255]));
+        // First frame on a monitor (no prev) always passes.
+        assert!(gate_passes(false, None, &a, 0.006));
+        // A large change passes the threshold; an identical frame does not.
+        assert!(gate_passes(false, Some(&a), &b, 0.006));
+        assert!(!gate_passes(false, Some(&a), &a, 0.006));
     }
 }
