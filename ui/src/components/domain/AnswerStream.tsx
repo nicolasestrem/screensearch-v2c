@@ -23,8 +23,8 @@ export interface AnswerStreamProps {
   error: string | null;
   /** Re-run the last question (shown on error). */
   onRetry?: () => void;
-  /** Router-free opener for the Flow overlay. Defaults to links in the main app. */
-  onOpenFrame?: (frameId: number) => void;
+  /** Router-free opener used by both the main Recall route and the Flow overlay. */
+  onOpenFrame: (frameId: number) => void;
 }
 
 export function AnswerStream({

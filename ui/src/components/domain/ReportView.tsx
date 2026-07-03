@@ -13,7 +13,7 @@ import type { ReportResponse } from "../../bindings/ReportResponse";
 
 export interface ReportViewProps {
   report: ReportResponse;
-  onOpenFrame?: (frameId: number) => void;
+  onOpenFrame: (frameId: number) => void;
 }
 
 /** How many citation chips to render before collapsing the rest into a count. */

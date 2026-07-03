@@ -29,6 +29,12 @@ export function FlowOverlay() {
   const ask = useAsk();
   const resetAsk = ask.reset;
   const resultLimit = settings.data?.overlay_max_results ?? DEFAULT_RESULT_LIMIT;
+  const normalizedText = text.trim();
+  const committedSearchText = debounced.trim();
+  const searchWaitingForCommit =
+    mode === "search" && normalizedText.length > 0 && normalizedText !== committedSearchText;
+  const searchMatchesInput =
+    mode === "search" && normalizedText.length > 0 && normalizedText === committedSearchText;
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(text), SEARCH_DEBOUNCE_MS);
@@ -45,13 +51,15 @@ export function FlowOverlay() {
     [debounced, resultLimit],
   );
   const search = useSearch(query, mode === "search", true);
-  const hits = mode === "search" ? (search.data ?? []) : [];
-  const activeHit = hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))];
-  const busy = (mode === "search" && search.isFetching && text.trim().length > 0) || ask.phase === "streaming";
+  const hits = searchMatchesInput ? (search.data ?? []) : [];
+  const activeHit = searchMatchesInput ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))] : undefined;
+  const busy =
+    (mode === "search" && normalizedText.length > 0 && (searchWaitingForCommit || search.isFetching)) ||
+    ask.phase === "streaming";
 
   useEffect(() => {
     setActiveIndex(0);
-  }, [debounced, mode]);
+  }, [text, mode]);
 
   useEffect(() => {
     if (activeIndex >= hits.length) {
@@ -158,6 +166,8 @@ export function FlowOverlay() {
       e.preventDefault();
       if (mode === "ask") {
         submitAsk();
+      } else if (searchWaitingForCommit) {
+        setDebounced(text);
       } else if (activeHit) {
         openFrame(activeHit.frame_id);
       }
@@ -209,7 +219,7 @@ export function FlowOverlay() {
               <SearchOverlayBody
                 text={text}
                 hits={hits}
-                isFetching={search.isFetching}
+                isFetching={search.isFetching || searchWaitingForCommit}
                 isError={search.isError}
                 error={search.error}
                 onRetry={() => search.refetch()}

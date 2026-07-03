@@ -9,7 +9,7 @@ import { absoluteTime, clockTime } from "../../lib/time";
 
 export interface CitationTileProps {
   frameId: number;
-  onOpenFrame?: (frameId: number) => void;
+  onOpenFrame: (frameId: number) => void;
 }
 
 export function CitationTile({ frameId, onOpenFrame }: CitationTileProps) {

@@ -73,11 +73,15 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ```text
 running 7 tests
-test privacy::tests::own_window_pid_rejects_matching_nonzero_pids ... ok
-test privacy::tests::own_window_pid_allows_different_pids ... ok
-test privacy::tests::own_window_pid_allows_zero_unknowns ... ok
+test privacy::tests::empty_excluded_entry_never_matches ... ok
+test privacy::tests::own_window_pid_matches_any_nonzero_own_process_window ... ok
+test privacy::tests::own_window_pid_rejects_unknown_foreground_pid ... ok
+test privacy::tests::matches_process_name_case_insensitively ... ok
+test privacy::tests::allows_unrelated_apps ... ok
+test privacy::tests::own_window_pid_rejects_foreign_process ... ok
+test privacy::tests::matches_window_title ... ok
 
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
 ```
 
 ```text
