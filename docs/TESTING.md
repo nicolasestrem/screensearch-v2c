@@ -170,3 +170,37 @@ against a **backed-up copy** of a populated 0.2.x/PR3 profile (`<app-data>\scree
 - **Text embeddings still work post-migration.** Start capture: `embed_text` jobs drain (job stats),
   `embed_model` readiness reaches **Ready**, and a semantic search over freshly captured content
   returns hits — confirming the trimmed fastembed build still loads and runs the text model.
+
+## Manual acceptance — Flow overlay (0.3.0 PR5)
+
+**0.3.0 PR5** adds the global-hotkey Flow overlay: a hidden, capture-protected second Tauri window
+for quick Search/Ask over the current foreground context (`docs/0.3.0.md` PR5, D6/D7). Run on a
+real Windows desktop with `npm run tauri dev`, capture enabled, and at least a few searchable frames
+in the profile.
+
+- **Default hotkey and keyboard loop.** Focus an unrelated app, press `Ctrl+Alt+Space`: the overlay
+  appears over that app, the input is focused, and the taskbar does not gain a second ScreenSearch
+  entry. Type a query, use `ArrowDown`/`ArrowUp` to move the active row, press `Enter`: the overlay
+  hides and the main window opens the selected Moment. Reopen, press `Tab`: Search/Ask mode toggles.
+  Reopen, type `? what was I reading`, press `Enter`: Ask streams in the overlay. Press `Esc`: it
+  hides and any in-flight Ask stream is cancelled.
+- **Settings hotkey controls.** Settings -> Hotkeys -> Flow overlay records a modifier chord, ignores
+  pure modifiers, saves through `set_settings`, and `get_hotkey_status` reports the active chord as
+  registered. Reset restores `Ctrl+Alt+Space`. Settings -> Overlay results clamps direct entry to
+  `1..=50`.
+- **Registration conflict is loud (D6).** Hold a chord with another local app or a tiny test program,
+  then set the overlay hotkey to that same chord. Expected: a warning toast appears and Settings
+  shows the failed chord with its error; releasing the conflict and saving the same chord again
+  registers successfully.
+- **Placement and focus.** Trigger the overlay from apps on each monitor. The window appears on the
+  foreground monitor when a foreground window rect is available; otherwise it falls back to the
+  primary monitor. It does not appear until the hotkey is pressed and hides on blur.
+- **Capture self-exclusion (D7).** With capture running, open the overlay for at least one capture
+  interval, search for visible overlay-only text such as `Search your screen history`, and inspect the
+  newest captured frames around that time. The overlay must not appear in its own capture history.
+- **Exclusive fullscreen canary.** Put a game or video app into exclusive fullscreen and press the
+  overlay hotkey. Some apps may suppress global overlays; this is accepted by the 0.3.0 contract. The
+  required behavior is that ScreenSearch does not steal focus or silently change settings.
+- **Latency note.** From hotkey press to focused input should feel effectively instant on a warm app.
+  For a repeatable local measurement, compare `overlay_perf` log timestamps around `summon_overlay`,
+  `overlay_shown`, and `overlay_shown_ack` on a warm profile.
