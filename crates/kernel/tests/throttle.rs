@@ -2,9 +2,11 @@
 //!
 //! Drives the *real* worker pool through the *real* throttle governor, with a fake
 //! pressure probe whose reading the test sets. Proves the end-to-end contract: under
-//! sustained pressure `embed_image` + `vision_tag` stop being claimed while `embed_text`
+//! sustained pressure the heavy `vision_tag` kind stops being claimed while `embed_text`
 //! keeps draining, and everything resumes once pressure recovers — and that with the
-//! throttle off (the default) nothing is paused.
+//! throttle off (the default) nothing is paused. (The level-2 `embed_text` floor is
+//! covered by the pure `ThrottleMachine` unit tests + the worker-gate code, unchanged
+//! by 0.3.0 PR4's image-lane removal.)
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -50,7 +52,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Deterministic embedder: text → fixed vector; image → fixed vector.
+/// Deterministic embedder: text → fixed vector.
 struct OkEmbedder;
 #[async_trait]
 impl EmbeddingProvider for OkEmbedder {
@@ -60,14 +62,8 @@ impl EmbeddingProvider for OkEmbedder {
     async fn embed_texts(&self, inputs: &[String]) -> Result<Vec<Embedding>> {
         Ok(inputs.iter().map(|_| unit()).collect())
     }
-    async fn embed_image(&self, _image: &RgbaImage) -> Result<Embedding> {
-        Ok(unit())
-    }
     fn text_model_name(&self) -> &str {
         "fake-text"
-    }
-    fn image_model_name(&self) -> &str {
-        "fake-image"
     }
 }
 
@@ -169,7 +165,7 @@ fn write_jpeg(data_dir: &std::path::Path, captured_at: i64) {
 }
 
 /// Throttle settings with fast timing so the dwell + sample windows pass in ~1 s, and the
-/// embed lanes enabled so the pool claims `embed_image` (off by default).
+/// text embed lane enabled so the pool claims `embed_text`.
 fn throttle_settings(enabled: bool) -> Settings {
     Settings {
         throttle_enabled: enabled,
@@ -180,7 +176,6 @@ fn throttle_settings(enabled: bool) -> Settings {
         throttle_sample_interval_ms: 250,
         throttle_embed_text_floor: 1,
         enrich_embed_text: true,
-        enrich_image_embeddings: true,
         ..Settings::default()
     }
 }
@@ -207,18 +202,18 @@ async fn wait_level(kernel: &Kernel, pred: impl Fn(u8) -> bool) -> bool {
     false
 }
 
-/// The headline test: under sustained pressure `embed_text` drains while `embed_image` +
-/// `vision_tag` stay pending; once pressure recovers, the held jobs drain too. The level
-/// is driven through the shared atomic mid-run, so this also proves live workers react to
-/// a level change without a pool restart.
+/// The headline test: under sustained pressure `embed_text` drains while the heavy
+/// `vision_tag` kind stays pending; once pressure recovers, the held job drains too. The
+/// level is driven through the shared atomic mid-run, so this also proves live workers
+/// react to a level change without a pool restart.
 #[tokio::test]
 async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
 
-    // One frame + job of each enrichment kind. Aggregate job_stats then tells the kinds
-    // apart: under throttle exactly the embed_text job (1) reaches `done`.
+    // One embed_text job (light) and one vision_tag job (heavy). Aggregate job_stats then
+    // tells the kinds apart: under throttle exactly the embed_text job (1) reaches `done`.
     let text_fid = store.insert_frame(new_frame(1_000)).await.unwrap();
     store
         .insert_ocr(text_fid, ocr("real document text"))
@@ -229,13 +224,6 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         .await
         .unwrap();
 
-    let img_fid = store.insert_frame(new_frame(2_000)).await.unwrap();
-    write_jpeg(&data_dir, 2_000);
-    store
-        .enqueue_job(job(JobKind::EmbedImage, img_fid))
-        .await
-        .unwrap();
-
     let vis_fid = store.insert_frame(new_frame(3_000)).await.unwrap();
     write_jpeg(&data_dir, 3_000);
     store
@@ -243,7 +231,7 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         .await
         .unwrap();
 
-    // Persist the throttle settings BEFORE the pool starts, so it claims embed_image too.
+    // Persist the throttle settings BEFORE the pool starts.
     kernel::settings::save_settings(store.as_ref(), &throttle_settings(true))
         .await
         .unwrap();
@@ -259,7 +247,7 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
     );
 
     // Probe starts HIGH; start the governor and wait until it reaches level >= 1 BEFORE
-    // any worker runs, so the heavy kinds are never claimable in this window.
+    // any worker runs, so the heavy kind is never claimable in this window.
     let cpu = Arc::new(AtomicU32::new(99));
     kernel.set_pressure_probe(Arc::new(FakePressureProbe {
         cpu_pct: cpu.clone(),
@@ -270,8 +258,8 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         "throttle did not engage under sustained high pressure"
     );
 
-    // Now bring up the providers (pool + vision). Level is already >= 1, so embed_image +
-    // vision_tag are paused; embed_text drains.
+    // Now bring up the providers (pool + vision). Level is already >= 1, so vision_tag is
+    // paused; embed_text drains.
     kernel.attach_embedder(Arc::new(OkEmbedder)).await;
     kernel
         .attach_inference(
@@ -287,7 +275,7 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         wait_done(&store, 1).await,
         "embed_text did not drain under throttle"
     );
-    // ...while embed_image + vision_tag stay held (give the pool ample time to (not) claim).
+    // ...while vision_tag stays held (give the pool ample time to (not) claim it).
     tokio::time::sleep(Duration::from_millis(600)).await;
     let held = store.job_stats().await.unwrap();
     assert_eq!(
@@ -295,8 +283,8 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         "only embed_text should drain under throttle: {held:?}"
     );
     assert_eq!(
-        held.pending, 2,
-        "embed_image + vision_tag must stay pending under throttle: {held:?}"
+        held.pending, 1,
+        "vision_tag must stay pending under throttle: {held:?}"
     );
 
     // Recover: drop pressure and wait for the governor to step back to level 0.
@@ -305,10 +293,10 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         wait_level(&kernel, |l| l == 0).await,
         "throttle did not release after pressure recovered"
     );
-    // The held heavy jobs now drain.
+    // The held heavy job now drains.
     assert!(
-        wait_done(&store, 3).await,
-        "embed_image + vision_tag did not drain after recovery"
+        wait_done(&store, 2).await,
+        "vision_tag did not drain after recovery"
     );
 
     kernel.stop_throttle().await;
@@ -316,7 +304,7 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
     kernel.stop_workers().await;
 }
 
-/// With the throttle off (the default), all three kinds drain — proving the claim gate is
+/// With the throttle off (the default), both kinds drain — proving the claim gate is
 /// truly inert when disabled (zero behavioral change), even with a probe injected.
 #[tokio::test]
 async fn throttle_disabled_drains_everything() {
@@ -333,12 +321,6 @@ async fn throttle_disabled_drains_everything() {
         .enqueue_job(job(JobKind::EmbedText, text_fid))
         .await
         .unwrap();
-    let img_fid = store.insert_frame(new_frame(2_000)).await.unwrap();
-    write_jpeg(&data_dir, 2_000);
-    store
-        .enqueue_job(job(JobKind::EmbedImage, img_fid))
-        .await
-        .unwrap();
     let vis_fid = store.insert_frame(new_frame(3_000)).await.unwrap();
     write_jpeg(&data_dir, 3_000);
     store
@@ -346,7 +328,7 @@ async fn throttle_disabled_drains_everything() {
         .await
         .unwrap();
 
-    // Throttle disabled, but image embeddings enabled so the pool claims all three.
+    // Throttle disabled, so the pool claims both kinds.
     kernel::settings::save_settings(store.as_ref(), &throttle_settings(false))
         .await
         .unwrap();
@@ -376,8 +358,8 @@ async fn throttle_disabled_drains_everything() {
         .await;
 
     assert!(
-        wait_done(&store, 3).await,
-        "all three kinds should drain when the throttle is off: {:?}",
+        wait_done(&store, 2).await,
+        "both kinds should drain when the throttle is off: {:?}",
         store.job_stats().await.unwrap()
     );
 

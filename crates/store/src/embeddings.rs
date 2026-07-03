@@ -1,11 +1,11 @@
-//! Text and image embeddings: metadata rows plus the synchronized sqlite-vec
-//! (`vec0`) shadow tables, and the cosine-KNN building blocks the vector arm of
+//! Text embeddings: metadata rows plus the synchronized sqlite-vec (`vec0`) shadow
+//! table, and the cosine-KNN building blocks the vector arm of
 //! [`crate::SqliteStore::hybrid_search`] reuses (`03 §3/§4`).
 //!
-//! Each embedding lives in two places that must stay in lock-step: the metadata
-//! table (`embeddings` / `image_embeddings`) and its `vec0` shadow keyed by the
-//! same id. Upserts do both inside one transaction; deletes are handled by the
-//! schema's `AFTER DELETE` triggers (incl. the `frames` cascade).
+//! Each embedding lives in two places that must stay in lock-step: the `embeddings`
+//! metadata table and its `vec0` shadow keyed by the same id. Upserts do both inside
+//! one transaction; deletes are handled by the schema's `AFTER DELETE` triggers (incl.
+//! the `frames` cascade). The optional image-embedding lane was removed in 0.3.0 PR4.
 
 use anyhow::bail;
 use rusqlite::{params, OptionalExtension};
@@ -121,81 +121,12 @@ impl SqliteStore {
         .await
     }
 
-    /// Inserts or replaces a frame's image embedding and its vec0 shadow (`03 §4`).
-    pub async fn upsert_image_embedding(
-        &self,
-        frame_id: i64,
-        emb: &Embedding,
-        model: &str,
-    ) -> Result<()> {
-        if emb.len() != EMBEDDING_DIM {
-            bail!(
-                "image embedding has {} dims, expected {EMBEDDING_DIM}",
-                emb.len()
-            );
-        }
-        let blob = f32_blob(&emb.0);
-        let model = model.to_string();
-
-        self.with_conn(move |conn| {
-            let tx = conn.unchecked_transaction()?;
-            let existing: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM image_embeddings WHERE frame_id = ?1",
-                    params![frame_id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let id = match existing {
-                Some(id) => {
-                    tx.execute(
-                        "UPDATE image_embeddings SET model = ?1, dim = ?2 WHERE id = ?3",
-                        params![model, EMBEDDING_DIM as i64, id],
-                    )?;
-                    tx.execute(
-                        "DELETE FROM image_embedding_vectors WHERE image_embedding_id = ?1",
-                        params![id],
-                    )?;
-                    id
-                }
-                None => {
-                    tx.execute(
-                        "INSERT INTO image_embeddings (frame_id, model, dim) VALUES (?1, ?2, ?3)",
-                        params![frame_id, model, EMBEDDING_DIM as i64],
-                    )?;
-                    tx.last_insert_rowid()
-                }
-            };
-            tx.execute(
-                "INSERT INTO image_embedding_vectors (image_embedding_id, embedding)
-                 VALUES (?1, ?2)",
-                params![id, blob],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
     /// Frame ids of the text chunks nearest `query` by cosine distance,
     /// nearest-first and de-duplicated by frame. Building block for the vector
     /// arm of hybrid search.
     pub async fn nearest_text_frames(&self, query: &Embedding, k: u32) -> Result<Vec<i64>> {
         self.knn_frames("embedding_vectors", "embeddings", "embedding_id", query, k)
             .await
-    }
-
-    /// Frame ids of the images nearest `query`, nearest-first (`03 §4`,
-    /// optional visual recall).
-    pub async fn nearest_image_frames(&self, query: &Embedding, k: u32) -> Result<Vec<i64>> {
-        self.knn_frames(
-            "image_embedding_vectors",
-            "image_embeddings",
-            "image_embedding_id",
-            query,
-            k,
-        )
-        .await
     }
 
     /// Shared cosine-KNN over a `(vec0 shadow, metadata)` pair. `id_col` is the
@@ -237,11 +168,6 @@ impl SqliteStore {
     /// Count of text-embedding rows (diagnostics / tests).
     pub async fn text_embedding_count(&self) -> Result<u64> {
         self.count_rows("embeddings").await
-    }
-
-    /// Count of image-embedding rows (diagnostics / tests).
-    pub async fn image_embedding_count(&self) -> Result<u64> {
-        self.count_rows("image_embeddings").await
     }
 
     async fn count_rows(&self, table: &'static str) -> Result<u64> {

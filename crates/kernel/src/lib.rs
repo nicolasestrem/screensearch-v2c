@@ -244,7 +244,6 @@ impl Kernel {
             frames_dir: self.frames_dir.clone(),
             events: self.events.clone(),
             enrich_embed_text: settings.enrich_embed_text,
-            enrich_image_embeddings: settings.enrich_image_embeddings,
             jpeg_quality: settings.storage_jpeg_quality,
             max_width: settings.storage_max_width,
             chrome_suppress_min_seen: settings.text_chrome_suppress_min_seen,
@@ -354,8 +353,7 @@ impl Kernel {
         let settings = settings::load_settings(self.store.as_ref()).await;
         let embedder_ready = self.embedder.read().expect("embedder slot lock").is_some();
         let vision_ready = self.vision.read().expect("vision slot lock").is_some();
-        let has_embed_lane =
-            embedder_ready && (settings.enrich_embed_text || settings.enrich_image_embeddings);
+        let has_embed_lane = embedder_ready && settings.enrich_embed_text;
         if !has_embed_lane && !vision_ready {
             tracing::debug!("start_workers: no provider-backed worker lanes available");
             return;
@@ -377,7 +375,6 @@ impl Kernel {
             embedder: self.embedder.clone(),
             vision: self.vision.clone(),
             enable_embed_text: settings.enrich_embed_text,
-            enable_embed_image: settings.enrich_image_embeddings,
             active_jobs: Arc::new(std::sync::Mutex::new(HashSet::new())),
             data_dir,
             events: self.events.clone(),

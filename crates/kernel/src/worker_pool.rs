@@ -90,7 +90,6 @@ pub(crate) struct Shared {
     /// The vision provider, attached after the sidecar comes up (`None` until then).
     pub vision: VisionSlot,
     pub enable_embed_text: bool,
-    pub enable_embed_image: bool,
     /// Job ids currently being processed by this worker pool. The periodic sweep
     /// uses this as a process-local guard so long-running provider calls can still
     /// record their final retry/dead-letter outcome instead of being requeued out
@@ -101,9 +100,9 @@ pub(crate) struct Shared {
     pub events: broadcast::Sender<KernelEvent>,
     pub concurrency: usize,
     /// Current enrichment-throttle level, shared live with the kernel governor (`03 §5`):
-    /// `0` claims every enabled kind; `>= 1` pauses `embed_image` + `vision_tag`; `2` also
-    /// caps concurrent `embed_text` to `embed_text_floor`. Stays `0` when the throttle is
-    /// off, so behavior is unchanged. Read on every claim — no pool restart on a change.
+    /// `0` claims every enabled kind; `>= 1` pauses `vision_tag`; `2` also caps concurrent
+    /// `embed_text` to `embed_text_floor`. Stays `0` when the throttle is off, so behavior
+    /// is unchanged. Read on every claim — no pool restart on a change.
     pub throttle_level: Arc<AtomicU8>,
     /// Minimum concurrent `embed_text` jobs at level 2 (clamped `>= 1`), so text indexing
     /// never fully stalls under sustained pressure. Shared live with the governor, which
@@ -215,28 +214,21 @@ impl Drop for EmbedTextGuard {
 }
 
 /// The claimable job kinds, narrowed by both provider readiness (the original slot-gating)
-/// and the throttle: at `level >= 1` `embed_image` + `vision_tag` are dropped; at level 2
-/// `embed_text` is dropped too when the in-flight count has reached the floor (`allow_embed_text`
-/// is precomputed by the caller so the level read + count read are a single snapshot).
-fn claim_kinds(shared: &Shared, level: u8, allow_embed_text: bool) -> ([JobKind; 3], usize) {
+/// and the throttle: at `level >= 1` `vision_tag` is dropped; at level 2 `embed_text` is
+/// dropped too when the in-flight count has reached the floor (`allow_embed_text` is
+/// precomputed by the caller so the level read + count read are a single snapshot).
+fn claim_kinds(shared: &Shared, level: u8, allow_embed_text: bool) -> ([JobKind; 2], usize) {
     let embedder_ready = shared
         .embedder
         .read()
         .expect("embedder slot lock")
         .is_some();
     let vision_ready = shared.vision.read().expect("vision slot lock").is_some();
-    let mut kinds = [JobKind::EmbedText; 3];
+    let mut kinds = [JobKind::EmbedText; 2];
     let mut len = 0;
-    if embedder_ready {
-        if shared.enable_embed_text && allow_embed_text {
-            kinds[len] = JobKind::EmbedText;
-            len += 1;
-        }
-        // embed_image is "heavy" enrichment — paused once throttling engages (level >= 1).
-        if shared.enable_embed_image && level == 0 {
-            kinds[len] = JobKind::EmbedImage;
-            len += 1;
-        }
+    if embedder_ready && shared.enable_embed_text && allow_embed_text {
+        kinds[len] = JobKind::EmbedText;
+        len += 1;
     }
     // vision_tag (sidecar) is paused once throttling engages (level >= 1).
     if vision_ready && level == 0 {
@@ -343,10 +335,6 @@ async fn process_job_with_providers(
     let outcome = match job.kind {
         JobKind::EmbedText => match embedder {
             Some(embedder) => embed_text_outcome(store, embedder, job.frame_id).await,
-            None => Outcome::Retry("embedding provider not attached".to_string()),
-        },
-        JobKind::EmbedImage => match embedder {
-            Some(embedder) => embed_image_outcome(store, embedder, data_dir, job.frame_id).await,
             None => Outcome::Retry("embedding provider not attached".to_string()),
         },
         JobKind::VisionTag => vision_tag_outcome(store, vision, data_dir, job.frame_id).await,
@@ -472,59 +460,11 @@ async fn embed_text_outcome(
     }
 }
 
-/// Embed a frame's stored JPEG (optional visual recall, `03 §4`). The JPEG lives at
-/// `data_dir / image_path`; a missing/corrupt file is dead-lettered (it won't fix
-/// itself), an embed/upsert error is retryable.
-async fn embed_image_outcome(
-    store: &Arc<dyn Store>,
-    embedder: &Arc<dyn EmbeddingProvider>,
-    data_dir: &Path,
-    frame_id: Option<i64>,
-) -> Outcome {
-    let Some(frame_id) = frame_id else {
-        return Outcome::DeadLetter("embed_image job has no frame_id".to_string());
-    };
-    let input = match store.get_enrichment_input(frame_id).await {
-        Ok(Some(i)) => i,
-        Ok(None) => {
-            return Outcome::Complete {
-                changed_data: false,
-            }
-        }
-        Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
-    };
-    let abs = data_dir.join(&input.image_path);
-    let image = match load_rgba(abs.clone()).await {
-        Ok(img) => img,
-        // A transient IO / sharing violation (AV, search indexer, or backup briefly
-        // holding the file on Windows) clears on retry; a file that is genuinely gone
-        // won't reappear. (The FK cascade deletes a frame's jobs with the frame, so an
-        // existing job whose JPEG is missing means an out-of-band deletion.)
-        Err(e) => {
-            return if abs.exists() {
-                Outcome::Retry(format!("load image {}: {e}", abs.display()))
-            } else {
-                Outcome::DeadLetter(format!("image missing {}: {e}", abs.display()))
-            };
-        }
-    };
-    let emb = match embedder.embed_image(&image).await {
-        Ok(e) => e,
-        Err(e) => return Outcome::Retry(format!("embed image: {e}")),
-    };
-    match store
-        .upsert_image_embedding(frame_id, &emb, embedder.image_model_name())
-        .await
-    {
-        Ok(()) => Outcome::Complete { changed_data: true },
-        Err(e) => Outcome::Retry(format!("upsert image embedding: {e}")),
-    }
-}
-
 /// Run deferred vision tagging on a frame's stored JPEG via the sidecar provider
-/// (`03 §5`). Image-load handling mirrors [`embed_image_outcome`]: a transient IO
-/// error retries, a genuinely missing file is dead-lettered. A purged frame is a
-/// no-op success. A sidecar/analyze error is retryable (the sidecar may be restarting).
+/// (`03 §5`). The JPEG lives at `data_dir / image_path`: a transient IO error (AV,
+/// search indexer, or backup briefly holding the file on Windows) retries, a genuinely
+/// missing file is dead-lettered (it won't reappear). A purged frame is a no-op success.
+/// A sidecar/analyze error is retryable (the sidecar may be restarting).
 async fn vision_tag_outcome(
     store: &Arc<dyn Store>,
     vision: Option<&Arc<dyn VisionProvider>>,

@@ -35,7 +35,7 @@ storage_max_width: number,
  * and its raw/content text + spans are always kept (they are the durable proof); only
  * the image file is removed. `0` = keep screenshots forever.
  */
-storage_retention_days: number, enrich_embed_text: boolean, enrich_image_embeddings: boolean, 
+storage_retention_days: number, enrich_embed_text: boolean, 
 /**
  * Opt-in: tag up to a batch of untagged frames every `vision_timer_interval_ms`.
  */
@@ -217,8 +217,8 @@ capture_uia_suppress_during_input_ms: number,
  * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
  * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
  * never runs and enrichment drains at full configured concurrency, exactly as
- * before. When on, sustained CPU/GPU pressure pauses `vision_tag`/`embed_image` and
- * floors `embed_text` concurrency; capture/OCR/storage never throttle (`03 §5`).
+ * before. When on, sustained CPU/GPU pressure pauses `vision_tag` and floors
+ * `embed_text` concurrency; capture/OCR/storage never throttle (`03 §5`).
  */
 throttle_enabled: boolean, 
 /**

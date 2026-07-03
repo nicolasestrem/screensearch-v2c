@@ -35,7 +35,6 @@ async fn round_trips_non_default_values() {
         storage_max_width: 1600,
         storage_retention_days: 30,
         enrich_embed_text: false,
-        enrich_image_embeddings: true,
         enrich_vision_timer_enabled: true,
         enrich_vision_timer_interval_ms: 1_800_000,
         enrich_vision_idle_enabled: true,

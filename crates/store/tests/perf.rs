@@ -112,9 +112,6 @@ impl EmbeddingProvider for LcgEmbedder {
             .map(|s| Embedding(pseudo_vec(hash_str(s))))
             .collect())
     }
-    async fn embed_image(&self, _image: &image::RgbaImage) -> Result<Embedding> {
-        anyhow::bail!("image embedding unused in the perf fixture")
-    }
 }
 
 #[tokio::test]

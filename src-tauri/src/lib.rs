@@ -100,8 +100,6 @@ struct AppState {
     ask_tasks: AskTasks,
     /// In-flight report cancel flags keyed by request id; `cancel_report` sets them.
     report_tasks: ReportTasks,
-    /// Whether the currently attached FastEmbed provider loaded the optional image lane.
-    embedder_with_image: Arc<StdMutex<bool>>,
     /// Shared toggle for the UIA-text composite provider (`docs/0.2.0.md` #48). The
     /// composite reads it per frame; `set_settings` flips it so the user can switch UIA on/
     /// off live without restarting capture.
@@ -785,13 +783,8 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
         a.set_launch_options(sidecar_params);
     }
     if let Some(kernel) = state.kernel.clone() {
-        let embeddings_enabled = settings.enrich_embed_text || settings.enrich_image_embeddings;
+        let embeddings_enabled = settings.enrich_embed_text;
         let embed_status = kernel.readiness().embed_model.status;
-        let needs_image_embedder = settings.enrich_image_embeddings
-            && !*state
-                .embedder_with_image
-                .lock()
-                .expect("embedder image flag");
         if embeddings_enabled
             && matches!(
                 embed_status,
@@ -807,19 +800,6 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
                 kernel,
                 dyn_store,
                 state.embed_models_dir.clone(),
-                state.embedder_with_image.clone(),
-            ));
-        } else if needs_image_embedder {
-            kernel.set_embed_readiness(
-                ComponentStatus::Initializing,
-                Some("loading image embedding model".to_string()),
-            );
-            let dyn_store: Arc<dyn Store> = store.clone();
-            tauri::async_runtime::spawn(init_embeddings(
-                kernel,
-                dyn_store,
-                state.embed_models_dir.clone(),
-                state.embedder_with_image.clone(),
             ));
         } else {
             kernel.reconfigure_enrichment().await;
@@ -956,7 +936,6 @@ pub fn run() {
             let vision_slot: SharedSlot<Arc<VisionSidecar>> = Arc::new(StdMutex::new(None));
             let answer_slot: SharedSlot<Arc<AnswerSidecar>> = Arc::new(StdMutex::new(None));
             let sidecar_binary_slot: SharedSlot<PathBuf> = Arc::new(StdMutex::new(None));
-            let embedder_with_image = Arc::new(StdMutex::new(false));
 
             // Forward kernel events to the UI, and kick off the off-thread model loads
             // (P3 embeddings + P4 inference) — app launch is never blocked on the
@@ -983,7 +962,6 @@ pub fn run() {
                     kernel.clone(),
                     dyn_store,
                     embed_models_dir.clone(),
-                    embedder_with_image.clone(),
                 ));
 
                 // Resolve the sidecar binary + wire the inference providers off-thread.
@@ -1018,7 +996,6 @@ pub fn run() {
                 sidecar_binary: sidecar_binary_slot,
                 ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 report_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-                embedder_with_image,
                 uia_enabled,
                 embed_models_dir,
                 db_path,
@@ -1083,38 +1060,27 @@ pub fn run() {
 /// which lights up the store's vector arm and starts the worker pool that drains the
 /// `embed_text` backlog (`03 §5`). App start never blocks on the multi-hundred-MB
 /// first-run download; `embed_model` readiness reflects progress
-/// (Initializing → Ready / Unavailable / Disabled). Skips loading entirely when both
-/// text and image embeddings are off.
-async fn init_embeddings(
-    kernel: Arc<Kernel>,
-    store: Arc<dyn Store>,
-    models_dir: PathBuf,
-    embedder_with_image: Arc<StdMutex<bool>>,
-) {
+/// (Initializing → Ready / Unavailable / Disabled). Skips loading entirely when text
+/// embeddings are off.
+async fn init_embeddings(kernel: Arc<Kernel>, store: Arc<dyn Store>, models_dir: PathBuf) {
     let settings = kernel::settings::load_settings(store.as_ref()).await;
-    if !settings.enrich_embed_text && !settings.enrich_image_embeddings {
-        *embedder_with_image.lock().expect("embedder image flag") = false;
+    if !settings.enrich_embed_text {
         kernel.set_embed_readiness(
             ComponentStatus::Disabled,
             Some("embeddings disabled in settings".to_string()),
         );
         return;
     }
-    let with_image = settings.enrich_image_embeddings;
-    match tokio::task::spawn_blocking(move || FastEmbedProvider::new(models_dir, with_image)).await
-    {
+    match tokio::task::spawn_blocking(move || FastEmbedProvider::new(models_dir)).await {
         Ok(Ok(provider)) => {
             tracing::info!("embedding model loaded; attaching to kernel");
             kernel.attach_embedder(Arc::new(provider)).await;
-            *embedder_with_image.lock().expect("embedder image flag") = with_image;
         }
         Ok(Err(e)) => {
-            *embedder_with_image.lock().expect("embedder image flag") = false;
             tracing::error!(error = %e, "embedding model load failed");
             kernel.set_embed_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
         }
         Err(e) => {
-            *embedder_with_image.lock().expect("embedder image flag") = false;
             tracing::error!(error = %e, "embedding model load task panicked");
             kernel.set_embed_readiness(
                 ComponentStatus::Unavailable,

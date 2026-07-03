@@ -2,6 +2,7 @@
 
 /**
  * Kind of deferred work. Serializes to the DB `kind` column
- * (`'embed_text' | 'embed_image' | 'vision_tag'`, `03 §4`).
+ * (`'embed_text' | 'vision_tag'`, `03 §4`). The `embed_image` kind was removed in
+ * 0.3.0 PR4 with the image-embedding lane; the V9 migration deletes any leftover rows.
  */
-export type JobKind = "embed_text" | "embed_image" | "vision_tag";
+export type JobKind = "embed_text" | "vision_tag";

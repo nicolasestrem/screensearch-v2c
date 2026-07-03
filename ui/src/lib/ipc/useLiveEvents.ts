@@ -56,7 +56,7 @@ export function useLiveEvents() {
       listenTo("job_completed", (completed) => {
         qc.setQueryData(queryKeys.jobStats, completed.stats);
         qc.invalidateQueries({ queryKey: queryKeys.frame(completed.frame_id) });
-        if (completed.kind === "embed_text" || completed.kind === "embed_image") {
+        if (completed.kind === "embed_text") {
           qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
         }
         if (completed.kind === "vision_tag") {
