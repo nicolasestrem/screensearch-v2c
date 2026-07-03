@@ -45,6 +45,15 @@
   change, file by file" + its acceptance ("a fresh agent can implement PR2 from the specs alone").
 - **New ambiguity (not in D1–D15):** API port-bind failure UX — surfaced to the user, resolved to
   **"loud + guided port change"**, contract written into `03 §7c` + `UI_REFERENCE`, recorded in `07` #80.
+- **PR #70 review round (bot comments; not replied to per user instruction; each verified vs. real
+  code first):** `03 §2` moved the `capture_now` note outside the `CaptureSource` trait ("not a trait
+  method"); `03 §7`/`§7c`/`§4` settled one canonical `list_marks` order (all marks, unresolved first
+  then newest-first) + fixed `idx_marks_open` to `created_at DESC`; `03 §7b` anchors where-was-i on the
+  **last non-ScreenSearch foreground** (overlay-focus bug) and absorbs transient excursions via the D9
+  dwell threshold; `03 §7b` pins `capture_now` to the **foreground-window monitor** (multi-monitor
+  determinism); `03 §7c` cancels `/v1/ask` inference on client disconnect and streams `/v1/export`
+  (flat memory, bounded window). A `CHECK` on `jobs.kind` was **declined** (live `schema.rs` has none;
+  would force an unplanned PR4 rebuild) and recorded as opt-in hardening in `07` #82. Full mapping: `05`.
 - **Verification — verbatim** (specs-only PR — the untouched tree must still build):
   - `cargo fmt --all -- --check` → `FMT_EXIT=0`
   - `cargo build --workspace` → `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 19.79s` / `BUILD_EXIT=0`

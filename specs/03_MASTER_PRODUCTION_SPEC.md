@@ -63,9 +63,11 @@ pub struct CapturedFrame { pub monitor_index: u32, pub width: u32, pub height: u
     fn monitors(&self) -> Vec<MonitorInfo>;
     /// Yields the next *changed* frame (diff-gated) or None on shutdown.
     async fn next_frame(&mut self) -> Result<Option<CapturedFrame>>;
-    // 0.3.0: a `capture_now` request (§7b) forces one frame *past* the diff gate — a demanded
-    // frame (e.g. mark-this-moment) must never be dropped as "unchanged".
 }
+// 0.3.0: `capture_now` (§7b) is NOT a method on this trait. It is a per-request flag handed to the
+// **capture worker** that drives `next_frame()`, telling it to emit exactly one frame *past* the diff
+// gate — a demanded frame (mark-this-moment) must never be dropped as "unchanged" (D8). The diff gate
+// lives in the worker, not in `CaptureSource`.
 
 pub struct OcrResult { pub text: String, pub mean_confidence: f32, pub engine: String,
                        pub spans: Vec<TextSpan> }   // 0.2.x: per-line/word geometry — see §3b
@@ -312,12 +314,12 @@ CREATE TABLE marks (
   note        TEXT,                          -- optional one-line intention (nullable)
   resolved_at INTEGER                        -- NULL = unresolved; set on resolve/dismiss
 );
-CREATE INDEX idx_marks_open ON marks(resolved_at, created_at);  -- Intentions strip: open, newest-first
+CREATE INDEX idx_marks_open ON marks(resolved_at, created_at DESC);  -- list_marks order: unresolved first (resolved_at NULLs sort first), newest-first within each group (§7/§7b)
 
 -- durable job queue (the heart of enrich-deferred) — see §5
 CREATE TABLE jobs (
   id           INTEGER PRIMARY KEY,
-  kind         TEXT NOT NULL,               -- 'embed_text' | 'vision_tag' (0.3.0 PR4 removed 'embed_image')
+  kind         TEXT NOT NULL,               -- 'embed_text' | 'vision_tag' (0.3.0 PR4 removed 'embed_image'). No CHECK — matches schema.rs; a value CHECK is optional hardening tracked in 07 #82.
   frame_id     INTEGER REFERENCES frames(id) ON DELETE CASCADE,
   state        TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed|dead
   priority     INTEGER NOT NULL DEFAULT 0,  -- higher first
@@ -440,7 +442,7 @@ duplicates). **Commands** (UI → core):
 | `get_readiness` | `()` → `Readiness` (capture, db, embed model, sidecar) |
 | `where_was_i` | `()` → `Option<ResumeContext>` (0.3.0; last sustained context — `§7b`) |
 | `add_mark` | `{ frame_id? \| capture_now, note? }` → `MarkId` (0.3.0; `capture_now` bypasses the diff gate — `§7b`/D8) |
-| `list_marks` | `()` → `Mark[]` (0.3.0; unresolved-first — `§7b`) |
+| `list_marks` | `()` → `Mark[]` (0.3.0; **all** marks, unresolved first then newest-first within each group — `§7b`; the Intentions strip renders the unresolved head) |
 | `resolve_mark` | `mark_id` → `()` (0.3.0; resolve = done, dismiss = resolve-no-action — `§7b`) |
 | `export_data` | `ExportRequest` → `ExportResult` (0.3.0; Settings "Export…"; same code path as `GET /v1/export`, works with the API off — `§7c`/D12) |
 | `set_api_config` | `{ enabled, port? }` → `ApiStatus` (0.3.0; enable/disable + port; bind failure is loud + guided-change — `§7c`) |
@@ -469,20 +471,33 @@ Core-side contracts behind the Flow overlay (PR5) and the where-was-i / mark-thi
 (§7); the overlay and the local API (§7c) reuse them — **no new retrieval code is invented**.
 
 **Where-was-i (context resume) — D9.** A pure, unit-tested heuristic (a store query + a small pure
-function; no new crate). The **last sustained context** = the most recent run of frames, ending
-*before* the current foreground app's session began, in which the same **context key** persisted for at
-least `resume.min_dwell_secs` (default **120**, a setting like every threshold, §8). Context key =
-`app_hint`, refined by browser domain (from `browser_url`) when present. Excluded from candidacy: the
-**current foreground app**, **ScreenSearch itself**, and any app on `privacy.excluded_apps`. Returns
-the run's **representative (last) frame** + app, window title, URL, and span start/end (a
-`ResumeContext`). Surfaced in the overlay's empty state (PR5) and as a Deck "Jump back" card (PR6);
-`Enter`/click opens the Moment, from which the existing frame context gets the user back.
+function; no new crate). The **anchor** is the **current context** — but because where-was-i is almost
+always invoked *from the overlay* (which holds the OS foreground while it is up, with its input focused
+on show), "current" must mean the **last non-ScreenSearch foreground context**: the app/domain active
+immediately *before* ScreenSearch or its overlay took focus, derived core-side from recent frames —
+ScreenSearch and its overlay never count as the anchor. The **last sustained context** = the most
+recent run of frames, ending *before* that anchor context began, in which the same **context key**
+persisted for at least `resume.min_dwell_secs` (default **120**, a setting like every threshold, §8).
+Context key = `app_hint`, refined by browser domain (from `browser_url`) when present. **Transient
+excursions are absorbed:** a run of one context key is *not* split by a brief switch away (a 2-second
+alt-tab, a notification, a frame whose `app_hint` fails to resolve) — an interruption breaks the run
+only if the interrupting context key is **itself sustained** (persists ≥ `resume.min_dwell_secs`);
+shorter excursions fold into the surrounding run. This reuses the one dwell threshold rather than
+adding a second knob (subtraction thesis, `02 §5c`). Excluded from candidacy: the **anchor context**,
+**ScreenSearch itself**, and any app on `privacy.excluded_apps`. Returns the run's **representative
+(last) frame** + app, window title, URL, and span start/end (a `ResumeContext`). Surfaced in the
+overlay's empty state (PR5) and as a Deck "Jump back" card (PR6); `Enter`/click opens the Moment, from
+which the existing frame context gets the user back.
 
 **Mark-this-moment (intention capture) — D8/D10.** The mark hotkey (`marks.hotkey`, default
 `Ctrl+Alt+M`; §8) issues **`capture_now`**: a request into the *existing* capture worker that
 **bypasses the diff gate for that one frame** (D8 — a demanded frame must never be dropped as
 "unchanged"; it is serialized like any capture cycle, a per-request flag, **not** a mode), inserts the
-frame, then inserts a **mark** (§4). A brief, quiet overlay toast confirms ("Marked ✓ — note?") with an
+frame, then inserts a **mark** (§4). **Multi-monitor is deterministic:** a capture cycle yields one
+frame per monitor, so `capture_now` marks the frame on the **monitor holding the foreground window** —
+the one whose `target_rect` resolves (`crates/capture`), i.e. the screen the user is actually on —
+falling back to the primary monitor if none resolves. One `capture_now` → one mark, never the
+ambiguous "first queued monitor". A brief, quiet overlay toast confirms ("Marked ✓ — note?") with an
 optional one-line note; ignoring it costs nothing. The Deck **Intentions** strip lists unresolved marks
 newest-first (thumbnail/reconstruction, note, age); resolve = done, dismiss = resolve-with-no-action.
 **No badge counts anywhere** (D14 — pull-based, never nagging). Marked frames follow normal retention
@@ -520,15 +535,24 @@ enabling this is an explicit trust decision.*
   semantics as the UI.
 - `POST /v1/ask` — grounded answer, **SSE stream**, cited frame ids. Reuses the ask pipeline; the API
   layer adapts the pipeline's `answer_delta` stream (§7) to SSE (the sidecar client already speaks SSE).
+  **Client disconnect cancels inference:** a half-read `/v1/ask` must never leave the sidecar
+  generating into a closed socket. This is **not free today** — `AnswerProvider::answer`
+  (`crates/inference/src/answer.rs`) is driven by the *sidecar* stream (`prx.recv()`) and discards
+  downstream `tx.send` errors, so merely dropping the SSE receiver keeps the sidecar generating to
+  `Done`. PR7 must add the cancellation path: detect the closed downstream (send failure /
+  `tx.is_closed()`) — or cancel a task/token the API layer owns — then **stop consuming and abort the
+  sidecar `stream_task`** so GPU/CPU is actually freed.
 - `GET /v1/frames/{id}` — metadata + text; `?image=1` returns the stored image (WebP; the §4
   `image_path` comment predates the native-WebP switch, `07` #73).
 - `GET /v1/context/where-was-i` — the §7b heuristic.
-- `GET /v1/marks` · `POST /v1/marks` (body: `frame_id` **or** `"now"` → `capture_now`) ·
-  `POST /v1/marks/{id}/resolve` — the **only write surface** in v1 (D11; write scopes beyond marks are
-  deferred, `07`).
-- `GET /v1/export?from=&to=&format=json` — frames + content text (+ marks), **no images** in v1 (D12). A
-  Settings **"Export…"** button calls the *same* code path internally, so export works even with the API
-  disabled.
+- `GET /v1/marks` (same order as `list_marks`: all marks, unresolved first then newest-first — §7) ·
+  `POST /v1/marks` (body: `frame_id` **or** `"now"` → `capture_now`) · `POST /v1/marks/{id}/resolve` —
+  the **only write surface** in v1 (D11; write scopes beyond marks are deferred, `07`).
+- `GET /v1/export?from=&to=&format=json` — frames + content text (+ marks), **no images** in v1 (D12).
+  **Serialized as a stream** (frames written incrementally to the response body — memory stays flat)
+  and bounded by the optional `from`/`to` window, so exporting months of history never buffers the
+  whole result set or risks OOM on the local box. A Settings **"Export…"** button calls the *same* code
+  path internally (streaming to a file), so export works even with the API disabled.
 
 Docs: a hand-written `docs/API.md` (OpenAPI-lite; v1 is small, no codegen), authored by PR7.
 

@@ -105,7 +105,8 @@ upper-third, **hidden-not-destroyed** (show/hide, so summon latency is window-sh
 webview boot). **Keyboard:** input focused on show; `↑/↓` navigate results; `Enter` opens the Moment
 in the main window; `Esc` (and blur) dismiss; `Tab` or a `?` prefix switches to **Ask** (streams a
 grounded, cited answer via the existing pipeline). An **empty query** shows the **where-was-i strip**
-(`03 §7b`) instead of results. **Perf:** visible **< 150 ms** from hotkey (warm); first results within
+(`03 §7b`, which anchors on the last **non-ScreenSearch** foreground context — the ScreenSearch window
+or its overlay never counts as "current") instead of results. **Perf:** visible **< 150 ms** from hotkey (warm); first results within
 the existing **< 200 ms** search budget. **Reduced-motion:** ambient scan disabled under
 `prefers-reduced-motion` (`§7`). **Privacy:** the overlay is the app's own window and is covered by
 the self-exclude capture gate — it must never appear in its own capture history (`03 §7b`, D7). A

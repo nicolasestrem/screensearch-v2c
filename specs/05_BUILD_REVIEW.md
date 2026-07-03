@@ -59,6 +59,37 @@ map. Specs-first: PR1 pre-writes the whole-arc contract so PR2–PR9 implement f
   D7 in `03`, `00 §E`/`01` image-model refs, `02 §8` Status). A whole-arc completeness sweep should run
   before PR2 (an adversarial grep that no live `specs/` reference to a removed subsystem survives).
 
+### PR #70 review round (2026-07-03) — bot comments folded in (specs-only, still no code)
+Three PR reviewers (claude/gemini/codex; all bots, not replied to per user instruction). Each inline
+comment verified against the **real** code before acting — several made claims about the tree:
+- **`capture_now` note misplaced inside the `CaptureSource` trait block** (claude) → moved outside the
+  `}`, reworded "**NOT** a method on this trait — a per-request flag to the capture worker" (`03 §2`).
+- **`list_marks` ordering stated 3 ways** (claude: IPC "unresolved-first" vs `§7b` "newest-first" vs
+  the index comment) → settled one canonical order (**all marks, unresolved first then newest-first
+  within each group**) in the `§7` IPC row, `§7c` `GET /v1/marks`, and fixed `idx_marks_open` to
+  `(resolved_at, created_at DESC)` so "newest-first" is actually index-served.
+- **where-was-i anchors on the wrong foreground** (codex P2): from the overlay the OS foreground *is*
+  ScreenSearch, so "current foreground" would pick the detour, not the work context → `§7b` now
+  anchors on the **last non-ScreenSearch foreground context**, derived core-side (no `where_was_i()`
+  signature change); mirrored in `UI_REFERENCE`.
+- **where-was-i fragile to transient focus switches** (gemini) → `§7b` absorbs brief excursions; an
+  interruption breaks a run only if the interrupting context is **itself sustained** (≥
+  `resume.min_dwell_secs`) — reuses the one D9 threshold, adds no new knob.
+- **`capture_now` frame nondeterministic on multi-monitor** (codex P2): `capture_cycle` yields one
+  frame per monitor → `§7b` pins the mark to the **foreground-window monitor** (the frame whose
+  `target_rect` resolves, `crates/capture/src/lib.rs:302-309`), primary as fallback.
+- **`POST /v1/ask` doesn't cancel on client disconnect** (gemini) → `§7c` now requires PR7 to
+  propagate cancellation on disconnect (**abort the sidecar `stream_task`**, free GPU/CPU), spelled out
+  because `AnswerProvider::answer` is driven by the sidecar stream and discards downstream `tx.send`
+  errors today — so merely dropping the SSE receiver would *not* stop generation (caught by the
+  review-round verification reading `crates/inference/src/answer.rs:118-137`).
+- **`GET /v1/export` unbounded → OOM** (gemini) → `§7c` specifies streaming serialization (flat
+  memory) + optional `from`/`to` bound; same for the Settings "Export…" file path.
+- **Add `CHECK` to `jobs.kind`** (gemini) → **declined + recorded** (`07` #82): live `schema.rs:132`
+  has no such `CHECK`; adding one would diverge the spec from code and force an unplanned jobs-table
+  rebuild in PR4 (beyond D5). Kept as opt-in future hardening as its own migration.
+- Verbatim re-verification below.
+
 ## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
 
 From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`
