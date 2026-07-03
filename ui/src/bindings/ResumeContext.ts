@@ -7,7 +7,7 @@
  * context key that persisted ≥ `resume.min_dwell_secs`, excluding the current
  * (anchor) context, ScreenSearch itself, and `privacy.excluded_apps`. `frame_id` is
  * the run's representative (last) frame — `Enter`/click opens its Moment. `image_path`
- * + `image_purged` let the overlay/Deck render a thumbnail without a second
+ * and `image_purged` let the overlay/Deck render a thumbnail without a second
  * `get_frame`. `browser_url` is dormant today (always `None` in production capture).
  */
 export type ResumeContext = { frame_id: number, 

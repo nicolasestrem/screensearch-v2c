@@ -19,10 +19,10 @@ use tauri::{Emitter, Manager, State};
 use traits::{
     AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
     CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
-    JobStats, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
-    ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
-    SearchHit, SearchQuery, SetModelTier, Settings, StorageStats, Store, TextSpan, ThrottleStatus,
-    TimeRange, TimelineBucket, ToastLevel, VisionTarget,
+    JobStats, Mark, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig,
+    ReportKind, ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse,
+    ResumeContext, RetrievedChunk, SearchHit, SearchQuery, SetModelTier, Settings, StorageStats,
+    Store, TextSpan, ThrottleStatus, TimeRange, TimelineBucket, ToastLevel, VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -270,6 +270,98 @@ async fn enqueue_vision(target: VisionTarget, state: State<'_, AppState>) -> Res
         .enqueue_vision(target)
         .await
         .map_err(|e| e.to_string())
+}
+
+// ── Flow recall: where-was-i + marks (0.3.0 PR6; `03 §7`/`§7b`) ────────────────────
+
+/// The last sustained context before the current detour (`where_was_i`, `03 §7b`, D9).
+/// `None` = "nothing to resume yet". Reads the live `resume.min_dwell_secs` +
+/// `privacy.excluded_apps`; the heuristic itself is the pure `kernel::resume`.
+#[tauri::command]
+async fn where_was_i(state: State<'_, AppState>) -> Result<Option<ResumeContext>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    kernel::resume::where_was_i(store.as_ref(), &settings)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Creates a mark (`add_mark`, `03 §7b`, D8). Exactly one of `frame_id` / `capture_now`.
+/// A `capture_now` mark captures the current screen past the diff gate first. Returns the
+/// new mark id and refreshes the Deck's Intentions strip via `marks_changed`.
+#[tauri::command]
+async fn add_mark(
+    frame_id: Option<i64>,
+    capture_now: bool,
+    note: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<i64, String> {
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable (database not open)".to_string())?;
+    let mark_id = kernel
+        .add_mark(frame_id, capture_now, note)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("marks_changed", ());
+    Ok(mark_id)
+}
+
+/// All marks, unresolved first then newest-first within each group (`list_marks`,
+/// `03 §7`). The Intentions strip renders the unresolved head.
+#[tauri::command]
+async fn list_marks(state: State<'_, AppState>) -> Result<Vec<Mark>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store.list_marks().await.map_err(|e| e.to_string())
+}
+
+/// Resolves a mark — done or dismiss (resolve-with-no-action), the same operation
+/// (`resolve_mark`, `03 §7b`). Refreshes the strip via `marks_changed`.
+#[tauri::command]
+async fn resolve_mark(
+    mark_id: i64,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .resolve_mark(mark_id, now_ms())
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("marks_changed", ());
+    Ok(())
+}
+
+/// Attaches the optional one-line note to an existing mark after the fact (`set_mark_note`,
+/// `03 §7`) — the mark is inserted at hotkey-press time; the note arrives from the toast.
+#[tauri::command]
+async fn set_mark_note(
+    mark_id: i64,
+    note: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .set_mark_note(mark_id, &note)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("marks_changed", ());
+    Ok(())
 }
 
 /// Builds grounded Ask context before any answer stream starts. Full context hydration
@@ -767,10 +859,11 @@ async fn set_settings(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Re-run the shell registration check after every save. The overlay helper no-ops
-    // when the persisted chord is already active, but it retries a previously failed
-    // registration for the same saved chord after the user releases an OS/app conflict.
+    // Re-run the shell registration check after every save. Each helper no-ops when the
+    // persisted chord is already active, but retries a previously failed registration for
+    // the same saved chord after the user releases an OS/app conflict (D6).
     overlay::reregister_overlay_hotkey(&app, &settings.overlay_hotkey);
+    overlay::reregister_marks_hotkey(&app, &settings.marks_hotkey);
 
     // Hot-apply the UIA enable toggle: the composite OcrProvider reads this per frame, so
     // switching UIA text on/off takes effect immediately with no capture restart
@@ -867,14 +960,23 @@ pub fn run() {
 
             let (store, db_readiness) = open_store(&db_path);
             app.manage(overlay::OverlayState::default());
-            let overlay_hotkey = match &store {
+            // Register both global hotkeys (Flow overlay + mark-this-moment, 0.3.0 PR5/PR6)
+            // from the persisted chords; a failed registration surfaces as a loud Settings
+            // warning + toast (D6), never a silent no-op.
+            let (overlay_hotkey, marks_hotkey) = match &store {
                 Some(store) => {
-                    tauri::async_runtime::block_on(kernel::settings::load_settings(store.as_ref()))
-                        .overlay_hotkey
+                    let s = tauri::async_runtime::block_on(kernel::settings::load_settings(
+                        store.as_ref(),
+                    ));
+                    (s.overlay_hotkey, s.marks_hotkey)
                 }
-                None => Settings::default().overlay_hotkey,
+                None => {
+                    let d = Settings::default();
+                    (d.overlay_hotkey, d.marks_hotkey)
+                }
             };
             overlay::init_overlay_hotkey(app.handle(), &overlay_hotkey);
+            overlay::init_marks_hotkey(app.handle(), &marks_hotkey);
             // PR3 audit fix: backfill the attention filter_version once at startup. When the
             // version bumped since the last run, re-clean every sub-current frame's
             // content_text against the now-warm chrome catalog (`textfilter::reconcile`) so
@@ -1055,7 +1157,14 @@ pub fn run() {
             overlay::get_hotkey_status,
             overlay::hide_overlay,
             overlay::overlay_shown_ack,
-            overlay::open_moment
+            overlay::open_moment,
+            overlay::focus_overlay_for_note,
+            overlay::dismiss_mark_toast,
+            where_was_i,
+            add_mark,
+            list_marks,
+            resolve_mark,
+            set_mark_note
         ])
         .on_window_event(|window, event| {
             match event {
