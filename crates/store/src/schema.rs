@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 9;
+pub const LATEST_SCHEMA_VERSION: i32 = 10;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -41,6 +41,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (7, MIGRATION_V7),
     (8, MIGRATION_V8),
     (9, MIGRATION_V9),
+    (10, MIGRATION_V10),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -365,4 +366,24 @@ const MIGRATION_V9: &str = r#"
 DROP TABLE image_embedding_vectors;
 DROP TABLE image_embeddings;
 DELETE FROM jobs WHERE kind = 'embed_image';
+"#;
+
+/// v10 — 0.3.0 PR6: mark-this-moment (`03 §4` "0.3.0 migrations", `docs/0.3.0.md` PR6).
+/// One row per user-flagged moment, with an optional intention note. Plain additive DDL
+/// (no table rebuild): `marks.frame_id` CASCADEs with the frame like every per-frame
+/// child (`frame_text`, `text_spans`, `embeddings`, `jobs`), so a hard-deleted frame
+/// takes its marks with it; a retention-*degraded* frame keeps its row, so a mark
+/// survives image expiry — the mark keeps the text reconstruction reachable, no retention
+/// pinning (`03 §4`, D10). `idx_marks_open` serves `list_marks`' canonical order — the
+/// unresolved group first (a partial-style `resolved_at IS NULL` head sorts first because
+/// SQL NULLs sort low), newest-first within each group by `created_at DESC` (`03 §7`).
+const MIGRATION_V10: &str = r#"
+CREATE TABLE marks (
+  id          INTEGER PRIMARY KEY,
+  frame_id    INTEGER NOT NULL REFERENCES frames(id) ON DELETE CASCADE,
+  created_at  INTEGER NOT NULL,
+  note        TEXT,
+  resolved_at INTEGER
+);
+CREATE INDEX idx_marks_open ON marks(resolved_at, created_at DESC);
 "#;

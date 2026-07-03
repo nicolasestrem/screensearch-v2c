@@ -23,15 +23,17 @@ use std::sync::{Arc, Mutex, Once, RwLock};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use traits::{
-    AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameEnrichmentInput, FrameMeta,
-    InsightsSummary, Job, JobKind, JobStats, NewFrame, NewJob, OcrResult, Result, SearchHit,
-    SearchQuery, TextFilterContext, TimelineBucket, VisionAnalysis,
+    AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameContextRow,
+    FrameEnrichmentInput, FrameMeta, InsightsSummary, Job, JobKind, JobStats, Mark, NewFrame,
+    NewJob, OcrResult, Result, SearchHit, SearchQuery, TextFilterContext, TimelineBucket,
+    VisionAnalysis,
 };
 
 mod embeddings;
 mod frames;
 mod insights;
 mod jobs;
+mod marks;
 mod records;
 mod schema;
 mod search;
@@ -338,6 +340,26 @@ impl Store for SqliteStore {
     async fn delete_settings(&self, keys: &[&str]) -> Result<Vec<String>> {
         SqliteStore::delete_settings(self, keys).await
     }
+    async fn insert_mark(
+        &self,
+        frame_id: i64,
+        created_at: i64,
+        note: Option<String>,
+    ) -> Result<i64> {
+        SqliteStore::insert_mark(self, frame_id, created_at, note).await
+    }
+    async fn list_marks(&self) -> Result<Vec<Mark>> {
+        SqliteStore::list_marks(self).await
+    }
+    async fn resolve_mark(&self, mark_id: i64, resolved_at: i64) -> Result<()> {
+        SqliteStore::resolve_mark(self, mark_id, resolved_at).await
+    }
+    async fn set_mark_note(&self, mark_id: i64, note: &str) -> Result<()> {
+        SqliteStore::set_mark_note(self, mark_id, note).await
+    }
+    async fn recent_frame_contexts(&self, limit: u32) -> Result<Vec<FrameContextRow>> {
+        SqliteStore::recent_frame_contexts(self, limit).await
+    }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);
     }
@@ -414,8 +436,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 9,
-            "latest schema is v9 (0.3.0 PR4 removed the image-embedding lane)"
+            version, 10,
+            "latest schema is v10 (0.3.0 PR6 added the marks table)"
         );
 
         let frame_rows: i64 = conn
@@ -616,8 +638,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 9,
-            "latest schema is v9 (image-embedding lane removed)"
+            version, 10,
+            "latest schema is v10 (0.3.0 PR6 added the marks table)"
         );
 
         // No image-lane object survives — tables, trigger, or vec0 shadow tables.
@@ -674,6 +696,64 @@ mod migration_tests {
             "the text embedding lane must survive v9"
         );
         assert_eq!(fk_violation_count(&conn), 0, "no FK violations after v9");
+    }
+
+    /// v10 (0.3.0 PR6) adds the `marks` table (mark-this-moment; `03 §4`/`§13b.5`, D15).
+    /// Seeded at v9 with a frame, this proves the migration is additive and correctly
+    /// wired: the `marks` table + `idx_marks_open` index exist, a mark inserts and reads
+    /// back, `ON DELETE CASCADE` removes the mark when its frame is hard-deleted (the
+    /// per-frame-child convention), and FK integrity holds throughout.
+    #[test]
+    fn migration_v10_adds_marks_with_cascade() {
+        let mut conn = open_at_version(9);
+        conn.execute(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, capture_trigger)
+             VALUES (1, 100, 0, 10, 10, 'p', 'h', 'manual')",
+            [],
+        )
+        .expect("insert frame");
+
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+        assert_eq!(version, 10, "latest schema is v10 (marks table added)");
+
+        // The marks table and its open-marks index exist.
+        let objs: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE (type = 'table' AND name = 'marks')
+                    OR (type = 'index' AND name = 'idx_marks_open')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read sqlite_master");
+        assert_eq!(objs, 2, "v10 creates the marks table + idx_marks_open");
+
+        // A mark inserts and reads back.
+        conn.execute(
+            "INSERT INTO marks (id, frame_id, created_at, note) VALUES (1, 1, 200, 'ship it')",
+            [],
+        )
+        .expect("insert mark");
+        let (fid, note): (i64, String) = conn
+            .query_row("SELECT frame_id, note FROM marks WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("read mark");
+        assert_eq!((fid, note.as_str()), (1, "ship it"));
+
+        // ON DELETE CASCADE: deleting the frame removes its mark.
+        assert_eq!(fk_violation_count(&conn), 0, "no FK violations after v10");
+        conn.execute("DELETE FROM frames WHERE id = 1", [])
+            .expect("delete frame");
+        let marks_after: i64 = conn
+            .query_row("SELECT count(*) FROM marks", [], |r| r.get(0))
+            .expect("count marks after frame delete");
+        assert_eq!(marks_after, 0, "a mark must CASCADE with its frame (D10)");
     }
 
     /// Acceptance (`03 §13b.3`): a fresh DB (V1..V9 in one bootstrap) and a v8 DB upgraded

@@ -83,6 +83,9 @@ async fn round_trips_non_default_values() {
         capture_uia_suppress_during_input_ms: 750,
         overlay_hotkey: "Ctrl+Shift+F".to_string(),
         overlay_max_results: 12,
+        // 0.3.0 flow recall — away from defaults, within the sanitize clamps.
+        resume_min_dwell_secs: 300,
+        marks_hotkey: "Ctrl+Shift+M".to_string(),
         // Enrichment throttle — every field away from its default, within the sanitize
         // clamps (each exit % kept below its enter %), so the round-trip exercises the
         // new load/save encodings.

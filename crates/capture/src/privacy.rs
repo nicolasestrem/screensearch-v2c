@@ -1,19 +1,14 @@
 //! Privacy gate (`03 §8`): skip capture when the foreground app is excluded, and
-//! pause when the workstation is locked. The matcher is pure (unit-tested); the
-//! foreground/lock probes are thin Win32 calls (the capture crate is the
-//! Windows-API crate, so these live here rather than leaking into the kernel).
+//! pause when the workstation is locked. The foreground/lock probes are thin Win32
+//! calls (the capture crate is the Windows-API crate, so these live here rather than
+//! leaking into the kernel).
+//!
+//! The pure excluded-apps matcher moved to [`traits::is_excluded`] so the kernel can
+//! reuse the identical semantics for where-was-i candidacy (`03 §7b`, D9) without
+//! depending on `capture` (`03 §2`); it is re-exported here so this crate's call
+//! sites and tests are unchanged.
 
-/// Case-insensitive substring match of any `excluded` entry against the foreground
-/// app/process name or window title (`privacy.excluded_apps`). Empty entries are
-/// ignored so a stray `""` can't match everything.
-pub fn is_excluded(app: Option<&str>, title: Option<&str>, excluded: &[String]) -> bool {
-    let app = app.unwrap_or_default().to_ascii_lowercase();
-    let title = title.unwrap_or_default().to_ascii_lowercase();
-    excluded.iter().any(|e| {
-        let needle = e.trim().to_ascii_lowercase();
-        !needle.is_empty() && (app.contains(&needle) || title.contains(&needle))
-    })
-}
+pub use traits::is_excluded;
 
 /// Whether a foreground-window process id belongs to this process. PID-based matching
 /// covers every ScreenSearch-owned window, including the hidden Flow overlay, without
@@ -177,45 +172,9 @@ pub use win::{
 
 #[cfg(test)]
 mod tests {
-    use super::{is_excluded, is_own_window_pid};
-
-    fn excluded() -> Vec<String> {
-        vec![
-            "1Password".to_string(),
-            "KeePass".to_string(),
-            "Bitwarden".to_string(),
-        ]
-    }
-
-    #[test]
-    fn matches_process_name_case_insensitively() {
-        assert!(is_excluded(Some("1password"), None, &excluded()));
-        assert!(is_excluded(Some("KeePassXC"), None, &excluded()));
-    }
-
-    #[test]
-    fn matches_window_title() {
-        assert!(is_excluded(
-            Some("explorer"),
-            Some("Bitwarden — Vault"),
-            &excluded()
-        ));
-    }
-
-    #[test]
-    fn allows_unrelated_apps() {
-        assert!(!is_excluded(Some("firefox"), Some("Inbox"), &excluded()));
-        assert!(!is_excluded(None, None, &excluded()));
-    }
-
-    #[test]
-    fn empty_excluded_entry_never_matches() {
-        assert!(!is_excluded(
-            Some("anything"),
-            Some("at all"),
-            &["".to_string(), "  ".to_string()]
-        ));
-    }
+    // `is_excluded` moved to `traits::privacy` (its tests moved with it); this module
+    // keeps the Win32-adjacent `is_own_window_pid` matcher tests.
+    use super::is_own_window_pid;
 
     #[test]
     fn own_window_pid_matches_any_nonzero_own_process_window() {

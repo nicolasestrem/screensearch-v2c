@@ -306,6 +306,9 @@ impl CaptureSource for WgcCapture {
                     target_rect,
                     foreground_hwnd: fg_hwnd,
                     trigger,
+                    // Stage 4 (capture_now) sets this true for the demanded monitor's
+                    // frame; the normal timer/event path never demands.
+                    demanded: false,
                 });
             }
             // Loop: drain the queue, or sleep and try again if nothing changed.

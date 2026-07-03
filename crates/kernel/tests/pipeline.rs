@@ -114,6 +114,7 @@ fn frame(captured_at: i64) -> CapturedFrame {
         target_rect: None,
         foreground_hwnd: None,
         trigger: traits::CaptureTrigger::Timer,
+        demanded: false,
     }
 }
 

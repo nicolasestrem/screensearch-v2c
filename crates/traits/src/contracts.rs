@@ -11,11 +11,11 @@ use image::RgbaImage;
 use tokio::sync::mpsc::Sender;
 
 use crate::domain::{
-    AnswerOpts, CapturedFrame, ChunkSource, Embedding, FrameEnrichmentInput, NewFrame, OcrResult,
-    RetrievedChunk, TextFilterContext, VisionAnalysis,
+    AnswerOpts, CapturedFrame, ChunkSource, Embedding, FrameContextRow, FrameEnrichmentInput,
+    NewFrame, OcrResult, RetrievedChunk, TextFilterContext, VisionAnalysis,
 };
 use crate::ipc::{
-    AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, PressureSample, SearchHit,
+    AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, Mark, PressureSample, SearchHit,
     SearchQuery, TimelineBucket,
 };
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
@@ -293,6 +293,50 @@ pub trait Store: Send + Sync {
     /// version retired (e.g. the 0.3.0 PR2 event triggers), so a config persisted with a
     /// removed key still loads and the stale row does not linger. Absent keys are no-ops.
     async fn delete_settings(&self, keys: &[&str]) -> Result<Vec<String>>;
+
+    // 0.3.0 marks + flow recall (`03 §4`/`§7b`, PR6)
+
+    /// Inserts a mark on `frame_id` (mark-this-moment; `03 §4`/`§7b`). Returns the new
+    /// `mark_id`. `created_at` is passed by the caller (unix epoch ms, the kernel clock,
+    /// like `claim_jobs`). The default errors — an id can't be honestly faked — so a
+    /// store that opts out of marks fails loudly rather than returning a bogus 0.
+    async fn insert_mark(
+        &self,
+        _frame_id: i64,
+        _created_at: i64,
+        _note: Option<String>,
+    ) -> Result<i64> {
+        Err(anyhow::anyhow!("marks not supported by this store"))
+    }
+
+    /// All marks, **unresolved first then newest-first within each group** (`03 §7`;
+    /// the Intentions strip renders the unresolved head). Carries joined frame fields
+    /// for display (no N+1). Default returns empty for stores without marks.
+    async fn list_marks(&self) -> Result<Vec<Mark>> {
+        Ok(Vec::new())
+    }
+
+    /// Marks a mark resolved at `resolved_at` (resolve = done, dismiss = resolve-with-
+    /// no-action; same operation — `03 §7b`). Idempotent: re-resolving an already-
+    /// resolved mark is a no-op (`Ok`); an unknown `mark_id` errors. Default is a no-op.
+    async fn resolve_mark(&self, _mark_id: i64, _resolved_at: i64) -> Result<()> {
+        Ok(())
+    }
+
+    /// Attaches/overwrites the optional one-line note on an existing mark (`set_mark_note`,
+    /// `03 §7`). The mark row is inserted at hotkey-press time; the note (if any) arrives
+    /// seconds later from the confirmation toast. An unknown `mark_id` errors. Default no-op.
+    async fn set_mark_note(&self, _mark_id: i64, _note: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// The most recent `limit` frames' context rows (newest-first by `captured_at`,
+    /// ties broken by `id` descending), for the where-was-i heuristic (`03 §7b`, D9).
+    /// The pure `kernel::resume` function does all filtering/exclusion, so this is a
+    /// plain capped window. Default returns empty for stores without frame browsing.
+    async fn recent_frame_contexts(&self, _limit: u32) -> Result<Vec<FrameContextRow>> {
+        Ok(Vec::new())
+    }
 
     /// Injects (or replaces) the query-embedding provider that lights up the vector
     /// arm of [`Self::hybrid_search`]. Set once the model has finished loading off
