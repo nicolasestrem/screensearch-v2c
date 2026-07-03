@@ -190,6 +190,8 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_suppress_during_input_ms,
         )
         .await,
+        overlay_hotkey: json(store, "overlay.hotkey", d.overlay_hotkey).await,
+        overlay_max_results: num(store, "overlay.max_results", d.overlay_max_results).await,
         throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
         throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
             .await,
@@ -450,6 +452,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.capture_uia_suppress_during_input_ms.to_string(),
         ),
         (
+            "overlay.hotkey".into(),
+            serde_json::to_string(&s.overlay_hotkey)?,
+        ),
+        (
+            "overlay.max_results".into(),
+            s.overlay_max_results.to_string(),
+        ),
+        (
             "throttle.enabled".into(),
             bool_str(s.throttle_enabled).into(),
         ),
@@ -567,6 +577,12 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // forever — capture still samples via OCR meanwhile). Threshold, not hardcoded.
     s.capture_uia_suppress_during_input_ms =
         clamp_u32(s.capture_uia_suppress_during_input_ms, 0, 10_000);
+    let default_overlay_hotkey = Settings::default().overlay_hotkey;
+    s.overlay_hotkey = match s.overlay_hotkey.trim() {
+        "" => default_overlay_hotkey,
+        hotkey => hotkey.to_string(),
+    };
+    s.overlay_max_results = clamp_u32(s.overlay_max_results, 1, 50);
     // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Thresholds are
     // settings, never hardcoded. Each `*_exit_pct` is clamped strictly below its
     // `*_enter_pct` so the hysteresis invariant holds even against hand-edited DB values

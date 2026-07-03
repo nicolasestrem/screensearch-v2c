@@ -13,11 +13,19 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 
 import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState, Select } from "../components/primitives";
-import { ModelPanel, ModelTierPicker, RetentionControl, ScheduleControl } from "../components/domain";
+import {
+  DEFAULT_OVERLAY_HOTKEY,
+  HotkeyField,
+  ModelPanel,
+  ModelTierPicker,
+  RetentionControl,
+  ScheduleControl,
+} from "../components/domain";
 import {
   useMonitors,
   useReadiness,
   useSettings,
+  useHotkeyStatus,
   useSidecarDevices,
   useTextFilterStats,
   useThrottleStatus,
@@ -117,6 +125,8 @@ function sanitizeSettings(s: Settings): Settings {
     reports_daily_top_k: clampInt(s.reports_daily_top_k, 1, 1_000),
     reports_weekly_top_k: clampInt(s.reports_weekly_top_k, 1, 2_000),
     reports_map_reduce_min_frames: clampInt(s.reports_map_reduce_min_frames, 1, 1_000),
+    overlay_hotkey: s.overlay_hotkey.trim() || DEFAULT_OVERLAY_HOTKEY,
+    overlay_max_results: clampInt(s.overlay_max_results, 1, 50),
     // 0.2.1 enrichment throttle — mirror the backend clamps (03 §8); each exit % is kept
     // strictly below its enter % so the hysteresis band is always valid.
     throttle_cpu_enter_pct: clampInt(s.throttle_cpu_enter_pct, 1, 100),
@@ -249,6 +259,7 @@ export function Component() {
     readiness.data?.sidecar.status === "ready" || readiness.data?.sidecar.status === "disabled";
   const sidecarDevices = useSidecarDevices(sidecarAvailable);
   const throttleStatus = useThrottleStatus();
+  const hotkeyStatus = useHotkeyStatus();
   // Default true while unknown, so GPU threshold fields aren't annotated as dead until the
   // probe confirms the GPU genuinely isn't monitored.
   const gpuMonitored = throttleStatus.data?.gpu_monitored ?? true;
@@ -378,6 +389,11 @@ export function Component() {
   };
   const detectedSidecarDevices = sidecarDevices.data ?? [];
   const hasDetectedSidecarDevices = detectedSidecarDevices.length > 0;
+  const overlayHotkeyStatus = (hotkeyStatus.data ?? []).find((h) => h.id === "overlay.hotkey");
+  const overlayHotkeyWarning =
+    overlayHotkeyStatus && !overlayHotkeyStatus.registered
+      ? `${overlayHotkeyStatus.error ?? "Windows did not register this shortcut."} Try a different combination.`
+      : null;
 
   // Partial state — surface that models may still be starting: while the readiness
   // probe is in flight, or either lane is still "unknown" (pre-init) / "initializing".
@@ -462,6 +478,27 @@ export function Component() {
               })}
             </div>
           )}
+        </div>
+      </Panel>
+
+      <Panel group title="Hotkeys">
+        <div className="flex flex-col gap-4">
+          <HotkeyField
+            label="Flow overlay"
+            value={draft.overlay_hotkey}
+            onChange={(v) => set("overlay_hotkey", v)}
+            error={overlayHotkeyWarning}
+            hint={`Default is Ctrl+Alt+Space. AltGr keyboards may report AltGr as Ctrl+Alt. ${APPLY_NOW}`}
+          />
+          <Field
+            label="Overlay results"
+            type="number"
+            min={1}
+            max={50}
+            value={draft.overlay_max_results}
+            onChange={intHandler("overlay_max_results")}
+            hint={`Top results shown in the Flow overlay. ${APPLY_NOW}`}
+          />
         </div>
       </Panel>
 

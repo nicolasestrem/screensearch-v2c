@@ -52,6 +52,7 @@ export function useSetSettings() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.settings });
+      qc.invalidateQueries({ queryKey: queryKeys.hotkeyStatus });
     },
   });
 }

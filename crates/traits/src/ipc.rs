@@ -578,6 +578,12 @@ pub struct Settings {
     /// when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
     /// the provider at startup — applied on app restart.
     pub capture_uia_suppress_during_input_ms: u32,
+    /// Global Flow overlay summon hotkey (`overlay.hotkey`, 0.3.0 PR5). The shell
+    /// validates and registers the chord so a bad/colliding value becomes the D6
+    /// Settings warning instead of being silently rewritten here.
+    pub overlay_hotkey: String,
+    /// Top-N results in the Flow overlay (`overlay.max_results`, 0.3.0 PR5).
+    pub overlay_max_results: u32,
     /// Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
     /// former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
     /// never runs and enrichment drains at full configured concurrency, exactly as
@@ -706,6 +712,11 @@ impl Default for Settings {
             // scroll keeps UIA off the target app, short enough that a paused user's next
             // timer tick resumes UIA promptly. 0 disables. (`07` #71 residual-gap fix.)
             capture_uia_suppress_during_input_ms: 500,
+            // 0.3.0 Flow overlay (docs/0.3.0.md PR5): a configurable non-OS-reserved
+            // summon chord plus the top-N result cap. Chord validity/conflicts are
+            // shell concerns so registration failure can surface loudly in Settings.
+            overlay_hotkey: "Ctrl+Alt+Space".to_string(),
+            overlay_max_results: 8,
             // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
             // master OFF: flipping it on backs enrichment off under sustained load. Enter
             // above 85% CPU / 90% GPU held 5 s; exit below 65% / 70% held 8 s (exit < enter
@@ -917,6 +928,27 @@ pub struct Toast {
     pub message: String,
 }
 
+/// Registration state for a global hotkey managed by the shell (`overlay.hotkey`,
+/// 0.3.0 PR5). `registered=false` is a first-class UI state so conflicts surface
+/// loudly in Settings instead of silently disabling the shortcut (D6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct HotkeyStatus {
+    pub id: String,
+    pub chord: String,
+    pub registered: bool,
+    pub error: Option<String>,
+}
+
+/// Event payload telling the main window to open a captured Moment after the overlay
+/// accepts a result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct OpenMoment {
+    #[ts(type = "number")]
+    pub frame_id: i64,
+}
+
 /// A point-in-time system-pressure reading from the `sysmon` probe (`03 §8`). The
 /// enrichment throttle (`03 §5`) consumes this to decide whether to back enrichment off
 /// under sustained load. `gpu_pct` is `None` and `gpu_monitored` is `false` when Windows
@@ -979,6 +1011,7 @@ mod ts_number_guard {
             ("JobStats", JobStats::inline()),
             ("ReportRequest", ReportRequest::inline()),
             ("ReportResponse", ReportResponse::inline()),
+            ("OpenMoment", OpenMoment::inline()),
             ("PressureSample", PressureSample::inline()),
             ("ThrottleStatus", ThrottleStatus::inline()),
         ];

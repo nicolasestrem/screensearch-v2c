@@ -28,6 +28,8 @@ mod privacy;
 mod trigger;
 mod wgc;
 
+#[cfg(windows)]
+pub use privacy::foreground_window_rect;
 pub use idle::user_idle_ms;
 use wgc::CaptureRequest;
 
@@ -253,11 +255,10 @@ impl CaptureSource for WgcCapture {
             if self.config.pause_on_lock && privacy::is_workstation_locked() {
                 continue;
             }
-            // Never capture our own window: it only contains app chrome (sidebar nav,
-            // command palette) and a results pane that echoes other captures' chrome —
-            // the dominant source of the PR3 'Deck'/'Recall' self-capture leak
-            // (docs/AUDIT_0.2.0_PR3_2026-06-26.md). PID-based, so it can't mismatch a
-            // third-party window merely titled "screensearch".
+            // Never capture our own windows: the main UI and Flow overlay only contain app
+            // chrome and result rows that echo other captures. PID-based matching covers
+            // every app-owned window, while the overlay's contentProtected window flag
+            // closes the unfocused-visible capture race (D7).
             if privacy::is_own_foreground_window() {
                 continue;
             }

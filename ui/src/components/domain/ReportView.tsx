@@ -13,6 +13,7 @@ import type { ReportResponse } from "../../bindings/ReportResponse";
 
 export interface ReportViewProps {
   report: ReportResponse;
+  onOpenFrame?: (frameId: number) => void;
 }
 
 /** How many citation chips to render before collapsing the rest into a count. */
@@ -40,7 +41,7 @@ async function copyMarkdown(markdown: string) {
   }
 }
 
-export function ReportView({ report }: ReportViewProps) {
+export function ReportView({ report, onOpenFrame }: ReportViewProps) {
   const cited = report.cited_frame_ids;
   const shown = cited.slice(0, CITATION_CAP);
   const overflow = cited.length - shown.length;
@@ -82,7 +83,7 @@ export function ReportView({ report }: ReportViewProps) {
           <span className="eyebrow">Source frames</span>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {shown.map((id) => (
-              <CitationTile key={id} frameId={id} />
+              <CitationTile key={id} frameId={id} onOpenFrame={onOpenFrame} />
             ))}
             {overflow > 0 && (
               <span className="flex shrink-0 items-center px-2 text-caption text-ink-muted">

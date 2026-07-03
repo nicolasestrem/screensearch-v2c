@@ -81,6 +81,8 @@ async fn round_trips_non_default_values() {
         capture_uia_max_nodes: 2000,
         capture_uia_max_textpattern_calls: 128,
         capture_uia_suppress_during_input_ms: 750,
+        overlay_hotkey: "Ctrl+Shift+F".to_string(),
+        overlay_max_results: 12,
         // Enrichment throttle — every field away from its default, within the sanitize
         // clamps (each exit % kept below its enter %), so the round-trip exercises the
         // new load/save encodings.
@@ -158,6 +160,14 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
         .set_setting("capture.uia_suppress_during_input_ms", "99999") // above ceiling 10_000
         .await
         .unwrap();
+    store
+        .set_setting("overlay.hotkey", "\"   \"")
+        .await
+        .unwrap();
+    store
+        .set_setting("overlay.max_results", "999")
+        .await
+        .unwrap();
 
     let loaded = load_settings(dyn_store).await;
 
@@ -165,6 +175,8 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
     assert_eq!(loaded.capture_uia_max_nodes, 100);
     assert_eq!(loaded.capture_uia_max_textpattern_calls, 1);
     assert_eq!(loaded.capture_uia_suppress_during_input_ms, 10_000);
+    assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
+    assert_eq!(loaded.overlay_max_results, 50);
     assert_eq!(loaded.capture_diff_threshold, 0.0);
     assert_eq!(loaded.storage_jpeg_quality, 1);
     assert_eq!(loaded.storage_max_width, 7680);
@@ -211,6 +223,8 @@ async fn save_settings_persists_sanitized_numeric_values() {
         capture_event_debounce_ms: 1,           // below floor 100
         capture_event_min_interval_ms: 999_999, // above ceiling 60_000
         capture_event_fallback_interval_ms: 1,  // below floor 1_000
+        overlay_hotkey: "  Ctrl+Shift+F  ".to_string(),
+        overlay_max_results: 0,
         ..Settings::default()
     };
 
@@ -233,6 +247,8 @@ async fn save_settings_persists_sanitized_numeric_values() {
     assert_eq!(loaded.capture_event_debounce_ms, 100);
     assert_eq!(loaded.capture_event_min_interval_ms, 60_000);
     assert_eq!(loaded.capture_event_fallback_interval_ms, 1_000);
+    assert_eq!(loaded.overlay_hotkey, "Ctrl+Shift+F");
+    assert_eq!(loaded.overlay_max_results, 1);
 
     assert_eq!(
         store
@@ -241,6 +257,31 @@ async fn save_settings_persists_sanitized_numeric_values() {
             .unwrap()
             .as_deref(),
         Some("0")
+    );
+}
+
+#[tokio::test]
+async fn overlay_hotkey_empty_string_resets_to_default() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    let settings = Settings {
+        overlay_hotkey: "   ".to_string(),
+        ..Settings::default()
+    };
+
+    save_settings(dyn_store, &settings)
+        .await
+        .expect("save settings");
+    let loaded = load_settings(dyn_store).await;
+
+    assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
+    assert_eq!(
+        store
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"Ctrl+Alt+Space\"")
     );
 }
 

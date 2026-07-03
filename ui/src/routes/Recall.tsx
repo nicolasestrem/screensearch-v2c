@@ -6,7 +6,8 @@
 // search → invite / loading / no-match / error / results; ask → invite(+cards) /
 // streaming / done / error; reports → invite / generating / done / error. A banner
 // flags degraded modes. Never a zero-result dead end.
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 
 import { Button, Chip, EmptyState, ErrorState, Skeleton } from "../components/primitives";
@@ -45,6 +46,7 @@ const MODES: { value: Mode; label: string; icon: ReactNode }[] = [
 ];
 
 export function Component() {
+  const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>("search");
   const [text, setText] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -54,6 +56,9 @@ export function Component() {
   const settings = useSettings();
   const ask = useAsk();
   const report = useReport();
+  const openFrame = useCallback((frameId: number) => {
+    navigate(`/timeline/${frameId}`);
+  }, [navigate]);
 
   // Content-text (default) vs raw/app-chrome search (03 §3b). `null` follows the
   // user's configured default (`text.include_chrome_default`) until they toggle it.
@@ -241,6 +246,7 @@ export function Component() {
               citations={ask.citations}
               error={ask.error}
               onRetry={() => askQuery(text)}
+              onOpenFrame={openFrame}
             />
           )
         ) : (
@@ -249,6 +255,7 @@ export function Component() {
             progress={report.progress}
             result={report.result}
             error={report.error}
+            onOpenFrame={openFrame}
           />
         )}
       </div>
@@ -261,9 +268,10 @@ interface ReportBodyProps {
   progress: ReturnType<typeof useReport>["progress"];
   result: ReturnType<typeof useReport>["result"];
   error: string | null;
+  onOpenFrame: (frameId: number) => void;
 }
 
-function ReportBody({ phase, progress, result, error }: ReportBodyProps) {
+function ReportBody({ phase, progress, result, error, onOpenFrame }: ReportBodyProps) {
   if (phase === "idle") {
     return (
       <EmptyState
@@ -296,7 +304,7 @@ function ReportBody({ phase, progress, result, error }: ReportBodyProps) {
     );
   }
   // done
-  return result ? <ReportView report={result} /> : null;
+  return result ? <ReportView report={result} onOpenFrame={onOpenFrame} /> : null;
 }
 
 interface SearchBodyProps {

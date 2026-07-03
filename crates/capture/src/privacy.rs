@@ -15,6 +15,13 @@ pub fn is_excluded(app: Option<&str>, title: Option<&str>, excluded: &[String]) 
     })
 }
 
+/// Whether a foreground-window process id belongs to this process. PID-based matching
+/// covers every ScreenSearch-owned window, including the hidden Flow overlay, without
+/// relying on process/window-name heuristics.
+pub fn is_own_window_pid(fg_pid: u32, own_pid: u32) -> bool {
+    fg_pid != 0 && own_pid != 0 && fg_pid == own_pid
+}
+
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
@@ -124,9 +131,10 @@ mod win {
             .map(|s| s.to_string_lossy().into_owned())
     }
 
-    /// Whether the current foreground window belongs to **our own** process (the
-    /// ScreenSearch window). Capturing our own UI only indexes app chrome — sidebar
-    /// nav, command palette, and a results pane that echoes other captures' chrome —
+    /// Whether the current foreground window belongs to **our own** process (any
+    /// ScreenSearch window, including the Flow overlay). Capturing our own UI only
+    /// indexes app chrome — sidebar nav, command palette, overlay rows, and a results
+    /// pane that echoes other captures' chrome —
     /// which was the dominant source of the PR3 `Deck`/`Recall` self-capture leak
     /// (`docs/AUDIT_0.2.0_PR3_2026-06-26.md`). PID-based so it is exact: it never
     /// mismatches a third-party window that merely has "screensearch" in its title
@@ -140,7 +148,7 @@ mod win {
             }
             let mut pid = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            pid != 0 && pid == GetCurrentProcessId()
+            super::is_own_window_pid(pid, GetCurrentProcessId())
         }
     }
 
@@ -169,7 +177,7 @@ pub use win::{
 
 #[cfg(test)]
 mod tests {
-    use super::is_excluded;
+    use super::{is_excluded, is_own_window_pid};
 
     fn excluded() -> Vec<String> {
         vec![
@@ -207,5 +215,20 @@ mod tests {
             Some("at all"),
             &["".to_string(), "  ".to_string()]
         ));
+    }
+
+    #[test]
+    fn own_window_pid_matches_any_nonzero_own_process_window() {
+        assert!(is_own_window_pid(42, 42));
+    }
+
+    #[test]
+    fn own_window_pid_rejects_foreign_process() {
+        assert!(!is_own_window_pid(42, 7));
+    }
+
+    #[test]
+    fn own_window_pid_rejects_unknown_foreground_pid() {
+        assert!(!is_own_window_pid(0, 42));
     }
 }

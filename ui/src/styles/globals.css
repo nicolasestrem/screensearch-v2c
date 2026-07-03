@@ -24,6 +24,10 @@
     text-rendering: optimizeLegibility;
   }
 
+  body[data-window="overlay"] {
+    background-color: transparent;
+  }
+
   /* Tabular, monospaced data everywhere it appears (timestamps, counts). */
   .font-mono {
     font-variant-numeric: tabular-nums;

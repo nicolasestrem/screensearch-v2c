@@ -3,7 +3,7 @@
 // <Outlet>, the CommandPalette overlay, and the toast viewport. Mounts the single
 // live-event subscription once, and the global ⌘K palette shortcut.
 import { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 
 import { StatusRail } from "./StatusRail";
 import { NavRail } from "./NavRail";
@@ -12,10 +12,12 @@ import { CommandPalette } from "./CommandPalette";
 import { DevStateBadge } from "./DevStateBadge";
 import { ToastViewport } from "../primitives";
 import { useLiveEvents } from "../../lib/ipc/useLiveEvents";
+import { listenTo } from "../../lib/ipc/events";
 import { useUiStore } from "../../state/uiStore";
 
 export function AppShell() {
   useLiveEvents();
+  const navigate = useNavigate();
   const togglePalette = useUiStore((s) => s.togglePalette);
 
   useEffect(() => {
@@ -28,6 +30,25 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePalette]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    listenTo("open_moment", (event) => {
+      navigate(`/timeline/${event.frame_id}`);
+    })
+      .then((u) => {
+        if (active) unlisten = u;
+        else u();
+      })
+      .catch(() => {
+        /* no Tauri runtime in browser dev */
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [navigate]);
 
   return (
     <div className="flex flex-col h-full">

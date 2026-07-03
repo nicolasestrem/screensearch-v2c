@@ -23,9 +23,19 @@ export interface AnswerStreamProps {
   error: string | null;
   /** Re-run the last question (shown on error). */
   onRetry?: () => void;
+  /** Router-free opener for the Flow overlay. Defaults to links in the main app. */
+  onOpenFrame?: (frameId: number) => void;
 }
 
-export function AnswerStream({ phase, thinking, answer, citations, error, onRetry }: AnswerStreamProps) {
+export function AnswerStream({
+  phase,
+  thinking,
+  answer,
+  citations,
+  error,
+  onRetry,
+  onOpenFrame,
+}: AnswerStreamProps) {
   const streaming = phase === "streaming";
 
   // The thinking trace is a *controlled* <details>: expanded while a new answer
@@ -127,7 +137,7 @@ export function AnswerStream({ phase, thinking, answer, citations, error, onRetr
           <span className="eyebrow">Frames checked</span>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {citations.map((id) => (
-              <CitationTile key={id} frameId={id} />
+              <CitationTile key={id} frameId={id} onOpenFrame={onOpenFrame} />
             ))}
           </div>
         </div>
