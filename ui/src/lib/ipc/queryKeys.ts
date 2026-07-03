@@ -13,6 +13,7 @@ export const queryKeys = {
   sidecarStatus: ["sidecarStatus"] as const,
   modelDownload: ["modelDownload"] as const,
   throttleStatus: ["throttleStatus"] as const,
+  hotkeyStatus: ["hotkeyStatus"] as const,
   settings: ["settings"] as const,
   textFilterStats: ["textFilterStats"] as const,
   // `*Prefix` keys match every variant of a family for bulk invalidation (e.g.

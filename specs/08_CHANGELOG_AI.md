@@ -17,6 +17,81 @@
 
 ---
 
+## 2026-07-03 — 0.3.0 PR5: Flow overlay (`feat/pr5-flow-overlay`)
+- **Change:** Added the PR5 Flow overlay shell, IPC, UI, settings surface, and capture-self-exclusion
+  tests.
+  - `src-tauri`: added a hidden pre-created `overlay` window (`overlay.html`) with `contentProtected`,
+    `alwaysOnTop`, no decorations, and no taskbar entry; added `tauri-plugin-global-shortcut`; added
+    `overlay.rs` for hotkey registration/status, conflict toasts, show/hide/toggle, foreground-monitor
+    placement, `overlay_shown`/`overlay_hidden`, and `open_moment` routing to the main window.
+  - `crates/capture`: factored the own-process foreground predicate so the existing self-exclude gate
+    explicitly covers the overlay window as well as the main app window.
+  - `crates/traits` / `kernel`: added `overlay.hotkey`, `overlay.max_results`, `HotkeyStatus`, and
+    `OpenMoment`; settings load/save sanitizes the hotkey and clamps top-N results to `1..=50`.
+  - `ui`: added the separate Vite overlay entry, router-free provider shell, Search/Ask overlay UI,
+    keyboard navigation (`Esc`, `Tab`, arrows, `Enter`, `?` Ask prefix), lazy Ask streaming, reusable
+    highlighted snippets/citation open callbacks, Settings hotkey recorder, conflict warning, and result
+    count control.
+  - Docs: updated README, `docs/ARCHITECTURE.md`, `docs/TESTING.md`, `CHANGELOG.md`, `03`, `05`, `07`,
+    and this log.
+- **Why:** `docs/0.3.0.md` PR5 + `03 §7b`/`§8`/`§13b.4`, D6/D7 — instant recall needs a summonable
+  overlay that does not become part of the user's captured history; hotkey conflicts must be visible,
+  not silent.
+- **Verification:** targeted checkpoint verification passed before the implementation commit:
+
+```text
+> screensearch-ui@0.2.2 typecheck
+> tsc --noEmit
+```
+
+```text
+> screensearch-ui@0.2.2 lint
+> eslint .
+```
+
+```text
+> screensearch-ui@0.2.2 build
+> tsc --noEmit && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 418 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html ... 0.71 kB gzip 0.34
+dist/overlay.html ... 0.99 kB gzip 0.42
+...
+✓ built in 1.55s
+```
+
+```text
+running 1 test
+test overlay_window_is_precreated_hidden_and_capture_protected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+```text
+running 7 tests
+test privacy::tests::empty_excluded_entry_never_matches ... ok
+test privacy::tests::own_window_pid_matches_any_nonzero_own_process_window ... ok
+test privacy::tests::own_window_pid_rejects_unknown_foreground_pid ... ok
+test privacy::tests::matches_process_name_case_insensitively ... ok
+test privacy::tests::allows_unrelated_apps ... ok
+test privacy::tests::own_window_pid_rejects_foreign_process ... ok
+test privacy::tests::matches_window_title ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+```
+
+```text
+running 55 tests
+...
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Full CI-order verification is run after the docs pass and recorded in the final delivery notes.
+
 ## 2026-07-03 — 0.3.0 PR4: image-embedding lane removal (`feat/pr4-image-lane-removal`)
 - **Change:** Removed the dark-launched, flag-off **nomic-embed-vision image-embedding lane**, with a
   forward-only **schema v8 → v9** migration (D5/D15).

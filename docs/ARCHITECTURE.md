@@ -1,9 +1,10 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together **as of 2026-06-27** — reflecting the 0.2.x arc
-through the PR3/PR7 fixes (v0.1.0 plus the 0.2.0 attention-first / Recall work and the PR3/PR7
-audit follow-ups) (capture -> OCR -> content-text store -> embeddings -> hybrid search ->
-**inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI). This describes the
+How ScreenSearch V2c is actually put together **as of 2026-07-03** — reflecting the active 0.3.0
+arc through PR5 (surface reduction plus the Flow overlay), on top of the shipped 0.2.x
+attention-first / Recall work (capture -> OCR/UIA text -> content-text store -> text embeddings ->
+hybrid search -> **inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI
+and Flow overlay). This describes the
 **implemented** system and how to navigate the code; the design intent and the *why* live in
 [`specs/`](../specs) (`03_MASTER_PRODUCTION_SPEC.md` is authoritative for schema/traits/protocols).
 Where they ever disagree, the specs win — open an issue.
@@ -13,17 +14,21 @@ Where they ever disagree, the specs win — open an issue.
   tiered runtime-downloaded models), and **P5 Command Deck UI** (Deck, Recall, Timeline, Moment,
   Insights, Settings), plus P5 hardening for bounded IPC, range-aware navigation, retention,
   storage telemetry, typed operational events, cancellable ask streams, adaptive charts, monitor
-  enumeration, and advanced sidecar device selection.
+  enumeration, advanced sidecar device selection, and the 0.3.0 **Flow overlay** (a protected,
+  global-hotkey second Tauri window for Search/Ask).
 - Implemented for 0.2.0: `frame_text` / `text_spans` / raw-vs-content retrieval, PR3's
   attention-first classifier plus the later self-capture/backfill audit fix, the Recall
   Search/Ask/Reports UI, and Calendar-Grid Coverage Map-Reduce reports. PR7 manual audit
   evidence is local-only under ignored `docs/AUDIT*.md` / `.playwright-mcp/`; tracked summaries
   live in the build-loop docs and changelog.
-- Implemented for 0.2.1: opt-in, default-off **event-driven capture** (foreground / clipboard /
-  idle / typing-pause / click / scroll-stop triggers over a debounce/rate-ceiling/idle-edge state
-  machine + a dedicated Win32 message-pump thread), with the per-frame `CaptureTrigger` persisted
-  (schema v6). Timer capture is unchanged when event mode is off.
-- Still open: code signing and some 0.2.x follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
+- Implemented for 0.2.1, then trimmed in 0.3.0 PR2: opt-in, default-off **event-driven capture**
+  now uses foreground/app-switch + idle only over the debounce/rate-ceiling/idle-edge state machine.
+  The old clipboard, typing-pause, click, and scroll-stop triggers remain readable as legacy
+  `CaptureTrigger` values, but new captures no longer emit them.
+- Implemented for 0.3.0 PR2-PR5: removed the invasive trigger surfaces, retired the Beta model
+  tier, removed the unused image-embedding lane with schema v9, and added the Flow overlay with
+  configurable hotkey/status controls.
+- Still open: code signing and the remaining 0.3.0 follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
 
@@ -50,8 +55,9 @@ Where they ever disagree, the specs win — open an issue.
 ## 2. Crate map
 
 A 9-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
-the store, spawns OCR, builds the `kernel`, loads the embedder + inference off-thread, and registers
-commands. `kernel` orchestrates (event bus, capture loop, worker pool, vision scheduler, readiness);
+the store, spawns OCR, builds the `kernel`, loads the embedder + inference off-thread, owns the
+Flow overlay window/hotkey plumbing, and registers commands. `kernel` orchestrates (event bus,
+capture loop, worker pool, vision scheduler, readiness);
 the module crates — `capture` (WGC), `ocr` (WinRT), `store` (SQLite + sqlite-vec + FTS5),
 `embeddings` (fastembed), `inference` (Job-Object-bound `llama-server` sidecar), `doctor` — each
 depend only on the contracts in `traits`, never on one another's concrete impls.
@@ -66,16 +72,17 @@ per-crate file-level guide to where each concern lives is the rest of this docum
 Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
 Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
 `busy_timeout=5000`. **Authoritative as-built DDL (every table, column, index, trigger, and the full
-v1→v8 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 8`)** — this is code,
+v1→v9 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 9`)** — this is code,
 so it never drifts. `03 §4` is the design contract for the schema; where the 0.2.x migrations have
 moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`, v5 adds the nullable
 `frames.capture_trigger`, v6 widens that trigger token set for click / scroll-stop, v7 adds
 `frames.image_purged` for degrade-to-text retention, and v8 adds the partial
-`idx_frames_image_retention` index for the retention sweep), the code in `store::schema` wins.
+`idx_frames_image_retention` index for the retention sweep, and v9 drops the removed image-embedding
+lane), the code in `store::schema` wins.
 
 Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
 vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
-FTS mirrors), the embedding lanes (text + optional image), vision analysis (P4), the durable `jobs`
+FTS mirrors), the text embedding lane, vision analysis (P4), the durable `jobs`
 queue, tags, and `settings`. The notes below capture the two as-built decisions that the DDL alone
 doesn't convey.
 
@@ -320,7 +327,9 @@ The kernel is shell-agnostic;
 `src-tauri::forward_events` bridges these to Tauri events (`capture_tick`, `readiness_changed`,
 `job_progress`, `job_completed`, `sidecar_status`, `toast`). The `ask` command streams
 request-scoped **`answer_delta`** events (`AnswerEvent { request_id, delta }`) directly from its
-forwarding task; `cancel_ask(request_id)` aborts a superseded stream.
+forwarding task; `cancel_ask(request_id)` aborts a superseded stream. The Flow overlay is
+shell-level, not a kernel subsystem: `src-tauri::overlay` emits `overlay_shown` / `overlay_hidden`
+to the overlay webview and `open_moment` to the main window.
 
 **Readiness** (`03 §7`): one `ComponentReadiness { status, detail? }` per subsystem — `capture`,
 `db`, `embed_model`, `sidecar` — where `status ∈ {unknown, disabled, initializing, ready,
@@ -338,7 +347,8 @@ rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_te
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
 `answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
-`sidecar.device`. Model tiers and sidecar launch options are applied live for the next request that
+`sidecar.device`. **0.3.0 overlay keys:** `overlay.hotkey` (`Ctrl+Alt+Space`) and
+`overlay.max_results` (default `8`, sanitized to `1..=50`). Model tiers and sidecar launch options are applied live for the next request that
 needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool from current
 settings after save. Capture's enqueue decisions for new `embed_text` jobs are still captured when a
 capture session starts, so changing that toggle affects capture enqueueing on the next capture start.
@@ -381,7 +391,10 @@ request id, and the UI ignores stale deltas.
    under `<app-data>/frames`: it deletes the screenshot file then calls `purge_frame_image`
    (degrade-to-text), keeping the row + text. `0` disables it.
 4. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
-5. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
+5. Manage shell state, including the overlay hotkey/status state. Load settings and register the
+   overlay global shortcut with `tauri-plugin-global-shortcut`; conflicts emit a toast and are
+   visible via `get_hotkey_status`.
+6. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
    off-thread → `attach_embedder`: store embedder + embedder worker slot, `embed_model = Ready`,
    idempotently start the worker pool). Set `sidecar = Initializing` and spawn **`init_inference`**:
    `ensure_binary` (off-thread) → build `SupervisorConfig` + `ModelSupervisor::new` (creates the job,
@@ -391,14 +404,15 @@ request id, and the UI ignores stale deltas.
    vision scheduler with the idle source) → `sidecar = Ready`. The first worker start, whichever
    provider triggers it, performs the startup stale-job sweep before spawning workers. Failure at any
    step sets `sidecar = Unavailable` with a reason.
-6. Register Tauri commands; run. On `ExitRequested`: `stop_vision_scheduler` + `stop_workers`, then
+7. Register Tauri commands; run. On `ExitRequested`: `stop_vision_scheduler` + `stop_workers`, then
    `supervisor.shutdown()` (kills the sidecar; the Job Object would anyway). All best-effort —
    correctness doesn't depend on it (the startup sweep requeues interrupted jobs).
 
 **Commands** (typed via `ts-rs`): `ping`, `get_readiness`, `get_job_stats`, `get_frame`, `search`,
 `capture_control`, **`enqueue_vision`**, **`ask`**, **`set_model_tier`**, `get_timeline`,
 `get_frames`, `get_nearest_frame`, `get_frame_context`, `get_insights`, `get_storage_stats`,
-`get_monitors`, `cancel_ask`, `list_sidecar_devices`, `get_settings`, and `set_settings`.
+`get_monitors`, `cancel_ask`, `list_sidecar_devices`, `get_settings`, `set_settings`,
+`get_hotkey_status`, `hide_overlay`, `overlay_shown_ack`, and `open_moment`.
 
 ---
 
@@ -411,7 +425,8 @@ request id, and the UI ignores stale deltas.
   non-FTS-matching query, and prove that `vision_tag` jobs drain when inference attaches without an
   embedder; the P4 `vision_tag` routing tests drive `process_job` with a fake `VisionProvider`
   (writes the analysis; retries with no provider). Store search tests cover the backend
-  `SearchQuery.limit` clamp.
+  `SearchQuery.limit` clamp. PR5 adds a Tauri config guard proving the overlay window is pre-created,
+  hidden by default, and `contentProtected`.
 - **Inference, deterministic (run in CI, no GPU/network):** the **no-orphan gate**
   (`tests/no_orphan.rs` — kill a parent, assert the Job-Object child dies), startup **reap**
   (`tests/reap.rs` — reaps a matching stray, never a foreign pid), the HTTP **client** against a

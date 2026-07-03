@@ -14,6 +14,7 @@ import type { AnswerEvent } from "../../bindings/AnswerEvent";
 import type { ReportProgress } from "../../bindings/ReportProgress";
 import type { Toast } from "../../bindings/Toast";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
+import type { OpenMoment } from "../../bindings/OpenMoment";
 
 /** Map of backend event name → payload type. */
 export interface AppEvents {
@@ -27,6 +28,9 @@ export interface AppEvents {
   report_progress: ReportProgress;
   toast: Toast;
   throttle_changed: ThrottleStatus;
+  overlay_shown: null;
+  overlay_hidden: null;
+  open_moment: OpenMoment;
 }
 
 /**

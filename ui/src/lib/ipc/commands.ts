@@ -26,6 +26,7 @@ import type { StorageStats } from "../../bindings/StorageStats";
 import type { MonitorInfo } from "../../bindings/MonitorInfo";
 import type { AppSuppression } from "../../bindings/AppSuppression";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
+import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -139,3 +140,17 @@ export const getTextFilterStats = (): Promise<AppSuppression[]> =>
  *  GPU is monitored (`03 §7`, former PR5). Live updates arrive via `throttle_changed`. */
 export const getThrottleStatus = (): Promise<ThrottleStatus> =>
   invoke<ThrottleStatus>("get_throttle_status");
+
+/** Shell-managed global hotkey registration status for Settings warnings. */
+export const getHotkeyStatus = (): Promise<HotkeyStatus[]> =>
+  invoke<HotkeyStatus[]>("get_hotkey_status");
+
+/** Hide the Flow overlay without destroying the pre-created webview. */
+export const hideOverlay = (): Promise<void> => invoke<void>("hide_overlay");
+
+/** Acknowledge the overlay's first focused paint for hotkey-to-input timing logs. */
+export const overlayShownAck = (): Promise<void> => invoke<void>("overlay_shown_ack");
+
+/** Open a captured frame in the main window, then dismiss the overlay. */
+export const openMoment = (frameId: number): Promise<void> =>
+  invoke<void>("open_moment", { frameId });

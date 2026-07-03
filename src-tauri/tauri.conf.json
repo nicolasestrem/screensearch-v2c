@@ -12,12 +12,29 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "ScreenSearch",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
         "minHeight": 640,
         "resizable": true
+      },
+      {
+        "label": "overlay",
+        "title": "ScreenSearch Overlay",
+        "url": "overlay.html",
+        "width": 640,
+        "height": 460,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "contentProtected": true
       }
     ],
     "security": {

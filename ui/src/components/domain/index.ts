@@ -2,6 +2,7 @@
 //   import { FrameTile, ScanlineTimeline } from "../domain";
 export { FrameImage, type FrameImageProps } from "./FrameImage";
 export { FrameTile, type FrameTileProps } from "./FrameTile";
+export { HighlightedSnippet } from "./HighlightedSnippet";
 export { SearchResult, type SearchResultProps } from "./SearchResult";
 export { AnswerStream, type AnswerStreamProps } from "./AnswerStream";
 export { CitationTile, type CitationTileProps } from "./CitationTile";
@@ -19,3 +20,4 @@ export { ScheduleControl, type ScheduleControlProps } from "./ScheduleControl";
 export { RetentionControl, type RetentionControlProps } from "./RetentionControl";
 export { InsightsBars, type InsightsBarsProps, type RankedItem } from "./InsightsBars";
 export { CapturesTrend, type CapturesTrendProps } from "./CapturesTrend";
+export { HotkeyField, DEFAULT_OVERLAY_HOTKEY, type HotkeyFieldProps } from "./HotkeyField";

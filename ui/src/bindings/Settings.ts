@@ -214,6 +214,16 @@ capture_uia_max_textpattern_calls: number,
  */
 capture_uia_suppress_during_input_ms: number, 
 /**
+ * Global Flow overlay summon hotkey (`overlay.hotkey`, 0.3.0 PR5). The shell
+ * validates and registers the chord so a bad/colliding value becomes the D6
+ * Settings warning instead of being silently rewritten here.
+ */
+overlay_hotkey: string, 
+/**
+ * Top-N results in the Flow overlay (`overlay.max_results`, 0.3.0 PR5).
+ */
+overlay_max_results: number, 
+/**
  * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
  * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
  * never runs and enrichment drains at full configured concurrency, exactly as

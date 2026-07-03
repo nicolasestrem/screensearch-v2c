@@ -31,6 +31,8 @@ use kernel::{CaptureFactory, IdleSource, Kernel, KernelEvent};
 use store::SqliteStore;
 use tokio::task::JoinHandle;
 
+mod overlay;
+
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
 /// on first run / large quants).
 const SIDECAR_HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
@@ -741,7 +743,11 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 /// take effect on the next capture start; enrichment workers reconfigure after save
 /// and the image embedder reloads when the image lane is newly enabled.
 #[tauri::command]
-async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+async fn set_settings(
+    settings: Settings,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let store = state
         .store
         .clone()
@@ -750,8 +756,8 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
     // apps, pause-on-lock) BEFORE persisting, so we can tell whether a running capture loop
     // must pick up new values. Without this, capture/privacy changes silently waited for the
     // next manual capture start — the user-reported "Excluded Apps never applies" bug.
-    let prev_capture_cfg =
-        kernel::settings::capture_config(&kernel::settings::load_settings(store.as_ref()).await);
+    let prev_settings = kernel::settings::load_settings(store.as_ref()).await;
+    let prev_capture_cfg = kernel::settings::capture_config(&prev_settings);
     // Clamp once up front so the values handed to the live providers below are exactly what
     // gets persisted. `save_settings` sanitizes internally too, but a direct IPC call could
     // pass out-of-range values (e.g. a huge `sidecar_ctx_size`); without this, the DB would
@@ -760,6 +766,11 @@ async fn set_settings(settings: Settings, state: State<'_, AppState>) -> Result<
     kernel::settings::save_settings(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Re-run the shell registration check after every save. The overlay helper no-ops
+    // when the persisted chord is already active, but it retries a previously failed
+    // registration for the same saved chord after the user releases an OS/app conflict.
+    overlay::reregister_overlay_hotkey(&app, &settings.overlay_hotkey);
 
     // Hot-apply the UIA enable toggle: the composite OcrProvider reads this per frame, so
     // switching UIA text on/off takes effect immediately with no capture restart
@@ -841,6 +852,7 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Resolve the per-user app data dir from the bundle identifier and make
             // sure it (and the log dir) exist before we open anything in them.
@@ -854,6 +866,15 @@ pub fn run() {
             let embed_models_dir = data_dir.join("models").join("fastembed");
 
             let (store, db_readiness) = open_store(&db_path);
+            app.manage(overlay::OverlayState::default());
+            let overlay_hotkey = match &store {
+                Some(store) => {
+                    tauri::async_runtime::block_on(kernel::settings::load_settings(store.as_ref()))
+                        .overlay_hotkey
+                }
+                None => Settings::default().overlay_hotkey,
+            };
+            overlay::init_overlay_hotkey(app.handle(), &overlay_hotkey);
             // PR3 audit fix: backfill the attention filter_version once at startup. When the
             // version bumped since the last run, re-clean every sub-current frame's
             // content_text against the now-warm chrome catalog (`textfilter::reconcile`) so
@@ -1030,8 +1051,35 @@ pub fn run() {
             get_settings,
             set_settings,
             get_text_filter_stats,
-            get_throttle_status
+            get_throttle_status,
+            overlay::get_hotkey_status,
+            overlay::hide_overlay,
+            overlay::overlay_shown_ack,
+            overlay::open_moment
         ])
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                    // The hidden overlay is a real WebView window, so closing the main window
+                    // would otherwise leave the process alive. Treat main-window close as quit.
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
+                tauri::WindowEvent::Focused(false)
+                    if window.label() == "overlay"
+                        && std::env::var_os("SCREENSEARCH_OVERLAY_STICKY").is_none() =>
+                {
+                    let _ = window.hide();
+                    let _ = window.emit("overlay_hidden", ());
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "overlay" => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window.emit("overlay_hidden", ());
+                }
+                _ => {}
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {

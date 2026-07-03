@@ -6,7 +6,7 @@
 // production (const-folds away) and whenever no `?__devState=…` is present, so the
 // live empty/partial/populated outcomes are untouched; only forced loading/error
 // states flow through. Mutations and the Ask/Report state machines are NOT wrapped.
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import * as cmd from "./commands";
 import { queryKeys } from "./queryKeys";
@@ -16,6 +16,7 @@ import type { TimeRange } from "../../bindings/TimeRange";
 import type { SidecarStatus } from "../../bindings/SidecarStatus";
 import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
+import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -101,6 +102,15 @@ export function useThrottleStatus() {
   return useMaybeOverride(q, queryKeys.throttleStatus);
 }
 
+/** Shell hotkey registration status. Registration failures are surfaced in Settings. */
+export function useHotkeyStatus() {
+  const q = useQuery<HotkeyStatus[]>({
+    queryKey: queryKeys.hotkeyStatus,
+    queryFn: cmd.getHotkeyStatus,
+  });
+  return useMaybeOverride(q, queryKeys.hotkeyStatus);
+}
+
 /** Per-app text-filter suppression rates (PR3 guardrail). */
 export function useTextFilterStats(enabled = true) {
   const q = useQuery({
@@ -112,12 +122,13 @@ export function useTextFilterStats(enabled = true) {
 }
 
 /** Hybrid search; idle until there is a non-empty query (no empty-string calls). */
-export function useSearch(query: SearchQuery, enabled = true) {
+export function useSearch(query: SearchQuery, enabled = true, keepPrevious = false) {
   const queryKey = queryKeys.search(query);
   const q = useQuery({
     queryKey,
     queryFn: () => cmd.search(query),
     enabled: enabled && query.text.trim().length > 0,
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
   });
   return useMaybeOverride(q, queryKey);
 }

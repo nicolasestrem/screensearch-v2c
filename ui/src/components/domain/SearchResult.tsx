@@ -8,37 +8,20 @@ import { Link } from "react-router-dom";
 
 import type { SearchHit } from "../../bindings/SearchHit";
 import { FrameImage } from "./FrameImage";
+import { HighlightedSnippet } from "./HighlightedSnippet";
 import { absoluteTime, relativeTime } from "../../lib/time";
-
-/** Splits an FTS snippet on its `[match]` delimiters, accenting the matched runs. */
-function HighlightedSnippet({ text }: { text: string }) {
-  const parts = text.split(/(\[[^\]]*\])/g);
-  return (
-    <>
-      {parts.map((part, i) =>
-        part.startsWith("[") && part.endsWith("]") ? (
-          <mark key={i} className="bg-transparent text-accent">
-            {part.slice(1, -1)}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
-    </>
-  );
-}
+export { HighlightedSnippet } from "./HighlightedSnippet";
 
 export interface SearchResultProps {
   hit: SearchHit;
+  onOpenFrame?: (frameId: number) => void;
 }
 
-export function SearchResult({ hit }: SearchResultProps) {
-  return (
-    <Link
-      to={`/timeline/${hit.frame_id}`}
-      title={absoluteTime(hit.captured_at)}
-      className="flex gap-3 rounded-panel border border-line bg-surface p-3 transition-colors duration-fast ease-ui hover:border-ink-faint"
-    >
+export function SearchResult({ hit, onOpenFrame }: SearchResultProps) {
+  const className =
+    "flex gap-3 rounded-panel border border-line bg-surface p-3 transition-colors duration-fast ease-ui hover:border-ink-faint";
+  const body = (
+    <>
       <FrameImage
         imagePath={hit.image_path}
         imagePurged={hit.image_purged}
@@ -59,6 +42,29 @@ export function SearchResult({ hit }: SearchResultProps) {
           )}
         </div>
       </div>
+    </>
+  );
+
+  if (onOpenFrame) {
+    return (
+      <button
+        type="button"
+        title={absoluteTime(hit.captured_at)}
+        onClick={() => onOpenFrame(hit.frame_id)}
+        className={`${className} w-full text-left`}
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return (
+    <Link
+      to={`/timeline/${hit.frame_id}`}
+      title={absoluteTime(hit.captured_at)}
+      className={className}
+    >
+      {body}
     </Link>
   );
 }

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "Capability for the Flow overlay window: core IPC only.",
+  "windows": ["overlay"],
+  "permissions": ["core:default"]
+}

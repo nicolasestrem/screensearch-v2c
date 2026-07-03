@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Flow overlay (0.3.0 PR5)
+ScreenSearch now has a global-hotkey **Flow overlay** for quick recall without leaving the app you
+are working in. Press `Ctrl+Alt+Space` to open a second, pre-created Tauri window over the foreground
+monitor, type to search, press `Tab` or prefix the query with `?` to switch into Ask, and press
+`Enter` to open the selected Moment in the main Command Deck. `Esc` hides the overlay.
+
+The overlay is treated as a privacy boundary: it is hidden by default, capture-protected at the
+window level, skipped from the taskbar, and covered by the same own-process capture gate used for the
+main window so it does not appear in ScreenSearch's own history. Settings exposes the summon hotkey
+and top-N result count (`overlay.max_results`, clamped to `1..=50`). A hotkey registration conflict
+is loud: the app emits a warning toast and Settings shows the failed chord instead of silently doing
+nothing. Exclusive-fullscreen applications may still suppress global overlays; that limitation is
+documented in the manual acceptance checklist.
+
 ### Removed — Image-embedding lane (0.3.0 PR4)
 ScreenSearch no longer has an optional **image-embedding** lane. It was dark-launched and off by
 default (the `enrich.image_embeddings` "Embed images" toggle), so almost nobody turned it on — and a
