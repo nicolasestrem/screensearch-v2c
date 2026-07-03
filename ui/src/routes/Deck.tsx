@@ -8,7 +8,13 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button, Chip, EmptyState, ErrorState, Panel, Skeleton } from "../components/primitives";
-import { FrameTile, JobQueueMeter, TimelineMinimap } from "../components/domain";
+import {
+  FrameTile,
+  IntentionsStrip,
+  JobQueueMeter,
+  TimelineMinimap,
+  WhereWasICard,
+} from "../components/domain";
 import { IconCapture } from "../components/icons";
 import { useCaptureControl } from "../lib/ipc/mutations";
 import { useFrames, useInsights, useJobStats, useReadiness, useTimeline } from "../lib/ipc/queries";
@@ -217,6 +223,12 @@ export function Component() {
             <Skeleton className="h-12 w-full" />
           )}
         </Panel>
+      </div>
+
+      {/* 0.3.0 flow recall (PR6): resume the last sustained context, and act on marks. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <WhereWasICard onOpen={(id) => navigate(`/timeline/${id}`)} />
+        <IntentionsStrip onOpen={(id) => navigate(`/timeline/${id}`)} />
       </div>
 
       <Panel

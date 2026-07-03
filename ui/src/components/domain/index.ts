@@ -21,3 +21,5 @@ export { RetentionControl, type RetentionControlProps } from "./RetentionControl
 export { InsightsBars, type InsightsBarsProps, type RankedItem } from "./InsightsBars";
 export { CapturesTrend, type CapturesTrendProps } from "./CapturesTrend";
 export { HotkeyField, DEFAULT_OVERLAY_HOTKEY, type HotkeyFieldProps } from "./HotkeyField";
+export { WhereWasICard, type WhereWasICardProps } from "./WhereWasICard";
+export { IntentionsStrip, type IntentionsStripProps } from "./IntentionsStrip";
