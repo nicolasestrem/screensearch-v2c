@@ -127,28 +127,8 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_event_on_foreground,
         )
         .await,
-        capture_event_on_clipboard: boolean(
-            store,
-            "capture.event_on_clipboard",
-            d.capture_event_on_clipboard,
-        )
-        .await,
         capture_event_on_idle: boolean(store, "capture.event_on_idle", d.capture_event_on_idle)
             .await,
-        capture_event_on_typing_pause: boolean(
-            store,
-            "capture.event_on_typing_pause",
-            d.capture_event_on_typing_pause,
-        )
-        .await,
-        capture_event_on_click: boolean(store, "capture.event_on_click", d.capture_event_on_click)
-            .await,
-        capture_event_on_scroll_stop: boolean(
-            store,
-            "capture.event_on_scroll_stop",
-            d.capture_event_on_scroll_stop,
-        )
-        .await,
         capture_event_debounce_ms: num(
             store,
             "capture.event_debounce_ms",
@@ -159,12 +139,6 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             store,
             "capture.event_min_interval_ms",
             d.capture_event_min_interval_ms,
-        )
-        .await,
-        capture_event_typing_pause_ms: num(
-            store,
-            "capture.event_typing_pause_ms",
-            d.capture_event_typing_pause_ms,
         )
         .await,
         capture_event_idle_threshold_ms: num(
@@ -246,6 +220,34 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         )
         .await,
     })
+}
+
+/// Settings keys retired by past versions, purged from the DB on startup so a config
+/// persisted with any of them still loads and the stale rows don't linger (`03 §8`,
+/// `docs/0.3.0.md` PR2). Grows per arc: 0.3.0 PR2 removed the four extra event triggers
+/// (clipboard / typing-pause / click / scroll-stop) and the typing-pause threshold.
+pub const RETIRED_SETTINGS_KEYS: &[&str] = &[
+    "capture.event_on_clipboard",
+    "capture.event_on_typing_pause",
+    "capture.event_on_click",
+    "capture.event_on_scroll_stop",
+    "capture.event_typing_pause_ms",
+];
+
+/// Deletes any [`RETIRED_SETTINGS_KEYS`] left in the `settings` table by an older
+/// version, logging **once** which keys were dropped. Called once at startup (before
+/// the rest of the maintenance sweep). "Log once" falls out naturally — the keys are
+/// gone by the next launch, so a subsequent run finds nothing and logs nothing. A read
+/// or delete error is logged and swallowed: dropping stale keys is best-effort and must
+/// never block startup or capture (`04 §4`).
+pub async fn drop_retired_settings(store: &dyn Store) {
+    match store.delete_settings(RETIRED_SETTINGS_KEYS).await {
+        Ok(dropped) if !dropped.is_empty() => {
+            tracing::warn!(keys = ?dropped, "settings: dropped retired keys");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "settings: failed to drop retired keys"),
+    }
 }
 
 /// Persists every `03 §8` setting back to the key/value `settings` table — the
@@ -404,24 +406,8 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             bool_str(s.capture_event_on_foreground).into(),
         ),
         (
-            "capture.event_on_clipboard".into(),
-            bool_str(s.capture_event_on_clipboard).into(),
-        ),
-        (
             "capture.event_on_idle".into(),
             bool_str(s.capture_event_on_idle).into(),
-        ),
-        (
-            "capture.event_on_typing_pause".into(),
-            bool_str(s.capture_event_on_typing_pause).into(),
-        ),
-        (
-            "capture.event_on_click".into(),
-            bool_str(s.capture_event_on_click).into(),
-        ),
-        (
-            "capture.event_on_scroll_stop".into(),
-            bool_str(s.capture_event_on_scroll_stop).into(),
         ),
         (
             "capture.event_debounce_ms".into(),
@@ -430,10 +416,6 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         (
             "capture.event_min_interval_ms".into(),
             s.capture_event_min_interval_ms.to_string(),
-        ),
-        (
-            "capture.event_typing_pause_ms".into(),
-            s.capture_event_typing_pause_ms.to_string(),
         ),
         (
             "capture.event_idle_threshold_ms".into(),
@@ -575,7 +557,6 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // a real rate ceiling) and ceilings guard hand-edited extremes.
     s.capture_event_debounce_ms = clamp_u32(s.capture_event_debounce_ms, 100, 10_000);
     s.capture_event_min_interval_ms = clamp_u32(s.capture_event_min_interval_ms, 250, 60_000);
-    s.capture_event_typing_pause_ms = clamp_u32(s.capture_event_typing_pause_ms, 500, 10_000);
     s.capture_event_idle_threshold_ms = clamp_u32(s.capture_event_idle_threshold_ms, 1_000, 60_000);
     s.capture_event_fallback_interval_ms =
         clamp_u32(s.capture_event_fallback_interval_ms, 1_000, 3_600_000);
@@ -647,14 +628,9 @@ pub fn capture_config(s: &Settings) -> CaptureConfig {
         pause_on_lock: s.privacy_pause_on_lock,
         event_driven_enabled: s.capture_event_driven_enabled,
         event_on_foreground: s.capture_event_on_foreground,
-        event_on_clipboard: s.capture_event_on_clipboard,
         event_on_idle: s.capture_event_on_idle,
-        event_on_typing_pause: s.capture_event_on_typing_pause,
-        event_on_click: s.capture_event_on_click,
-        event_on_scroll_stop: s.capture_event_on_scroll_stop,
         event_debounce_ms: s.capture_event_debounce_ms,
         event_min_interval_ms: s.capture_event_min_interval_ms,
-        event_typing_pause_ms: s.capture_event_typing_pause_ms,
         event_idle_threshold_ms: s.capture_event_idle_threshold_ms,
         event_fallback_interval_ms: s.capture_event_fallback_interval_ms,
     }

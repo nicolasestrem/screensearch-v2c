@@ -104,24 +104,23 @@ WgcCapture.next_frame()           # diff-gated + privacy-gated; only *changed* f
   → emit KernelEvent::CaptureTick # drives the live timeline
 ```
 
-**Capture cadence — timer OR (opt-in) event-driven (0.2.1).** By default capture paces to
-`capture.interval_ms` (the 0.2.0 timer cadence). When `capture.event_driven_enabled` is on (default
-off), `WgcCapture` instead captures on real user activity: a pure debounce / rate-ceiling / idle-edge
-**trigger state machine** (`capture::trigger`, no Win32, unit-tested) is fed by a dedicated
-**input-events thread** (`capture::events`) that owns a message-only `HWND_MESSAGE` window plus a
-foreground hook (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`), a clipboard listener
-(`AddClipboardFormatListener`), and a `WH_MOUSE_LL` low-level mouse hook installed **only** when
-click or scroll-stop is enabled. The hook callback reads only the message id, never cursor
-coordinates, button payloads, scroll deltas, keystrokes, or clipboard contents. Idle and
-typing-pause triggers need no hook — they poll `user_idle_ms` (`GetLastInputInfo`). A long fallback
-interval still samples a static screen, a debounce collapses bursts, and a min-interval ceiling caps
-the rate. A failed hook install is non-fatal (falls back to the fallback timer + idle polling). The
-kernel loop and the `CaptureSource` trait are unchanged; the event source lives inside `WgcCapture`,
-which stamps each frame with a `CaptureTrigger` (`Timer`/`Idle`/`ForegroundChange`/
-`ClipboardChange`/`TypingPause`/`Click`/`ScrollStop`/`Manual`) persisted to
-`frames.capture_trigger` (schema v6) and surfaced as the Moment "Captured via" row. Event settings
-hot-apply through the existing `set_settings`→`reload_capture` path (`CaptureConfig` is
-`PartialEq`).
+**Capture cadence — timer OR (opt-in) event-driven (0.2.1; trimmed 0.3.0 PR2).** By default capture
+paces to `capture.interval_ms` (the 0.2.0 timer cadence). When `capture.event_driven_enabled` is on
+(default off), `WgcCapture` instead captures on real user activity: a pure debounce / rate-ceiling /
+idle-edge **trigger state machine** (`capture::trigger`, no Win32, unit-tested) is fed by a dedicated
+**input-events thread** (`capture::events`) that runs a bare message pump plus one out-of-context
+foreground hook (`SetWinEventHook` `EVENT_SYSTEM_FOREGROUND`). Idle needs no hook — it polls
+`user_idle_ms` (`GetLastInputInfo`). *(0.3.0 PR2 trimmed the six triggers to foreground + idle,
+deleting the clipboard listener, the global `WH_MOUSE_LL` mouse hook — click/scroll-stop — and the
+typing-pause edge, so a whole `unsafe` path and the message-only window are gone — `docs/0.3.0.md`,
+`02 §5c`.)* A long fallback interval still samples a static screen, a debounce collapses bursts, and
+a min-interval ceiling caps the rate. A failed hook install is non-fatal (falls back to the fallback
+timer + idle polling). The kernel loop and the `CaptureSource` trait are unchanged; the event source
+lives inside `WgcCapture`, which stamps each frame with a `CaptureTrigger`. New frames use only
+`Timer`/`Idle`/`ForegroundChange`/`Manual`; the legacy `ClipboardChange`/`TypingPause`/`Click`/
+`ScrollStop` tokens stay in the enum + the `frames.capture_trigger` CHECK (schema v6, unchanged) so
+pre-trim frames still render in the Moment "Captured via" row. Event settings hot-apply through the
+existing `set_settings`→`reload_capture` path (`CaptureConfig` is `PartialEq`).
 
 Capture is **off until the user starts it** (privacy-first). If WinRT OCR cannot be created, the app
 still boots but capture start fails with `capture = Unavailable` rather than storing empty OCR rows.

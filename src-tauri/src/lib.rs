@@ -885,7 +885,11 @@ pub fn run() {
                 let store = store.clone();
                 let purge_dir = data_dir.clone();
                 tauri::async_runtime::spawn(async move {
-                    // First sweep out any pre-existing own-window captures (PR3 self-
+                    // Purge any settings keys retired by a past version (0.3.0 PR2 event
+                    // triggers) so a config persisted with them still loads and the stale
+                    // rows don't linger; logs once (the keys are gone next launch).
+                    kernel::settings::drop_retired_settings(store.as_ref()).await;
+                    // Then sweep out any pre-existing own-window captures (PR3 self-
                     // exclude), then re-clean the remaining frames against the warm
                     // chrome catalog.
                     purge_self_captures(store.clone(), purge_dir).await;

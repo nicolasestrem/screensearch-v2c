@@ -61,4 +61,28 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// Deletes the given settings keys in **one transaction** and returns those that
+    /// actually existed (a row was removed). Used to purge keys a version retired
+    /// (0.3.0 PR2 event triggers) so an existing config still loads without the stale
+    /// rows lingering. `unchecked_transaction` is sound for the same reason as
+    /// [`Self::set_settings_batch`]: `with_conn` holds the store mutex exclusively.
+    pub async fn delete_settings(&self, keys: &[&str]) -> Result<Vec<String>> {
+        let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        self.with_conn(move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut deleted = Vec::new();
+            {
+                let mut stmt = tx.prepare("DELETE FROM settings WHERE key = ?1")?;
+                for key in &keys {
+                    if stmt.execute(params![key])? > 0 {
+                        deleted.push(key.clone());
+                    }
+                }
+            }
+            tx.commit()?;
+            Ok(deleted)
+        })
+        .await
+    }
 }

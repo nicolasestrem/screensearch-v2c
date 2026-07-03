@@ -518,31 +518,17 @@ pub struct Settings {
     /// cadence and no input hooks are installed unless this is on.
     pub capture_event_driven_enabled: bool,
     /// Capture on foreground/app switch when event-driven capture is on
-    /// (`capture.event_on_foreground`).
+    /// (`capture.event_on_foreground`). *(0.3.0 PR2 trimmed the six event triggers to
+    /// foreground + idle — `docs/0.3.0.md`.)*
     pub capture_event_on_foreground: bool,
-    /// Capture on clipboard change — change event only, never contents
-    /// (`capture.event_on_clipboard`).
-    pub capture_event_on_clipboard: bool,
     /// Capture when the user goes idle past the threshold (`capture.event_on_idle`).
     pub capture_event_on_idle: bool,
-    /// Capture when typing/input pauses for the quiet period
-    /// (`capture.event_on_typing_pause`).
-    pub capture_event_on_typing_pause: bool,
-    /// Capture on a mouse click — the *fact* of a click only, never position/button/
-    /// content (`capture.event_on_click`). Uses the `WH_MOUSE_LL` low-level mouse hook.
-    pub capture_event_on_click: bool,
-    /// Capture when scrolling stops after a wheel burst settles
-    /// (`capture.event_on_scroll_stop`). Uses the `WH_MOUSE_LL` low-level mouse hook.
-    pub capture_event_on_scroll_stop: bool,
     /// Collapse a burst of triggers within this window into one capture, ms
     /// (`capture.event_debounce_ms`). A threshold, never hardcoded.
     pub capture_event_debounce_ms: u32,
     /// Minimum gap between any two event-driven captures, ms — the rate ceiling
     /// (`capture.event_min_interval_ms`).
     pub capture_event_min_interval_ms: u32,
-    /// Quiet period after the last input that counts as a typing pause, ms
-    /// (`capture.event_typing_pause_ms`).
-    pub capture_event_typing_pause_ms: u32,
     /// Idle time that counts as "gone idle", ms (`capture.event_idle_threshold_ms`).
     pub capture_event_idle_threshold_ms: u32,
     /// Fallback capture interval in event mode, ms — a static screen is still sampled
@@ -690,24 +676,17 @@ impl Default for Settings {
             reports_daily_top_k: 40,
             reports_weekly_top_k: 200,
             reports_map_reduce_min_frames: 20,
-            // 0.2.1 event-driven capture (docs/0.2.0.md, 07 #47). Opt-in master OFF:
-            // flipping it on gives a sane out-of-box set (foreground + clipboard on;
-            // idle + typing-pause off as the noisier triggers), 500 ms debounce, a 1 s
-            // rate ceiling, and a 30 s fallback so a static screen is still sampled.
-            // Every threshold is a setting, never hardcoded (mirrors the PR3 stance).
+            // 0.2.1 event-driven capture (docs/0.2.0.md, 07 #47), trimmed by 0.3.0 PR2
+            // (docs/0.3.0.md) to foreground + idle. Opt-in master OFF: flipping it on
+            // gives a sane out-of-box set (foreground on; idle off as the noisier
+            // trigger), 500 ms debounce, a 1 s rate ceiling, and a 30 s fallback so a
+            // static screen is still sampled. Every threshold is a setting, never
+            // hardcoded (mirrors the PR3 stance).
             capture_event_driven_enabled: false,
             capture_event_on_foreground: true,
-            capture_event_on_clipboard: true,
             capture_event_on_idle: false,
-            capture_event_on_typing_pause: false,
-            // Click / scroll-stop default OFF even within event mode: they rely on the
-            // global WH_MOUSE_LL low-level mouse hook (heavier than the out-of-context
-            // foreground/clipboard listeners), so they stay opt-in (`07` #47).
-            capture_event_on_click: false,
-            capture_event_on_scroll_stop: false,
             capture_event_debounce_ms: 500,
             capture_event_min_interval_ms: 1000,
-            capture_event_typing_pause_ms: 1500,
             capture_event_idle_threshold_ms: 5000,
             capture_event_fallback_interval_ms: 30_000,
             // UIA text (docs/0.2.0.md #48): default ON with OCR fallback. 150 ms keeps the

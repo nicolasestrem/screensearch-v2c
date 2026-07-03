@@ -50,7 +50,7 @@ capture refinements:
 |---|---|---|
 | **Attention-first text** | Span-aware classifier so search/Ask/embeddings rank on content, not chrome (raw text still opt-in) | ✅ Shipped |
 | **Recall reports** | On-device Daily / Weekly / Custom summaries that cite the frames they used | ✅ Shipped |
-| **Event-driven capture** | Opt-in triggers — foreground, clipboard, idle, typing-pause, click, scroll-stop (timer stays the default) | ✅ Shipped |
+| **Event-driven capture** | Opt-in triggers — foreground + idle (timer stays the default) | ✅ Shipped |
 | **UIA text source** | Foreground-window text via UI Automation, with automatic OCR fallback | ✅ Shipped |
 | **Smart enrichment throttle** | Opt-in CPU/GPU backpressure that eases off background work under load — capture/OCR/storage never pause | ✅ Shipped |
 
@@ -63,8 +63,8 @@ Start capture → each changed frame's text is read (foreground-window **UIA**, 
 → an `embed_text` job is enqueued → a background worker pool embeds it with **fastembed**
 (EmbeddingGemma-300M, 768-dim) → **hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with
 Reciprocal Rank Fusion) returns the right frames in **~33 ms p95 on a 10 000-frame database**.
-Capture runs on a timer by default, with **opt-in event-driven triggers** (foreground, clipboard,
-idle, typing-pause, click, scroll-stop). **Vision tagging** (on-demand / timer / idle — structured
+Capture runs on a timer by default, with **opt-in event-driven triggers** (foreground + idle).
+**Vision tagging** (on-demand / timer / idle — structured
 output with an honest confidence, never a fabricated score), **grounded streaming answers** with
 citations, and **Recall reports** (Daily / Weekly / Custom, citing their source frames) run on the
 local **llama.cpp sidecar**; the full Command-Deck UI surfaces all of it. An optional **enrichment

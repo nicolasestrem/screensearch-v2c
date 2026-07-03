@@ -46,10 +46,12 @@ cargo test -p inference --test smoke -- --ignored --nocapture
 cargo test -p capture -- --ignored
 ```
 
-The 0.2.1 event-driven trigger logic itself runs in plain CI: the 14 `crates/capture/src/trigger.rs`
-unit tests cover debounce / rate-ceiling / idle-edge behavior plus click and scroll-stop coalescing
-(pure, no Win32), and the kernel settings round-trip + sanitize tests are extended for the new
-`capture.event_*` keys. Only the hardware hook lifecycle test in `events.rs` is `#[ignore]`d.
+The event-driven trigger logic itself runs in plain CI: the 9 `crates/capture/src/trigger.rs` unit
+tests cover foreground debounce / rate-ceiling / idle-edge behavior (pure, no Win32), and the kernel
+settings round-trip + sanitize + retired-key-drop tests cover the `capture.event_*` keys. Only the
+hardware hook lifecycle test in `events.rs` is `#[ignore]`d. *(0.3.0 PR2 trimmed the six triggers to
+foreground + idle, deleting the clipboard, click, scroll-stop, and typing-pause tests with their
+triggers — `docs/0.3.0.md`.)*
 
 ## 🎯 Just one crate (faster)
 
@@ -94,23 +96,31 @@ Audit coverage:
 The 2026-06-25 run is a local ignored artifact at `docs/AUDIT_0.2.0_PR7_2026-06-25.md`; tracked
 summaries live in `CHANGELOG.md` and `specs/05_BUILD_REVIEW.md` / `07_KNOWN_GAPS.md`.
 
-## 🎛️ Manual acceptance — event-driven capture (0.2.1)
+## 🎛️ Manual acceptance — event-driven capture (0.2.1; trimmed 0.3.0 PR2)
 
 Opt-in event-driven capture (`07` #47) needs a quick live check on a real Windows desktop with
-`npm run tauri dev`:
+`npm run tauri dev`. **0.3.0 PR2** trimmed the six triggers to **foreground + idle** (clipboard,
+click, scroll-stop, and typing-pause removed — `docs/0.3.0.md`); the Settings panel now shows only
+the master toggle, app-switch, idle, and the three surviving thresholds (debounce, min-interval,
+idle-threshold — plus the fallback interval).
 
 - **Default off.** On a fresh profile, Settings shows event-driven capture **off** and capture uses
-  the timer cadence (no input hooks installed).
-- **Event mode fires on activity.** Turn **Event-driven capture** on, start capture, then **alt-tab**
-  to another app and **copy** some text → new frames appear (foreground-change and clipboard-change
-  triggers); the Moment view's **"Captured via"** row shows the matching trigger.
-- **Mouse triggers stay explicitly opt-in.** Turn on **Capture on click** and **Capture when scrolling
-  stops**, then click once in another app and perform one scroll burst. New frames appear after the
-  configured debounce, Moment shows **Click** / **Scroll stop**, and repeated wheel movement collapses
-  to one trailing-edge scroll-stop capture.
+  the timer cadence (no input hooks installed). The clipboard / click / scroll-stop / typing-pause
+  toggles are gone.
+- **Foreground fires on activity.** Turn **Event-driven capture** on, start capture, then **alt-tab**
+  to another app → a new frame appears; the Moment view's **"Captured via"** row shows **App switch**.
+- **Idle fires after the threshold.** Leave the machine untouched past the idle threshold (default
+  5 s) → one **Idle** frame appears; a static screen is still sampled at least every fallback
+  interval (default 30 s, tagged **Timer**).
+- **Legacy tokens still render.** Open a frame captured before the trim whose trigger was
+  `click` / `scroll_stop` / `clipboard_change` / `typing_pause` (from an earlier 0.2.1 run) — the
+  Moment "Captured via" row still renders **Click** / **Scroll stop** / etc.; new frames never emit
+  those tokens again.
+- **Retired keys drop on load.** A profile whose settings DB still holds the retired
+  `capture.event_on_clipboard` / `…_typing_pause` / `…_on_click` / `…_on_scroll_stop` /
+  `…_typing_pause_ms` keys loads cleanly: the app logs **one** warn (`settings: dropped retired keys`)
+  on first launch and nothing on the next (the keys are gone).
 - **Timer mode unchanged.** Turn event mode back off → capture returns to the fixed-interval cadence,
   with no behavior regression.
-- **Privacy.** Nothing typed or copied is stored — only the timing/change signal. Existing gates
-  (self-exclude own window, excluded apps, pause-on-lock) still apply in event mode. For mouse
-  triggers, verify only the event kind is surfaced; cursor coordinates, button details, and scroll
-  deltas are not stored.
+- **Privacy.** Nothing typed is stored — only the timing/change signal. Existing gates (self-exclude
+  own window, excluded apps, pause-on-lock) still apply in event mode.

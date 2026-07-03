@@ -50,31 +50,26 @@ pub struct WgcCapture {
     /// Event-driven capture state machine (debounce / rate-ceiling / idle edges).
     /// Driven only when `config.event_driven_enabled`; inert otherwise.
     machine: trigger::TriggerMachine,
-    /// The Win32 input-hook thread, present only in event mode **and** when a hook-backed
-    /// trigger (foreground / clipboard via the WinEvent + clipboard listeners, or click /
-    /// scroll via the `WH_MOUSE_LL` mouse hook) is enabled. Idle / typing-pause need no
-    /// hook (they poll [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
+    /// The Win32 input-hook thread, present only in event mode **and** when foreground
+    /// capture is enabled (the sole hook-backed trigger after the 0.3.0 PR2 trim — the
+    /// out-of-context `EVENT_SYSTEM_FOREGROUND` WinEvent hook). Idle needs no hook (it
+    /// polls [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
     events: Option<events::InputEventSource>,
 }
 
-/// How often (ms) the event-mode loop polls the trigger machine for idle/typing-pause
-/// edges and to flush a settled debounce window. An internal responsiveness constant
-/// (like the WGC cold-start sleep), not a user-facing threshold — the *durations* it
-/// observes (debounce/idle/typing/min-interval) are all configurable settings.
+/// How often (ms) the event-mode loop polls the trigger machine for idle edges and to
+/// flush a settled debounce window. An internal responsiveness constant (like the WGC
+/// cold-start sleep), not a user-facing threshold — the *durations* it observes
+/// (debounce / idle / min-interval) are all configurable settings.
 const EVENT_POLL_INTERVAL_MS: u64 = 250;
 
 /// Builds the pure trigger config from the capture config.
 fn trigger_config(c: &CaptureConfig) -> trigger::TriggerConfig {
     trigger::TriggerConfig {
         on_foreground: c.event_on_foreground,
-        on_clipboard: c.event_on_clipboard,
         on_idle: c.event_on_idle,
-        on_typing_pause: c.event_on_typing_pause,
-        on_click: c.event_on_click,
-        on_scroll_stop: c.event_on_scroll_stop,
         debounce_ms: i64::from(c.event_debounce_ms),
         min_interval_ms: i64::from(c.event_min_interval_ms),
-        typing_pause_ms: i64::from(c.event_typing_pause_ms),
         idle_threshold_ms: i64::from(c.event_idle_threshold_ms),
     }
 }
@@ -124,21 +119,12 @@ impl WgcCapture {
         };
 
         let machine = trigger::TriggerMachine::new(trigger_config(&config));
-        // Start the Win32 hook thread only when event mode is on and a hook-backed
-        // trigger is enabled. A failure to install hooks is non-fatal: capture falls
-        // back to the event-mode fallback timer + idle polling (the machine still runs).
-        let events = if config.event_driven_enabled
-            && (config.event_on_foreground
-                || config.event_on_clipboard
-                || config.event_on_click
-                || config.event_on_scroll_stop)
-        {
-            match events::InputEventSource::start(
-                config.event_on_foreground,
-                config.event_on_clipboard,
-                config.event_on_click,
-                config.event_on_scroll_stop,
-            ) {
+        // Start the Win32 hook thread only when event mode is on and foreground capture
+        // is enabled (the sole hook-backed trigger after the 0.3.0 PR2 trim). A failure
+        // to install the hook is non-fatal: capture falls back to the event-mode
+        // fallback timer + idle polling (the machine still runs).
+        let events = if config.event_driven_enabled && config.event_on_foreground {
+            match events::InputEventSource::start() {
                 Ok(source) => Some(source),
                 Err(e) => {
                     tracing::warn!(error = %e, "event-driven capture: input hooks unavailable; using fallback timer + idle only");
