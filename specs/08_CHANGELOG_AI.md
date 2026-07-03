@@ -17,6 +17,50 @@
 
 ---
 
+## 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
+- **Change:** Added the flow-recall core — a where-was-i heuristic and mark-this-moment — end to end.
+  - `crates/traits`: `FrameContextRow`, `CaptureNowRequest`/`CaptureNowReceiver`, `CapturedFrame.demanded`;
+    `ResumeContext`/`Mark`/`MarkToast` ts-rs types; `Settings.resume_min_dwell_secs` (120) +
+    `marks_hotkey` ("Ctrl+Alt+M"); `Store` methods `insert_mark`/`list_marks`/`resolve_mark`/
+    `set_mark_note`/`recent_frame_contexts` (default bodies); moved the pure `is_excluded` matcher to
+    `traits::privacy` so the kernel reuses it without depending on `capture`.
+  - `crates/store`: migration **v10** (`marks` table + `idx_marks_open`, `LATEST_SCHEMA_VERSION 9→10`);
+    `marks.rs` (CRUD with a clear FK-miss error, idempotent resolve, canonical list order);
+    `recent_frame_contexts` query. Populated-DB migration test (mirrors the v9 pattern) + marks CRUD/
+    ordering + purge-survival tests + a `recent_frame_contexts` ordering test.
+  - `crates/kernel`: `resume.rs` — a pure `last_sustained_context` heuristic (context key = app_hint +
+    browser domain; transient-excursion absorption using per-key presence-span; anchor = last non-self
+    context; excludes anchor/ScreenSearch/excluded-apps) with a 15-case fixture suite, plus the
+    `where_was_i(store, settings)` convenience. `capture_now` (serialized by a gate, two-timeout ack →
+    frame-id, honest failures) + `add_mark`; `CaptureFactory` gains the demand receiver; the capture
+    loop returns the demanded frame's id via a `pending_demand` slot. Settings load/save/sanitize for
+    the two new keys + tests.
+  - `crates/capture`: per-monitor diff-gate bypass (`CaptureRequest.bypass_for`) with a static-screen
+    frame-pool recreate so a demanded frame is never dropped; the `capture_now` demand seam in
+    `next_frame` (a `Wake` enum racing the timer/event wait against the demand channel; privacy gates
+    still apply, denials acked honestly); `select_target_monitor` (foreground monitor → primary → first);
+    a pure `diff::gate_passes` helper. Unit tests for the gate, target-monitor selection.
+  - `src-tauri`: `overlay.rs` gains the `marks.hotkey` registration (mirrors the overlay hotkey, loud D6
+    failure), a non-focus-stealing `show_mark_toast` (`set_focusable(false)` → show without focus), and
+    `focus_overlay_for_note`/`dismiss_mark_toast`. New commands `where_was_i`/`add_mark`/`list_marks`/
+    `resolve_mark`/`set_mark_note` (mutations emit `marks_changed`); setup registers the marks hotkey,
+    `set_settings` reregisters it. Kernel-level mark tests (demanded frame + mark; capture-off honest
+    failure; denial propagates; mark-by-frame-id).
+  - `ui`: IPC wrappers/queries/mutations/events for all of the above (`marks_changed` invalidates the
+    strip cross-window); `OverlayRuntime` flow|mark view + `MarkToast` (optional note, ~6s auto-dismiss
+    paused while typing); overlay empty state → `WhereWasIStrip` (+ Enter jumps to the resume frame);
+    Deck `WhereWasICard` + `IntentionsStrip` (open/done/dismiss, no badge counts); Settings mark hotkey
+    + dwell fields; `IconMark`.
+  - Docs: `03 §7` gains the `set_mark_note` row + `§7b` note; `05`/`06`/`07`; `docs/TESTING.md` PR6
+    manual-acceptance section; `CHANGELOG.md`.
+- **Why:** 0.3.0 PR6 (`docs/0.3.0.md` Part II; `03 §7b`/`§4`/`§7`/`§13b.5`; D8/D9/D10/D14/D15). The
+  ADHD core of the arc — pull-based recall that reuses the store, capture pipeline, and overlay with no
+  new subsystem.
+- **Verification:** `cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` ·
+  `cargo build --workspace` · `cargo test --workspace` (all green; new: 15 resume + v10 migration +
+  marks CRUD + diff/target-monitor + 4 kernel mark tests) · `ui` `npm run lint && npm run build` ·
+  bindings diff clean. Live desktop checks per `docs/TESTING.md` PR6.
+
 ## 2026-07-03 — 0.3.0 PR5: Flow overlay (`feat/pr5-flow-overlay`)
 - **Change:** Added the PR5 Flow overlay shell, IPC, UI, settings surface, and capture-self-exclusion
   tests.

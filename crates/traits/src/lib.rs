@@ -9,6 +9,7 @@
 //! - [`domain`] — internal value types (frames, OCR, embeddings, …).
 //! - [`ipc`] — the typed UI ↔ core contract (`ts-rs`-exported, `03 §7`).
 //! - [`jobs`] — durable job-queue types (`03 §5`).
+//! - [`privacy`] — the pure excluded-apps matcher shared by `capture` + `kernel`.
 
 #![forbid(unsafe_code)]
 
@@ -16,6 +17,7 @@ pub mod contracts;
 pub mod domain;
 pub mod ipc;
 pub mod jobs;
+pub mod privacy;
 
 pub use contracts::{
     AnswerProvider, BackfillControl, CaptureSource, EmbeddingProvider, OcrProvider, PressureProbe,
@@ -24,6 +26,7 @@ pub use contracts::{
 pub use domain::*;
 pub use ipc::*;
 pub use jobs::*;
+pub use privacy::is_excluded;
 
 /// Workspace-wide fallible result type (`03 §3`).
 ///

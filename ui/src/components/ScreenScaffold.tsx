@@ -12,7 +12,11 @@ export interface ScreenScaffoldProps {
   children?: ReactNode;
 }
 
-export function ScreenScaffold({ title, purpose, children }: ScreenScaffoldProps) {
+export function ScreenScaffold({
+  title,
+  purpose,
+  children,
+}: ScreenScaffoldProps) {
   return (
     <div className="p-6 max-w-5xl mx-auto flex flex-col gap-4">
       <Panel title={title}>

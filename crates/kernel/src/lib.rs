@@ -15,26 +15,32 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 use traits::{
-    AnswerProvider, BackfillControl, CaptureConfig, CaptureSource, ComponentReadiness,
-    ComponentStatus, EmbeddingProvider, JobKind, ModelDownloadStatus, NewJob, OcrProvider,
-    PressureProbe, Readiness, SidecarState, SidecarStatus, Store, ThrottleStatus, Toast,
-    ToastLevel, VisionProvider, VisionTarget,
+    AnswerProvider, BackfillControl, CaptureConfig, CaptureNowReceiver, CaptureNowRequest,
+    CaptureSource, ComponentReadiness, ComponentStatus, EmbeddingProvider, JobKind,
+    ModelDownloadStatus, NewJob, OcrProvider, PressureProbe, Readiness, SidecarState,
+    SidecarStatus, Store, ThrottleStatus, Toast, ToastLevel, VisionProvider, VisionTarget,
 };
 
 mod capture_loop;
 mod events;
 pub mod reports;
+pub mod resume;
 pub mod settings;
 mod throttle;
 mod vision_scheduler;
 mod worker_pool;
 
-pub use capture_loop::{run_capture_loop, CaptureLoopExit, LoopCtx};
+pub use capture_loop::{run_capture_loop, CaptureLoopExit, LoopCtx, PendingDemand};
 pub use events::KernelEvent;
 pub use worker_pool::process_job;
+
+/// Timeout for one `capture_now` demand end-to-end (the worker ack, then the kernel
+/// loop inserting the demanded frame and returning its id). An engineering bound, not a
+/// user knob — a mark that can't be serviced this fast is surfaced as an honest failure.
+const CAPTURE_NOW_TIMEOUT_MS: u64 = 5_000;
 
 /// A platform idle-time source, injected by the composition root (the kernel forbids
 /// `unsafe`, so it can't query Win32 itself). Returns milliseconds since the last user
@@ -52,13 +58,30 @@ const VISION_RANGE_CAP: u32 = 1000;
 /// the composition root so the kernel stays impl-agnostic; called on every
 /// `start_capture` so settings changes take effect and `stop` can fully release the
 /// OS capture resources by dropping the source.
-pub type CaptureFactory =
-    Arc<dyn Fn(CaptureConfig) -> anyhow::Result<Box<dyn CaptureSource>> + Send + Sync>;
+pub type CaptureFactory = Arc<
+    dyn Fn(CaptureConfig, CaptureNowReceiver) -> anyhow::Result<Box<dyn CaptureSource>>
+        + Send
+        + Sync,
+>;
 
 struct CaptureHandle {
     id: u64,
     stop: watch::Sender<bool>,
     join: JoinHandle<()>,
+    /// Sender for mark-this-moment `capture_now` demands into this capture session's
+    /// worker (`03 §7b`, D8). Dropped with the handle on stop, closing the channel so the
+    /// capture source's demand arm goes inert.
+    capture_now: mpsc::Sender<CaptureNowRequest>,
+}
+
+/// Clears the kernel's `pending_demand` slot on drop, so every `capture_now` exit path
+/// (including an early `?`/`bail!`) leaves no stale frame-id sender behind to misroute
+/// the next demand's frame (`03 §7b`, D8).
+struct ClearPendingDemand<'a>(&'a PendingDemand);
+impl Drop for ClearPendingDemand<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().expect("pending demand lock poisoned") = None;
+    }
 }
 
 /// The orchestrator. Holds the long-lived providers (store, OCR), the capture
@@ -106,6 +129,12 @@ pub struct Kernel {
     throttle_status: Arc<RwLock<ThrottleStatus>>,
     /// The running throttle governor loop; `None` when the throttle is disabled.
     throttle: Mutex<Option<throttle::ThrottleHandle>>,
+    /// One-shot slot handing a demanded frame's `frame_id` back to a waiting
+    /// `capture_now` caller; shared into every capture loop's `LoopCtx` (`03 §7b`, D8).
+    pending_demand: PendingDemand,
+    /// Serializes `capture_now` demands so two rapid mark presses each complete fully
+    /// (one frame + one mark each) instead of racing the single `pending_demand` slot.
+    capture_now_gate: Mutex<()>,
 }
 
 impl Kernel {
@@ -190,6 +219,8 @@ impl Kernel {
                 gpu_monitored: false,
             })),
             throttle: Mutex::new(None),
+            pending_demand: Arc::new(std::sync::Mutex::new(None)),
+            capture_now_gate: Mutex::new(()),
         }
     }
 
@@ -229,7 +260,11 @@ impl Kernel {
 
         let settings = settings::load_settings(self.store.as_ref()).await;
         let cfg = settings::capture_config(&settings);
-        let capture = match (self.capture_factory)(cfg) {
+        // The mark-this-moment demand channel for this capture session (`03 §7b`, D8):
+        // the source holds the receiver, the handle keeps the sender. Bounded + small —
+        // demands are serialized by `capture_now_gate`, so one is ever in flight.
+        let (capture_now_tx, capture_now_rx) = mpsc::channel::<CaptureNowRequest>(4);
+        let capture = match (self.capture_factory)(cfg, capture_now_rx) {
             Ok(c) => c,
             Err(e) => {
                 self.set_capture_readiness(ComponentStatus::Unavailable, Some(e.to_string()));
@@ -249,6 +284,7 @@ impl Kernel {
             chrome_suppress_min_seen: settings.text_chrome_suppress_min_seen,
             chrome_protect_min_chars: settings.text_chrome_protect_min_chars,
             chrome_region_buckets: settings.text_chrome_region_buckets,
+            pending_demand: self.pending_demand.clone(),
         };
         let id = self.capture_generation.fetch_add(1, Ordering::Relaxed);
         let capture_slot = self.capture.clone();
@@ -277,6 +313,7 @@ impl Kernel {
             id,
             stop: stop_tx,
             join,
+            capture_now: capture_now_tx,
         });
         self.set_capture_readiness(ComponentStatus::Ready, None);
         drop(guard);
@@ -325,6 +362,87 @@ impl Kernel {
         }
         self.stop_capture().await;
         self.start_capture().await
+    }
+
+    /// Demands one capture **now**, bypassing the diff gate, and returns the stored
+    /// frame's id (mark-this-moment, `03 §7b`, D8). The privacy gate still applies in the
+    /// capture source (a locked screen / our own window / an excluded app is refused with
+    /// an honest reason). Errors — surfaced to the user, never a silent no-op — if capture
+    /// is off, the worker is gone, or the demand times out.
+    ///
+    /// `capture_now_gate` serializes demands so two rapid mark presses each complete
+    /// fully (one guaranteed frame each) rather than racing the single `pending_demand`
+    /// slot. The capture slot lock is released before awaiting, so a demand never blocks
+    /// `stop_capture`.
+    pub async fn capture_now(&self) -> anyhow::Result<i64> {
+        let _serialize = self.capture_now_gate.lock().await;
+
+        // Clone the live session's demand sender, then drop the capture lock before await.
+        let sender = {
+            let guard = self.capture.lock().await;
+            match guard.as_ref() {
+                Some(h) => h.capture_now.clone(),
+                None => anyhow::bail!("capture is off"),
+            }
+        };
+
+        // Register the frame-id return slot before issuing the demand so the loop can fire
+        // it the instant the demanded frame is inserted.
+        let (frame_tx, frame_rx) = oneshot::channel::<i64>();
+        *self
+            .pending_demand
+            .lock()
+            .expect("pending demand lock poisoned") = Some(frame_tx);
+
+        // Guard so every early return clears the slot (a stale sender would misroute the
+        // next demand's frame id).
+        let clear_on_drop = ClearPendingDemand(&self.pending_demand);
+
+        let (ack_tx, ack_rx) = oneshot::channel::<anyhow::Result<()>>();
+        if sender
+            .send(CaptureNowRequest { ack: ack_tx })
+            .await
+            .is_err()
+        {
+            anyhow::bail!("capture stopped");
+        }
+
+        let timeout = std::time::Duration::from_millis(CAPTURE_NOW_TIMEOUT_MS);
+        // 1. The worker acks once the demanded frame is queued (or denies with a reason).
+        match tokio::time::timeout(timeout, ack_rx).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(reason))) => return Err(reason),
+            // Sender dropped (capture stopped mid-flight) or timed out → honest failure.
+            Ok(Err(_)) => anyhow::bail!("capture stopped"),
+            Err(_) => anyhow::bail!("capture timed out"),
+        }
+        // 2. Then the kernel loop hands back the inserted frame's id.
+        let frame_id = match tokio::time::timeout(timeout, frame_rx).await {
+            Ok(Ok(id)) => id,
+            Ok(Err(_)) => anyhow::bail!("captured frame was dropped before it could be marked"),
+            Err(_) => anyhow::bail!("capture timed out"),
+        };
+        drop(clear_on_drop); // slot already emptied by the loop's take(); keep it tidy
+        Ok(frame_id)
+    }
+
+    /// Creates a mark (`03 §7b`, D8). Exactly one source: an existing `frame_id`, or
+    /// `capture_now = true` to capture the current screen past the diff gate first. A
+    /// `capture_now` failure inserts **nothing** (no orphan mark). One demand → one mark.
+    pub async fn add_mark(
+        &self,
+        frame_id: Option<i64>,
+        capture_now: bool,
+        note: Option<String>,
+    ) -> anyhow::Result<i64> {
+        let target = match (frame_id, capture_now) {
+            (Some(id), false) => id,
+            (None, true) => self.capture_now().await?,
+            _ => anyhow::bail!("add_mark needs exactly one of frame_id or capture_now"),
+        };
+        self.store
+            .insert_mark(target, worker_pool::now_ms(), note)
+            .await
     }
 
     fn set_capture_readiness(&self, status: ComponentStatus, detail: Option<String>) {

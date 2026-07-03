@@ -12,13 +12,22 @@ export interface EmptyStateProps {
   action?: ReactNode;
 }
 
-export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+}: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center text-center gap-3 px-6 py-12">
       {icon && <div className="text-ink-faint">{icon}</div>}
-      <h2 className="font-display uppercase tracking-eyebrow text-subtitle text-ink">{title}</h2>
+      <h2 className="font-display uppercase tracking-eyebrow text-subtitle text-ink">
+        {title}
+      </h2>
       {description && (
-        <p className="text-body text-ink-muted max-w-prose font-body">{description}</p>
+        <p className="text-body text-ink-muted max-w-prose font-body">
+          {description}
+        </p>
       )}
       {action && <div className="mt-2">{action}</div>}
     </div>

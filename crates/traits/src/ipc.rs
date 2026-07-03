@@ -584,6 +584,15 @@ pub struct Settings {
     pub overlay_hotkey: String,
     /// Top-N results in the Flow overlay (`overlay.max_results`, 0.3.0 PR5).
     pub overlay_max_results: u32,
+    /// Minimum dwell for the where-was-i heuristic, seconds (`resume.min_dwell_secs`,
+    /// 0.3.0 PR6; `03 §7b`, D9). A context must persist at least this long to count as a
+    /// "sustained context" worth resuming, and the same threshold decides whether a
+    /// brief excursion breaks a run. One knob, never hardcoded (`03 §3b` stance).
+    pub resume_min_dwell_secs: u32,
+    /// Global mark-this-moment hotkey (`marks.hotkey`, 0.3.0 PR6; `03 §7b`, D6). Same
+    /// shell-registered/validated posture as `overlay_hotkey`: a bad/colliding value
+    /// surfaces as the D6 Settings warning + toast, never a silent rewrite.
+    pub marks_hotkey: String,
     /// Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
     /// former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
     /// never runs and enrichment drains at full configured concurrency, exactly as
@@ -717,6 +726,11 @@ impl Default for Settings {
             // shell concerns so registration failure can surface loudly in Settings.
             overlay_hotkey: "Ctrl+Alt+Space".to_string(),
             overlay_max_results: 8,
+            // 0.3.0 flow recall (docs/0.3.0.md PR6): 120 s min sustained-context dwell
+            // for where-was-i (D9), and the mark-this-moment chord (D6, non-OS-reserved,
+            // shell-registered so a conflict surfaces loudly in Settings).
+            resume_min_dwell_secs: 120,
+            marks_hotkey: "Ctrl+Alt+M".to_string(),
             // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
             // master OFF: flipping it on backs enrichment off under sustained load. Enter
             // above 85% CPU / 90% GPU held 5 s; exit below 65% / 70% held 8 s (exit < enter
@@ -949,6 +963,77 @@ pub struct OpenMoment {
     pub frame_id: i64,
 }
 
+/// The last sustained work context before the current detour (`where_was_i` output,
+/// 0.3.0 PR6; `03 §7b`, D9). `None` from the command means "nothing to resume yet".
+/// The pure heuristic (`kernel::resume`) picks the most recent run of frames sharing a
+/// context key that persisted ≥ `resume.min_dwell_secs`, excluding the current
+/// (anchor) context, ScreenSearch itself, and `privacy.excluded_apps`. `frame_id` is
+/// the run's representative (last) frame — `Enter`/click opens its Moment. `image_path`
+/// and `image_purged` let the overlay/Deck render a thumbnail without a second
+/// `get_frame`. `browser_url` is dormant today (always `None` in production capture).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ResumeContext {
+    #[ts(type = "number")]
+    pub frame_id: i64,
+    /// The representative frame's `app_hint`, original casing (the context's app).
+    pub app: String,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
+    /// First capture of the sustained run, unix epoch ms.
+    #[ts(type = "number")]
+    pub span_start: i64,
+    /// Last capture of the sustained run (the representative frame), unix epoch ms.
+    #[ts(type = "number")]
+    pub span_end: i64,
+    pub image_path: String,
+    pub image_purged: bool,
+}
+
+/// A mark — a user-flagged moment with an optional intention note (`list_marks`
+/// output, 0.3.0 PR6; `03 §4`/`§7b`). Carries the joined frame fields the Intentions
+/// strip renders (thumbnail + context) so listing marks never triggers an N+1
+/// `get_frame` per row; the `frames` INNER JOIN is total because `marks.frame_id`
+/// CASCADEs with the frame. A retention-degraded frame keeps its row (image_purged =
+/// true, "text kept"), so a mark survives image expiry (`03 §4`, D10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct Mark {
+    #[ts(type = "number")]
+    pub mark_id: i64,
+    #[ts(type = "number")]
+    pub frame_id: i64,
+    /// When the mark was created, unix epoch ms.
+    #[ts(type = "number")]
+    pub created_at: i64,
+    /// Optional one-line intention note (attached via `set_mark_note` after the fact).
+    pub note: Option<String>,
+    /// `null` while unresolved; set when the user resolves or dismisses the mark.
+    #[ts(type = "number | null")]
+    pub resolved_at: Option<i64>,
+    /// The marked frame's capture time, unix epoch ms (joined for display "age").
+    #[ts(type = "number")]
+    pub captured_at: i64,
+    pub image_path: String,
+    pub image_purged: bool,
+    pub app_hint: Option<String>,
+    pub window_title: Option<String>,
+}
+
+/// Payload of the overlay `mark_toast` event (0.3.0 PR6; `03 §7b`). Tells the overlay
+/// window to show the quiet, non-focus-stealing "Marked ✓ — note?" confirmation (or a
+/// warning on failure). `mark_id` is `Some` on success (so the optional note can be
+/// attached via `set_mark_note`), `None` on the failure variant (e.g. capture off, or a
+/// privacy-gate denial), where only the `message` is shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct MarkToast {
+    #[ts(type = "number | null")]
+    pub mark_id: Option<i64>,
+    pub level: ToastLevel,
+    pub message: String,
+}
+
 /// A point-in-time system-pressure reading from the `sysmon` probe (`03 §8`). The
 /// enrichment throttle (`03 §5`) consumes this to decide whether to back enrichment off
 /// under sustained load. `gpu_pct` is `None` and `gpu_monitored` is `false` when Windows
@@ -1012,6 +1097,9 @@ mod ts_number_guard {
             ("ReportRequest", ReportRequest::inline()),
             ("ReportResponse", ReportResponse::inline()),
             ("OpenMoment", OpenMoment::inline()),
+            ("ResumeContext", ResumeContext::inline()),
+            ("Mark", Mark::inline()),
+            ("MarkToast", MarkToast::inline()),
             ("PressureSample", PressureSample::inline()),
             ("ThrottleStatus", ThrottleStatus::inline()),
         ];

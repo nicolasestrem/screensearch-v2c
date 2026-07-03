@@ -11,7 +11,13 @@ export interface ToggleProps {
   disabled?: boolean;
 }
 
-export function Toggle({ label, checked, onChange, hint, disabled = false }: ToggleProps) {
+export function Toggle({
+  label,
+  checked,
+  onChange,
+  hint,
+  disabled = false,
+}: ToggleProps) {
   const id = useId();
   const hintId = `${id}-hint`;
 

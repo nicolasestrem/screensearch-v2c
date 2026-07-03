@@ -4,6 +4,7 @@ import { Button } from "../primitives";
 import { cn } from "../../lib/cn";
 
 export const DEFAULT_OVERLAY_HOTKEY = "Ctrl+Alt+Space";
+export const DEFAULT_MARKS_HOTKEY = "Ctrl+Alt+M";
 
 const MODIFIER_CODES = new Set([
   "AltLeft",
@@ -96,7 +97,9 @@ export function HotkeyField({
         <button
           type="button"
           aria-labelledby={id}
-          aria-describedby={cn(hint ? hintId : null, shownError ? errorId : null) || undefined}
+          aria-describedby={
+            cn(hint ? hintId : null, shownError ? errorId : null) || undefined
+          }
           aria-invalid={shownError ? true : undefined}
           onClick={() => {
             setRecording(true);
@@ -106,20 +109,30 @@ export function HotkeyField({
           className={cn(
             "inline-flex min-h-hit-min min-w-48 items-center rounded-chip border bg-base px-3",
             "font-mono text-data text-ink transition-colors duration-fast ease-ui",
-            recording ? "border-accent text-accent" : "border-line hover:border-ink-faint",
+            recording
+              ? "border-accent text-accent"
+              : "border-line hover:border-ink-faint",
             shownError && "border-danger",
           )}
         >
           {recording ? "Recording..." : value}
         </button>
-        <Button size="sm" variant="ghost" onClick={() => onChange(defaultValue)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onChange(defaultValue)}
+        >
           Reset
         </Button>
       </div>
       <span className="text-caption text-ink-faint" aria-live="polite">
         {recording ? "Press a modified key combination." : hint}
       </span>
-      {hint && !recording && <span id={hintId} className="sr-only">{hint}</span>}
+      {hint && !recording && (
+        <span id={hintId} className="sr-only">
+          {hint}
+        </span>
+      )}
       {shownError && (
         <span id={errorId} className="text-caption text-danger">
           {shownError}
@@ -152,7 +165,8 @@ function chordFromEvent(e: KeyboardEvent<HTMLButtonElement>): ChordResult {
 }
 
 function keyToken(code: string): string | null {
-  if (code.startsWith("Key") && code.length === 4) return code.slice(3).toUpperCase();
+  if (code.startsWith("Key") && code.length === 4)
+    return code.slice(3).toUpperCase();
   if (code.startsWith("Digit") && code.length === 6) return code.slice(5);
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   return KEY_TOKENS[code] ?? null;

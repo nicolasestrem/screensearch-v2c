@@ -6,6 +6,53 @@
 
 ---
 
+## TODO-3 — Settings-level hotkey-conflict check for the mark/overlay chords (deferred from PR #75, 0.3.0 PR6)
+
+**Status:** OPEN. Deferred **by decision**, not by time. Reviewer suggestion from PR #75
+(claude hand review). Low value given the existing OS-level guard; recorded so the deferral is
+deliberate.
+
+### The suggestion
+`sanitize_settings` (`crates/kernel/src/settings.rs`) accepts `overlay_hotkey` and `marks_hotkey`
+set to the **same chord** silently. A settings-layer cross-check could reject/flag the collision
+earlier and more cheaply than an OS round-trip.
+
+### Why it's deferred (the trade-offs)
+- **The conflict is already caught, loudly.** When two chords collide, the second
+  `global_shortcut().on_shortcut(...)` registration fails at OS-registration time and surfaces the
+  D6 warning toast + a `failed` `HotkeyStatus` (`src-tauri/src/overlay.rs`
+  `register_*_hotkey` → `emit_hotkey_warning`). The user sees it immediately; nothing is silently
+  dropped. This is the same path every other unavailable-chord case flows through.
+- **Consistency.** Every hotkey availability decision currently lives at registration time, keyed by
+  the actual OS response — the only source of truth for "is this chord free" (a chord can also
+  collide with a *third-party* global hotkey, which a settings-layer app-internal check can't know).
+  Adding a partial app-internal check duplicates that logic while still not being authoritative.
+- **Not hot / not a correctness bug.** Settings save is user-initiated and rare; the collision is
+  recoverable (pick another chord) and observable.
+
+### If ever implemented — do it without fragmenting the source of truth
+- Treat a settings-layer check as a *fast-path UX hint* (e.g. inline field warning "same as Flow
+  overlay"), not as the authority — keep the OS-registration path as the real gate so third-party
+  collisions still surface.
+- Mirror the check in both the Rust `sanitize_settings` and the UI `sanitizeSettings`
+  (`ui/src/routes/Settings.tsx`) if it's meant to block save, and add a round-trip test.
+
+### Also considered, rejected (not a TODO)
+- **Done/Dismiss in `IntentionsStrip` share one resolve op** (claude review): this is the documented
+  backend design — dismiss = resolve-with-no-action, the same `resolve_mark` call
+  (`crates/store/src/marks.rs`). Two labels, one op, by intent. No change warranted.
+
+### Files
+- `crates/kernel/src/settings.rs` (`sanitize_settings`) · `src-tauri/src/overlay.rs` (the live
+  registration gate that already handles this) · `ui/src/routes/Settings.tsx` (`sanitizeSettings`,
+  if the check should also live client-side).
+
+### References
+- PR #75 review (claude hand review, finding #3) · `07_KNOWN_GAPS.md` (0.3.0 PR6 decisions) ·
+  D6 loud-conflict decision.
+
+---
+
 ## TODO-2 — Bulk span-merge for the purged-span backfill (deferred from `fix/degrade-to-text-db-growth`, `07` #73a)
 
 **Status:** OPEN. Deferred **by decision**, not by time. Reviewer suggestion from PR #67

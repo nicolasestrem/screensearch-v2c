@@ -22,11 +22,22 @@ export interface PanelProps extends HTMLAttributes<HTMLElement> {
   children: ReactNode;
 }
 
-export function Panel({ title, action, flush = false, group = false, className, children, ...rest }: PanelProps) {
+export function Panel({
+  title,
+  action,
+  flush = false,
+  group = false,
+  className,
+  children,
+  ...rest
+}: PanelProps) {
   // A stable id from the title so the group can be labelled by it (only when grouping).
   const titleId =
     group && title
-      ? `panel-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
+      ? `panel-${title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")}`
       : undefined;
   return (
     <section

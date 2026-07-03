@@ -192,6 +192,8 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         .await,
         overlay_hotkey: json(store, "overlay.hotkey", d.overlay_hotkey).await,
         overlay_max_results: num(store, "overlay.max_results", d.overlay_max_results).await,
+        resume_min_dwell_secs: num(store, "resume.min_dwell_secs", d.resume_min_dwell_secs).await,
+        marks_hotkey: json(store, "marks.hotkey", d.marks_hotkey).await,
         throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
         throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
             .await,
@@ -460,6 +462,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.overlay_max_results.to_string(),
         ),
         (
+            "resume.min_dwell_secs".into(),
+            s.resume_min_dwell_secs.to_string(),
+        ),
+        (
+            "marks.hotkey".into(),
+            serde_json::to_string(&s.marks_hotkey)?,
+        ),
+        (
             "throttle.enabled".into(),
             bool_str(s.throttle_enabled).into(),
         ),
@@ -583,6 +593,16 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
         hotkey => hotkey.to_string(),
     };
     s.overlay_max_results = clamp_u32(s.overlay_max_results, 1, 50);
+    // 0.3.0 flow recall (docs/0.3.0.md PR6). The where-was-i dwell is floored at 10 s (a
+    // shorter "sustained" context is noise) and ceilinged at a day; the mark hotkey empty
+    // → default, same shell-registered posture as the overlay hotkey. Thresholds/chords are
+    // settings, never hardcoded (`03 §3b` stance); the shell surfaces a bad chord loudly (D6).
+    s.resume_min_dwell_secs = clamp_u32(s.resume_min_dwell_secs, 10, 86_400);
+    let default_marks_hotkey = Settings::default().marks_hotkey;
+    s.marks_hotkey = match s.marks_hotkey.trim() {
+        "" => default_marks_hotkey,
+        hotkey => hotkey.to_string(),
+    };
     // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Thresholds are
     // settings, never hardcoded. Each `*_exit_pct` is clamped strictly below its
     // `*_enter_pct` so the hysteresis invariant holds even against hand-edited DB values
@@ -765,5 +785,41 @@ mod tests {
             ..Settings::default()
         });
         assert_eq!(s.sidecar_recycle_rss_mb, 131_072);
+    }
+
+    #[test]
+    fn resume_min_dwell_secs_clamps_to_band() {
+        // Below the 10 s floor: clamped up (a shorter "sustained" context is noise).
+        let s = sanitize_settings(Settings {
+            resume_min_dwell_secs: 0,
+            ..Settings::default()
+        });
+        assert_eq!(s.resume_min_dwell_secs, 10);
+        // Above the day ceiling: clamped down.
+        let s = sanitize_settings(Settings {
+            resume_min_dwell_secs: 999_999,
+            ..Settings::default()
+        });
+        assert_eq!(s.resume_min_dwell_secs, 86_400);
+        // In band: unchanged (the 120 s default).
+        let s = sanitize_settings(Settings::default());
+        assert_eq!(s.resume_min_dwell_secs, 120);
+    }
+
+    #[test]
+    fn marks_hotkey_empty_falls_back_to_default() {
+        let default = Settings::default().marks_hotkey;
+        // Blank / whitespace-only → the default chord (never silently blank, D6).
+        let s = sanitize_settings(Settings {
+            marks_hotkey: "   ".to_string(),
+            ..Settings::default()
+        });
+        assert_eq!(s.marks_hotkey, default);
+        // A real chord is trimmed and kept.
+        let s = sanitize_settings(Settings {
+            marks_hotkey: "  Ctrl+Alt+K  ".to_string(),
+            ..Settings::default()
+        });
+        assert_eq!(s.marks_hotkey, "Ctrl+Alt+K");
     }
 }

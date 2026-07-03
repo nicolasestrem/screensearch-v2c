@@ -27,22 +27,27 @@ import type { MonitorInfo } from "../../bindings/MonitorInfo";
 import type { AppSuppression } from "../../bindings/AppSuppression";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
+import type { Mark } from "../../bindings/Mark";
+import type { ResumeContext } from "../../bindings/ResumeContext";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
 
 /** Current subsystem readiness (`03 §7`). */
-export const getReadiness = (): Promise<Readiness> => invoke<Readiness>("get_readiness");
+export const getReadiness = (): Promise<Readiness> =>
+  invoke<Readiness>("get_readiness");
 
 /** Aggregate job-queue counts (`03 §7`). */
-export const getJobStats = (): Promise<JobStats> => invoke<JobStats>("get_job_stats");
+export const getJobStats = (): Promise<JobStats> =>
+  invoke<JobStats>("get_job_stats");
 
 /** Storage footprint for the StatusRail. */
 export const getStorageStats = (): Promise<StorageStats> =>
   invoke<StorageStats>("get_storage_stats");
 
 /** Connected monitor metadata for Settings. */
-export const getMonitors = (): Promise<MonitorInfo[]> => invoke<MonitorInfo[]>("get_monitors");
+export const getMonitors = (): Promise<MonitorInfo[]> =>
+  invoke<MonitorInfo[]>("get_monitors");
 
 /** Device ids reported by llama.cpp `--list-devices`. */
 export const listSidecarDevices = (): Promise<string[]> =>
@@ -70,7 +75,8 @@ export const enqueueVision = (target: VisionTarget): Promise<number> =>
   invoke<number>("enqueue_vision", { target });
 
 /** Ask a grounded question; the answer streams back via `answer_delta` events. */
-export const ask = (request: AskRequest): Promise<void> => invoke<void>("ask", { request });
+export const ask = (request: AskRequest): Promise<void> =>
+  invoke<void>("ask", { request });
 
 /** Cancel a streaming grounded answer by request id. */
 export const cancelAsk = (requestId: string): Promise<void> =>
@@ -78,7 +84,9 @@ export const cancelAsk = (requestId: string): Promise<void> =>
 
 /** Generate a recall report over a time range (`03 §8b`); progress streams via
  *  `report_progress` events, the report returns when complete. */
-export const generateReport = (request: ReportRequest): Promise<ReportResponse> =>
+export const generateReport = (
+  request: ReportRequest,
+): Promise<ReportResponse> =>
   invoke<ReportResponse>("generate_report", { request });
 
 /** Cancel an in-flight report by request id (stops at the next pass boundary). */
@@ -97,17 +105,25 @@ export const loadModel = (lane: ModelLane): Promise<void> =>
 export const unloadModel = (): Promise<void> => invoke<void>("unload_model");
 
 /** Frame-count density buckets over `[start, end)` for the Scanline Timeline. */
-export const getTimeline = (range: TimeRange, bucketCount: number): Promise<TimelineBucket[]> =>
+export const getTimeline = (
+  range: TimeRange,
+  bucketCount: number,
+): Promise<TimelineBucket[]> =>
   invoke<TimelineBucket[]>("get_timeline", { range, bucketCount });
 
 /** Lightweight frame list over `[start, end)`, newest-first, capped at `limit`
  *  (timeline thumbnails, deck recents, moment neighbours). */
-export const getFrames = (range: TimeRange, limit: number): Promise<FrameMeta[]> =>
-  invoke<FrameMeta[]>("get_frames", { range, limit });
+export const getFrames = (
+  range: TimeRange,
+  limit: number,
+): Promise<FrameMeta[]> => invoke<FrameMeta[]>("get_frames", { range, limit });
 
 /** The frame whose capture time is nearest `at` (unix ms), or `null` if the DB has
  *  no frames — resolves a timeline scan-head position to a concrete frame. */
-export const getNearestFrame = (at: number, range?: TimeRange): Promise<FrameMeta | null> =>
+export const getNearestFrame = (
+  at: number,
+  range?: TimeRange,
+): Promise<FrameMeta | null> =>
   invoke<FrameMeta | null>("get_nearest_frame", { at, range: range ?? null });
 
 /** The captures bracketing `at` (unix ms): up to `limitEach` closest frames on each
@@ -121,11 +137,15 @@ export const getFrameContext = (
   invoke<FrameMeta[]>("get_frame_context", { at, halfWindowMs, limitEach });
 
 /** Truthful activity aggregates over `[start, end)` for the Insights screen. */
-export const getInsights = (range: TimeRange, bucketCount: number): Promise<InsightsSummary> =>
+export const getInsights = (
+  range: TimeRange,
+  bucketCount: number,
+): Promise<InsightsSummary> =>
   invoke<InsightsSummary>("get_insights", { range, bucketCount });
 
 /** Read the persisted user settings (missing keys fall back to defaults). */
-export const getSettings = (): Promise<Settings> => invoke<Settings>("get_settings");
+export const getSettings = (): Promise<Settings> =>
+  invoke<Settings>("get_settings");
 
 /** Persist user settings; tiers hot-apply, the rest on restart / next capture. */
 export const setSettings = (settings: Settings): Promise<void> =>
@@ -149,8 +169,47 @@ export const getHotkeyStatus = (): Promise<HotkeyStatus[]> =>
 export const hideOverlay = (): Promise<void> => invoke<void>("hide_overlay");
 
 /** Acknowledge the overlay's first focused paint for hotkey-to-input timing logs. */
-export const overlayShownAck = (): Promise<void> => invoke<void>("overlay_shown_ack");
+export const overlayShownAck = (): Promise<void> =>
+  invoke<void>("overlay_shown_ack");
 
 /** Open a captured frame in the main window, then dismiss the overlay. */
 export const openMoment = (frameId: number): Promise<void> =>
   invoke<void>("open_moment", { frameId });
+
+/** The last sustained context before the current detour, or `null` for "nothing to
+ *  resume yet" (`where_was_i`, `03 §7b`). Drives the overlay empty state + Deck card. */
+export const whereWasI = (): Promise<ResumeContext | null> =>
+  invoke<ResumeContext | null>("where_was_i");
+
+/** Create a mark: exactly one of an existing `frameId`, or `captureNow` to capture the
+ *  current screen past the diff gate first (`add_mark`, `03 §7b`, D8). Returns the id. */
+export const addMark = (args: {
+  frameId?: number | null;
+  captureNow?: boolean;
+  note?: string | null;
+}): Promise<number> =>
+  invoke<number>("add_mark", {
+    frameId: args.frameId ?? null,
+    captureNow: args.captureNow ?? false,
+    note: args.note ?? null,
+  });
+
+/** All marks, unresolved first then newest-first within each group (`list_marks`). */
+export const listMarks = (): Promise<Mark[]> => invoke<Mark[]>("list_marks");
+
+/** Resolve a mark — done or dismiss, the same operation (`resolve_mark`, `03 §7b`). */
+export const resolveMark = (markId: number): Promise<void> =>
+  invoke<void>("resolve_mark", { markId });
+
+/** Attach the optional one-line note to an existing mark (`set_mark_note`, `03 §7`). */
+export const setMarkNote = (markId: number, note: string): Promise<void> =>
+  invoke<void>("set_mark_note", { markId, note });
+
+/** Make the overlay focusable + focus it when the user clicks the mark toast's note
+ *  field, so keystrokes land in the note (the toast is otherwise non-focusable, D1). */
+export const focusOverlayForNote = (): Promise<void> =>
+  invoke<void>("focus_overlay_for_note");
+
+/** Dismiss the mark toast, restoring the overlay to focusable for the next summon. */
+export const dismissMarkToast = (): Promise<void> =>
+  invoke<void>("dismiss_mark_toast");

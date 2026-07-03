@@ -1,0 +1,5 @@
+# Generated ts-rs bindings — the CI guard (`git diff --exit-code -- ui/src/bindings`
+# after `cargo test`) requires the canonical ts-rs output, so Prettier must not reformat
+# them. Build output is not source either. (Mirrors eslint.config.js `ignores`.)
+dist
+src/bindings

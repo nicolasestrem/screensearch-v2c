@@ -32,7 +32,11 @@ export function CapturesTrend({ buckets, range }: CapturesTrendProps) {
             <div
               key={i}
               className="absolute bottom-0 bg-accent"
-              style={{ left: `${left}%`, width: `${width}%`, height: `${height}%` }}
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                height: `${height}%`,
+              }}
             />
           );
         })}

@@ -142,6 +142,13 @@ pub struct CapturedFrame {
     /// decides to capture; the kernel copies it onto the stored [`NewFrame`]. Always
     /// [`CaptureTrigger::Timer`] in the 0.2.0 timer/idle path.
     pub trigger: CaptureTrigger,
+    /// `true` only for the one frame that satisfies a `capture_now` demand (0.3.0 PR6,
+    /// mark-this-moment; `03 §7b`, D8). The kernel loop reads it to correlate "the
+    /// marked frame" — after inserting it, the kernel hands its `frame_id` back to the
+    /// waiting `capture_now` caller. Always `false` on the normal timer/event path (a
+    /// multi-monitor `capture_now` cycle stores every changed monitor but flags only the
+    /// foreground-window monitor's frame — `03 §7b`).
+    pub demanded: bool,
 }
 
 /// Origin of a text span / the primary text of a frame (`03 §3b`). Serializes to
@@ -367,6 +374,45 @@ pub struct FrameEnrichmentInput {
     pub image_path: String,
     pub ocr_text: Option<String>,
 }
+
+/// One frame's context row for the where-was-i heuristic (`03 §7b`, D9). Internal —
+/// it never crosses IPC; the heuristic's *output* is [`crate::ipc::ResumeContext`].
+/// The store returns these newest-first (`Store::recent_frame_contexts`); the pure
+/// `kernel::resume` function walks them to find the last sustained context. Carries
+/// `window_title`/`browser_url` (which [`crate::ipc::FrameMeta`] omits) because the
+/// context key is `app_hint` refined by browser domain, and the representative frame
+/// needs the title/URL for its display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameContextRow {
+    pub frame_id: i64,
+    /// Capture time, unix epoch milliseconds.
+    pub captured_at: i64,
+    pub app_hint: Option<String>,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
+    pub image_path: String,
+    pub image_purged: bool,
+}
+
+/// One `capture_now` demand handed to the **capture worker** that drives
+/// [`CaptureSource::next_frame`](crate::CaptureSource) (0.3.0 PR6, mark-this-moment;
+/// `03 §7b`, D8). Deliberately **not** a [`CaptureSource`](crate::CaptureSource)
+/// method — the diff gate lives in the worker, and a demanded frame must bypass it
+/// (a demanded frame must never be dropped as "unchanged"). The worker acks once the
+/// demanded frame is queued for the kernel loop (or on a privacy-gate denial / device
+/// failure): `Ok(())` guarantees the loop will observe exactly one `demanded` frame;
+/// `Err(reason)` is surfaced to the user honestly (e.g. "capture is off", "the focused
+/// app is excluded from capture") — never a silent no-op.
+#[derive(Debug)]
+pub struct CaptureNowRequest {
+    pub ack: tokio::sync::oneshot::Sender<crate::Result<()>>,
+}
+
+/// The receiving half of the `capture_now` demand channel, handed to the capture
+/// source at construction so its wait loop can select on demands alongside the timer
+/// tick / event trigger (`03 §7b`). The kernel holds the [`tokio::sync::mpsc::Sender`]
+/// on the live capture handle.
+pub type CaptureNowReceiver = tokio::sync::mpsc::Receiver<CaptureNowRequest>;
 
 /// Configuration handed to a [`CaptureSource`](crate::CaptureSource) at
 /// construction. The kernel derives it from [`Settings`](crate::Settings) when

@@ -18,10 +18,9 @@ use image::RgbaImage;
 use kernel::{CaptureFactory, Kernel};
 use store::SqliteStore;
 use traits::{
-    AnswerDelta, AnswerOpts, AnswerProvider, CaptureConfig, CaptureSource, Embedding,
-    EmbeddingProvider, JobKind, NewFrame, NewJob, OcrProvider, OcrResult, PressureProbe,
-    PressureSample, Readiness, Result, RetrievedChunk, Settings, Store, VisionAnalysis,
-    VisionProvider,
+    AnswerDelta, AnswerOpts, AnswerProvider, CaptureSource, Embedding, EmbeddingProvider, JobKind,
+    NewFrame, NewJob, OcrProvider, OcrResult, PressureProbe, PressureSample, Readiness, Result,
+    RetrievedChunk, Settings, Store, VisionAnalysis, VisionProvider,
 };
 
 /// A pressure probe whose CPU reading the test sets live (GPU unmonitored, so this also
@@ -237,7 +236,7 @@ async fn throttle_pauses_heavy_enrichment_then_resumes_on_recovery() {
         .unwrap();
 
     let factory: CaptureFactory =
-        Arc::new(|_c: CaptureConfig| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
+        Arc::new(|_c, _rx| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
     let kernel = Kernel::new(
         store.clone(),
         Arc::new(NoOcr) as Arc<dyn OcrProvider>,
@@ -334,7 +333,7 @@ async fn throttle_disabled_drains_everything() {
         .unwrap();
 
     let factory: CaptureFactory =
-        Arc::new(|_c: CaptureConfig| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
+        Arc::new(|_c, _rx| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
     let kernel = Kernel::new(
         store.clone(),
         Arc::new(NoOcr) as Arc<dyn OcrProvider>,

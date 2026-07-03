@@ -1,16 +1,30 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { Button, EmptyState, ErrorState, Skeleton } from "../components/primitives";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+} from "../components/primitives";
 import { IconRecall } from "../components/icons";
 import { hideOverlay, openMoment, overlayShownAck } from "../lib/ipc/commands";
 import { listenTo } from "../lib/ipc/events";
+import { queryKeys } from "../lib/ipc/queryKeys";
 import { useAsk } from "../lib/ipc/useAsk";
-import { useSearch, useSettings } from "../lib/ipc/queries";
+import { useSearch, useSettings, useWhereWasI } from "../lib/ipc/queries";
 import { cn } from "../lib/cn";
 import type { SearchQuery } from "../bindings/SearchQuery";
 import type { SearchHit } from "../bindings/SearchHit";
 import { OverlayResultRow } from "./OverlayResultRow";
 import { OverlayAsk } from "./OverlayAsk";
+import { WhereWasIStrip } from "./WhereWasIStrip";
 
 type Mode = "search" | "ask";
 
@@ -21,6 +35,7 @@ const LISTBOX_ID = "flow-overlay-results";
 
 export function FlowOverlay() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>("search");
   const [text, setText] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -28,13 +43,18 @@ export function FlowOverlay() {
   const settings = useSettings();
   const ask = useAsk();
   const resetAsk = ask.reset;
-  const resultLimit = settings.data?.overlay_max_results ?? DEFAULT_RESULT_LIMIT;
+  const resultLimit =
+    settings.data?.overlay_max_results ?? DEFAULT_RESULT_LIMIT;
   const normalizedText = text.trim();
   const committedSearchText = debounced.trim();
   const searchWaitingForCommit =
-    mode === "search" && normalizedText.length > 0 && normalizedText !== committedSearchText;
+    mode === "search" &&
+    normalizedText.length > 0 &&
+    normalizedText !== committedSearchText;
   const searchMatchesInput =
-    mode === "search" && normalizedText.length > 0 && normalizedText === committedSearchText;
+    mode === "search" &&
+    normalizedText.length > 0 &&
+    normalizedText === committedSearchText;
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(text), SEARCH_DEBOUNCE_MS);
@@ -51,10 +71,18 @@ export function FlowOverlay() {
     [debounced, resultLimit],
   );
   const search = useSearch(query, mode === "search", true);
+  // Empty-query search state shows the where-was-i strip (`03 §7b`); the query only runs
+  // when that strip is visible, and refreshes on each summon (it depends on live context).
+  const showResume = mode === "search" && normalizedText.length === 0;
+  const resume = useWhereWasI(showResume);
   const hits = searchMatchesInput ? (search.data ?? []) : [];
-  const activeHit = searchMatchesInput ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))] : undefined;
+  const activeHit = searchMatchesInput
+    ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))]
+    : undefined;
   const busy =
-    (mode === "search" && normalizedText.length > 0 && (searchWaitingForCommit || search.isFetching)) ||
+    (mode === "search" &&
+      normalizedText.length > 0 &&
+      (searchWaitingForCommit || search.isFetching)) ||
     ask.phase === "streaming";
 
   useEffect(() => {
@@ -82,6 +110,8 @@ export function FlowOverlay() {
 
     track(
       listenTo("overlay_shown", () => {
+        // Each summon re-checks where-was-i (it reflects the live foreground context).
+        qc.invalidateQueries({ queryKey: queryKeys.whereWasI });
         inputRef.current?.focus();
         inputRef.current?.select();
         requestAnimationFrame(() => {
@@ -101,7 +131,7 @@ export function FlowOverlay() {
       active = false;
       unlisteners.forEach((u) => u());
     };
-  }, [resetAsk]);
+  }, [resetAsk, qc]);
 
   const openFrame = (frameId: number) => {
     void openMoment(frameId).catch(() => undefined);
@@ -166,6 +196,9 @@ export function FlowOverlay() {
       e.preventDefault();
       if (mode === "ask") {
         submitAsk();
+      } else if (showResume && resume.data) {
+        // Empty query + a resume context → jump straight back to it.
+        openFrame(resume.data.frame_id);
       } else if (searchWaitingForCommit) {
         setDebounced(text);
       } else if (activeHit) {
@@ -178,7 +211,10 @@ export function FlowOverlay() {
     <div className="flex h-full items-start justify-center p-3">
       <section className="w-full overflow-hidden rounded-panel border border-line bg-overlay shadow-scan">
         <div
-          className={cn("h-1 bg-accent shadow-scan", busy && "scanlines scanlines-drift")}
+          className={cn(
+            "h-1 bg-accent shadow-scan",
+            busy && "scanlines scanlines-drift",
+          )}
           aria-hidden="true"
         />
         <div className="scanlines flex flex-col gap-3 p-3">
@@ -193,10 +229,16 @@ export function FlowOverlay() {
               aria-controls={LISTBOX_ID}
               aria-expanded={mode === "search"}
               aria-activedescendant={
-                mode === "search" && activeHit ? optionId(activeHit.frame_id) : undefined
+                mode === "search" && activeHit
+                  ? optionId(activeHit.frame_id)
+                  : undefined
               }
               autoFocus
-              placeholder={mode === "search" ? "Search screen history" : "Ask about captured screens"}
+              placeholder={
+                mode === "search"
+                  ? "Search screen history"
+                  : "Ask about captured screens"
+              }
               className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
             />
             <Button
@@ -209,7 +251,11 @@ export function FlowOverlay() {
             >
               Search
             </Button>
-            <Button variant={mode === "ask" ? "primary" : "secondary"} size="sm" onClick={() => setMode("ask")}>
+            <Button
+              variant={mode === "ask" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setMode("ask")}
+            >
               Ask
             </Button>
           </div>
@@ -226,6 +272,7 @@ export function FlowOverlay() {
                 onOpen={openFrame}
                 activeIndex={activeIndex}
                 onActiveIndexChange={setActiveIndex}
+                resume={resume}
               />
             ) : (
               <OverlayAsk
@@ -252,6 +299,7 @@ interface SearchOverlayBodyProps {
   onOpen: (frameId: number) => void;
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
+  resume: ReturnType<typeof useWhereWasI>;
 }
 
 function SearchOverlayBody({
@@ -264,18 +312,20 @@ function SearchOverlayBody({
   onOpen,
   activeIndex,
   onActiveIndexChange,
+  resume,
 }: SearchOverlayBodyProps) {
   if (text.trim().length === 0) {
-    return (
-      <EmptyState
-        icon={<IconRecall size={24} />}
-        title="Type to search your screen history"
-        description="? to ask"
-      />
-    );
+    // Empty query → the where-was-i strip (`03 §7b`) instead of a plain prompt.
+    return <WhereWasIStrip resume={resume} />;
   }
   if (isError) {
-    return <ErrorState title="Search failed" message={String(error)} onRetry={onRetry} />;
+    return (
+      <ErrorState
+        title="Search failed"
+        message={String(error)}
+        onRetry={onRetry}
+      />
+    );
   }
   if (isFetching && hits.length === 0) {
     return (
@@ -303,7 +353,12 @@ function SearchOverlayBody({
   }
 
   return (
-    <div id={LISTBOX_ID} role="listbox" aria-label="Flow search results" className="flex flex-col gap-2 p-2">
+    <div
+      id={LISTBOX_ID}
+      role="listbox"
+      aria-label="Flow search results"
+      className="flex flex-col gap-2 p-2"
+    >
       {hits.map((hit, index) => (
         <OverlayResultRow
           key={hit.frame_id}

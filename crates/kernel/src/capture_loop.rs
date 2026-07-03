@@ -28,6 +28,11 @@ pub enum CaptureLoopExit {
     SourceShutdown,
 }
 
+/// Shared slot handing a demanded frame's `frame_id` back to a waiting `capture_now`
+/// caller (mark-this-moment, `03 §7b`, D8). The kernel registers a fresh one-shot sender
+/// before issuing a demand; [`run_capture_loop`] takes it once the demanded frame lands.
+pub type PendingDemand = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<i64>>>>;
+
 /// Everything the capture loop needs besides the [`CaptureSource`] itself. Built
 /// by the kernel on [`start_capture`](crate::Kernel::start_capture) and reused for
 /// the loop's lifetime.
@@ -53,6 +58,9 @@ pub struct LoopCtx {
     pub chrome_protect_min_chars: u32,
     /// `text.chrome_region_buckets`.
     pub chrome_region_buckets: u32,
+    /// Slot to return a demanded frame's id to a waiting `capture_now` caller (`03 §7b`,
+    /// D8). Shared with the kernel; fired only for the one frame flagged `demanded`.
+    pub pending_demand: PendingDemand,
 }
 
 /// Runs the capture loop until the source yields `None` (shutdown) or `stop` fires.
@@ -113,6 +121,21 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
             capture_trigger: Some(frame.trigger), // why this frame was captured (03 §4)
         })
         .await?;
+
+    // Mark-this-moment (`03 §7b`, D8): hand the demanded frame's id back to the waiting
+    // `capture_now` caller as soon as the `frames` row exists — before the (fallible)
+    // OCR/enrichment below, so a demanded frame is always markable even if OCR later
+    // fails. Only the one demanded monitor's frame carries the flag.
+    if frame.demanded {
+        if let Some(tx) = ctx
+            .pending_demand
+            .lock()
+            .expect("pending demand lock poisoned")
+            .take()
+        {
+            let _ = tx.send(frame_id);
+        }
+    }
 
     // Apply PR3's attention filter in the same write (`03 §3b`): classify spans into
     // roles, store the filtered `content_text` (so embeddings + default search use

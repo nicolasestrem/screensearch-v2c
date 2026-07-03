@@ -13,12 +13,36 @@ export const router = createBrowserRouter([
     element: <AppShell />,
     errorElement: <RouteError />,
     children: [
-      { index: true, lazy: () => import("../routes/Deck"), errorElement: <RouteError /> },
-      { path: "recall", lazy: () => import("../routes/Recall"), errorElement: <RouteError /> },
-      { path: "timeline", lazy: () => import("../routes/Timeline"), errorElement: <RouteError /> },
-      { path: "timeline/:id", lazy: () => import("../routes/Moment"), errorElement: <RouteError /> },
-      { path: "insights", lazy: () => import("../routes/Insights"), errorElement: <RouteError /> },
-      { path: "settings", lazy: () => import("../routes/Settings"), errorElement: <RouteError /> },
+      {
+        index: true,
+        lazy: () => import("../routes/Deck"),
+        errorElement: <RouteError />,
+      },
+      {
+        path: "recall",
+        lazy: () => import("../routes/Recall"),
+        errorElement: <RouteError />,
+      },
+      {
+        path: "timeline",
+        lazy: () => import("../routes/Timeline"),
+        errorElement: <RouteError />,
+      },
+      {
+        path: "timeline/:id",
+        lazy: () => import("../routes/Moment"),
+        errorElement: <RouteError />,
+      },
+      {
+        path: "insights",
+        lazy: () => import("../routes/Insights"),
+        errorElement: <RouteError />,
+      },
+      {
+        path: "settings",
+        lazy: () => import("../routes/Settings"),
+        errorElement: <RouteError />,
+      },
       { path: "*", lazy: () => import("../routes/NotFound") },
     ],
   },

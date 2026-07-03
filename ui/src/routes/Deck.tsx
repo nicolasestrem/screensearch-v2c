@@ -7,11 +7,30 @@
 //   populated → today's aggregates + recent frames + density minimap
 import { useNavigate } from "react-router-dom";
 
-import { Button, Chip, EmptyState, ErrorState, Panel, Skeleton } from "../components/primitives";
-import { FrameTile, JobQueueMeter, TimelineMinimap } from "../components/domain";
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorState,
+  Panel,
+  Skeleton,
+} from "../components/primitives";
+import {
+  FrameTile,
+  IntentionsStrip,
+  JobQueueMeter,
+  TimelineMinimap,
+  WhereWasICard,
+} from "../components/domain";
 import { IconCapture } from "../components/icons";
 import { useCaptureControl } from "../lib/ipc/mutations";
-import { useFrames, useInsights, useJobStats, useReadiness, useTimeline } from "../lib/ipc/queries";
+import {
+  useFrames,
+  useInsights,
+  useJobStats,
+  useReadiness,
+  useTimeline,
+} from "../lib/ipc/queries";
 import { toast } from "../state/toastStore";
 import { useUiStore } from "../state/uiStore";
 import { statusLabel, statusTone } from "../lib/status";
@@ -62,7 +81,8 @@ export function Component() {
   }
 
   const captureStatus: ComponentStatus = readiness.data.capture.status;
-  const captureOn = captureStatus === "ready" || captureStatus === "initializing";
+  const captureOn =
+    captureStatus === "ready" || captureStatus === "initializing";
   const startCapture = () =>
     capture.mutate("start", {
       onSuccess: () => toast.success("Capture started"),
@@ -93,10 +113,16 @@ export function Component() {
           {captureOn
             ? "Recording your screen. Everything stays on this device."
             : "Capture is off. Start it to begin recording your screen."}
-          {readiness.data.capture.detail ? ` (${readiness.data.capture.detail})` : ""}
+          {readiness.data.capture.detail
+            ? ` (${readiness.data.capture.detail})`
+            : ""}
         </p>
         {captureOn ? (
-          <Button variant="secondary" onClick={stopCapture} disabled={capture.isPending}>
+          <Button
+            variant="secondary"
+            onClick={stopCapture}
+            disabled={capture.isPending}
+          >
             Stop capture
           </Button>
         ) : (
@@ -121,7 +147,9 @@ export function Component() {
         <Panel title="Get started">
           <EmptyState
             icon={<IconCapture size={28} />}
-            title={captureOn ? "Waiting for the first capture" : "No captures yet"}
+            title={
+              captureOn ? "Waiting for the first capture" : "No captures yet"
+            }
             description={
               captureOn
                 ? "Capture is running — your first frame will appear here in a moment."
@@ -168,12 +196,16 @@ export function Component() {
               onRetry={() => insights.refetch()}
             />
           ) : total === 0 ? (
-            <p className="text-body text-ink-muted font-body">No captures today yet.</p>
+            <p className="text-body text-ink-muted font-body">
+              No captures today yet.
+            </p>
           ) : (
             <div className="flex flex-col gap-4">
               <div className="flex items-baseline gap-2">
                 <span className="font-mono text-display text-ink">{total}</span>
-                <span className="text-body text-ink-muted font-body">captures today</span>
+                <span className="text-body text-ink-muted font-body">
+                  captures today
+                </span>
               </div>
               {todayDensity.isError ? (
                 <ErrorState
@@ -219,10 +251,20 @@ export function Component() {
         </Panel>
       </div>
 
+      {/* 0.3.0 flow recall (PR6): resume the last sustained context, and act on marks. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <WhereWasICard onOpen={(id) => navigate(`/timeline/${id}`)} />
+        <IntentionsStrip onOpen={(id) => navigate(`/timeline/${id}`)} />
+      </div>
+
       <Panel
         title="Jump back in"
         action={
-          <Button variant="ghost" size="sm" onClick={() => navigate("/timeline")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate("/timeline")}
+          >
             Open timeline
           </Button>
         }
@@ -246,7 +288,9 @@ export function Component() {
             ))}
           </div>
         ) : (
-          <p className="text-body text-ink-muted font-body">Recent captures will appear here.</p>
+          <p className="text-body text-ink-muted font-body">
+            Recent captures will appear here.
+          </p>
         )}
       </Panel>
     </div>

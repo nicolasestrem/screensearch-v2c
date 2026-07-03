@@ -25,7 +25,12 @@ const ROLE_TONE: Record<TextSpan["role"], string> = {
   unknown: "text-ink-muted",
 };
 
-export function FrameReconstruction({ spans, width, height, className }: FrameReconstructionProps) {
+export function FrameReconstruction({
+  spans,
+  width,
+  height,
+  className,
+}: FrameReconstructionProps) {
   const aspect = width > 0 && height > 0 ? width / height : 16 / 9;
 
   return (
@@ -53,7 +58,9 @@ export function FrameReconstruction({ spans, width, height, className }: FrameRe
           const chars = Math.max(s.text.length, 1);
           const byHeight = `${Math.max(s.h * 90, 0.5)}cqh`;
           const fontSize =
-            s.w > 0 ? `min(${byHeight}, ${(s.w * 100) / (0.6 * chars)}cqw)` : byHeight;
+            s.w > 0
+              ? `min(${byHeight}, ${(s.w * 100) / (0.6 * chars)}cqw)`
+              : byHeight;
           return (
             <span
               key={i}

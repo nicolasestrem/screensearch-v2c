@@ -192,6 +192,7 @@ mod tests {
             // `None` ⇒ the worker skips the focus-change check (it can't know the live HWND).
             foreground_hwnd: None,
             trigger: CaptureTrigger::Timer,
+            demanded: false,
         }
     }
 

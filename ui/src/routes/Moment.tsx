@@ -8,7 +8,11 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { Button, ErrorState, Panel, Skeleton } from "../components/primitives";
 import { FrameTile, MomentDetail } from "../components/domain";
-import { IconArrowLeft, IconChevronLeft, IconChevronRight } from "../components/icons";
+import {
+  IconArrowLeft,
+  IconChevronLeft,
+  IconChevronRight,
+} from "../components/icons";
 import { useFrame, useFrameContext, useFrameSpans } from "../lib/ipc/queries";
 import { useEnqueueVision } from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
@@ -29,7 +33,12 @@ export function Component() {
   // in a busy session (a plain newest-first window would only return the latest
   // frames and drop the anchor, breaking navigation).
   const at = detail.data?.captured_at ?? 0;
-  const neighbours = useFrameContext(at, NEIGHBOUR_HALF_MS, NEIGHBOUR_EACH, detail.data != null);
+  const neighbours = useFrameContext(
+    at,
+    NEIGHBOUR_HALF_MS,
+    NEIGHBOUR_EACH,
+    detail.data != null,
+  );
 
   // Spans back the text+layout reconstruction shown when the screenshot has expired.
   // Only fetched for degraded frames (the common image case never pays for it).
@@ -40,14 +49,22 @@ export function Component() {
     enqueue.mutate(
       { kind: "frame", frame_id: frameId },
       {
-        onSuccess: (n) => toast.success(n > 0 ? "Vision queued for this frame" : "Already tagged or queued"),
+        onSuccess: (n) =>
+          toast.success(
+            n > 0 ? "Vision queued for this frame" : "Already tagged or queued",
+          ),
         onError: (e) => toast.error(String(e)),
       },
     );
   };
 
   const backToTimeline = (
-    <Button variant="ghost" size="sm" leadingIcon={<IconArrowLeft size={16} />} onClick={() => navigate("/timeline")}>
+    <Button
+      variant="ghost"
+      size="sm"
+      leadingIcon={<IconArrowLeft size={16} />}
+      onClick={() => navigate("/timeline")}
+    >
       Timeline
     </Button>
   );
@@ -108,7 +125,9 @@ export function Component() {
   // excluded). `at` is this frame's capture time, so prev = the closest capture before
   // it and next = the closest after — derived by time, not by locating the anchor in
   // the list (it isn't there).
-  const sorted = [...(neighbours.data ?? [])].sort((a, b) => a.captured_at - b.captured_at);
+  const sorted = [...(neighbours.data ?? [])].sort(
+    (a, b) => a.captured_at - b.captured_at,
+  );
   const before = sorted.filter((f) => f.captured_at < at);
   const prev = before.length > 0 ? before[before.length - 1] : null;
   const next = sorted.find((f) => f.captured_at > at) ?? null;

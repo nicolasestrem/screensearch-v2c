@@ -18,7 +18,10 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use traits::{CaptureConfig, CaptureSource, CaptureTrigger, CapturedFrame, MonitorInfo, Result};
+use traits::{
+    CaptureConfig, CaptureNowReceiver, CaptureNowRequest, CaptureSource, CaptureTrigger,
+    CapturedFrame, MonitorInfo, Result,
+};
 
 mod diff;
 mod events;
@@ -57,6 +60,20 @@ pub struct WgcCapture {
     /// out-of-context `EVENT_SYSTEM_FOREGROUND` WinEvent hook). Idle needs no hook (it
     /// polls [`user_idle_ms`]). Dropped on stop/reload, tearing the thread down.
     events: Option<events::InputEventSource>,
+    /// Mark-this-moment `capture_now` demands (`03 §7b`, D8). The kernel holds the
+    /// sender on the live capture handle; the wait loop selects on this alongside the
+    /// timer tick / event trigger. A demand captures Manual past the diff gate.
+    capture_now_rx: CaptureNowReceiver,
+    /// Set once the demand channel closes (the kernel dropped its sender — capture is
+    /// stopping), so the demand `select!` arm goes inert instead of hot-looping.
+    demand_closed: bool,
+}
+
+/// The reason [`WgcCapture::next_frame`] woke: a normal timer/event trigger, or a
+/// mark-this-moment `capture_now` demand carrying its ack channel (`03 §7b`).
+enum Wake {
+    Trigger(CaptureTrigger),
+    Demand(CaptureNowRequest),
 }
 
 /// How often (ms) the event-mode loop polls the trigger machine for idle edges and to
@@ -101,10 +118,39 @@ fn normalize_window_rect(
     Some([nx, ny, (nr - nx).max(0.0), (nb - ny).max(0.0)])
 }
 
+/// The monitor a `capture_now` frame should be marked on (`03 §7b`, D8): the monitor
+/// holding the foreground window (its rect resolves onto that monitor), falling back to
+/// the **primary** monitor, then the first enumerated one. Deterministic — one
+/// `capture_now` marks exactly one monitor's frame, never the ambiguous "first queued".
+/// Pure, so it is unit-tested without any Win32 calls.
+fn select_target_monitor(
+    fg_rect: Option<(i32, i32, i32, i32)>,
+    bounds: &[monitors::MonitorBounds],
+    monitors: &[MonitorInfo],
+) -> u32 {
+    if let Some(rect) = fg_rect {
+        if let Some(b) = bounds
+            .iter()
+            .find(|b| normalize_window_rect(rect, **b).is_some())
+        {
+            return b.index;
+        }
+    }
+    monitors
+        .iter()
+        .find(|m| m.is_primary)
+        .or_else(|| monitors.first())
+        .map_or(0, |m| m.index)
+}
+
 impl WgcCapture {
     /// Spawns the capture worker, sets up per-monitor WGC sessions, and returns once
     /// the monitor list is known. Errors if there are no capturable monitors.
-    pub fn new(config: CaptureConfig) -> Result<Self> {
+    ///
+    /// `capture_now_rx` is the receiving half of the mark-this-moment demand channel
+    /// (`03 §7b`, D8); the kernel keeps the sender on the live capture handle. Timer-only
+    /// callers with no marks surface can pass a receiver whose sender they drop.
+    pub fn new(config: CaptureConfig, capture_now_rx: CaptureNowReceiver) -> Result<Self> {
         let (req_tx, req_rx) = mpsc::channel::<CaptureRequest>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<Vec<MonitorInfo>>>();
 
@@ -146,18 +192,51 @@ impl WgcCapture {
             queue: VecDeque::new(),
             machine,
             events,
+            capture_now_rx,
+            demand_closed: false,
         })
     }
 
+    /// Waits for the next reason to capture: a normal timer tick / event trigger, or a
+    /// mark-this-moment `capture_now` demand (`03 §7b`). In timer mode the interval sleep
+    /// races the demand channel; in event mode the demand arm joins the trigger machine's
+    /// `select!` (see [`Self::next_event_trigger`]).
+    async fn next_wake(&mut self) -> Wake {
+        if self.config.event_driven_enabled {
+            return self.next_event_trigger().await;
+        }
+        let interval = Duration::from_millis(u64::from(self.config.interval_ms.max(1)));
+        let sleep = tokio::time::sleep(interval);
+        tokio::pin!(sleep);
+        let demand_open = !self.demand_closed;
+        let rx = &mut self.capture_now_rx;
+        tokio::select! {
+            _ = &mut sleep => Wake::Trigger(CaptureTrigger::Timer),
+            req = recv_demand(rx, demand_open) => match req {
+                Some(req) => Wake::Demand(req),
+                None => {
+                    // The demand channel closed (capture tearing down); go inert and pace
+                    // as a normal timer cycle. `run_capture_loop` will exit on `stop`.
+                    self.demand_closed = true;
+                    Wake::Trigger(CaptureTrigger::Timer)
+                }
+            }
+        }
+    }
+
     /// Event mode's pacing: wait until the trigger machine decides to capture (a settled
-    /// debounce, an idle/typing edge) or the fallback interval elapses, and return the
-    /// reason. Coexists with — does not replace — the timer path used in timer mode.
-    async fn next_event_trigger(&mut self) -> CaptureTrigger {
+    /// debounce, an idle/typing edge), the fallback interval elapses, or a `capture_now`
+    /// demand arrives, and return the reason. Coexists with — does not replace — the timer
+    /// path used in timer mode.
+    async fn next_event_trigger(&mut self) -> Wake {
         let fallback_ms = u64::from(self.config.event_fallback_interval_ms.max(1));
-        // Disjoint field borrows: the machine mutably, the hook source shared. `events`
-        // is a `Copy` `Option<&_>` we clear locally the moment the hook channel closes.
+        // Disjoint field borrows: the machine + demand receiver mutably, the hook source
+        // shared. `events` is a `Copy` `Option<&_>` we clear locally the moment the hook
+        // channel closes.
         let machine = &mut self.machine;
         let mut events = self.events.as_ref();
+        let demand_open = !self.demand_closed;
+        let rx = &mut self.capture_now_rx;
 
         let mut poll = tokio::time::interval(Duration::from_millis(EVENT_POLL_INTERVAL_MS));
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -165,7 +244,8 @@ impl WgcCapture {
         tokio::pin!(fallback);
 
         let mut hook_died = false;
-        let trigger = loop {
+        let mut demand_closed_now = false;
+        let wake = loop {
             // Not `biased`: a continuous event stream must not starve the fallback/poll
             // arms (tokio picks a ready arm pseudo-randomly).
             tokio::select! {
@@ -188,10 +268,18 @@ impl WgcCapture {
                 }
                 _ = poll.tick() => {
                     if let Some(trigger) = machine.poll(now_ms(), idle_ms_now()) {
-                        break trigger;
+                        break Wake::Trigger(trigger);
                     }
                 }
-                _ = &mut fallback => break CaptureTrigger::Timer,
+                _ = &mut fallback => break Wake::Trigger(CaptureTrigger::Timer),
+                req = recv_demand(rx, demand_open && !demand_closed_now) => {
+                    match req {
+                        Some(req) => break Wake::Demand(req),
+                        // Demand channel closed (capture tearing down): retire the arm so
+                        // it goes pending instead of hot-looping (mirrors the hook arm).
+                        None => demand_closed_now = true,
+                    }
+                }
             }
         };
 
@@ -201,16 +289,26 @@ impl WgcCapture {
         if hook_died {
             self.events = None;
         }
-        trigger
+        if demand_closed_now {
+            self.demand_closed = true;
+        }
+        wake
     }
 
-    /// Asks the worker for one capture cycle and returns the changed frames.
-    /// `None` means the worker is gone (shutdown).
-    async fn capture_cycle(&self) -> Option<Vec<wgc::FrameData>> {
+    /// Asks the worker for one capture cycle and returns the changed frames. `bypass_for`
+    /// is the monitor (if any) whose diff gate to bypass for a `capture_now` demand
+    /// (`03 §7b`). `None` means the worker is gone (shutdown).
+    async fn capture_cycle(&self, bypass_for: Option<u32>) -> Option<Vec<wgc::FrameData>> {
         let (resp_tx, resp_rx) = oneshot::channel();
         {
             let tx = self.req_tx.lock().expect("capture req sender poisoned");
-            if tx.send(CaptureRequest { resp: resp_tx }).is_err() {
+            if tx
+                .send(CaptureRequest {
+                    resp: resp_tx,
+                    bypass_for,
+                })
+                .is_err()
+            {
                 return None;
             }
         }
@@ -237,22 +335,20 @@ impl CaptureSource for WgcCapture {
                 return Ok(Some(frame));
             }
 
-            // Decide when to capture and why. Timer mode keeps the 0.2.0 interval
-            // cadence; event mode waits for a user-activity trigger (with a fallback
-            // interval) so the trigger is known before the privacy gate + capture run.
-            let trigger = if self.config.event_driven_enabled {
-                self.next_event_trigger().await
-            } else {
-                tokio::time::sleep(Duration::from_millis(u64::from(
-                    self.config.interval_ms.max(1),
-                )))
-                .await;
-                CaptureTrigger::Timer
+            // Decide when to capture and why. Timer mode keeps the 0.2.0 interval cadence;
+            // event mode waits for a user-activity trigger (with a fallback interval).
+            // Either wait also races a mark-this-moment `capture_now` demand, which
+            // captures `Manual` past the diff gate (`03 §7b`, D8).
+            let (trigger, demand) = match self.next_wake().await {
+                Wake::Trigger(t) => (t, None),
+                Wake::Demand(req) => (CaptureTrigger::Manual, Some(req)),
             };
 
-            // Privacy gate (03 §8): pause while locked, skip while an excluded app
-            // is focused. The foreground read also yields the frame context.
+            // Privacy gate (03 §8) — still applies to a demand. A demanded frame from a
+            // locked screen / our own window / an excluded app is denied **honestly** (the
+            // mark hotkey surfaces the reason), never a silent no-op.
             if self.config.pause_on_lock && privacy::is_workstation_locked() {
+                deny_demand(demand, "the workstation is locked");
                 continue;
             }
             // Never capture our own windows: the main UI and Flow overlay only contain app
@@ -260,6 +356,7 @@ impl CaptureSource for WgcCapture {
             // every app-owned window, while the overlay's contentProtected window flag
             // closes the unfocused-visible capture race (D7).
             if privacy::is_own_foreground_window() {
+                deny_demand(demand, "a ScreenSearch window is focused");
                 continue;
             }
             let (app_hint, window_title) = privacy::foreground_context();
@@ -268,6 +365,7 @@ impl CaptureSource for WgcCapture {
                 window_title.as_deref(),
                 &self.config.excluded_apps,
             ) {
+                deny_demand(demand, "the focused app is excluded from capture");
                 continue;
             }
             // Foreground-window rect, read at the same instant as the app/title so the
@@ -277,11 +375,19 @@ impl CaptureSource for WgcCapture {
             // focus change between capture and recognition and fall back to OCR (`07` #48).
             let fg_hwnd = privacy::foreground_hwnd();
 
-            let Some(frames) = self.capture_cycle().await else {
+            // For a demand, bypass the diff gate on the foreground-window monitor (primary
+            // as fallback) so exactly one guaranteed frame is marked (`03 §7b`).
+            let bypass_for = demand
+                .as_ref()
+                .map(|_| select_target_monitor(fg_rect, &self.monitor_bounds, &self.monitors));
+
+            let Some(frames) = self.capture_cycle(bypass_for).await else {
+                deny_demand(demand, "the capture worker is unavailable");
                 return Ok(None); // worker gone
             };
 
             let captured_at = now_ms();
+            let mut demanded_found = false;
             for fd in frames {
                 let Some(pixels) = RgbaImage::from_raw(fd.width, fd.height, fd.rgba) else {
                     continue;
@@ -294,6 +400,10 @@ impl CaptureSource for WgcCapture {
                         .find(|b| b.index == fd.monitor_index)
                         .and_then(|b| normalize_window_rect(w, *b))
                 });
+                // Flag only the demanded monitor's frame so the kernel can hand its
+                // `frame_id` back to the waiting `capture_now` caller (`03 §7b`).
+                let is_demanded = bypass_for == Some(fd.monitor_index);
+                demanded_found |= is_demanded;
                 self.queue.push_back(CapturedFrame {
                     monitor_index: fd.monitor_index,
                     width: fd.width,
@@ -306,6 +416,19 @@ impl CaptureSource for WgcCapture {
                     target_rect,
                     foreground_hwnd: fg_hwnd,
                     trigger,
+                    demanded: is_demanded,
+                });
+            }
+            // Ack the demand once its frame is queued — the kernel then reads it back and
+            // returns the mark's `frame_id`. An `Ok` guarantees the loop will observe the
+            // demanded frame; report a miss honestly if the target produced nothing.
+            if let Some(req) = demand {
+                let _ = req.ack.send(if demanded_found {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!(
+                        "no frame captured for the foreground monitor"
+                    ))
                 });
             }
             // Loop: drain the queue, or sleep and try again if nothing changed.
@@ -327,6 +450,25 @@ async fn recv_event(events: Option<&events::InputEventSource>) -> Option<trigger
     match events {
         Some(source) => source.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+/// Awaits the next `capture_now` demand, or never resolves when the demand channel is
+/// inactive/closed (`open == false`) — so the demand `select!` arm is inert without
+/// hot-looping (mirrors [`recv_event`]).
+async fn recv_demand(rx: &mut CaptureNowReceiver, open: bool) -> Option<CaptureNowRequest> {
+    if open {
+        rx.recv().await
+    } else {
+        std::future::pending().await
+    }
+}
+
+/// Sends an honest failure back to a waiting `capture_now` caller (`03 §7b`, D8) — never
+/// a silent no-op. A dropped receiver (the caller already timed out) is ignored.
+fn deny_demand(demand: Option<CaptureNowRequest>, reason: &str) {
+    if let Some(req) = demand {
+        let _ = req.ack.send(Err(anyhow::anyhow!(reason.to_string())));
     }
 }
 
@@ -384,5 +526,43 @@ mod tests {
     fn degenerate_inputs_are_none() {
         assert!(normalize_window_rect((100, 100, 50, 50), mon(0, 0, 0, 1920, 1080)).is_none());
         assert!(normalize_window_rect((0, 0, 10, 10), mon(0, 0, 0, 0, 0)).is_none());
+    }
+
+    fn info(index: u32, is_primary: bool) -> MonitorInfo {
+        MonitorInfo {
+            index,
+            name: format!("Monitor {index}"),
+            width: 1920,
+            height: 1080,
+            is_primary,
+        }
+    }
+
+    #[test]
+    fn target_monitor_is_the_one_holding_the_foreground_window() {
+        // Monitor 0 primary at origin; monitor 1 to its right.
+        let bounds = [mon(0, 0, 0, 1920, 1080), mon(1, 1920, 0, 1920, 1080)];
+        let monitors = [info(0, true), info(1, false)];
+        // A window centred on the secondary monitor → target = monitor 1.
+        let rect = Some((2000, 100, 2800, 700));
+        assert_eq!(select_target_monitor(rect, &bounds, &monitors), 1);
+        // A window on the primary → target = monitor 0.
+        let rect = Some((100, 100, 900, 700));
+        assert_eq!(select_target_monitor(rect, &bounds, &monitors), 0);
+    }
+
+    #[test]
+    fn target_monitor_falls_back_to_primary_then_first() {
+        let bounds = [mon(0, 0, 0, 1920, 1080), mon(1, 1920, 0, 1920, 1080)];
+        // No foreground rect (minimized / unresolved) → the primary monitor (index 1 here).
+        let monitors = [info(0, false), info(1, true)];
+        assert_eq!(select_target_monitor(None, &bounds, &monitors), 1);
+        // No primary flagged at all → the first enumerated monitor.
+        let monitors = [info(3, false), info(4, false)];
+        assert_eq!(select_target_monitor(None, &bounds, &monitors), 3);
+        // A rect on no monitor also falls back to primary.
+        let monitors = [info(0, false), info(1, true)];
+        let offscreen = Some((10_000, 10_000, 10_800, 10_700));
+        assert_eq!(select_target_monitor(offscreen, &bounds, &monitors), 1);
     }
 }

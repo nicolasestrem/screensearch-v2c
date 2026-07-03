@@ -6,11 +6,25 @@
 // search → invite / loading / no-match / error / results; ask → invite(+cards) /
 // streaming / done / error; reports → invite / generating / done / error. A banner
 // flags degraded modes. Never a zero-result dead end.
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 
-import { Button, Chip, EmptyState, ErrorState, Skeleton } from "../components/primitives";
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+} from "../components/primitives";
 import {
   SearchResult,
   AnswerStream,
@@ -56,14 +70,18 @@ export function Component() {
   const settings = useSettings();
   const ask = useAsk();
   const report = useReport();
-  const openFrame = useCallback((frameId: number) => {
-    navigate(`/timeline/${frameId}`);
-  }, [navigate]);
+  const openFrame = useCallback(
+    (frameId: number) => {
+      navigate(`/timeline/${frameId}`);
+    },
+    [navigate],
+  );
 
   // Content-text (default) vs raw/app-chrome search (03 §3b). `null` follows the
   // user's configured default (`text.include_chrome_default`) until they toggle it.
   const [chromeOverride, setChromeOverride] = useState<boolean | null>(null);
-  const includeChrome = chromeOverride ?? (settings.data?.text_include_chrome_default ?? false);
+  const includeChrome =
+    chromeOverride ?? settings.data?.text_include_chrome_default ?? false;
 
   // Debounce keystrokes into the committed search term (live search, bounded).
   useEffect(() => {
@@ -122,7 +140,8 @@ export function Component() {
 
   const embedReady = readiness.data?.embed_model.status === "ready";
   const sidecarStatus = readiness.data?.sidecar.status;
-  const sidecarDown = sidecarStatus === "unavailable" || sidecarStatus === "error";
+  const sidecarDown =
+    sidecarStatus === "unavailable" || sidecarStatus === "error";
 
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-4 p-6">
@@ -165,8 +184,16 @@ export function Component() {
             aria-label={mode === "search" ? "Search query" : "Question"}
             className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
           />
-          <Button type="submit" variant="primary" disabled={mode === "ask" && ask.phase === "streaming"}>
-            {mode === "search" ? "Search" : ask.phase === "streaming" ? "Asking…" : "Ask"}
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={mode === "ask" && ask.phase === "streaming"}
+          >
+            {mode === "search"
+              ? "Search"
+              : ask.phase === "streaming"
+                ? "Asking…"
+                : "Ask"}
           </Button>
         </form>
       )}
@@ -196,7 +223,9 @@ export function Component() {
                 : "border-line text-ink-muted hover:text-ink",
             )}
           >
-            {includeChrome ? "Including app chrome + raw text" : "Content text only"}
+            {includeChrome
+              ? "Including app chrome + raw text"
+              : "Content text only"}
           </button>
           <span className="text-caption text-ink-faint">
             {includeChrome
@@ -208,11 +237,17 @@ export function Component() {
 
       {/* Degraded-mode banners (truthful, not blocking). */}
       {mode === "search" && readiness.data && !embedReady && (
-        <Chip tone="warn">Searching text only — semantic search lights up once the embedding model loads</Chip>
+        <Chip tone="warn">
+          Searching text only — semantic search lights up once the embedding
+          model loads
+        </Chip>
       )}
       {mode !== "search" && sidecarDown && (
         <Chip tone="warn">
-          Answer model not loaded{readiness.data?.sidecar.detail ? ` — ${readiness.data.sidecar.detail}` : ""}
+          Answer model not loaded
+          {readiness.data?.sidecar.detail
+            ? ` — ${readiness.data.sidecar.detail}`
+            : ""}
         </Chip>
       )}
 
@@ -236,7 +271,12 @@ export function Component() {
                 title="Ask about what you've seen"
                 description="Questions are answered from your captured screens, with the source frames cited. Try a card below, or ask your own."
               />
-              <PromptCardGrid onPick={(p) => { setText(p); askQuery(p); }} />
+              <PromptCardGrid
+                onPick={(p) => {
+                  setText(p);
+                  askQuery(p);
+                }}
+              />
             </div>
           ) : (
             <AnswerStream
@@ -271,7 +311,13 @@ interface ReportBodyProps {
   onOpenFrame: (frameId: number) => void;
 }
 
-function ReportBody({ phase, progress, result, error, onOpenFrame }: ReportBodyProps) {
+function ReportBody({
+  phase,
+  progress,
+  result,
+  error,
+  onOpenFrame,
+}: ReportBodyProps) {
   if (phase === "idle") {
     return (
       <EmptyState
@@ -285,7 +331,10 @@ function ReportBody({ phase, progress, result, error, onOpenFrame }: ReportBodyP
     return (
       <ErrorState
         title="Couldn't build that report"
-        message={error ?? "The answer model is unavailable. Make sure the inference sidecar is loaded, then try again."}
+        message={
+          error ??
+          "The answer model is unavailable. Make sure the inference sidecar is loaded, then try again."
+        }
       />
     );
   }
@@ -293,18 +342,26 @@ function ReportBody({ phase, progress, result, error, onOpenFrame }: ReportBodyP
     return (
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2 text-body text-ink-muted font-body">
-          <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-accent" aria-hidden />
+          <span
+            className="inline-block h-3 w-3 animate-pulse rounded-full bg-accent"
+            aria-hidden
+          />
           {progress ? progress.stage : "Starting…"}
-          {progress && progress.total > 0 ? ` (${progress.done}/${progress.total})` : ""}
+          {progress && progress.total > 0
+            ? ` (${progress.done}/${progress.total})`
+            : ""}
         </div>
         <span className="text-caption text-ink-faint">
-          Reports summarize active periods in bounded passes, so larger ranges can take a little longer.
+          Reports summarize active periods in bounded passes, so larger ranges
+          can take a little longer.
         </span>
       </div>
     );
   }
   // done
-  return result ? <ReportView report={result} onOpenFrame={onOpenFrame} /> : null;
+  return result ? (
+    <ReportView report={result} onOpenFrame={onOpenFrame} />
+  ) : null;
 }
 
 interface SearchBodyProps {
@@ -317,7 +374,15 @@ interface SearchBodyProps {
   virtualizer: Virtualizer<HTMLDivElement, Element>;
 }
 
-function SearchBody({ query, isFetching, isError, error, onRetry, hits, virtualizer }: SearchBodyProps) {
+function SearchBody({
+  query,
+  isFetching,
+  isError,
+  error,
+  onRetry,
+  hits,
+  virtualizer,
+}: SearchBodyProps) {
   // Invite: nothing typed yet.
   if (query.text.trim().length === 0) {
     return (
@@ -329,7 +394,13 @@ function SearchBody({ query, isFetching, isError, error, onRetry, hits, virtuali
     );
   }
   if (isError) {
-    return <ErrorState title="Search failed" message={String(error)} onRetry={onRetry} />;
+    return (
+      <ErrorState
+        title="Search failed"
+        message={String(error)}
+        onRetry={onRetry}
+      />
+    );
   }
   if (isFetching && hits.length === 0) {
     return (
@@ -351,7 +422,10 @@ function SearchBody({ query, isFetching, isError, error, onRetry, hits, virtuali
   }
 
   return (
-    <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+    <div
+      className="relative w-full"
+      style={{ height: virtualizer.getTotalSize() }}
+    >
       {virtualizer.getVirtualItems().map((row) => {
         const hit = hits[row.index];
         return (

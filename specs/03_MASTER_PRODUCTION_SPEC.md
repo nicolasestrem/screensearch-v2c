@@ -444,6 +444,7 @@ duplicates). **Commands** (UI → core):
 | `add_mark` | `{ frame_id? \| capture_now, note? }` → `MarkId` (0.3.0; `capture_now` bypasses the diff gate — `§7b`/D8) |
 | `list_marks` | `()` → `Mark[]` (0.3.0; **all** marks, unresolved first then newest-first within each group — `§7b`; the Intentions strip renders the unresolved head) |
 | `resolve_mark` | `mark_id` → `()` (0.3.0; resolve = done, dismiss = resolve-no-action — `§7b`) |
+| `set_mark_note` | `{ mark_id, note }` → `()` (0.3.0; attaches the optional toast note **after the fact** — the mark row is inserted at hotkey-press time and the note arrives seconds later from the confirmation toast — `§7b`) |
 | `export_data` | `ExportRequest` → `ExportResult` (0.3.0; Settings "Export…"; same code path as `GET /v1/export`, works with the API off — `§7c`/D12) |
 | `set_api_config` | `{ enabled, port? }` → `ApiStatus` (0.3.0; enable/disable + port; bind failure is loud + guided-change — `§7c`) |
 | `get_api_status` | `()` → `ApiStatus` (0.3.0; enabled, bound port, token-present — `§7c`) |
@@ -497,8 +498,14 @@ frame, then inserts a **mark** (§4). **Multi-monitor is deterministic:** a capt
 frame per monitor, so `capture_now` marks the frame on the **monitor holding the foreground window** —
 the one whose `target_rect` resolves (`crates/capture`), i.e. the screen the user is actually on —
 falling back to the primary monitor if none resolves. One `capture_now` → one mark, never the
-ambiguous "first queued monitor". A brief, quiet overlay toast confirms ("Marked ✓ — note?") with an
-optional one-line note; ignoring it costs nothing. The Deck **Intentions** strip lists unresolved marks
+ambiguous "first queued monitor". The mark row is inserted **at press time** (durable immediately); the
+optional note arrives seconds later from the confirmation toast and is attached by **`set_mark_note`**
+(§7) — so a crash during the toast never loses the mark. A brief, quiet overlay toast confirms
+("Marked ✓ — note?") **without stealing focus** (the shell shows the overlay non-focusable; the user
+keeps typing — clicking the note field focuses it); ignoring it costs nothing. A `capture_now` whose
+privacy gate denies (locked screen / a ScreenSearch window focused / an excluded app) or whose worker is
+off inserts **nothing** and surfaces the reason honestly in the toast ("Capture is off — mark not
+saved"), never a silent no-op. The Deck **Intentions** strip lists unresolved marks
 newest-first (thumbnail/reconstruction, note, age); resolve = done, dismiss = resolve-with-no-action.
 **No badge counts anywhere** (D14 — pull-based, never nagging). Marked frames follow normal retention
 (§4 — images expire; the mark keeps the reconstruction reachable; no retention pinning).

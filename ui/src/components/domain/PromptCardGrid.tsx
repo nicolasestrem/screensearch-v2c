@@ -30,17 +30,20 @@ const CARDS: Card[] = [
   {
     title: "Time Breakdown",
     blurb: "Where your time went",
-    prompt: "Break down how I spent my time today across the apps and activities I had open.",
+    prompt:
+      "Break down how I spent my time today across the apps and activities I had open.",
   },
   {
     title: "Top of Mind",
     blurb: "The themes you kept returning to",
-    prompt: "What topics and tasks were most on my mind, based on what I had open and read?",
+    prompt:
+      "What topics and tasks were most on my mind, based on what I had open and read?",
   },
   {
     title: "AI Habits",
     blurb: "How you used AI tools",
-    prompt: "Summarize how I used AI tools and assistants — what I asked and what for.",
+    prompt:
+      "Summarize how I used AI tools and assistants — what I asked and what for.",
   },
 ];
 
@@ -56,8 +59,12 @@ export function PromptCardGrid({ onPick }: PromptCardGridProps) {
             onClick={() => onPick(card.prompt)}
             className="flex min-h-hit-min flex-col items-start gap-0.5 rounded-chip border border-line bg-surface px-3 py-2 text-left transition-colors duration-fast ease-ui hover:border-accent hover:bg-overlay"
           >
-            <span className="font-display text-body font-semibold text-ink">{card.title}</span>
-            <span className="text-caption text-ink-muted font-body">{card.blurb}</span>
+            <span className="font-display text-body font-semibold text-ink">
+              {card.title}
+            </span>
+            <span className="text-caption text-ink-muted font-body">
+              {card.blurb}
+            </span>
           </button>
         ))}
       </div>

@@ -17,9 +17,9 @@ use image::RgbaImage;
 use kernel::{process_job, CaptureFactory, Kernel};
 use store::{SqliteStore, EMBEDDING_DIM};
 use traits::{
-    AnswerDelta, AnswerOpts, AnswerProvider, CaptureConfig, CaptureSource, Embedding,
-    EmbeddingProvider, JobKind, NewFrame, NewJob, OcrProvider, OcrResult, Readiness, Result,
-    RetrievedChunk, SearchQuery, Store, VisionAnalysis, VisionProvider,
+    AnswerDelta, AnswerOpts, AnswerProvider, CaptureSource, Embedding, EmbeddingProvider, JobKind,
+    NewFrame, NewJob, OcrProvider, OcrResult, Readiness, Result, RetrievedChunk, SearchQuery,
+    Store, VisionAnalysis, VisionProvider,
 };
 
 /// A deterministic embedder: maps each text to a pre-registered vector (so the
@@ -311,7 +311,7 @@ async fn attach_embedder_drains_backlog_and_vector_arm_finds_frame() {
     );
 
     let factory: CaptureFactory =
-        Arc::new(|_cfg: CaptureConfig| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
+        Arc::new(|_cfg, _rx| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
     let kernel = Kernel::new(
         store.clone(),
         Arc::new(NoOcr) as Arc<dyn OcrProvider>,
@@ -509,7 +509,7 @@ async fn vision_jobs_drain_when_embeddings_disabled() {
         .unwrap();
 
     let factory: CaptureFactory =
-        Arc::new(|_cfg: CaptureConfig| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
+        Arc::new(|_cfg, _rx| Ok(Box::new(NoCapture) as Box<dyn CaptureSource>));
     let kernel = Kernel::new(
         store.clone(),
         Arc::new(NoOcr) as Arc<dyn OcrProvider>,

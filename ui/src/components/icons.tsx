@@ -5,7 +5,11 @@ import type { ReactNode, SVGProps } from "react";
 
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
-function Svg({ size = 18, children, ...rest }: IconProps & { children: ReactNode }) {
+function Svg({
+  size = 18,
+  children,
+  ...rest
+}: IconProps & { children: ReactNode }) {
   return (
     <svg
       width={size}
@@ -38,6 +42,13 @@ export const IconRecall = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="11" cy="11" r="6" />
     <path d="M20 20l-3.5-3.5" />
+  </Svg>
+);
+
+/** Mark — a bookmark (mark-this-moment / Intentions). */
+export const IconMark = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z" />
   </Svg>
 );
 

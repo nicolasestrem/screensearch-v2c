@@ -3,7 +3,13 @@
 // caches that the live event stream keeps fresh (useLiveEvents). Outside the Tauri
 // shell the readiness query errors and the rail shows an honest "Kernel offline".
 import { Chip, Skeleton, Tooltip } from "../primitives";
-import { IconCapture, IconCpu, IconDatabase, IconDownload, IconQueue } from "../icons";
+import {
+  IconCapture,
+  IconCpu,
+  IconDatabase,
+  IconDownload,
+  IconQueue,
+} from "../icons";
 import {
   useJobStats,
   useModelDownload,
@@ -68,7 +74,8 @@ export function StatusRail() {
             label={`Throttling enrichment (${throttling.level >= 2 ? "Sustained" : "High"})${
               throttling.sample
                 ? ` · CPU ${Math.round(throttling.sample.cpu_pct)}% · ${
-                    throttling.gpu_monitored && throttling.sample.gpu_pct != null
+                    throttling.gpu_monitored &&
+                    throttling.sample.gpu_pct != null
                       ? `GPU ${Math.round(throttling.sample.gpu_pct)}%`
                       : "GPU not monitored"
                   }`
@@ -117,7 +124,10 @@ export function StatusRail() {
 
         {readiness.data && (
           <>
-            <Tooltip label={readiness.data.capture.detail ?? "Capture loop"} side="bottom">
+            <Tooltip
+              label={readiness.data.capture.detail ?? "Capture loop"}
+              side="bottom"
+            >
               <Chip tone={statusTone(readiness.data.capture.status)}>
                 <IconCapture size={14} />
                 {statusLabel(readiness.data.capture.status)}
@@ -146,9 +156,15 @@ export function StatusRail() {
               }
               side="bottom"
             >
-              <Chip tone={jobStats.data && jobStats.data.failed > 0 ? "warn" : "neutral"}>
+              <Chip
+                tone={
+                  jobStats.data && jobStats.data.failed > 0 ? "warn" : "neutral"
+                }
+              >
                 <IconQueue size={14} />
-                {jobStats.data ? jobStats.data.pending + jobStats.data.running : "—"}
+                {jobStats.data
+                  ? jobStats.data.pending + jobStats.data.running
+                  : "—"}
               </Chip>
             </Tooltip>
 

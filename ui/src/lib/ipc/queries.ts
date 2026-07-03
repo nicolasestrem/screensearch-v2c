@@ -6,7 +6,11 @@
 // production (const-folds away) and whenever no `?__devState=…` is present, so the
 // live empty/partial/populated outcomes are untouched; only forced loading/error
 // states flow through. Mutations and the Ask/Report state machines are NOT wrapped.
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import * as cmd from "./commands";
 import { queryKeys } from "./queryKeys";
@@ -17,28 +21,42 @@ import type { SidecarStatus } from "../../bindings/SidecarStatus";
 import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
+import type { Mark } from "../../bindings/Mark";
+import type { ResumeContext } from "../../bindings/ResumeContext";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
-  const q = useQuery({ queryKey: queryKeys.readiness, queryFn: cmd.getReadiness });
+  const q = useQuery({
+    queryKey: queryKeys.readiness,
+    queryFn: cmd.getReadiness,
+  });
   return useMaybeOverride(q, queryKeys.readiness);
 }
 
 /** Job-queue counts; kept live by `job_progress`. */
 export function useJobStats() {
-  const q = useQuery({ queryKey: queryKeys.jobStats, queryFn: cmd.getJobStats });
+  const q = useQuery({
+    queryKey: queryKeys.jobStats,
+    queryFn: cmd.getJobStats,
+  });
   return useMaybeOverride(q, queryKeys.jobStats);
 }
 
 /** Storage footprint; refreshed by capture/retention events. */
 export function useStorageStats() {
-  const q = useQuery({ queryKey: queryKeys.storageStats, queryFn: cmd.getStorageStats });
+  const q = useQuery({
+    queryKey: queryKeys.storageStats,
+    queryFn: cmd.getStorageStats,
+  });
   return useMaybeOverride(q, queryKeys.storageStats);
 }
 
 /** Connected monitors for Settings. */
 export function useMonitors() {
-  const q = useQuery({ queryKey: queryKeys.monitors, queryFn: cmd.getMonitors });
+  const q = useQuery({
+    queryKey: queryKeys.monitors,
+    queryFn: cmd.getMonitors,
+  });
   return useMaybeOverride(q, queryKeys.monitors);
 }
 
@@ -62,7 +80,8 @@ export function useSidecarStatus() {
   const qc = useQueryClient();
   const q = useQuery<SidecarStatus | null>({
     queryKey: queryKeys.sidecarStatus,
-    queryFn: () => qc.getQueryData<SidecarStatus | null>(queryKeys.sidecarStatus) ?? null,
+    queryFn: () =>
+      qc.getQueryData<SidecarStatus | null>(queryKeys.sidecarStatus) ?? null,
     staleTime: Infinity,
   });
   return useMaybeOverride(q, queryKeys.sidecarStatus);
@@ -77,7 +96,9 @@ export function useModelDownload() {
   const qc = useQueryClient();
   const q = useQuery<ModelDownloadStatus | null>({
     queryKey: queryKeys.modelDownload,
-    queryFn: () => qc.getQueryData<ModelDownloadStatus | null>(queryKeys.modelDownload) ?? null,
+    queryFn: () =>
+      qc.getQueryData<ModelDownloadStatus | null>(queryKeys.modelDownload) ??
+      null,
     staleTime: Infinity,
   });
   return useMaybeOverride(q, queryKeys.modelDownload);
@@ -85,7 +106,10 @@ export function useModelDownload() {
 
 /** Persisted settings. */
 export function useSettings() {
-  const q = useQuery({ queryKey: queryKeys.settings, queryFn: cmd.getSettings });
+  const q = useQuery({
+    queryKey: queryKeys.settings,
+    queryFn: cmd.getSettings,
+  });
   return useMaybeOverride(q, queryKeys.settings);
 }
 
@@ -122,7 +146,11 @@ export function useTextFilterStats(enabled = true) {
 }
 
 /** Hybrid search; idle until there is a non-empty query (no empty-string calls). */
-export function useSearch(query: SearchQuery, enabled = true, keepPrevious = false) {
+export function useSearch(
+  query: SearchQuery,
+  enabled = true,
+  keepPrevious = false,
+) {
   const queryKey = queryKeys.search(query);
   const q = useQuery({
     queryKey,
@@ -134,7 +162,11 @@ export function useSearch(query: SearchQuery, enabled = true, keepPrevious = fal
 }
 
 /** Timeline density buckets; invalidated (debounced) by `capture_tick`. */
-export function useTimeline(range: TimeRange, bucketCount: number, enabled = true) {
+export function useTimeline(
+  range: TimeRange,
+  bucketCount: number,
+  enabled = true,
+) {
   const queryKey = queryKeys.timeline(range, bucketCount);
   const q = useQuery({
     queryKey,
@@ -207,7 +239,11 @@ export function useFrameSpans(frameId: number | null, enabled = true) {
 }
 
 /** Activity aggregates for the Insights screen. */
-export function useInsights(range: TimeRange, bucketCount: number, enabled = true) {
+export function useInsights(
+  range: TimeRange,
+  bucketCount: number,
+  enabled = true,
+) {
   const queryKey = queryKeys.insights(range, bucketCount);
   const q = useQuery({
     queryKey,
@@ -215,4 +251,33 @@ export function useInsights(range: TimeRange, bucketCount: number, enabled = tru
     enabled: enabled && bucketCount > 0 && range.end > range.start,
   });
   return useMaybeOverride(q, queryKey);
+}
+
+/**
+ * The last sustained context before the current detour (`where_was_i`, `03 §7b`, D9);
+ * `null` = "nothing to resume yet". Depends on the live foreground context, so it is not
+ * cached long — the overlay invalidates it on each summon and the Deck card refetches on
+ * mount. `enabled` lets the overlay hold it idle until an empty-query strip is shown.
+ */
+export function useWhereWasI(enabled = true) {
+  const q = useQuery<ResumeContext | null>({
+    queryKey: queryKeys.whereWasI,
+    queryFn: cmd.whereWasI,
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  return useMaybeOverride(q, queryKeys.whereWasI);
+}
+
+/** All marks (unresolved first, newest-first within each group). Kept live by the
+ *  `marks_changed` event (see useLiveEvents); the Intentions strip renders the
+ *  unresolved head. */
+export function useMarks(enabled = true) {
+  const q = useQuery<Mark[]>({
+    queryKey: queryKeys.marks,
+    queryFn: cmd.listMarks,
+    enabled,
+  });
+  return useMaybeOverride(q, queryKeys.marks);
 }

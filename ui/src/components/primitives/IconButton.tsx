@@ -3,7 +3,10 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
-export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label"> {
+export interface IconButtonProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "aria-label"
+> {
   label: string;
   active?: boolean;
   children: ReactNode;
@@ -27,7 +30,9 @@ export function IconButton({
         "inline-flex items-center justify-center rounded-chip w-hit-min h-hit-min",
         "transition-colors duration-fast ease-ui",
         "disabled:opacity-50 disabled:pointer-events-none",
-        active ? "bg-accent-wash text-accent" : "text-ink-muted hover:text-ink hover:bg-overlay",
+        active
+          ? "bg-accent-wash text-accent"
+          : "text-ink-muted hover:text-ink hover:bg-overlay",
         className,
       )}
       {...rest}

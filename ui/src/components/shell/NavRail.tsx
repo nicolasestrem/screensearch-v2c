@@ -4,7 +4,13 @@
 // Keyboard (UI_REFERENCE §7): a roving tabindex makes the rail a single Tab stop —
 // Arrow Up/Down (wrapping) and Home/End move focus between links; Enter follows one.
 import { NavLink, useLocation } from "react-router-dom";
-import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../state/uiStore";
 import {
@@ -33,7 +39,9 @@ const ITEMS: NavItem[] = [
 /** Index of the nav item matching the current path (Deck matches only the exact "/"). */
 function activeIndexFor(pathname: string): number {
   const i = ITEMS.findIndex((it) =>
-    it.end ? pathname === it.to : pathname === it.to || pathname.startsWith(`${it.to}/`),
+    it.end
+      ? pathname === it.to
+      : pathname === it.to || pathname.startsWith(`${it.to}/`),
   );
   return i < 0 ? 0 : i;
 }
@@ -60,7 +68,10 @@ export function NavRail() {
     linkRefs.current[next]?.focus();
   };
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
+  const onKeyDown = (
+    e: ReactKeyboardEvent<HTMLAnchorElement>,
+    index: number,
+  ) => {
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();

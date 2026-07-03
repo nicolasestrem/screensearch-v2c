@@ -16,7 +16,11 @@ export function JobQueueMeter({ stats }: JobQueueMeterProps) {
   const total = stats.pending + stats.running + stats.done + failed;
 
   if (total === 0) {
-    return <p className="text-body text-ink-muted font-body">No enrichment queued.</p>;
+    return (
+      <p className="text-body text-ink-muted font-body">
+        No enrichment queued.
+      </p>
+    );
   }
 
   // Proportions of the bar; widths are inline (data-driven percentages aren't a
@@ -38,12 +42,18 @@ export function JobQueueMeter({ stats }: JobQueueMeterProps) {
       >
         {segments.map((s) =>
           s.n > 0 ? (
-            <span key={s.key} className={cn("h-full", s.className)} style={{ width: pct(s.n) }} />
+            <span
+              key={s.key}
+              className={cn("h-full", s.className)}
+              style={{ width: pct(s.n) }}
+            />
           ) : null,
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Chip tone={stats.running > 0 ? "accent" : "neutral"}>running {stats.running}</Chip>
+        <Chip tone={stats.running > 0 ? "accent" : "neutral"}>
+          running {stats.running}
+        </Chip>
         <Chip tone="neutral">pending {stats.pending}</Chip>
         <Chip tone="ok">done {stats.done}</Chip>
         {failed > 0 && <Chip tone="danger">failed {failed}</Chip>}

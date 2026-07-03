@@ -204,3 +204,45 @@ in the profile.
 - **Latency note.** From hotkey press to focused input should feel effectively instant on a warm app.
   For a repeatable local measurement, compare `overlay_perf` log timestamps around `summon_overlay`,
   `overlay_shown`, and `overlay_shown_ack` on a warm profile.
+
+## Manual acceptance — where-was-i + marks (0.3.0 PR6)
+
+**0.3.0 PR6** adds two pull-based flow-recall features (`docs/0.3.0.md` Part II, D8/D9/D10/D14): the
+**where-was-i** heuristic (overlay empty state + Deck card) and **mark-this-moment** (global hotkey
+`Ctrl+Alt+M` → a `capture_now` past the diff gate + a mark, with a non-focus-stealing toast). Run on a
+real Windows desktop with `npm run tauri dev`, capture enabled, and a few minutes of history.
+
+- **Where-was-i offers the work context (the core flow).** Spend ≥ 2 minutes (the default
+  `resume.min_dwell_secs = 120`) in one app (e.g. VS Code), then switch to a browser for a short detour
+  and stay there. Press the overlay hotkey (`Ctrl+Alt+Space`) with the query empty: the strip reads
+  **"Jump back: <window> — <app>, until HH:MM"** for the work app, not the browser. Press `Enter` (or
+  click): the main window opens that Moment. The Deck's **"Where was I?"** card shows the same.
+- **Honest empty.** On a fresh profile, or when you never left one app, the strip/card reads **"Nothing
+  to resume yet"** — never a fabricated suggestion.
+- **Mark a static screen (diff-gate bypass).** Open a third-party app and leave the screen completely
+  still for several capture intervals (so the diff gate would drop a normal frame). Press `Ctrl+Alt+M`:
+  a **"Marked ✓"** toast appears over the app, and a new frame is captured **at press time** (verify in
+  Timeline / the Intentions strip that the marked frame's time is *now*, not an older frame).
+- **The toast does not steal focus (D1).** Immediately after pressing `Ctrl+Alt+M`, keep typing in the
+  underlying app — your keystrokes land there, not in the toast. Then click the toast's note field: the
+  overlay takes focus, type a note, press `Enter` — the note saves and the toast dismisses. Ignoring the
+  toast entirely lets it fade after ~6 seconds.
+- **Intentions strip.** Open the Deck: the **Intentions** strip lists the mark (thumbnail or "text kept"
+  reconstruction, the note or a title fallback, and its age), newest first. **Open** navigates to the
+  Moment; **Done** and **Dismiss** both resolve it (it leaves the strip). Confirm there is **no badge
+  count** anywhere in the app.
+- **Capture off is honest (not silent).** Stop capture, then press `Ctrl+Alt+M`: the toast reads
+  **"Capture is off — mark not saved"** and no mark appears in the strip.
+- **Excluded app is refused.** Focus an app on the excluded-apps list (e.g. a password manager) and
+  press `Ctrl+Alt+M`: the toast explains the app is excluded, and no mark is created.
+- **Multi-monitor determinism.** With the foreground window on a secondary monitor, mark it: the marked
+  frame's monitor is the one holding the foreground window. Minimize everything (no resolvable
+  foreground) and mark: the frame is captured on the primary monitor.
+- **Hotkey conflict is loud (D6).** Pre-register `Ctrl+Alt+M` in another app (or set both ScreenSearch
+  hotkeys to the same chord), then set the mark hotkey to it in Settings → Hotkeys: a warning toast
+  fires and Settings shows the failed chord. Releasing the conflict and saving again registers cleanly.
+- **Retention keeps a mark reachable.** For a marked frame whose screenshot has expired
+  (`storage.retention_days`), the Intentions row still renders (the "text kept" state) and Open shows
+  the text reconstruction — the mark is never orphaned.
+- **Five overlay states.** Exercise the overlay empty-state strip's loading / error / null / populated
+  paths (e.g. via `?__devState=…` where supported, or by toggling capture/data).

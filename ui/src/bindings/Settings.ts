@@ -224,6 +224,19 @@ overlay_hotkey: string,
  */
 overlay_max_results: number, 
 /**
+ * Minimum dwell for the where-was-i heuristic, seconds (`resume.min_dwell_secs`,
+ * 0.3.0 PR6; `03 §7b`, D9). A context must persist at least this long to count as a
+ * "sustained context" worth resuming, and the same threshold decides whether a
+ * brief excursion breaks a run. One knob, never hardcoded (`03 §3b` stance).
+ */
+resume_min_dwell_secs: number, 
+/**
+ * Global mark-this-moment hotkey (`marks.hotkey`, 0.3.0 PR6; `03 §7b`, D6). Same
+ * shell-registered/validated posture as `overlay_hotkey`: a bad/colliding value
+ * surfaces as the D6 Settings warning + toast, never a silent rewrite.
+ */
+marks_hotkey: string, 
+/**
  * Smart enrichment-throttle master switch (`throttle.enabled`, `docs/0.2.0.md`
  * former PR5, `03 §8`). Opt-in, default `false`: when off the pressure-probe loop
  * never runs and enrichment drains at full configured concurrency, exactly as

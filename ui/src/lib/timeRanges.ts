@@ -13,7 +13,11 @@ export function startOfLocalDay(at: number = Date.now()): number {
 
 function localDayOffset(at: number, offsetDays: number): number {
   const d = new Date(at);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offsetDays).getTime();
+  return new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate() + offsetDays,
+  ).getTime();
 }
 
 /** `[today 00:00, tomorrow 00:00)` in local time. */

@@ -20,6 +20,62 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
+
+The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and
+mark-this-moment (global hotkey → `capture_now` past the diff gate + a mark). Data-spine-first,
+then core plumbing, shell, UI, docs (`docs/0.3.0.md` Part II; `03 §7b`/`§4`/`§7`/`§13b.5`;
+D8/D9/D10/D14/D15).
+
+### Implemented
+- **Schema v10** (`crates/store/src/schema.rs`, `LATEST_SCHEMA_VERSION 9→10`): the `marks` table +
+  `idx_marks_open`, verbatim from `03 §4`. Plain additive DDL (no rebuild); `marks.frame_id` CASCADEs
+  like every per-frame child. Proven by a populated-DB migration test (`migration_v10_adds_marks_with_cascade`,
+  mirrors the v9 pattern) and the fresh-vs-migrated schema-agreement test stays green.
+- **Marks store API** (`crates/store/src/marks.rs`): `insert_mark` (clear "frame not found" on FK miss),
+  `list_marks` (join `frames`, canonical order `(resolved_at IS NOT NULL) ASC, created_at DESC, id DESC`),
+  idempotent `resolve_mark`, `set_mark_note`; `recent_frame_contexts` in `frames.rs`. CRUD/ordering/
+  purge-survival + context-ordering unit tests.
+- **Where-was-i heuristic** (`crates/kernel/src/resume.rs`): a pure `last_sustained_context` over
+  newest-first `FrameContextRow`s — context key = `app_hint` + browser domain; transient-excursion
+  absorption via per-key presence-span; anchor = last non-self context; excludes anchor/ScreenSearch/
+  `privacy.excluded_apps`. 15-case fixture suite. `where_was_i(store, settings)` convenience.
+- **capture_now plumbing:** `crates/capture` gains a per-monitor diff-gate bypass
+  (`CaptureRequest.bypass_for`) with a **static-screen frame-pool recreate** (so a demanded frame is
+  never dropped), a `Wake`-enum demand seam in `next_frame` (privacy gates still apply; denials acked
+  honestly), and `select_target_monitor` (foreground → primary → first). `crates/kernel`:
+  `capture_now` (serialized gate, two-timeout ack→frame-id) + `add_mark`; `CaptureFactory` grows the
+  demand receiver; the loop returns the demanded frame's id via a `pending_demand` slot. A pure
+  `diff::gate_passes` helper. Kernel-level mark tests (demanded frame+mark, capture-off, denial,
+  by-frame-id) + diff/target-monitor unit tests.
+- **Shell** (`src-tauri`): `overlay.rs` marks hotkey (mirrors the overlay hotkey, loud D6 failure), a
+  **non-focus-stealing** `show_mark_toast` (`set_focusable(false)`), `focus_overlay_for_note` /
+  `dismiss_mark_toast`. Commands `where_was_i`/`add_mark`/`list_marks`/`resolve_mark`/`set_mark_note`
+  (mutations emit `marks_changed`); setup + `set_settings` wiring.
+- **UI**: IPC wrappers/queries/mutations/events; `OverlayRuntime` flow|mark view + `MarkToast`
+  (optional note, ~6 s auto-dismiss paused while typing); overlay empty state → `WhereWasIStrip`
+  (Enter jumps to resume); Deck `WhereWasICard` + `IntentionsStrip` (no badge counts); Settings mark
+  hotkey + dwell fields; `IconMark`. Moved the pure `is_excluded` matcher to `traits::privacy` so the
+  kernel reuses it without depending on `capture`.
+
+### Verification
+`cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` · `cargo build --workspace`
+· `cargo test --workspace` — all green. `ui` `npm run lint && npm run build` — green, bindings diff
+clean. Live desktop pass per `docs/TESTING.md` PR6.
+
+### Decisions / interpretations (recorded)
+- Four spec-silent behaviours resolved by user decision (`07` #85): non-focus-stealing toast,
+  capture-off honest failure, `set_mark_note` for the after-the-fact note, privacy-gates-still-apply.
+- Heuristic edges pinned (`07` #86): per-key presence-span interruption test; no hard "ends before
+  anchor" clamp; capture-gap dwell; single-frame runs fail dwell.
+- `list_marks` order follows the `§7` prose, not the `idx_marks_open` comment (`06` #18 / `07` #87);
+  WGC pool-recreate handles the static-screen demand (`07` #87).
+
+### Still risky
+- The static-screen `pool.Recreate` path and the non-focus-stealing `set_focusable(false)` summon are
+  Windows-runtime behaviours that unit tests can't exercise — both are covered by the `docs/TESTING.md`
+  PR6 live checks (mark a static fullscreen app; keep typing through the toast).
+
 ## Pass — 2026-07-03 — 0.3.0 PR4: image-embedding lane removal (`feat/pr4-image-lane-removal`)
 
 Delete the dark-launched, flag-off nomic-embed-vision image-embedding lane, with a forward-only

@@ -77,7 +77,10 @@ export function AnswerStream({
     return (
       <ErrorState
         title="Couldn't answer that"
-        message={error ?? "The answer model is unavailable. Make sure the inference sidecar is loaded, then try again."}
+        message={
+          error ??
+          "The answer model is unavailable. Make sure the inference sidecar is loaded, then try again."
+        }
         onRetry={onRetry}
       />
     );
@@ -88,7 +91,9 @@ export function AnswerStream({
       {thinking && (
         <details
           open={thinkingOpen}
-          onToggle={(e) => setThinkingOpen((e.currentTarget as HTMLDetailsElement).open)}
+          onToggle={(e) =>
+            setThinkingOpen((e.currentTarget as HTMLDetailsElement).open)
+          }
           className="rounded-panel border border-line bg-base"
         >
           <summary className="cursor-pointer select-none px-3 py-2 text-caption text-ink-muted font-body">

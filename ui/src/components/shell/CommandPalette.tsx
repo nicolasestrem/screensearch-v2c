@@ -49,23 +49,63 @@ export function CommandPalette() {
   const commands = useMemo<Command[]>(() => {
     const toggleCapture = (control: "start" | "stop") =>
       capture.mutate(control, {
-        onSuccess: () => toast.success(control === "start" ? "Capture started" : "Capture stopped"),
+        onSuccess: () =>
+          toast.success(
+            control === "start" ? "Capture started" : "Capture stopped",
+          ),
         onError: (e) => toast.error(String(e)),
       });
     return [
-      { id: "deck", label: "Go to Deck", icon: IconDeck, run: () => navigate("/") },
-      { id: "recall", label: "Go to Recall — search & ask", icon: IconRecall, run: () => navigate("/recall") },
-      { id: "timeline", label: "Go to Timeline", icon: IconTimeline, run: () => navigate("/timeline") },
-      { id: "insights", label: "Go to Insights", icon: IconInsights, run: () => navigate("/insights") },
-      { id: "settings", label: "Open Settings", icon: IconSettings, run: () => navigate("/settings") },
-      { id: "start", label: "Start capture", icon: IconCapture, run: () => toggleCapture("start") },
-      { id: "stop", label: "Stop capture", icon: IconCapture, run: () => toggleCapture("stop") },
+      {
+        id: "deck",
+        label: "Go to Deck",
+        icon: IconDeck,
+        run: () => navigate("/"),
+      },
+      {
+        id: "recall",
+        label: "Go to Recall — search & ask",
+        icon: IconRecall,
+        run: () => navigate("/recall"),
+      },
+      {
+        id: "timeline",
+        label: "Go to Timeline",
+        icon: IconTimeline,
+        run: () => navigate("/timeline"),
+      },
+      {
+        id: "insights",
+        label: "Go to Insights",
+        icon: IconInsights,
+        run: () => navigate("/insights"),
+      },
+      {
+        id: "settings",
+        label: "Open Settings",
+        icon: IconSettings,
+        run: () => navigate("/settings"),
+      },
+      {
+        id: "start",
+        label: "Start capture",
+        icon: IconCapture,
+        run: () => toggleCapture("start"),
+      },
+      {
+        id: "stop",
+        label: "Stop capture",
+        icon: IconCapture,
+        run: () => toggleCapture("stop"),
+      },
     ];
   }, [navigate, capture]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? commands.filter((c) => c.label.toLowerCase().includes(q)) : commands;
+    return q
+      ? commands.filter((c) => c.label.toLowerCase().includes(q))
+      : commands;
   }, [commands, query]);
 
   // Reset and focus the input each time the palette opens, and restore focus to the
@@ -75,7 +115,9 @@ export function CommandPalette() {
   useEffect(() => {
     if (!open) return;
     openerRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     restoreFocusRef.current = true; // default to restore; run() opts out
     setQuery("");
     setActive(0);
@@ -95,7 +137,9 @@ export function CommandPalette() {
   // `Math.min(a, …)` latches at -1 after an ArrowDown over a zero-match query,
   // which then makes Enter run `filtered[-1]` (undefined) once matches return.
   useEffect(() => {
-    setActive((a) => (filtered.length > 0 ? Math.min(Math.max(0, a), filtered.length - 1) : 0));
+    setActive((a) =>
+      filtered.length > 0 ? Math.min(Math.max(0, a), filtered.length - 1) : 0,
+    );
   }, [filtered.length]);
 
   if (!open) return null;
@@ -105,7 +149,9 @@ export function CommandPalette() {
     close();
     cmd.run();
   };
-  const activeOption = filtered[active] ? `command-option-${filtered[active].id}` : undefined;
+  const activeOption = filtered[active]
+    ? `command-option-${filtered[active].id}`
+    : undefined;
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key === "Escape") {
@@ -131,7 +177,11 @@ export function CommandPalette() {
       aria-modal="true"
       aria-label="Command palette"
     >
-      <div className="absolute inset-0 bg-scrim" onClick={close} aria-hidden="true" />
+      <div
+        className="absolute inset-0 bg-scrim"
+        onClick={close}
+        aria-hidden="true"
+      />
       <div
         className="relative mt-24 w-full max-w-lg bg-overlay border border-line rounded-panel overflow-hidden"
         onKeyDown={onKeyDown}
@@ -154,9 +204,15 @@ export function CommandPalette() {
           spellCheck={false}
           className="w-full bg-transparent px-4 py-3 text-body text-ink placeholder:text-ink-faint border-b border-line font-body"
         />
-        <ul id={listboxId} role="listbox" className="max-h-80 overflow-y-auto py-2">
+        <ul
+          id={listboxId}
+          role="listbox"
+          className="max-h-80 overflow-y-auto py-2"
+        >
           {filtered.length === 0 ? (
-            <li className="px-4 py-3 text-body text-ink-muted font-body">No matching command</li>
+            <li className="px-4 py-3 text-body text-ink-muted font-body">
+              No matching command
+            </li>
           ) : (
             filtered.map((c, i) => {
               const Icon = c.icon;
@@ -171,7 +227,9 @@ export function CommandPalette() {
                     onClick={() => run(c)}
                     className={cn(
                       "flex items-center gap-3 w-full px-4 min-h-hit-min text-left text-body font-body",
-                      i === active ? "bg-accent-wash text-accent" : "text-ink hover:bg-overlay",
+                      i === active
+                        ? "bg-accent-wash text-accent"
+                        : "text-ink hover:bg-overlay",
                     )}
                   >
                     <Icon size={18} />

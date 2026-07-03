@@ -7,7 +7,7 @@
 //! frame id is chosen. Both seek on `idx_frames_captured_at`.
 
 use rusqlite::{params, OptionalExtension, Row};
-use traits::{FrameMeta, Result};
+use traits::{FrameContextRow, FrameMeta, Result};
 
 use crate::SqliteStore;
 
@@ -342,6 +342,43 @@ impl SqliteStore {
         })
         .await
     }
+
+    /// The most recent `limit` frames' context rows (`app_hint` + `window_title` +
+    /// `browser_url` + the representative-frame display fields), **newest first** by
+    /// `captured_at`, ties broken by `id DESC` (a multi-monitor cycle shares one
+    /// `captured_at`). Feeds the where-was-i heuristic (`03 §7b`, D9): the pure
+    /// `kernel::resume` function does all keying, run-building, and exclusion, so this
+    /// is a plain capped window over `idx_frames_captured_at`. `limit == 0` yields no
+    /// rows.
+    pub async fn recent_frame_contexts(&self, limit: u32) -> Result<Vec<FrameContextRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, captured_at, app_hint, window_title, browser_url,
+                        image_path, image_purged
+                 FROM frames
+                 ORDER BY captured_at DESC, id DESC
+                 LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![i64::from(limit)], |r| {
+                    Ok(FrameContextRow {
+                        frame_id: r.get(0)?,
+                        captured_at: r.get(1)?,
+                        app_hint: r.get(2)?,
+                        window_title: r.get(3)?,
+                        browser_url: r.get(4)?,
+                        image_path: r.get(5)?,
+                        image_purged: r.get::<_, i64>(6)? != 0,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
 }
 
 /// Picks whichever of `before` / `after` is closer to `at`. `before.captured_at < at`
@@ -534,5 +571,28 @@ mod tests {
             "already-degraded frame excluded"
         );
         assert!(!ids.contains(&recent), "in-window frame excluded");
+    }
+
+    /// `recent_frame_contexts` returns the newest `limit` frames, newest-first, with the
+    /// context fields the where-was-i heuristic needs; ties on `captured_at` (a
+    /// multi-monitor cycle) break by `id DESC` so the order is deterministic.
+    #[tokio::test]
+    async fn recent_frame_contexts_newest_first_capped_with_id_tiebreak() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        // Three at distinct times, plus two sharing a timestamp (a dual-monitor cycle).
+        for at in [10, 20, 30] {
+            store.insert_frame(frame(at)).await.unwrap();
+        }
+        let tie_a = store.insert_frame(frame(40)).await.unwrap();
+        let tie_b = store.insert_frame(frame(40)).await.unwrap();
+
+        let got = store.recent_frame_contexts(3).await.unwrap();
+        // Cap honored; newest-first; the same-timestamp pair ordered by id DESC.
+        let ids: Vec<i64> = got.iter().map(|c| c.frame_id).collect();
+        assert_eq!(ids, vec![tie_b, tie_a, 3]);
+        assert_eq!(got[0].captured_at, 40);
+        assert_eq!(got[2].captured_at, 30);
+        // A zero limit is empty.
+        assert!(store.recent_frame_contexts(0).await.unwrap().is_empty());
     }
 }
