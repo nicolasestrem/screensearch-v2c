@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs — 0.3.0 arc specs contract (PR1, specs-only; no code / schema / UI)
+The 0.3.0 roadmap (`docs/0.3.0.md`) is normalized into the specs so every later PR (PR2–PR9) is
+implementable from the specs alone, without reopening the roadmap. **This change touches only specs
+and docs.** The contract now locks in the arc's **subtractions** — the six event-capture triggers
+trim to foreground + idle (retiring the global `WH_MOUSE_LL` mouse hook, the clipboard listener, and
+typing-pause), the model **Beta** tier is retired (Default/Quality only, uniformly Apache — Nemotron
+and Qwen3.5-9B-VLM leave the registry), and the flag-off image-embedding lane is removed (with a
+forward-only migration that drops only derived vectors) — and its **additions**: a global-hotkey
+**Flow overlay** for instant recall, a **where-was-i + mark-this-moment** workflow, and an **opt-in
+localhost HTTP API + export** with a thin stdio **MCP** wrapper. Deferrals (audio capture, custom
+GGUF, proactive nudges, marks-in-reports, wider API write scopes) are recorded in known-gaps.
+
 ### Changed — Faster UIA text capture on heavy windows (gap #71)
 Reading a foreground window's accessibility text now fetches each element's properties in a **single
 batched call** instead of ~5 separate cross-process calls, cutting the per-walk overhead ~2.5× on the

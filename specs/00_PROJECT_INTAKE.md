@@ -43,7 +43,7 @@
 | Target OS | **Windows 10/11 only.** — `✓ decided` |
 | In scope (v1.0) | Always-on cheap capture + OCR + store; **deferred** enrichment (embeddings + **on-demand/timed** vision); hybrid search (FTS5 + vector + RRF); RAG answers; Tauri UI. — `✓ decided` |
 | Out of scope / non-goals | macOS/Linux; **OS automation** (deferred); cloud upload / default telemetry; mobile; multi-user/tenancy; accounts; **real-time vision**; V1 data import. — `✓ decided` |
-| Feature flags | New/risky features default-off (image embeddings, reranker, scheduled-vision cadence). — `✓` |
+| Feature flags | Only **scheduled-vision cadence** remains (default-off). **Image embeddings removed in 0.3.0** (PR4); **reranker never implemented** (struck 0.3.0). See `02 §5c`. — `✓` |
 
 ## E. Tech stack (decided)
 
@@ -61,29 +61,30 @@
 | Database | **SQLite (WAL) + sqlite-vec (`vec0`, cosine) + FTS5 (porter)** | `✓ decided` |
 | Automation | **None in v1.0** (deferred) | `✓ decided` |
 
-### Models (researched June 2026) — uniform 3-tier scheme per lane
+### Models (researched June 2026) — uniform 2-tier scheme per lane (0.3.0 retired Beta)
 
-Two independent model **lanes**, each user-selectable across **Default / Quality / Beta**.
-**Default** = lightest / most resource-friendly · **Quality** = best output · **Beta** =
-cutting-edge with caveats. The model-agnostic sidecar loads whichever tier is selected on demand.
+Two independent model **lanes**, each user-selectable across **Default / Quality**.
+**Default** = lightest / most resource-friendly · **Quality** = best output. The model-agnostic
+sidecar loads whichever tier is selected on demand. *(0.3.0 retired the **Beta** tier — the
+non-Apache Nemotron and the unproven hybrid arch went with it; `02 §5c`, `MODEL_REGISTRY.md`.)*
 
 **Vision lane** (on-demand / timed screenshot understanding, GGUF + mmproj):
 | Tier | Model | License | Notes |
 |---|---|---|---|
 | Default | **Qwen3-VL-4B-Instruct** | Apache-2.0 | Light, fast on-demand tagging. `✓ decided` |
 | Quality | **Qwen3-VL-8B-Instruct** | Apache-2.0 | Higher-fidelity descriptions. `✓ decided` |
-| Beta | **Qwen3.5-9B-VLM** | Apache-2.0 | Newest generation; experimental. `✓ decided` (swappable) |
 
 **Answer lane** (RAG, *thinking* enabled, GGUF):
 | Tier | Model | Ctx | License | Notes |
 |---|---|---|---|---|
 | Default | **Ministral-3-3B-Reasoning-2512** | 256K | Apache-2.0 | Lightest (3B), vanilla arch (rock-solid llama.cpp), proven lineage. `✓ decided` |
 | Quality | **Qwen3-4B-Thinking-2507** | 256K | Apache-2.0 | Top small reasoner; same family as vision. `✓ decided` |
-| Beta | **NVIDIA-Nemotron-3-Nano-4B** | ~49K | ⚠️ NVIDIA OML | Strongest reasoner-per-param; **hybrid Mamba-Transformer** + non-Apache → experimental. `✓ decided` |
 
 **Embeddings (in-process fastembed, not the sidecar):**
 - **Text:** **EmbeddingGemma-300M** (768-dim). *Embed one input at a time* (quantized; no batch). `✓ decided`
-- **Image (optional visual recall):** **nomic-embed-vision-v1.5** (768-dim). `✓ decided`
+- **Image (optional visual recall): removed in 0.3.0** (PR4) — the nomic-embed-vision-v1.5 lane was
+  flag-off and unused; text embeddings + vision tags cover semantic reach (`02 §5c`). Text is the
+  only embedding lane now. `✓ removed 0.3.0`
 - **Avoid:** Qwen3-VL-Embedding on llama.cpp — ignores images (V1 POC, cos≈1.0). `✓ fact`
 
 **GPU:** Vulkan assumed for ~99% of users; CPU fallback retained. `✓ decided`
@@ -124,4 +125,5 @@ cutting-edge with caveats. The model-agnostic sidecar loads whichever tier is se
 ---
 
 ### Status
-- **All intake items decided.** License **MIT**; vision Beta **Qwen3.5-9B-VLM**; model tiers locked.
+- **All intake items decided.** License **MIT**; model tiers locked at **Default / Quality** per lane
+  (0.3.0 retired Beta — `02 §5c`).

@@ -20,6 +20,45 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-03 — 0.3.0 arc specs contract (PR1, specs-only) (`feat/0.3.0-pr1-specs-contract`)
+
+From `docs/0.3.0.md` (roadmap, decisions D1–D15) + a Plan-agent adversarial validation of the edit
+map. Specs-first: PR1 pre-writes the whole-arc contract so PR2–PR9 implement from the specs alone.
+
+### Implemented
+- **Contract normalized across `00`–`04` + `UI_REFERENCE` + `MODEL_REGISTRY` + `07` + `CLAUDE.md`/
+  `AGENTS.md` + `CHANGELOG.md`.** Subtractions (trigger trim / Beta retire / image-lane drop) and
+  additions (Flow overlay §7b / where-was-i + marks §7b / localhost API + export §7c + MCP) are now
+  contract language; every D1–D15 has a home (matrix in the plan file). Details: `08` entry above.
+- **New ambiguity resolved:** API port-bind UX (not a D-decision) → "loud + guided port change"
+  (`03 §7c`, `UI_REFERENCE`, `07` #80), surfaced to the user first.
+
+### Verification (specs-only — the untouched tree must still build) — verbatim
+- `cargo fmt --all -- --check` → `FMT_EXIT=0`
+- `cargo build --workspace` → `Finished \`dev\` profile … in 19.79s` / `BUILD_EXIT=0`
+- `git status --short` → only `specs/*` + `docs/0.3.0.md` + `CLAUDE.md`/`AGENTS.md`/`CHANGELOG.md`/
+  `.gitignore`; **no `.rs`/`.ts`/`.tsx`/`.toml`/`ui/`** touched → `ts-rs` bindings untouched by
+  construction (no `cargo test` regen needed for a docs-only change).
+
+### Skipped / deferred (intentional — out of PR1 scope)
+- **Pre-existing `03 §4` ↔ `crates/store/src/schema.rs` DDL drift** (mostly deferred): `§4`'s
+  "authoritative DDL" predates the `capture_trigger` (v5/v6) and `image_purged` (v7) columns and still
+  carries a stale "schema_version 2 → 3" comment (actual `LATEST_SCHEMA_VERSION = 8`). PR1's D2 contract
+  is written against the **real** schema. Because a fresh PR2 implementer reads `§4` to ground D2, the
+  verification workflow flagged the undocumented `capture_trigger` column, so PR1 **added it to the `§4`
+  frames DDL verbatim from `schema.rs` (incl. its widened CHECK)** — the one targeted reconciliation D2
+  directly needs. The rest of the drift (`image_purged`, the stale version comment, `frame_text`
+  nuances) stays a future cleanup. The new `marks` DDL + the two 0.3.0 migration notes use the
+  **relative** "+1, confirm against `LATEST_SCHEMA_VERSION`" rule so they stay correct regardless.
+- `docs/ARCHITECTURE.md` / `docs/TESTING.md` (live docs naming removed subsystems) are **not** edited —
+  PR1 is specs-only; assigned to PR2/PR4/PR9 via `07` #81.
+
+### Still risky
+- Nothing runtime (docs-only). The risk is contract completeness — mitigated by the Plan-agent map
+  validation (High/Medium findings folded in: `03 §3` trait signatures, residual `embed_image` prose,
+  D7 in `03`, `00 §E`/`01` image-model refs, `02 §8` Status). A whole-arc completeness sweep should run
+  before PR2 (an adversarial grep that no live `specs/` reference to a removed subsystem survives).
+
 ## Pass — 2026-07-01 — UIA cache-batched walk: efficiency lever (#71) (`fix/uia-findall-buildcache`)
 
 From a `/superpowers:brainstorming` design (plan approved). Third of three (#8, #73a shipped). The `07`

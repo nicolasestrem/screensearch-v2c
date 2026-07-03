@@ -74,13 +74,17 @@ AppShell
  ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
-     /            Deck      — at-a-glance: capture status, today's activity, jump back in
+     /            Deck      — at-a-glance: capture status, today's activity, jump back in (0.3.0: where-was-i "Jump back" card + Intentions strip)
      /recall      Recall    — Search · Ask · Reports (0.2.x); content text default, opt-in raw/chrome
      /timeline    Timeline  — the Scanline Timeline browser
      /timeline/:id Moment   — one frame: image, OCR text, vision tags, context, actions
      /insights    Insights  — activity analytics (nice-to-have; ships as real or honest-empty)
-     /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention · performance throttle (0.2.1)
+     /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention · performance throttle (0.2.1) · hotkeys + local API (0.3.0)
      *            NotFound
+
+ ┄ FlowOverlay (0.3.0) — a SEPARATE always-on-top hotkey window, NOT a NavRail route: Ctrl+Alt+Space
+                         summons instant search-as-you-type / Ask over content text; Esc dismisses,
+                         Enter jumps to the Moment; an empty query shows the where-was-i strip.
 ```
 Rules: one primary action per screen; every route is reachable from NavRail or a link; no orphan
 screens; deep-linkable (real routes, `/timeline/:id` shareable within the app).
@@ -92,13 +96,28 @@ shows a subtle, desaturated **"Throttling"** chip (functional `--warn`, not the 
 surfaces the live CPU/GPU pressure (or "GPU not monitored" when PDH counters are absent). It is a
 status indicator, not a control — the toggle and thresholds live in Settings.
 
+**Flow overlay (0.3.0).** A second always-on-top window summoned by a global hotkey
+(`overlay.hotkey`, default `Ctrl+Alt+Space`; `03 §8`) — recall without switching context. It must
+**read as ScreenSearch**, not a generic launcher: the Scanline-Timeline signature (a thin scan-head
+strip), one-accent discipline (signal-orange only), Windows-native fonts, **tokens only** (`§1`/`§2`;
+the `--bg-overlay` token + `overlay` z-layer already exist). Frameless, transparent, centered
+upper-third, **hidden-not-destroyed** (show/hide, so summon latency is window-show latency, not a
+webview boot). **Keyboard:** input focused on show; `↑/↓` navigate results; `Enter` opens the Moment
+in the main window; `Esc` (and blur) dismiss; `Tab` or a `?` prefix switches to **Ask** (streams a
+grounded, cited answer via the existing pipeline). An **empty query** shows the **where-was-i strip**
+(`03 §7b`) instead of results. **Perf:** visible **< 150 ms** from hotkey (warm); first results within
+the existing **< 200 ms** search budget. **Reduced-motion:** ambient scan disabled under
+`prefers-reduced-motion` (`§7`). **Privacy:** the overlay is the app's own window and is covered by
+the self-exclude capture gate — it must never appear in its own capture history (`03 §7b`, D7). A
+failed hotkey registration is a **visible Settings warning + toast**, never silent (D6).
+
 ## 4. Per-screen state matrix (the comprehensiveness guarantee)
 **Every view defines all of: `loading` · `empty` · `error` · `partial` · `populated`.** No screen
 ships with only the happy path; no mock data; no "Coming Soon."
 
 | Screen | empty | error | partial | notes |
 |---|---|---|---|---|
-| Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding |
+| Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding; **0.3.0:** where-was-i "Jump back" card + Intentions strip (unresolved marks, newest-first; open/resolve/dismiss; **no badge counts**) |
 | Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
 | Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
 | Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + model/tokens footer; honest empty on no-evidence ranges |
@@ -107,6 +126,8 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
 | Settings | — | save failed → keep form, explain | model downloading (progress) | optimistic + reconcile |
 | Settings · Performance throttle (0.2.1) | toggle OFF → readout collapsed to "Throttle disabled" (empty-off) | status probe failed → "Pressure unavailable", keep toggle + fields | partial: GPU unmonitored → CPU% shown + honest "GPU not monitored" | master toggle + live CPU/GPU + level readout + 8 threshold fields; loading = skeleton readout; populated = live CPU/GPU% + level (Normal/High/Sustained) |
+| Flow overlay (0.3.0) | empty query → where-was-i strip ("Jump back: *repo* — VS Code, until 14:32") or honest "Nothing to resume yet" | search/ask cmd failed → inline retry, overlay stays open | results streaming / Ask tokens arriving | frameless always-on-top; loading = skeleton rows; populated = top-N results with thumbnails; `Esc`/blur dismiss; five states like every view |
+| Settings · Local API (0.3.0) | toggle OFF → "API disabled" (empty-off); nothing listens | port in use on enable → **loud warning + toast + inline "pick another port"**; save failed → keep form | enabling → binding | master toggle + port field + token reveal/copy/regenerate + threat-model copy; populated = "listening on 127.0.0.1:<port>" |
 
 Loading uses skeletons that match final layout (no spinner-only screens). Empty states are
 **invitations to act**, not mood.
@@ -116,7 +137,7 @@ Shell: `AppShell`, `StatusRail`, `NavRail`, `CommandPalette`, `ReadinessBanner`.
 Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`, `Toast`,
 `EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`.
 Domain: `ScanlineTimeline`, `FrameTile`, `FrameImage` (lazy), `AnswerStream` (markdown + citations),
-`SearchResult`, `MomentDetail`, `JobQueueMeter`, `ModelTierPicker` (Default/Quality/Beta),
+`SearchResult`, `MomentDetail`, `JobQueueMeter`, `ModelTierPicker` (Default/Quality — 0.3.0 retired Beta),
 `ScheduleControl` (on-demand/timer/idle), `RetentionControl`.
 Domain (0.2.x): `RecallModeTabs` (Search/Ask/Reports), `TextSourceToggle` (content / include-chrome),
 `ReportBuilder` (daily/weekly/custom range → Generate), `ReportView` (markdown + clickable
@@ -126,6 +147,12 @@ Domain (0.2.1): `ThrottlePanel` (Settings: master `Toggle` + 8 threshold `Field`
 `ThrottleStatus` (live CPU/GPU pressure + level Normal/High/Sustained, honest "GPU not monitored"
 when PDH counters are absent — five states per `§4`), `ThrottleChip` (subtle StatusRail indicator,
 level ≥ 1 only).
+Domain (0.3.0): `FlowOverlay` (the always-on-top hotkey window: search-as-you-type + Ask over content
+text, where-was-i empty state, five states per `§4`), `WhereWasICard` (Deck "Jump back" card →
+Moment), `IntentionsStrip` (Deck: unresolved marks, newest-first, open/resolve/dismiss, **no badge
+counts**), `HotkeyField` (Settings: records a chord for `overlay.hotkey`/`marks.hotkey`, shows a loud
+warning on registration conflict), `ApiPanel` (Settings: master `Toggle` + port `Field` + token
+reveal/copy/regenerate + threat-model copy + the loud port-in-use "pick another" affordance).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
 
 ## 6. Data & state (reliability by construction)
