@@ -15,6 +15,7 @@ import type { ReportProgress } from "../../bindings/ReportProgress";
 import type { Toast } from "../../bindings/Toast";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { OpenMoment } from "../../bindings/OpenMoment";
+import type { MarkToast } from "../../bindings/MarkToast";
 
 /** Map of backend event name → payload type. */
 export interface AppEvents {
@@ -31,6 +32,11 @@ export interface AppEvents {
   overlay_shown: null;
   overlay_hidden: null;
   open_moment: OpenMoment;
+  // 0.3.0 flow recall (PR6): the overlay mark-this-moment confirmation toast, and a
+  // main-window signal that the marks set changed (fired from the mark hotkey + the
+  // marks commands) so the Deck's Intentions strip refreshes across windows.
+  mark_toast: MarkToast;
+  marks_changed: null;
 }
 
 /**

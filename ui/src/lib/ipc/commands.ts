@@ -27,6 +27,8 @@ import type { MonitorInfo } from "../../bindings/MonitorInfo";
 import type { AppSuppression } from "../../bindings/AppSuppression";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
+import type { Mark } from "../../bindings/Mark";
+import type { ResumeContext } from "../../bindings/ResumeContext";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -154,3 +156,40 @@ export const overlayShownAck = (): Promise<void> => invoke<void>("overlay_shown_
 /** Open a captured frame in the main window, then dismiss the overlay. */
 export const openMoment = (frameId: number): Promise<void> =>
   invoke<void>("open_moment", { frameId });
+
+/** The last sustained context before the current detour, or `null` for "nothing to
+ *  resume yet" (`where_was_i`, `03 §7b`). Drives the overlay empty state + Deck card. */
+export const whereWasI = (): Promise<ResumeContext | null> =>
+  invoke<ResumeContext | null>("where_was_i");
+
+/** Create a mark: exactly one of an existing `frameId`, or `captureNow` to capture the
+ *  current screen past the diff gate first (`add_mark`, `03 §7b`, D8). Returns the id. */
+export const addMark = (args: {
+  frameId?: number | null;
+  captureNow?: boolean;
+  note?: string | null;
+}): Promise<number> =>
+  invoke<number>("add_mark", {
+    frameId: args.frameId ?? null,
+    captureNow: args.captureNow ?? false,
+    note: args.note ?? null,
+  });
+
+/** All marks, unresolved first then newest-first within each group (`list_marks`). */
+export const listMarks = (): Promise<Mark[]> => invoke<Mark[]>("list_marks");
+
+/** Resolve a mark — done or dismiss, the same operation (`resolve_mark`, `03 §7b`). */
+export const resolveMark = (markId: number): Promise<void> =>
+  invoke<void>("resolve_mark", { markId });
+
+/** Attach the optional one-line note to an existing mark (`set_mark_note`, `03 §7`). */
+export const setMarkNote = (markId: number, note: string): Promise<void> =>
+  invoke<void>("set_mark_note", { markId, note });
+
+/** Make the overlay focusable + focus it when the user clicks the mark toast's note
+ *  field, so keystrokes land in the note (the toast is otherwise non-focusable, D1). */
+export const focusOverlayForNote = (): Promise<void> =>
+  invoke<void>("focus_overlay_for_note");
+
+/** Dismiss the mark toast, restoring the overlay to focusable for the next summon. */
+export const dismissMarkToast = (): Promise<void> => invoke<void>("dismiss_mark_toast");

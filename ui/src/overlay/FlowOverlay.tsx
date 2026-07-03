@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Button, EmptyState, ErrorState, Skeleton } from "../components/primitives";
 import { IconRecall } from "../components/icons";
 import { hideOverlay, openMoment, overlayShownAck } from "../lib/ipc/commands";
 import { listenTo } from "../lib/ipc/events";
+import { queryKeys } from "../lib/ipc/queryKeys";
 import { useAsk } from "../lib/ipc/useAsk";
-import { useSearch, useSettings } from "../lib/ipc/queries";
+import { useSearch, useSettings, useWhereWasI } from "../lib/ipc/queries";
 import { cn } from "../lib/cn";
 import type { SearchQuery } from "../bindings/SearchQuery";
 import type { SearchHit } from "../bindings/SearchHit";
 import { OverlayResultRow } from "./OverlayResultRow";
 import { OverlayAsk } from "./OverlayAsk";
+import { WhereWasIStrip } from "./WhereWasIStrip";
 
 type Mode = "search" | "ask";
 
@@ -21,6 +24,7 @@ const LISTBOX_ID = "flow-overlay-results";
 
 export function FlowOverlay() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
   const [mode, setMode] = useState<Mode>("search");
   const [text, setText] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -51,6 +55,10 @@ export function FlowOverlay() {
     [debounced, resultLimit],
   );
   const search = useSearch(query, mode === "search", true);
+  // Empty-query search state shows the where-was-i strip (`03 §7b`); the query only runs
+  // when that strip is visible, and refreshes on each summon (it depends on live context).
+  const showResume = mode === "search" && normalizedText.length === 0;
+  const resume = useWhereWasI(showResume);
   const hits = searchMatchesInput ? (search.data ?? []) : [];
   const activeHit = searchMatchesInput ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))] : undefined;
   const busy =
@@ -82,6 +90,8 @@ export function FlowOverlay() {
 
     track(
       listenTo("overlay_shown", () => {
+        // Each summon re-checks where-was-i (it reflects the live foreground context).
+        qc.invalidateQueries({ queryKey: queryKeys.whereWasI });
         inputRef.current?.focus();
         inputRef.current?.select();
         requestAnimationFrame(() => {
@@ -101,7 +111,7 @@ export function FlowOverlay() {
       active = false;
       unlisteners.forEach((u) => u());
     };
-  }, [resetAsk]);
+  }, [resetAsk, qc]);
 
   const openFrame = (frameId: number) => {
     void openMoment(frameId).catch(() => undefined);
@@ -166,6 +176,9 @@ export function FlowOverlay() {
       e.preventDefault();
       if (mode === "ask") {
         submitAsk();
+      } else if (showResume && resume.data) {
+        // Empty query + a resume context → jump straight back to it.
+        openFrame(resume.data.frame_id);
       } else if (searchWaitingForCommit) {
         setDebounced(text);
       } else if (activeHit) {
@@ -226,6 +239,7 @@ export function FlowOverlay() {
                 onOpen={openFrame}
                 activeIndex={activeIndex}
                 onActiveIndexChange={setActiveIndex}
+                resume={resume}
               />
             ) : (
               <OverlayAsk
@@ -252,6 +266,7 @@ interface SearchOverlayBodyProps {
   onOpen: (frameId: number) => void;
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
+  resume: ReturnType<typeof useWhereWasI>;
 }
 
 function SearchOverlayBody({
@@ -264,15 +279,11 @@ function SearchOverlayBody({
   onOpen,
   activeIndex,
   onActiveIndexChange,
+  resume,
 }: SearchOverlayBodyProps) {
   if (text.trim().length === 0) {
-    return (
-      <EmptyState
-        icon={<IconRecall size={24} />}
-        title="Type to search your screen history"
-        description="? to ask"
-      />
-    );
+    // Empty query → the where-was-i strip (`03 §7b`) instead of a plain prompt.
+    return <WhereWasIStrip resume={resume} />;
   }
   if (isError) {
     return <ErrorState title="Search failed" message={String(error)} onRetry={onRetry} />;

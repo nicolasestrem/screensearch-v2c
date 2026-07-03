@@ -40,4 +40,9 @@ export const queryKeys = {
     ["frameContext", at, halfWindowMs, limitEach] as const,
   insightsPrefix: ["insights"] as const,
   insights: (range: TimeRange, bucketCount: number) => ["insights", range, bucketCount] as const,
+  // 0.3.0 flow recall (PR6): the where-was-i card/strip and the Intentions strip. A
+  // `marks_changed` event invalidates `marks`; the overlay re-fetches `whereWasI` on
+  // each summon (it depends on the live foreground context, not a data-change event).
+  whereWasI: ["whereWasI"] as const,
+  marks: ["marks"] as const,
 };

@@ -118,6 +118,14 @@ export function useLiveEvents() {
       }),
     );
 
+    // A mark was created / resolved / annotated (possibly from the overlay window's own
+    // JS context via the mark hotkey) — refresh the Deck's Intentions strip.
+    track(
+      listenTo("marks_changed", () => {
+        qc.invalidateQueries({ queryKey: queryKeys.marks });
+      }),
+    );
+
     track(
       listenTo("toast", (t) => {
         toastStore[t.level](t.message);

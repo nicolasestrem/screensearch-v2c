@@ -41,6 +41,13 @@ export const IconRecall = (p: IconProps) => (
   </Svg>
 );
 
+/** Mark — a bookmark (mark-this-moment / Intentions). */
+export const IconMark = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z" />
+  </Svg>
+);
+
 /** Timeline — a filmstrip / scan ribbon. */
 export const IconTimeline = (p: IconProps) => (
   <Svg {...p}>

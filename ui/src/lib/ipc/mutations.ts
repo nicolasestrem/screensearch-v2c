@@ -92,3 +92,28 @@ export function useUnloadModel() {
     },
   });
 }
+
+/** Resolve a mark — done or dismiss, the same operation (`03 §7b`). Refreshes the
+ *  Intentions strip. The backend also broadcasts `marks_changed`, but invalidating here
+ *  keeps the strip snappy even before the event round-trips. */
+export function useResolveMark() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (markId: number) => cmd.resolveMark(markId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.marks });
+    },
+  });
+}
+
+/** Attach the optional one-line note to a mark after the fact (`03 §7`). */
+export function useSetMarkNote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ markId, note }: { markId: number; note: string }) =>
+      cmd.setMarkNote(markId, note),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.marks });
+    },
+  });
+}

@@ -17,6 +17,8 @@ import type { SidecarStatus } from "../../bindings/SidecarStatus";
 import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
+import type { Mark } from "../../bindings/Mark";
+import type { ResumeContext } from "../../bindings/ResumeContext";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -215,4 +217,33 @@ export function useInsights(range: TimeRange, bucketCount: number, enabled = tru
     enabled: enabled && bucketCount > 0 && range.end > range.start,
   });
   return useMaybeOverride(q, queryKey);
+}
+
+/**
+ * The last sustained context before the current detour (`where_was_i`, `03 §7b`, D9);
+ * `null` = "nothing to resume yet". Depends on the live foreground context, so it is not
+ * cached long — the overlay invalidates it on each summon and the Deck card refetches on
+ * mount. `enabled` lets the overlay hold it idle until an empty-query strip is shown.
+ */
+export function useWhereWasI(enabled = true) {
+  const q = useQuery<ResumeContext | null>({
+    queryKey: queryKeys.whereWasI,
+    queryFn: cmd.whereWasI,
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  return useMaybeOverride(q, queryKeys.whereWasI);
+}
+
+/** All marks (unresolved first, newest-first within each group). Kept live by the
+ *  `marks_changed` event (see useLiveEvents); the Intentions strip renders the
+ *  unresolved head. */
+export function useMarks(enabled = true) {
+  const q = useQuery<Mark[]>({
+    queryKey: queryKeys.marks,
+    queryFn: cmd.listMarks,
+    enabled,
+  });
+  return useMaybeOverride(q, queryKeys.marks);
 }
