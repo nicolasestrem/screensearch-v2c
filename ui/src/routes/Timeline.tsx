@@ -8,7 +8,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { Button, Chip, EmptyState, ErrorState, Panel, Skeleton } from "../components/primitives";
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorState,
+  Panel,
+  Skeleton,
+} from "../components/primitives";
 import { ScanlineTimeline } from "../components/domain";
 import * as cmd from "../lib/ipc/commands";
 import { useFrames, useTimeline } from "../lib/ipc/queries";
@@ -27,7 +34,8 @@ const PRESETS = [
   { label: "30 days", days: 30 },
 ] as const;
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(Math.max(v, lo), hi);
 
 export function Component() {
   const navigate = useNavigate();
@@ -44,7 +52,12 @@ export function Component() {
     return Number.isFinite(t) && t > 0 ? t : range.end - 1;
   });
 
-  const [timelineMeasureRef, bucketCount] = useAdaptiveBucketCount(DEFAULT_BUCKETS, 120, 2000, 4);
+  const [timelineMeasureRef, bucketCount] = useAdaptiveBucketCount(
+    DEFAULT_BUCKETS,
+    120,
+    2000,
+    4,
+  );
   const timeline = useTimeline(range, bucketCount);
   const thumbs = useFrames(range, THUMB_LIMIT);
 
@@ -84,7 +97,9 @@ export function Component() {
           className={cn(
             "inline-flex items-center rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
             "transition-colors duration-fast ease-ui",
-            days === p.days ? "bg-accent-wash text-accent" : "text-ink-muted hover:text-ink hover:bg-overlay",
+            days === p.days
+              ? "bg-accent-wash text-accent"
+              : "text-ink-muted hover:text-ink hover:bg-overlay",
           )}
         >
           {p.label}
@@ -109,7 +124,11 @@ export function Component() {
         <Panel
           title="Scanline"
           flush
-          action={hasData ? <Chip tone="accent">{absoluteTime(position)}</Chip> : undefined}
+          action={
+            hasData ? (
+              <Chip tone="accent">{absoluteTime(position)}</Chip>
+            ) : undefined
+          }
         >
           {timeline.isLoading ? (
             <Skeleton className="h-24 w-full rounded-none" />
@@ -140,7 +159,8 @@ export function Component() {
                 thumbnails={thumbs.data ?? []}
               />
               <p className="px-1 text-caption text-ink-faint font-body">
-                Drag or use ← → to scrub (Shift for bigger steps, Home/End to jump). Enter opens the moment.
+                Drag or use ← → to scrub (Shift for bigger steps, Home/End to
+                jump). Enter opens the moment.
                 {thumbs.isLoading ? " · Loading thumbnails…" : ""}
               </p>
             </div>

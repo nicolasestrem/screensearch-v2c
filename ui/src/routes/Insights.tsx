@@ -7,8 +7,19 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { Button, Chip, EmptyState, ErrorState, Panel, Skeleton } from "../components/primitives";
-import { CapturesTrend, InsightsBars, type RankedItem } from "../components/domain";
+import {
+  Button,
+  Chip,
+  EmptyState,
+  ErrorState,
+  Panel,
+  Skeleton,
+} from "../components/primitives";
+import {
+  CapturesTrend,
+  InsightsBars,
+  type RankedItem,
+} from "../components/domain";
 import { IconInsights } from "../components/icons";
 import { useInsights } from "../lib/ipc/queries";
 import { lastDaysRange } from "../lib/timeRanges";
@@ -146,7 +157,10 @@ export function Component() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Top apps">
-          <InsightsBars items={topApps} emptyLabel="No foreground app was recorded." />
+          <InsightsBars
+            items={topApps}
+            emptyLabel="No foreground app was recorded."
+          />
         </Panel>
 
         <Panel
@@ -156,8 +170,9 @@ export function Component() {
           <div className="flex flex-col gap-3">
             {partial && (
               <p className="text-caption text-ink-faint font-body">
-                Based on the {tagged} tagged {tagged === 1 ? "frame" : "frames"} so far. Tag more from
-                a moment, or enable a schedule in Settings.
+                Based on the {tagged} tagged {tagged === 1 ? "frame" : "frames"}{" "}
+                so far. Tag more from a moment, or enable a schedule in
+                Settings.
               </p>
             )}
             <InsightsBars

@@ -10,11 +10,19 @@ export interface SkeletonProps extends HTMLAttributes<HTMLDivElement> {
   circle?: boolean;
 }
 
-export function Skeleton({ circle = false, className, ...rest }: SkeletonProps) {
+export function Skeleton({
+  circle = false,
+  className,
+  ...rest
+}: SkeletonProps) {
   return (
     <div
       aria-hidden="true"
-      className={cn("animate-pulse bg-overlay", circle ? "rounded-full" : "rounded-chip", className)}
+      className={cn(
+        "animate-pulse bg-overlay",
+        circle ? "rounded-full" : "rounded-chip",
+        className,
+      )}
       {...rest}
     />
   );

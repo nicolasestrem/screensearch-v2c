@@ -7,20 +7,21 @@
  * exposes no GPU performance counters — a truthful "GPU not monitored" state, not an
  * error; the throttle then runs on CPU pressure alone (a weak-iGPU / VM machine).
  */
-export type PressureSample = { 
-/**
- * Whole-machine CPU busy %, `0..=100` (not per-process — see `03 §5`).
- */
-cpu_pct: number, 
-/**
- * Summed GPU-engine utilization %, `0..=100`; `None` when GPU is unmonitored.
- */
-gpu_pct: number | null, 
-/**
- * Whether GPU monitoring is live; `false` → the UI shows "GPU not monitored".
- */
-gpu_monitored: boolean, 
-/**
- * When this sample was taken, unix epoch ms (the kernel clock unit, `03 §4`).
- */
-sampled_at: number, };
+export type PressureSample = {
+  /**
+   * Whole-machine CPU busy %, `0..=100` (not per-process — see `03 §5`).
+   */
+  cpu_pct: number;
+  /**
+   * Summed GPU-engine utilization %, `0..=100`; `None` when GPU is unmonitored.
+   */
+  gpu_pct: number | null;
+  /**
+   * Whether GPU monitoring is live; `false` → the UI shows "GPU not monitored".
+   */
+  gpu_monitored: boolean;
+  /**
+   * When this sample was taken, unix epoch ms (the kernel clock unit, `03 §4`).
+   */
+  sampled_at: number;
+};

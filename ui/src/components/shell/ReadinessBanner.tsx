@@ -16,15 +16,17 @@ const SUBSYSTEMS = [
 
 /** Statuses worth surfacing in the banner. */
 function isConcerning(status: ComponentStatus): boolean {
-  return status === "initializing" || status === "unavailable" || status === "error";
+  return (
+    status === "initializing" || status === "unavailable" || status === "error"
+  );
 }
 
 export function ReadinessBanner() {
   const { data } = useReadiness();
   if (!data) return null;
 
-  const issues = SUBSYSTEMS.map((s) => ({ ...s, cr: data[s.key] })).filter((s) =>
-    isConcerning(s.cr.status),
+  const issues = SUBSYSTEMS.map((s) => ({ ...s, cr: data[s.key] })).filter(
+    (s) => isConcerning(s.cr.status),
   );
   if (issues.length === 0) return null;
 

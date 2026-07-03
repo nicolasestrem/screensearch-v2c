@@ -4,7 +4,10 @@
 import { useId, type InputHTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
-export interface FieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "id"> {
+export interface FieldProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "id"
+> {
   label: string;
   /** Helper text below the input (e.g. "applies on next capture start"). */
   hint?: ReactNode;
@@ -25,7 +28,9 @@ export function Field({ label, hint, error, className, ...rest }: FieldProps) {
       <input
         id={id}
         aria-invalid={error ? true : undefined}
-        aria-describedby={cn(hint ? hintId : null, error ? errorId : null) || undefined}
+        aria-describedby={
+          cn(hint ? hintId : null, error ? errorId : null) || undefined
+        }
         className={cn(
           "bg-base border rounded-chip px-3 min-h-hit-min text-body text-ink font-body",
           "transition-colors duration-fast ease-ui",

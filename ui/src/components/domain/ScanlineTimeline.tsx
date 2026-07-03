@@ -6,7 +6,14 @@
 // scan-head and texture are DOM overlays (crisp accent + token glow); only the
 // density is canvas. devicePixelRatio-crisp; ambient drift is gated by
 // prefers-reduced-motion in globals.css.
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { TimelineBucket } from "../../bindings/TimelineBucket";
 import type { TimeRange } from "../../bindings/TimeRange";
@@ -30,9 +37,13 @@ export interface ScanlineTimelineProps {
   height?: number;
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(Math.max(v, lo), hi);
 
-function nearestThumbnailByTime(thumbnails: FrameMeta[], time: number): FrameMeta | null {
+function nearestThumbnailByTime(
+  thumbnails: FrameMeta[],
+  time: number,
+): FrameMeta | null {
   if (thumbnails.length === 0) return null;
 
   let lo = 0;
@@ -117,7 +128,10 @@ export function ScanlineTimeline({
     return Math.round(range.start + frac * span);
   };
 
-  const positionPct = span === 0 ? 0 : (clamp(position, range.start, range.end) - range.start) / span;
+  const positionPct =
+    span === 0
+      ? 0
+      : (clamp(position, range.start, range.end) - range.start) / span;
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     dragging.current = true;
@@ -147,10 +161,18 @@ export function ScanlineTimeline({
     let next: number | null = null;
     switch (e.key) {
       case "ArrowRight":
-        next = clamp(position + (e.shiftKey ? bigStep : step), range.start, range.end);
+        next = clamp(
+          position + (e.shiftKey ? bigStep : step),
+          range.start,
+          range.end,
+        );
         break;
       case "ArrowLeft":
-        next = clamp(position - (e.shiftKey ? bigStep : step), range.start, range.end);
+        next = clamp(
+          position - (e.shiftKey ? bigStep : step),
+          range.start,
+          range.end,
+        );
         break;
       case "Home":
         next = range.start;
@@ -170,7 +192,9 @@ export function ScanlineTimeline({
     if (next !== null) onScrub(next);
   };
 
-  const hoverFrame = hover ? nearestThumbnailByTime(sortedThumbnails, hover.time) : null;
+  const hoverFrame = hover
+    ? nearestThumbnailByTime(sortedThumbnails, hover.time)
+    : null;
 
   return (
     <div
@@ -198,7 +222,10 @@ export function ScanlineTimeline({
 
       {/* Faint scanline texture — the subject's native material; drift is disabled
           under prefers-reduced-motion (globals.css). */}
-      <div className="scanlines scanlines-drift pointer-events-none absolute inset-0" aria-hidden="true" />
+      <div
+        className="scanlines scanlines-drift pointer-events-none absolute inset-0"
+        aria-hidden="true"
+      />
 
       {/* The sweeping signal-orange scan-head + its time read-out. */}
       <div

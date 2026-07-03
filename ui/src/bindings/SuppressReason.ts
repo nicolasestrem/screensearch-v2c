@@ -5,4 +5,5 @@
  * maps to the nullable `text_spans.suppress_reason` column — `None` = a searchable,
  * non-suppressed span (no redundant in-enum `None` variant, `03 §4`).
  */
-export type SuppressReason = "static_chrome" | "system_ui" | "background_window";
+export type SuppressReason =
+  "static_chrome" | "system_ui" | "background_window";

@@ -22,7 +22,8 @@ export const queryKeys = {
   searchPrefix: ["search"] as const,
   search: (query: SearchQuery) => ["search", query] as const,
   timelinePrefix: ["timeline"] as const,
-  timeline: (range: TimeRange, bucketCount: number) => ["timeline", range, bucketCount] as const,
+  timeline: (range: TimeRange, bucketCount: number) =>
+    ["timeline", range, bucketCount] as const,
   framePrefix: ["frame"] as const,
   frame: (frameId: number) => ["frame", frameId] as const,
   // A frame's text spans (for the text+layout reconstruction of a degraded capture).
@@ -31,7 +32,8 @@ export const queryKeys = {
   // Frame *lists* (FrameMeta) — distinct from the singular `frame` detail above.
   // A new capture (`capture_tick`) invalidates every range/limit variant at once.
   framesPrefix: ["frames"] as const,
-  frames: (range: TimeRange, limit: number) => ["frames", range, limit] as const,
+  frames: (range: TimeRange, limit: number) =>
+    ["frames", range, limit] as const,
   // A frame's neighbour context (closest captures on each side). A new capture
   // (`capture_tick`) can add a neighbour, so this family is invalidated alongside
   // the frame lists above.
@@ -39,7 +41,8 @@ export const queryKeys = {
   frameContext: (at: number, halfWindowMs: number, limitEach: number) =>
     ["frameContext", at, halfWindowMs, limitEach] as const,
   insightsPrefix: ["insights"] as const,
-  insights: (range: TimeRange, bucketCount: number) => ["insights", range, bucketCount] as const,
+  insights: (range: TimeRange, bucketCount: number) =>
+    ["insights", range, bucketCount] as const,
   // 0.3.0 flow recall (PR6): the where-was-i card/strip and the Intentions strip. A
   // `marks_changed` event invalidates `marks`; the overlay re-fetches `whereWasI` on
   // each summon (it depends on the live foreground context, not a data-change event).

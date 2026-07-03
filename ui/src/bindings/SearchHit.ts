@@ -3,10 +3,17 @@
 /**
  * One hybrid-search result row (`search` output).
  */
-export type SearchHit = { frame_id: number, captured_at: number, snippet: string, score: number, image_path: string, 
-/**
- * `true` once this frame's screenshot has been retention-degraded — text proof kept,
- * image gone. Purged frames still match search (the text is preserved); the result
- * tile shows a "screenshot expired" state instead of a broken thumbnail.
- */
-image_purged: boolean, app_hint: string | null, };
+export type SearchHit = {
+  frame_id: number;
+  captured_at: number;
+  snippet: string;
+  score: number;
+  image_path: string;
+  /**
+   * `true` once this frame's screenshot has been retention-degraded — text proof kept,
+   * image gone. Purged frames still match search (the text is preserved); the result
+   * tile shows a "screenshot expired" state instead of a broken thumbnail.
+   */
+  image_purged: boolean;
+  app_hint: string | null;
+};

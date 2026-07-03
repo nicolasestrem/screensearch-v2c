@@ -62,13 +62,19 @@ export function IntentionsStrip({ onOpen }: IntentionsStripProps) {
                 className="h-14 w-24 shrink-0 rounded-chip object-cover bg-overlay"
               />
               <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="truncate text-body text-ink font-body">{markLabel(mark)}</span>
+                <span className="truncate text-body text-ink font-body">
+                  {markLabel(mark)}
+                </span>
                 <span className="font-mono text-data text-ink-faint">
                   {relativeTime(mark.created_at)}
                 </span>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <Button size="sm" variant="ghost" onClick={() => onOpen(mark.frame_id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onOpen(mark.frame_id)}
+                >
                   Open
                 </Button>
                 <Button

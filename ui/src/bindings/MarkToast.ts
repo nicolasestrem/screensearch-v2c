@@ -8,4 +8,8 @@ import type { ToastLevel } from "./ToastLevel";
  * attached via `set_mark_note`), `None` on the failure variant (e.g. capture off, or a
  * privacy-gate denial), where only the `message` is shown.
  */
-export type MarkToast = { mark_id: number | null, level: ToastLevel, message: string, };
+export type MarkToast = {
+  mark_id: number | null;
+  level: ToastLevel;
+  message: string;
+};

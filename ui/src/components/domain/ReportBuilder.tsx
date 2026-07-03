@@ -18,7 +18,11 @@ import type { TimeRange } from "../../bindings/TimeRange";
  * the switch days), so adding a fixed `DAY_MS` would over/undershoot the next midnight.
  */
 function localMidnight(d: Date, offsetDays = 0): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offsetDays).getTime();
+  return new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate() + offsetDays,
+  ).getTime();
 }
 
 /**
@@ -29,7 +33,11 @@ function localMidnight(d: Date, offsetDays = 0): number {
 function localDateMidnight(value: string, offsetDays = 0): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + offsetDays).getTime();
+  return new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]) + offsetDays,
+  ).getTime();
 }
 
 /** Today's date as a `YYYY-MM-DD` string in local time (for the date inputs). */
@@ -55,7 +63,11 @@ const KINDS: { value: ReportKind; label: string }[] = [
   { value: "custom", label: "Custom" },
 ];
 
-export function ReportBuilder({ onGenerate, onCancel, busy }: ReportBuilderProps) {
+export function ReportBuilder({
+  onGenerate,
+  onCancel,
+  busy,
+}: ReportBuilderProps) {
   const [kind, setKind] = useState<ReportKind>("daily");
   const [from, setFrom] = useState(todayInput());
   const [to, setTo] = useState(todayInput());
@@ -86,7 +98,9 @@ export function ReportBuilder({ onGenerate, onCancel, busy }: ReportBuilderProps
     if (busy) return;
     const time_range = resolveRange();
     if (!time_range) {
-      setRangeError("Pick a valid date range (the end date can't be before the start).");
+      setRangeError(
+        "Pick a valid date range (the end date can't be before the start).",
+      );
       return;
     }
     setRangeError(null);
@@ -160,7 +174,9 @@ export function ReportBuilder({ onGenerate, onCancel, busy }: ReportBuilderProps
         </div>
       )}
 
-      {rangeError && <span className="text-caption text-danger">{rangeError}</span>}
+      {rangeError && (
+        <span className="text-caption text-danger">{rangeError}</span>
+      )}
 
       <div className="flex items-center gap-2">
         <Button type="submit" variant="primary" disabled={busy}>

@@ -57,7 +57,9 @@ export function WhereWasICard({ onOpen }: WhereWasICardProps) {
           />
           <span className="flex min-w-0 flex-1 flex-col gap-1">
             <span className="eyebrow text-ink-faint">Jump back</span>
-            <span className="truncate text-body text-ink font-body">{headline(resume.data)}</span>
+            <span className="truncate text-body text-ink font-body">
+              {headline(resume.data)}
+            </span>
             <span className="font-mono text-data text-ink-faint">
               until {clockTime(resume.data.span_end)}
             </span>

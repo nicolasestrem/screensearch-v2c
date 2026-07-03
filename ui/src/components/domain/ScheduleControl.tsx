@@ -39,8 +39,9 @@ export function ScheduleControl({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-caption text-ink-faint font-body">
-        Vision tagging never runs in real time. On-demand tagging (from a moment) is always
-        available — turn on a schedule to also tag untagged frames in the background.
+        Vision tagging never runs in real time. On-demand tagging (from a
+        moment) is always available — turn on a schedule to also tag untagged
+        frames in the background.
       </p>
 
       <Toggle
@@ -58,7 +59,9 @@ export function ScheduleControl({
           onChange={(e) => {
             const m = e.currentTarget.valueAsNumber;
             if (Number.isFinite(m) && m >= 1) {
-              onChange({ enrich_vision_timer_interval_ms: Math.round(m) * 60_000 });
+              onChange({
+                enrich_vision_timer_interval_ms: Math.round(m) * 60_000,
+              });
             } else if (e.currentTarget.value === "") {
               onChange({ enrich_vision_timer_interval_ms: 0 });
             }

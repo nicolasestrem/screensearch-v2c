@@ -4,4 +4,4 @@ import type { AnswerDelta } from "./AnswerDelta";
 /**
  * Request-scoped streamed answer event (`answer_delta` payload).
  */
-export type AnswerEvent = { request_id: string, delta: AnswerDelta, };
+export type AnswerEvent = { request_id: string; delta: AnswerDelta };

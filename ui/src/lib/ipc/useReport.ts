@@ -23,7 +23,12 @@ export interface ReportState {
   error: string | null;
 }
 
-const initial: ReportState = { phase: "idle", progress: null, result: null, error: null };
+const initial: ReportState = {
+  phase: "idle",
+  progress: null,
+  result: null,
+  error: null,
+};
 
 type Action =
   | { type: "start" }
@@ -52,7 +57,12 @@ function reducer(state: ReportState, action: Action): ReportState {
     case "done":
       return { ...state, phase: "done", result: action.result, progress: null };
     case "error":
-      return { ...state, phase: "error", error: action.message, progress: null };
+      return {
+        ...state,
+        phase: "error",
+        error: action.message,
+        progress: null,
+      };
   }
 }
 
@@ -91,19 +101,27 @@ export function useReport(): UseReport {
     };
   }, []);
 
-  const generate = useCallback(async (request: Omit<ReportRequest, "request_id">) => {
-    const requestId = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    activeRequest.current = requestId;
-    dispatch({ type: "start" });
-    try {
-      const result = await cmd.generateReport({ ...request, request_id: requestId });
-      if (activeRequest.current === requestId) dispatch({ type: "done", result });
-    } catch (e) {
-      if (activeRequest.current === requestId) dispatch({ type: "error", message: String(e) });
-    } finally {
-      if (activeRequest.current === requestId) activeRequest.current = null;
-    }
-  }, []);
+  const generate = useCallback(
+    async (request: Omit<ReportRequest, "request_id">) => {
+      const requestId = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      activeRequest.current = requestId;
+      dispatch({ type: "start" });
+      try {
+        const result = await cmd.generateReport({
+          ...request,
+          request_id: requestId,
+        });
+        if (activeRequest.current === requestId)
+          dispatch({ type: "done", result });
+      } catch (e) {
+        if (activeRequest.current === requestId)
+          dispatch({ type: "error", message: String(e) });
+      } finally {
+        if (activeRequest.current === requestId) activeRequest.current = null;
+      }
+    },
+    [],
+  );
 
   const cancel = useCallback(() => {
     const requestId = activeRequest.current;

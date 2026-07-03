@@ -20,7 +20,9 @@ export function readRibbonColors(el: HTMLElement): RibbonColors {
   const cs = getComputedStyle(el);
   const root = getComputedStyle(document.documentElement);
   const v = (name: string) =>
-    cs.getPropertyValue(name).trim() || root.getPropertyValue(name).trim() || "transparent";
+    cs.getPropertyValue(name).trim() ||
+    root.getPropertyValue(name).trim() ||
+    "transparent";
   return {
     bar: v("--accent-wash"),
     barTop: v("--accent"),
@@ -46,7 +48,10 @@ export interface DrawOptions {
  * encodes real capture density, never decorative ticks. Leaves the canvas blank when
  * the window is degenerate or empty (the screen renders an explicit empty state).
  */
-export function drawDensityRibbon(ctx: CanvasRenderingContext2D, o: DrawOptions): void {
+export function drawDensityRibbon(
+  ctx: CanvasRenderingContext2D,
+  o: DrawOptions,
+): void {
   const { width, height, dpr, buckets, range, colors } = o;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);

@@ -11,24 +11,25 @@ import type { TimelineBucket } from "./TimelineBucket";
  * (reusing [`TimelineBucket`]), the top foreground apps, and the vision
  * activity-type breakdown. [`Default`] is the honest-empty summary.
  */
-export type InsightsSummary = { 
-/**
- * Frames captured in the window.
- */
-total_frames: number, 
-/**
- * Frames in the window that carry a vision `activity_type`.
- */
-tagged_frames: number, 
-/**
- * Capture density across the window (sparse, ascending by time).
- */
-captures: Array<TimelineBucket>, 
-/**
- * Most-captured foreground apps, descending by frame count.
- */
-top_apps: Array<AppCount>, 
-/**
- * Vision activity-type breakdown, descending by frame count.
- */
-activity_breakdown: Array<ActivityCount>, };
+export type InsightsSummary = {
+  /**
+   * Frames captured in the window.
+   */
+  total_frames: number;
+  /**
+   * Frames in the window that carry a vision `activity_type`.
+   */
+  tagged_frames: number;
+  /**
+   * Capture density across the window (sparse, ascending by time).
+   */
+  captures: Array<TimelineBucket>;
+  /**
+   * Most-captured foreground apps, descending by frame count.
+   */
+  top_apps: Array<AppCount>;
+  /**
+   * Vision activity-type breakdown, descending by frame count.
+   */
+  activity_breakdown: Array<ActivityCount>;
+};

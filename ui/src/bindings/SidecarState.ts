@@ -3,4 +3,5 @@
 /**
  * Lifecycle state of the inference sidecar (`03 §6`).
  */
-export type SidecarState = "stopped" | "starting" | "ready" | "evicted" | "crashed" | "recycled";
+export type SidecarState =
+  "stopped" | "starting" | "ready" | "evicted" | "crashed" | "recycled";

@@ -12,7 +12,10 @@ import { frameSrc } from "../../lib/ipc/frameSrc";
 import { cn } from "../../lib/cn";
 import { IconImage, IconDatabase } from "../icons";
 
-export interface FrameImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> {
+export interface FrameImageProps extends Omit<
+  ImgHTMLAttributes<HTMLImageElement>,
+  "src"
+> {
   imagePath: string | null | undefined;
   /** When the screenshot has been retention-degraded — the image file is gone but the
    *  text proof remains. Renders a "text kept" state instead of fetching a dead path. */
@@ -76,7 +79,10 @@ export function FrameImage({
   if (!src || failed) {
     return (
       <div
-        className={cn("flex items-center justify-center bg-overlay text-ink-faint", className)}
+        className={cn(
+          "flex items-center justify-center bg-overlay text-ink-faint",
+          className,
+        )}
         role="img"
         aria-label={alt}
       >

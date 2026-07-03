@@ -33,7 +33,9 @@ export function OverlayRuntime() {
           /* no Tauri runtime in browser dev */
         });
 
-    track(listenTo("mark_toast", (payload) => setView({ mode: "mark", payload })));
+    track(
+      listenTo("mark_toast", (payload) => setView({ mode: "mark", payload })),
+    );
     track(listenTo("overlay_shown", () => setView({ mode: "flow" })));
     track(listenTo("overlay_hidden", () => setView({ mode: "flow" })));
 
@@ -44,7 +46,10 @@ export function OverlayRuntime() {
   }, []);
 
   return view.mode === "mark" ? (
-    <MarkToast payload={view.payload} onDone={() => setView({ mode: "flow" })} />
+    <MarkToast
+      payload={view.payload}
+      onDone={() => setView({ mode: "flow" })}
+    />
   ) : (
     <FlowOverlay />
   );

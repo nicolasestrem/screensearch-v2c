@@ -1,7 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { Button, EmptyState, ErrorState, Skeleton } from "../components/primitives";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+} from "../components/primitives";
 import { IconRecall } from "../components/icons";
 import { hideOverlay, openMoment, overlayShownAck } from "../lib/ipc/commands";
 import { listenTo } from "../lib/ipc/events";
@@ -32,13 +43,18 @@ export function FlowOverlay() {
   const settings = useSettings();
   const ask = useAsk();
   const resetAsk = ask.reset;
-  const resultLimit = settings.data?.overlay_max_results ?? DEFAULT_RESULT_LIMIT;
+  const resultLimit =
+    settings.data?.overlay_max_results ?? DEFAULT_RESULT_LIMIT;
   const normalizedText = text.trim();
   const committedSearchText = debounced.trim();
   const searchWaitingForCommit =
-    mode === "search" && normalizedText.length > 0 && normalizedText !== committedSearchText;
+    mode === "search" &&
+    normalizedText.length > 0 &&
+    normalizedText !== committedSearchText;
   const searchMatchesInput =
-    mode === "search" && normalizedText.length > 0 && normalizedText === committedSearchText;
+    mode === "search" &&
+    normalizedText.length > 0 &&
+    normalizedText === committedSearchText;
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(text), SEARCH_DEBOUNCE_MS);
@@ -60,9 +76,13 @@ export function FlowOverlay() {
   const showResume = mode === "search" && normalizedText.length === 0;
   const resume = useWhereWasI(showResume);
   const hits = searchMatchesInput ? (search.data ?? []) : [];
-  const activeHit = searchMatchesInput ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))] : undefined;
+  const activeHit = searchMatchesInput
+    ? hits[Math.min(activeIndex, Math.max(hits.length - 1, 0))]
+    : undefined;
   const busy =
-    (mode === "search" && normalizedText.length > 0 && (searchWaitingForCommit || search.isFetching)) ||
+    (mode === "search" &&
+      normalizedText.length > 0 &&
+      (searchWaitingForCommit || search.isFetching)) ||
     ask.phase === "streaming";
 
   useEffect(() => {
@@ -191,7 +211,10 @@ export function FlowOverlay() {
     <div className="flex h-full items-start justify-center p-3">
       <section className="w-full overflow-hidden rounded-panel border border-line bg-overlay shadow-scan">
         <div
-          className={cn("h-1 bg-accent shadow-scan", busy && "scanlines scanlines-drift")}
+          className={cn(
+            "h-1 bg-accent shadow-scan",
+            busy && "scanlines scanlines-drift",
+          )}
           aria-hidden="true"
         />
         <div className="scanlines flex flex-col gap-3 p-3">
@@ -206,10 +229,16 @@ export function FlowOverlay() {
               aria-controls={LISTBOX_ID}
               aria-expanded={mode === "search"}
               aria-activedescendant={
-                mode === "search" && activeHit ? optionId(activeHit.frame_id) : undefined
+                mode === "search" && activeHit
+                  ? optionId(activeHit.frame_id)
+                  : undefined
               }
               autoFocus
-              placeholder={mode === "search" ? "Search screen history" : "Ask about captured screens"}
+              placeholder={
+                mode === "search"
+                  ? "Search screen history"
+                  : "Ask about captured screens"
+              }
               className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
             />
             <Button
@@ -222,7 +251,11 @@ export function FlowOverlay() {
             >
               Search
             </Button>
-            <Button variant={mode === "ask" ? "primary" : "secondary"} size="sm" onClick={() => setMode("ask")}>
+            <Button
+              variant={mode === "ask" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setMode("ask")}
+            >
               Ask
             </Button>
           </div>
@@ -286,7 +319,13 @@ function SearchOverlayBody({
     return <WhereWasIStrip resume={resume} />;
   }
   if (isError) {
-    return <ErrorState title="Search failed" message={String(error)} onRetry={onRetry} />;
+    return (
+      <ErrorState
+        title="Search failed"
+        message={String(error)}
+        onRetry={onRetry}
+      />
+    );
   }
   if (isFetching && hits.length === 0) {
     return (
@@ -314,7 +353,12 @@ function SearchOverlayBody({
   }
 
   return (
-    <div id={LISTBOX_ID} role="listbox" aria-label="Flow search results" className="flex flex-col gap-2 p-2">
+    <div
+      id={LISTBOX_ID}
+      role="listbox"
+      aria-label="Flow search results"
+      className="flex flex-col gap-2 p-2"
+    >
       {hits.map((hit, index) => (
         <OverlayResultRow
           key={hit.frame_id}

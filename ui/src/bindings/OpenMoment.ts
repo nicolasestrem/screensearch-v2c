@@ -4,4 +4,4 @@
  * Event payload telling the main window to open a captured Moment after the overlay
  * accepts a result.
  */
-export type OpenMoment = { frame_id: number, };
+export type OpenMoment = { frame_id: number };

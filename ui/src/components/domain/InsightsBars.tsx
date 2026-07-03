@@ -14,7 +14,10 @@ export interface InsightsBarsProps {
   emptyLabel?: string;
 }
 
-export function InsightsBars({ items, emptyLabel = "No data yet." }: InsightsBarsProps) {
+export function InsightsBars({
+  items,
+  emptyLabel = "No data yet.",
+}: InsightsBarsProps) {
   if (items.length === 0) {
     return <p className="text-body text-ink-muted font-body">{emptyLabel}</p>;
   }
@@ -33,7 +36,10 @@ export function InsightsBars({ items, emptyLabel = "No data yet." }: InsightsBar
               {item.label}
             </span>
             <div className="relative h-6 min-w-0 flex-1 overflow-hidden rounded-chip bg-overlay">
-              <div className="h-full rounded-chip bg-accent" style={{ width: `${pct}%` }} />
+              <div
+                className="h-full rounded-chip bg-accent"
+                style={{ width: `${pct}%` }}
+              />
             </div>
             <span className="w-12 shrink-0 text-right font-mono text-data text-ink-muted">
               {item.count}

@@ -10,16 +10,22 @@
  * and `image_purged` let the overlay/Deck render a thumbnail without a second
  * `get_frame`. `browser_url` is dormant today (always `None` in production capture).
  */
-export type ResumeContext = { frame_id: number, 
-/**
- * The representative frame's `app_hint`, original casing (the context's app).
- */
-app: string, window_title: string | null, browser_url: string | null, 
-/**
- * First capture of the sustained run, unix epoch ms.
- */
-span_start: number, 
-/**
- * Last capture of the sustained run (the representative frame), unix epoch ms.
- */
-span_end: number, image_path: string, image_purged: boolean, };
+export type ResumeContext = {
+  frame_id: number;
+  /**
+   * The representative frame's `app_hint`, original casing (the context's app).
+   */
+  app: string;
+  window_title: string | null;
+  browser_url: string | null;
+  /**
+   * First capture of the sustained run, unix epoch ms.
+   */
+  span_start: number;
+  /**
+   * Last capture of the sustained run (the representative frame), unix epoch ms.
+   */
+  span_end: number;
+  image_path: string;
+  image_purged: boolean;
+};

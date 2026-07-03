@@ -8,13 +8,22 @@ export interface SelectOption {
   label: string;
 }
 
-export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "id"> {
+export interface SelectProps extends Omit<
+  SelectHTMLAttributes<HTMLSelectElement>,
+  "id"
+> {
   label: string;
   options: SelectOption[];
   hint?: ReactNode;
 }
 
-export function Select({ label, options, hint, className, ...rest }: SelectProps) {
+export function Select({
+  label,
+  options,
+  hint,
+  className,
+  ...rest
+}: SelectProps) {
   const id = useId();
   const hintId = `${id}-hint`;
 

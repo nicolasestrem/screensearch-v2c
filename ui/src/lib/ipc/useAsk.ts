@@ -30,7 +30,8 @@ const initial: AskState = {
   error: null,
 };
 
-type AskAction = { type: "start" } | { type: "reset" } | { type: "delta"; delta: AnswerDelta };
+type AskAction =
+  { type: "start" } | { type: "reset" } | { type: "delta"; delta: AnswerDelta };
 
 function reducer(state: AskState, action: AskAction): AskState {
   switch (action.type) {

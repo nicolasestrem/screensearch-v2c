@@ -5,7 +5,11 @@
 // the vision model loads automatically while the idle backfill drains the tagging backlog.
 import { Button, Chip, Tooltip } from "../primitives";
 import { IconCpu } from "../icons";
-import { useModelDownload, useReadiness, useSidecarStatus } from "../../lib/ipc/queries";
+import {
+  useModelDownload,
+  useReadiness,
+  useSidecarStatus,
+} from "../../lib/ipc/queries";
 import { useLoadModel, useUnloadModel } from "../../lib/ipc/mutations";
 import { sidecarStateLabel, sidecarStateTone } from "../../lib/status";
 import type { ModelLane } from "../../bindings/ModelLane";
@@ -69,7 +73,9 @@ export function ModelPanel() {
           {state ? sidecarStateLabel(state) : "Unknown"}
         </Chip>
         {laneLabel && (
-          <span className="text-caption text-ink-muted font-body">{laneLabel} model</span>
+          <span className="text-caption text-ink-muted font-body">
+            {laneLabel} model
+          </span>
         )}
         {status?.model && (
           <Tooltip label={status.model} side="bottom">
@@ -113,8 +119,8 @@ export function ModelPanel() {
             {failed.model ?? `${failed.lane} model`} download didn’t finish
           </span>
           <span className="text-caption text-ink-muted font-body">
-            {failed.error ?? "The download was interrupted."} It resumes from where it
-            stopped — load the model or run a tag to retry.
+            {failed.error ?? "The download was interrupted."} It resumes from
+            where it stopped — load the model or run a tag to retry.
           </span>
         </div>
       )}

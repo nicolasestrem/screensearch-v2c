@@ -32,9 +32,13 @@ export function FrameTile({ frame, className }: FrameTileProps) {
         className="aspect-video w-full rounded-chip object-cover bg-overlay"
       />
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-data text-ink-muted">{clockTime(frame.captured_at)}</span>
+        <span className="font-mono text-data text-ink-muted">
+          {clockTime(frame.captured_at)}
+        </span>
         {frame.app_hint && (
-          <span className="truncate text-caption text-ink-faint font-body">{frame.app_hint}</span>
+          <span className="truncate text-caption text-ink-faint font-body">
+            {frame.app_hint}
+          </span>
         )}
       </div>
     </Link>

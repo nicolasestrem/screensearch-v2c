@@ -6,4 +6,9 @@ import type { JobStats } from "./JobStats";
  * Data-changing enrichment job completion (`job_completed` event). Carries enough
  * identity for the UI to refresh frame/search/insights data surgically.
  */
-export type JobCompleted = { job_id: number, kind: JobKind, frame_id: number, stats: JobStats, };
+export type JobCompleted = {
+  job_id: number;
+  kind: JobKind;
+  frame_id: number;
+  stats: JobStats;
+};

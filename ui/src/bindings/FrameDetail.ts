@@ -6,35 +6,48 @@ import type { VisionAnalysis } from "./VisionAnalysis";
 /**
  * Full detail for a single frame (`get_frame` output).
  */
-export type FrameDetail = { frame_id: number, captured_at: number, monitor_index: number, width: number, height: number, image_path: string, 
-/**
- * `true` once this frame's screenshot has been retention-degraded — the image file
- * is gone but the text proof (raw/content text + `text_spans`) remains. The Moment
- * view renders the layout reconstruction instead of the image (`storage.retention_days`).
- */
-image_purged: boolean, app_hint: string | null, window_title: string | null, browser_url: string | null, activity_type: string | null, 
-/**
- * Why the frame was captured (`frames.capture_trigger`, 0.2.1 event-driven
- * capture). `None` for legacy frames or an unrecognized token; the Moment view
- * shows it as "why captured".
- */
-capture_trigger: CaptureTrigger | null, 
-/**
- * Full, unfiltered OCR/UIA text — always preserved (`03 §3b`). `None` when no
- * `frame_text` row exists yet.
- */
-raw_text: string | null, 
-/**
- * Filtered default-retrieval text (`03 §3b`). In 0.2.0 this is a passthrough
- * copy of `raw_text` until PR3's classifier lands (`07` #51).
- */
-content_text: string | null, 
-/**
- * Which engine produced the primary text (`ocr` in 0.2.0; `uia` from 0.2.1).
- */
-text_source: TextSource, 
-/**
- * Spans dropped from `content_text` (the suppression-rate metric, `03 §3b`).
- * Always `0` in PR2 (no filtering yet).
- */
-suppressed_text_count: number, vision: VisionAnalysis | null, tags: Array<string>, };
+export type FrameDetail = {
+  frame_id: number;
+  captured_at: number;
+  monitor_index: number;
+  width: number;
+  height: number;
+  image_path: string;
+  /**
+   * `true` once this frame's screenshot has been retention-degraded — the image file
+   * is gone but the text proof (raw/content text + `text_spans`) remains. The Moment
+   * view renders the layout reconstruction instead of the image (`storage.retention_days`).
+   */
+  image_purged: boolean;
+  app_hint: string | null;
+  window_title: string | null;
+  browser_url: string | null;
+  activity_type: string | null;
+  /**
+   * Why the frame was captured (`frames.capture_trigger`, 0.2.1 event-driven
+   * capture). `None` for legacy frames or an unrecognized token; the Moment view
+   * shows it as "why captured".
+   */
+  capture_trigger: CaptureTrigger | null;
+  /**
+   * Full, unfiltered OCR/UIA text — always preserved (`03 §3b`). `None` when no
+   * `frame_text` row exists yet.
+   */
+  raw_text: string | null;
+  /**
+   * Filtered default-retrieval text (`03 §3b`). In 0.2.0 this is a passthrough
+   * copy of `raw_text` until PR3's classifier lands (`07` #51).
+   */
+  content_text: string | null;
+  /**
+   * Which engine produced the primary text (`ocr` in 0.2.0; `uia` from 0.2.1).
+   */
+  text_source: TextSource;
+  /**
+   * Spans dropped from `content_text` (the suppression-rate metric, `03 §3b`).
+   * Always `0` in PR2 (no filtering yet).
+   */
+  suppressed_text_count: number;
+  vision: VisionAnalysis | null;
+  tags: Array<string>;
+};

@@ -1,6 +1,10 @@
 // RouteError — the per-route error boundary element (UI_REFERENCE §6: a thrown
 // render never blanks the whole app). Shown when a route's loader/render throws.
-import { isRouteErrorResponse, useNavigate, useRouteError } from "react-router-dom";
+import {
+  isRouteErrorResponse,
+  useNavigate,
+  useRouteError,
+} from "react-router-dom";
 import { ErrorState } from "../components/primitives";
 
 /**
@@ -11,7 +15,10 @@ import { ErrorState } from "../components/primitives";
  */
 function routeErrorMessage(error: unknown): string {
   if (isRouteErrorResponse(error)) {
-    const detail = typeof error.data === "string" && error.data ? error.data : error.statusText;
+    const detail =
+      typeof error.data === "string" && error.data
+        ? error.data
+        : error.statusText;
     return detail ? `${error.status} — ${detail}` : `${error.status}`;
   }
   if (error instanceof Error) return error.message;

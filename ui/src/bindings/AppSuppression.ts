@@ -8,16 +8,18 @@
  * resolved foreground app. False suppression is the top risk, so this is surfaced
  * in the UI and recoverable via `include_chrome` + preserved `raw_text`.
  */
-export type AppSuppression = { app: string | null, 
-/**
- * Total classified spans for this app.
- */
-total_spans: number, 
-/**
- * Spans dropped from `content_text` (role `chrome`/`system`/`background`).
- */
-suppressed_spans: number, 
-/**
- * `suppressed_spans / total_spans`, in `[0,1]` (`0` when `total_spans == 0`).
- */
-rate: number, };
+export type AppSuppression = {
+  app: string | null;
+  /**
+   * Total classified spans for this app.
+   */
+  total_spans: number;
+  /**
+   * Spans dropped from `content_text` (role `chrome`/`system`/`background`).
+   */
+  suppressed_spans: number;
+  /**
+   * `suppressed_spans / total_spans`, in `[0,1]` (`0` when `total_spans == 0`).
+   */
+  rate: number;
+};

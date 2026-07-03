@@ -7,7 +7,11 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { IconMark } from "../components/icons";
 import { cn } from "../lib/cn";
-import { dismissMarkToast, focusOverlayForNote, setMarkNote } from "../lib/ipc/commands";
+import {
+  dismissMarkToast,
+  focusOverlayForNote,
+  setMarkNote,
+} from "../lib/ipc/commands";
 import type { MarkToast as MarkToastPayload } from "../bindings/MarkToast";
 
 /** Auto-dismiss delay for the mark toast (a UX constant, like SEARCH_DEBOUNCE_MS —
@@ -86,7 +90,9 @@ export function MarkToast({ payload, onDone }: MarkToastProps) {
                 value={note}
                 onChange={(e) => setNote(e.currentTarget.value)}
                 onKeyDown={handleKeyDown}
-                onPointerDown={() => void focusOverlayForNote().catch(() => undefined)}
+                onPointerDown={() =>
+                  void focusOverlayForNote().catch(() => undefined)
+                }
                 onFocus={() => {
                   setFocused(true);
                   void focusOverlayForNote().catch(() => undefined);

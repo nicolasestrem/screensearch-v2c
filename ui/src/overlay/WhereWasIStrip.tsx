@@ -13,7 +13,7 @@ import type { ResumeContext } from "../bindings/ResumeContext";
 
 /** The one-line headline for a resume context: the window title (the "what") then the
  *  app (the "where"), or just the app when there's no title. */
-export function resumeHeadline(ctx: ResumeContext): string {
+function resumeHeadline(ctx: ResumeContext): string {
   return ctx.window_title ? `${ctx.window_title} — ${ctx.app}` : ctx.app;
 }
 
@@ -68,8 +68,12 @@ export function WhereWasIStrip({ resume }: WhereWasIStripProps) {
         />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="eyebrow text-ink-faint">Jump back</span>
-          <span className="truncate text-body text-ink font-body">{resumeHeadline(ctx)}</span>
-          <span className="font-mono text-data text-ink-faint">until {clockTime(ctx.span_end)}</span>
+          <span className="truncate text-body text-ink font-body">
+            {resumeHeadline(ctx)}
+          </span>
+          <span className="font-mono text-data text-ink-faint">
+            until {clockTime(ctx.span_end)}
+          </span>
         </span>
       </button>
     </div>

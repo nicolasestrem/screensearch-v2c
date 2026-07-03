@@ -30,10 +30,16 @@ export function SearchResult({ hit, onOpenFrame }: SearchResultProps) {
       />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <p className="line-clamp-2 text-body text-ink font-body">
-          {hit.snippet ? <HighlightedSnippet text={hit.snippet} /> : <span className="text-ink-faint">No text recognized</span>}
+          {hit.snippet ? (
+            <HighlightedSnippet text={hit.snippet} />
+          ) : (
+            <span className="text-ink-faint">No text recognized</span>
+          )}
         </p>
         <div className="flex items-center gap-2 text-caption text-ink-faint">
-          <span className="font-mono text-data">{relativeTime(hit.captured_at)}</span>
+          <span className="font-mono text-data">
+            {relativeTime(hit.captured_at)}
+          </span>
           {hit.app_hint && (
             <>
               <span aria-hidden="true">·</span>

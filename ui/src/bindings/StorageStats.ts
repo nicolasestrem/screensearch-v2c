@@ -3,4 +3,8 @@
 /**
  * Storage footprint shown in the StatusRail.
  */
-export type StorageStats = { db_bytes: number, frame_bytes: number, total_bytes: number, };
+export type StorageStats = {
+  db_bytes: number;
+  frame_bytes: number;
+  total_bytes: number;
+};

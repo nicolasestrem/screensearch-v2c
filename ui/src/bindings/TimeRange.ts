@@ -6,4 +6,4 @@
  * AND captured_at < end`, so callers must pass an exclusive upper bound — a frame
  * captured exactly at `end` is *not* included.
  */
-export type TimeRange = { start: number, end: number, };
+export type TimeRange = { start: number; end: number };

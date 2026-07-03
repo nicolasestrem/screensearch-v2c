@@ -8,4 +8,9 @@ import type { PressureSample } from "./PressureSample";
  * `None` until the first probe reading lands; `gpu_monitored` mirrors the probe so the
  * UI can show an honest "GPU not monitored" state even before a sample exists.
  */
-export type ThrottleStatus = { enabled: boolean, level: number, sample: PressureSample | null, gpu_monitored: boolean, };
+export type ThrottleStatus = {
+  enabled: boolean;
+  level: number;
+  sample: PressureSample | null;
+  gpu_monitored: boolean;
+};

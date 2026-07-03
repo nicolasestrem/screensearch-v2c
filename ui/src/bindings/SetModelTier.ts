@@ -5,4 +5,4 @@ import type { ModelTier } from "./ModelTier";
 /**
  * Input to `set_model_tier`.
  */
-export type SetModelTier = { lane: ModelLane, tier: ModelTier, };
+export type SetModelTier = { lane: ModelLane; tier: ModelTier };

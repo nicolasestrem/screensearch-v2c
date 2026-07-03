@@ -14,16 +14,26 @@ export interface ErrorStateProps {
   retryLabel?: string;
 }
 
-export function ErrorState({ icon, title, message, onRetry, retryLabel = "Try again" }: ErrorStateProps) {
+export function ErrorState({
+  icon,
+  title,
+  message,
+  onRetry,
+  retryLabel = "Try again",
+}: ErrorStateProps) {
   return (
     <div
       role="alert"
       className="flex flex-col items-center justify-center text-center gap-3 px-6 py-12"
     >
       {icon && <div className="text-danger">{icon}</div>}
-      <h2 className="font-display uppercase tracking-eyebrow text-subtitle text-ink">{title}</h2>
+      <h2 className="font-display uppercase tracking-eyebrow text-subtitle text-ink">
+        {title}
+      </h2>
       {message && (
-        <p className="text-body text-ink-muted max-w-prose font-body break-words">{message}</p>
+        <p className="text-body text-ink-muted max-w-prose font-body break-words">
+          {message}
+        </p>
       )}
       {onRetry && (
         <Button variant="secondary" onClick={onRetry} className="mt-2">

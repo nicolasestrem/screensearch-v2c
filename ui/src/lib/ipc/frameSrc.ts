@@ -34,7 +34,9 @@ const urlCache = new Map<string, string | null>();
  * Resolve a relative `image_path` to an asset URL, or `null` if unavailable
  * (no path, or no Tauri runtime). Results are memoized per path.
  */
-export async function frameSrc(imagePath: string | null | undefined): Promise<string | null> {
+export async function frameSrc(
+  imagePath: string | null | undefined,
+): Promise<string | null> {
   if (!imagePath) return null;
   const cached = urlCache.get(imagePath);
   if (cached !== undefined) return cached;

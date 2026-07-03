@@ -20,7 +20,13 @@ export interface ChipProps extends HTMLAttributes<HTMLSpanElement> {
   children: ReactNode;
 }
 
-export function Chip({ tone = "neutral", dot = false, className, children, ...rest }: ChipProps) {
+export function Chip({
+  tone = "neutral",
+  dot = false,
+  className,
+  children,
+  ...rest
+}: ChipProps) {
   return (
     <span
       className={cn(
@@ -31,7 +37,9 @@ export function Chip({ tone = "neutral", dot = false, className, children, ...re
       )}
       {...rest}
     >
-      {dot && <span className="w-2 h-2 rounded-full bg-current" aria-hidden="true" />}
+      {dot && (
+        <span className="w-2 h-2 rounded-full bg-current" aria-hidden="true" />
+      )}
       {children}
     </span>
   );

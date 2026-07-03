@@ -44,14 +44,24 @@ export interface ModelTierPickerProps {
   disabled?: boolean;
 }
 
-export function ModelTierPicker({ lane, value, onChange, hint, disabled = false }: ModelTierPickerProps) {
+export function ModelTierPicker({
+  lane,
+  value,
+  onChange,
+  hint,
+  disabled = false,
+}: ModelTierPickerProps) {
   const label = LANE_LABEL[lane];
   return (
     <div className="flex flex-col gap-2">
       <span className="text-caption text-ink-muted font-body">{label}</span>
       <div role="group" aria-label={`${label} tier`} className="flex gap-1">
         {TIERS.map((t) => (
-          <Tooltip key={t.value} label={MODEL_NAMES[lane][t.value]} side="bottom">
+          <Tooltip
+            key={t.value}
+            label={MODEL_NAMES[lane][t.value]}
+            side="bottom"
+          >
             <button
               type="button"
               aria-pressed={value === t.value}

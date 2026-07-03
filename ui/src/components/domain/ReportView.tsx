@@ -20,8 +20,12 @@ export interface ReportViewProps {
 const CITATION_CAP = 24;
 
 function downloadMarkdown(report: ReportResponse) {
-  const slug = report.range_label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "range";
-  const blob = new Blob([report.markdown], { type: "text/markdown;charset=utf-8" });
+  const slug =
+    report.range_label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") ||
+    "range";
+  const blob = new Blob([report.markdown], {
+    type: "text/markdown;charset=utf-8",
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -52,10 +56,18 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="eyebrow">Report · {report.range_label}</span>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => copyMarkdown(report.markdown)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => copyMarkdown(report.markdown)}
+          >
             Copy
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => downloadMarkdown(report)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => downloadMarkdown(report)}
+          >
             Download .md
           </Button>
         </div>
@@ -97,7 +109,9 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
       {hasEvidence && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-2 text-caption text-ink-faint">
           {report.model && <span className="font-mono">{report.model}</span>}
-          <span>{report.passes} pass{report.passes === 1 ? "" : "es"}</span>
+          <span>
+            {report.passes} pass{report.passes === 1 ? "" : "es"}
+          </span>
           <span>
             {report.periods_covered}/{report.periods_total} periods
           </span>
@@ -105,7 +119,9 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
             {report.frames_summarized}/{report.frames_sampled} frames summarized
           </span>
           {report.truncated && (
-            <span className="text-warn">range trimmed to fit — more was captured than summarized</span>
+            <span className="text-warn">
+              range trimmed to fit — more was captured than summarized
+            </span>
           )}
         </div>
       )}

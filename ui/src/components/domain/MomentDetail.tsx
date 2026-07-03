@@ -39,7 +39,13 @@ export interface MomentDetailProps {
 }
 
 /** A labelled context row; renders nothing when the value is absent. */
-function Meta({ label, value }: { label: string; value: string | null | undefined }) {
+function Meta({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null | undefined;
+}) {
   if (!value) return null;
   return (
     <div className="flex flex-col gap-1">
@@ -49,7 +55,12 @@ function Meta({ label, value }: { label: string; value: string | null | undefine
   );
 }
 
-export function MomentDetail({ detail, onQueueVision, queueing, spans }: MomentDetailProps) {
+export function MomentDetail({
+  detail,
+  onQueueVision,
+  queueing,
+  spans,
+}: MomentDetailProps) {
   const { vision } = detail;
   // A negative confidence is the "unknown" sentinel (the model gave no usable score);
   // surface it as n/a rather than a misleading -100%.
@@ -74,8 +85,9 @@ export function MomentDetail({ detail, onQueueVision, queueing, spans }: MomentD
               className="h-auto"
             />
             <p className="text-caption text-ink-faint font-body">
-              The screenshot expired to save space — this is a reconstruction from the
-              recognized text at its on-screen positions. The full text is below.
+              The screenshot expired to save space — this is a reconstruction
+              from the recognized text at its on-screen positions. The full text
+              is below.
             </p>
           </div>
         ) : (
@@ -90,7 +102,9 @@ export function MomentDetail({ detail, onQueueVision, queueing, spans }: MomentD
         <Panel
           title="Recognized text"
           action={
-            <Chip tone="neutral">{detail.text_source === "uia" ? "UIA" : "OCR"}</Chip>
+            <Chip tone="neutral">
+              {detail.text_source === "uia" ? "UIA" : "OCR"}
+            </Chip>
           }
         >
           {detail.content_text ? (
@@ -98,12 +112,17 @@ export function MomentDetail({ detail, onQueueVision, queueing, spans }: MomentD
               {detail.content_text}
             </pre>
           ) : (
-            <p className="text-body text-ink-faint font-body">No text was recognized in this frame.</p>
+            <p className="text-body text-ink-faint font-body">
+              No text was recognized in this frame.
+            </p>
           )}
           {detail.raw_text && (
             <details className="mt-3 border-t border-line pt-3">
               <summary className="eyebrow cursor-pointer select-none text-ink-muted">
-                Raw text{detail.raw_text !== detail.content_text ? " (includes app chrome)" : ""}
+                Raw text
+                {detail.raw_text !== detail.content_text
+                  ? " (includes app chrome)"
+                  : ""}
               </summary>
               <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
                 {detail.raw_text}
@@ -120,21 +139,32 @@ export function MomentDetail({ detail, onQueueVision, queueing, spans }: MomentD
             <Meta label="Captured" value={absoluteTime(detail.captured_at)} />
             <Meta
               label="Captured via"
-              value={detail.capture_trigger ? TRIGGER_LABEL[detail.capture_trigger] : null}
+              value={
+                detail.capture_trigger
+                  ? TRIGGER_LABEL[detail.capture_trigger]
+                  : null
+              }
             />
             <Meta label="App" value={detail.app_hint} />
             <Meta label="Window" value={detail.window_title} />
             <Meta label="URL" value={detail.browser_url} />
-            <Meta label="Monitor" value={`#${detail.monitor_index} · ${detail.width}×${detail.height}`} />
+            <Meta
+              label="Monitor"
+              value={`#${detail.monitor_index} · ${detail.width}×${detail.height}`}
+            />
           </div>
         </Panel>
 
         <Panel title="Vision" action={confidenceChip}>
           {vision ? (
             <div className="flex flex-col gap-3">
-              <p className="text-body text-ink font-body">{vision.description}</p>
+              <p className="text-body text-ink font-body">
+                {vision.description}
+              </p>
               <div className="flex flex-wrap items-center gap-2">
-                {vision.activity_type && <Chip tone="neutral">{vision.activity_type}</Chip>}
+                {vision.activity_type && (
+                  <Chip tone="neutral">{vision.activity_type}</Chip>
+                )}
                 <Chip tone="neutral">{vision.model}</Chip>
               </div>
             </div>

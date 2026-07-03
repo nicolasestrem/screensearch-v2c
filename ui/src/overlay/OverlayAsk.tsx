@@ -5,7 +5,9 @@ import { IconSparkle } from "../components/icons";
 import type { UseAsk } from "../lib/ipc/useAsk";
 
 const LazyAnswerStream = lazy(() =>
-  import("../components/domain/AnswerStream").then((m) => ({ default: m.AnswerStream })),
+  import("../components/domain/AnswerStream").then((m) => ({
+    default: m.AnswerStream,
+  })),
 );
 
 export interface OverlayAskProps {
@@ -15,7 +17,12 @@ export interface OverlayAskProps {
   onOpenFrame: (frameId: number) => void;
 }
 
-export function OverlayAsk({ question, ask, onSubmit, onOpenFrame }: OverlayAskProps) {
+export function OverlayAsk({
+  question,
+  ask,
+  onSubmit,
+  onOpenFrame,
+}: OverlayAskProps) {
   if (ask.phase === "idle") {
     return (
       <EmptyState
@@ -23,7 +30,12 @@ export function OverlayAsk({ question, ask, onSubmit, onOpenFrame }: OverlayAskP
         title="Ask about what you've seen"
         description="Questions stream from captured screens and keep their source frames attached."
         action={
-          <Button variant="primary" size="sm" onClick={onSubmit} disabled={!question.trim()}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={onSubmit}
+            disabled={!question.trim()}
+          >
             Ask
           </Button>
         }

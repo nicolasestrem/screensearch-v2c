@@ -12,7 +12,13 @@ export interface OverlayResultRowProps {
   onHover: () => void;
 }
 
-export function OverlayResultRow({ hit, id, selected, onOpen, onHover }: OverlayResultRowProps) {
+export function OverlayResultRow({
+  hit,
+  id,
+  selected,
+  onOpen,
+  onHover,
+}: OverlayResultRowProps) {
   return (
     <button
       id={id}
@@ -25,7 +31,9 @@ export function OverlayResultRow({ hit, id, selected, onOpen, onHover }: Overlay
       className={cn(
         "flex w-full items-center gap-3 rounded-chip border p-2 text-left",
         "transition-colors duration-fast ease-ui",
-        selected ? "border-accent bg-accent-wash" : "border-line bg-surface hover:border-ink-faint",
+        selected
+          ? "border-accent bg-accent-wash"
+          : "border-line bg-surface hover:border-ink-faint",
       )}
     >
       <FrameImage
@@ -43,7 +51,9 @@ export function OverlayResultRow({ hit, id, selected, onOpen, onHover }: Overlay
           )}
         </span>
         <span className="flex min-w-0 items-center gap-2 text-caption text-ink-faint">
-          <span className="font-mono text-data">{relativeTime(hit.captured_at)}</span>
+          <span className="font-mono text-data">
+            {relativeTime(hit.captured_at)}
+          </span>
           {hit.app_hint && (
             <>
               <span aria-hidden="true">.</span>

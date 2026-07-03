@@ -3,4 +3,8 @@
 /**
  * Emitted once per stored capture (`capture_tick` event).
  */
-export type CaptureTick = { frame_id: number, captured_at: number, monitor_index: number, };
+export type CaptureTick = {
+  frame_id: number;
+  captured_at: number;
+  monitor_index: number;
+};

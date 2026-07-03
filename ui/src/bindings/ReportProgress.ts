@@ -5,4 +5,9 @@
  * `request_id`. `stage` is a short human label ("Summarizing day 3 of 7",
  * "Combining summaries"); `done`/`total` drive a determinate progress bar.
  */
-export type ReportProgress = { request_id: string, stage: string, done: number, total: number, };
+export type ReportProgress = {
+  request_id: string;
+  stage: string;
+  done: number;
+  total: number;
+};

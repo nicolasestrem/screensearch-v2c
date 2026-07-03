@@ -12,7 +12,16 @@
 // no empty state. A failed Save keeps the form and explains via a toast.
 import { useEffect, useState, type ChangeEvent } from "react";
 
-import { Button, Chip, Field, Panel, Skeleton, Toggle, ErrorState, Select } from "../components/primitives";
+import {
+  Button,
+  Chip,
+  Field,
+  Panel,
+  Skeleton,
+  Toggle,
+  ErrorState,
+  Select,
+} from "../components/primitives";
 import {
   DEFAULT_OVERLAY_HOTKEY,
   HotkeyField,
@@ -85,57 +94,117 @@ function sanitizeSettings(s: Settings): Settings {
     capture_interval_ms: clampInt(s.capture_interval_ms, 250, 3_600_000),
     capture_diff_threshold: clampNum(s.capture_diff_threshold, 0, 1),
     // Event-driven capture timing knobs — mirror the backend clamps exactly.
-    capture_event_debounce_ms: clampInt(s.capture_event_debounce_ms, 100, 10_000),
-    capture_event_min_interval_ms: clampInt(s.capture_event_min_interval_ms, 250, 60_000),
-    capture_event_idle_threshold_ms: clampInt(s.capture_event_idle_threshold_ms, 1_000, 60_000),
+    capture_event_debounce_ms: clampInt(
+      s.capture_event_debounce_ms,
+      100,
+      10_000,
+    ),
+    capture_event_min_interval_ms: clampInt(
+      s.capture_event_min_interval_ms,
+      250,
+      60_000,
+    ),
+    capture_event_idle_threshold_ms: clampInt(
+      s.capture_event_idle_threshold_ms,
+      1_000,
+      60_000,
+    ),
     capture_event_fallback_interval_ms: clampInt(
       s.capture_event_fallback_interval_ms,
       1_000,
       3_600_000,
     ),
     // UIA text knobs — mirror the backend clamps (docs/0.2.0.md #48, hang fix 07 #71).
-    capture_uia_latency_budget_ms: clampInt(s.capture_uia_latency_budget_ms, 20, 2_000),
-    capture_uia_min_text_chars: clampInt(s.capture_uia_min_text_chars, 0, 10_000),
+    capture_uia_latency_budget_ms: clampInt(
+      s.capture_uia_latency_budget_ms,
+      20,
+      2_000,
+    ),
+    capture_uia_min_text_chars: clampInt(
+      s.capture_uia_min_text_chars,
+      0,
+      10_000,
+    ),
     capture_uia_max_nodes: clampInt(s.capture_uia_max_nodes, 100, 20_000),
-    capture_uia_max_textpattern_calls: clampInt(s.capture_uia_max_textpattern_calls, 1, 4_096),
-    capture_uia_suppress_during_input_ms: clampInt(s.capture_uia_suppress_during_input_ms, 0, 10_000),
+    capture_uia_max_textpattern_calls: clampInt(
+      s.capture_uia_max_textpattern_calls,
+      1,
+      4_096,
+    ),
+    capture_uia_suppress_during_input_ms: clampInt(
+      s.capture_uia_suppress_during_input_ms,
+      0,
+      10_000,
+    ),
     storage_jpeg_quality: clampInt(s.storage_jpeg_quality, 1, 100),
     // 0 = native (no downscale) — mirrors the backend sentinel; any other value clamps.
     storage_max_width:
       s.storage_max_width === 0 ? 0 : clampInt(s.storage_max_width, 320, 7680),
     storage_retention_days: clampInt(s.storage_retention_days, 0, 3650),
     enrich_worker_concurrency: clampInt(s.enrich_worker_concurrency, 1, 16),
-    enrich_vision_timer_interval_ms: clampInt(s.enrich_vision_timer_interval_ms, 60_000, 86_400_000),
+    enrich_vision_timer_interval_ms: clampInt(
+      s.enrich_vision_timer_interval_ms,
+      60_000,
+      86_400_000,
+    ),
     enrich_vision_idle_secs: clampInt(s.enrich_vision_idle_secs, 60, 86_400),
     enrich_vision_batch_size: clampInt(s.enrich_vision_batch_size, 1, 500),
     sidecar_idle_ttl_secs: clampInt(s.sidecar_idle_ttl_secs, 0, 86_400),
     sidecar_ngl: clampInt(s.sidecar_ngl, 0, 999),
     // 0 = automatic (per-lane default chosen in the backend); any other value is clamped
     // to a sane window. The two enum fields are constrained by their Select options.
-    sidecar_ctx_size: s.sidecar_ctx_size === 0 ? 0 : clampInt(s.sidecar_ctx_size, 512, 32_768),
+    sidecar_ctx_size:
+      s.sidecar_ctx_size === 0 ? 0 : clampInt(s.sidecar_ctx_size, 512, 32_768),
     sidecar_recycle_enabled: !!s.sidecar_recycle_enabled,
-    sidecar_recycle_rss_mb: s.sidecar_recycle_rss_mb === 0 ? 0 : clampInt(s.sidecar_recycle_rss_mb, 8192, 131_072),
+    sidecar_recycle_rss_mb:
+      s.sidecar_recycle_rss_mb === 0
+        ? 0
+        : clampInt(s.sidecar_recycle_rss_mb, 8192, 131_072),
     sidecar_device: s.sidecar_device?.trim() ? s.sidecar_device.trim() : null,
     // PR3 attention-filter thresholds — mirror the backend clamps (03 §8).
-    text_chrome_suppress_min_seen: clampInt(s.text_chrome_suppress_min_seen, 2, 100_000),
-    text_chrome_protect_min_chars: clampInt(s.text_chrome_protect_min_chars, 1, 4_096),
+    text_chrome_suppress_min_seen: clampInt(
+      s.text_chrome_suppress_min_seen,
+      2,
+      100_000,
+    ),
+    text_chrome_protect_min_chars: clampInt(
+      s.text_chrome_protect_min_chars,
+      1,
+      4_096,
+    ),
     text_chrome_region_buckets: clampInt(s.text_chrome_region_buckets, 1, 32),
     // PR6 retrieval + recall reports — mirror the backend clamps (03 §8).
     retrieval_default_top_k: clampInt(s.retrieval_default_top_k, 1, 100),
     reports_daily_top_k: clampInt(s.reports_daily_top_k, 1, 1_000),
     reports_weekly_top_k: clampInt(s.reports_weekly_top_k, 1, 2_000),
-    reports_map_reduce_min_frames: clampInt(s.reports_map_reduce_min_frames, 1, 1_000),
+    reports_map_reduce_min_frames: clampInt(
+      s.reports_map_reduce_min_frames,
+      1,
+      1_000,
+    ),
     overlay_hotkey: s.overlay_hotkey.trim() || DEFAULT_OVERLAY_HOTKEY,
     overlay_max_results: clampInt(s.overlay_max_results, 1, 50),
     // 0.2.1 enrichment throttle — mirror the backend clamps (03 §8); each exit % is kept
     // strictly below its enter % so the hysteresis band is always valid.
     throttle_cpu_enter_pct: clampInt(s.throttle_cpu_enter_pct, 1, 100),
-    throttle_cpu_exit_pct: clampInt(s.throttle_cpu_exit_pct, 0, clampInt(s.throttle_cpu_enter_pct, 1, 100) - 1),
+    throttle_cpu_exit_pct: clampInt(
+      s.throttle_cpu_exit_pct,
+      0,
+      clampInt(s.throttle_cpu_enter_pct, 1, 100) - 1,
+    ),
     throttle_gpu_enter_pct: clampInt(s.throttle_gpu_enter_pct, 1, 100),
-    throttle_gpu_exit_pct: clampInt(s.throttle_gpu_exit_pct, 0, clampInt(s.throttle_gpu_enter_pct, 1, 100) - 1),
+    throttle_gpu_exit_pct: clampInt(
+      s.throttle_gpu_exit_pct,
+      0,
+      clampInt(s.throttle_gpu_enter_pct, 1, 100) - 1,
+    ),
     throttle_enter_after_ms: clampInt(s.throttle_enter_after_ms, 500, 120_000),
     throttle_exit_after_ms: clampInt(s.throttle_exit_after_ms, 500, 300_000),
-    throttle_sample_interval_ms: clampInt(s.throttle_sample_interval_ms, 250, 10_000),
+    throttle_sample_interval_ms: clampInt(
+      s.throttle_sample_interval_ms,
+      250,
+      10_000,
+    ),
     throttle_embed_text_floor: clampInt(s.throttle_embed_text_floor, 1, 16),
   };
 }
@@ -169,15 +238,17 @@ function SuppressionReadout() {
   if (rows.length === 0) {
     return (
       <p className="text-caption text-ink-muted">
-        No filtered captures yet — start capture to see how much chrome each app sheds.
+        No filtered captures yet — start capture to see how much chrome each app
+        sheds.
       </p>
     );
   }
   return (
     <div className="flex flex-col gap-2">
       <p className="text-caption text-ink-muted">
-        Share of recognised text dropped as chrome/system/background, per foreground app. A very
-        high rate can signal over-suppression — raw text and “include app chrome” always recover it.
+        Share of recognised text dropped as chrome/system/background, per
+        foreground app. A very high rate can signal over-suppression — raw text
+        and “include app chrome” always recover it.
       </p>
       <ul className="flex flex-col gap-1">
         {rows.slice(0, 12).map((r) => (
@@ -185,7 +256,9 @@ function SuppressionReadout() {
             key={r.app ?? "(unknown)"}
             className="flex items-center justify-between gap-3"
           >
-            <span className="text-body text-ink truncate">{r.app ?? "(unknown app)"}</span>
+            <span className="text-body text-ink truncate">
+              {r.app ?? "(unknown app)"}
+            </span>
             <span className="text-caption text-ink-muted tabular-nums">
               {Math.round(r.rate * 100)}% · {r.suppressed_spans}/{r.total_spans}
             </span>
@@ -235,14 +308,15 @@ function ThrottleReadout() {
       </p>
       {!s.gpu_monitored && (
         <p className="text-caption text-ink-muted">
-          Your GPU exposes no Windows performance counters; throttling uses CPU pressure only.
+          Your GPU exposes no Windows performance counters; throttling uses CPU
+          pressure only.
         </p>
       )}
       {s.level > 0 && (
         <p className="text-caption text-ink-muted">
           Throttling active — vision tagging and image embeds are paused
-          {s.level >= 2 ? " and text-embed concurrency is reduced" : ""}; capture, OCR, and
-          storage keep running.
+          {s.level >= 2 ? " and text-embed concurrency is reduced" : ""};
+          capture, OCR, and storage keep running.
         </p>
       )}
     </div>
@@ -256,7 +330,8 @@ export function Component() {
   // The device list only needs the binary resolved, so an idle-unloaded sidecar
   // (now reported as "disabled", not "ready") is still "available" for this probe.
   const sidecarAvailable =
-    readiness.data?.sidecar.status === "ready" || readiness.data?.sidecar.status === "disabled";
+    readiness.data?.sidecar.status === "ready" ||
+    readiness.data?.sidecar.status === "disabled";
   const sidecarDevices = useSidecarDevices(sidecarAvailable);
   const throttleStatus = useThrottleStatus();
   const hotkeyStatus = useHotkeyStatus();
@@ -305,7 +380,8 @@ export function Component() {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
     setDraft((d) => (d ? { ...d, [key]: value } : d));
 
-  const patch = (p: Partial<Settings>) => setDraft((d) => (d ? { ...d, ...p } : d));
+  const patch = (p: Partial<Settings>) =>
+    setDraft((d) => (d ? { ...d, ...p } : d));
 
   // Numeric inputs: a cleared field yields NaN — fall back to 0 (a transient value the
   // user types over; out-of-range values are clamped on save) rather than ignoring the
@@ -339,7 +415,9 @@ export function Component() {
       {
         onSuccess: () => {
           setBaseline((b) => (b ? { ...b, [key]: tier } : b));
-          toast.success(`${lane === "vision" ? "Vision" : "Answer"} model → ${TIER_LABEL[tier]}`);
+          toast.success(
+            `${lane === "vision" ? "Vision" : "Answer"} model → ${TIER_LABEL[tier]}`,
+          );
         },
         onError: (e) => {
           set(key, prev);
@@ -357,7 +435,9 @@ export function Component() {
       onSuccess: () => {
         setBaseline(clean);
         toast.success(
-          clamped ? "Settings saved (some values clamped to valid ranges)" : "Settings saved",
+          clamped
+            ? "Settings saved (some values clamped to valid ranges)"
+            : "Settings saved",
         );
       },
       onError: (e) => toast.error(String(e)),
@@ -389,12 +469,16 @@ export function Component() {
   };
   const detectedSidecarDevices = sidecarDevices.data ?? [];
   const hasDetectedSidecarDevices = detectedSidecarDevices.length > 0;
-  const overlayHotkeyStatus = (hotkeyStatus.data ?? []).find((h) => h.id === "overlay.hotkey");
+  const overlayHotkeyStatus = (hotkeyStatus.data ?? []).find(
+    (h) => h.id === "overlay.hotkey",
+  );
   const overlayHotkeyWarning =
     overlayHotkeyStatus && !overlayHotkeyStatus.registered
       ? `${overlayHotkeyStatus.error ?? "Windows did not register this shortcut."} Try a different combination.`
       : null;
-  const marksHotkeyStatus = (hotkeyStatus.data ?? []).find((h) => h.id === "marks.hotkey");
+  const marksHotkeyStatus = (hotkeyStatus.data ?? []).find(
+    (h) => h.id === "marks.hotkey",
+  );
   const marksHotkeyWarning =
     marksHotkeyStatus && !marksHotkeyStatus.registered
       ? `${marksHotkeyStatus.error ?? "Windows did not register this shortcut."} Try a different combination.`
@@ -416,7 +500,8 @@ export function Component() {
         <div className="flex flex-col">
           <span className="eyebrow">Settings</span>
           <span className="text-body text-ink-muted font-body">
-            Everything stays on this device. {dirty ? "You have unsaved changes." : "All changes saved."}
+            Everything stays on this device.{" "}
+            {dirty ? "You have unsaved changes." : "All changes saved."}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -463,7 +548,8 @@ export function Component() {
             <div className="flex flex-wrap gap-2">
               {monitors.data.map((m) => {
                 const selected =
-                  draft.capture_monitors.length === 0 || draft.capture_monitors.includes(m.index);
+                  draft.capture_monitors.length === 0 ||
+                  draft.capture_monitors.includes(m.index);
                 return (
                   <button
                     key={m.index}
@@ -495,6 +581,14 @@ export function Component() {
             error={overlayHotkeyWarning}
             hint={`Default is Ctrl+Alt+Space. AltGr keyboards may report AltGr as Ctrl+Alt. ${APPLY_NOW}`}
           />
+          <HotkeyField
+            label="Mark this moment"
+            value={draft.marks_hotkey}
+            onChange={(v) => set("marks_hotkey", v)}
+            defaultValue="Ctrl+Alt+M"
+            error={marksHotkeyWarning}
+            hint={`Captures the current screen and flags it as an intention. Default is Ctrl+Alt+M. ${APPLY_NOW}`}
+          />
           <Field
             label="Overlay results"
             type="number"
@@ -503,6 +597,14 @@ export function Component() {
             value={draft.overlay_max_results}
             onChange={intHandler("overlay_max_results")}
             hint={`Top results shown in the Flow overlay. ${APPLY_NOW}`}
+          />
+          <Field
+            label="Where-was-I dwell (seconds)"
+            type="number"
+            min={10}
+            value={draft.resume_min_dwell_secs}
+            onChange={intHandler("resume_min_dwell_secs")}
+            hint={`How long a context must persist to count as a place worth resuming. ${APPLY_NOW}`}
           />
         </div>
       </Panel>
@@ -667,7 +769,9 @@ export function Component() {
       <Panel
         group
         title="Models"
-        action={modelsLoading ? <Chip tone="warn">models loading…</Chip> : undefined}
+        action={
+          modelsLoading ? <Chip tone="warn">models loading…</Chip> : undefined
+        }
       >
         <div className="flex flex-col gap-4">
           <ModelTierPicker
@@ -967,7 +1071,10 @@ export function Component() {
             label="KV cache precision"
             value={draft.sidecar_kv_cache_type}
             onChange={(e) =>
-              set("sidecar_kv_cache_type", e.currentTarget.value as Settings["sidecar_kv_cache_type"])
+              set(
+                "sidecar_kv_cache_type",
+                e.currentTarget.value as Settings["sidecar_kv_cache_type"],
+              )
             }
             options={[
               { value: "f16", label: "f16 (max quality)" },
@@ -980,7 +1087,10 @@ export function Component() {
             label="Flash attention"
             value={draft.sidecar_flash_attn}
             onChange={(e) =>
-              set("sidecar_flash_attn", e.currentTarget.value as Settings["sidecar_flash_attn"])
+              set(
+                "sidecar_flash_attn",
+                e.currentTarget.value as Settings["sidecar_flash_attn"],
+              )
             }
             options={[
               { value: "auto", label: "Auto" },
@@ -993,12 +1103,20 @@ export function Component() {
             <Select
               label="Device"
               value={draft.sidecar_device ?? ""}
-              onChange={(e) => set("sidecar_device", e.currentTarget.value || null)}
+              onChange={(e) =>
+                set("sidecar_device", e.currentTarget.value || null)
+              }
               options={[
                 { value: "", label: "Automatic" },
                 ...detectedSidecarDevices.map((d) => ({ value: d, label: d })),
-                ...(draft.sidecar_device && !detectedSidecarDevices.includes(draft.sidecar_device)
-                  ? [{ value: draft.sidecar_device, label: draft.sidecar_device }]
+                ...(draft.sidecar_device &&
+                !detectedSidecarDevices.includes(draft.sidecar_device)
+                  ? [
+                      {
+                        value: draft.sidecar_device,
+                        label: draft.sidecar_device,
+                      },
+                    ]
                   : []),
               ]}
               hint={APPLY_SIDECAR}
@@ -1007,7 +1125,9 @@ export function Component() {
             <Field
               label="Device"
               value={draft.sidecar_device ?? ""}
-              onChange={(e) => set("sidecar_device", e.currentTarget.value.trim() || null)}
+              onChange={(e) =>
+                set("sidecar_device", e.currentTarget.value.trim() || null)
+              }
               hint={
                 sidecarDevices.isError
                   ? `Device list unavailable; enter a llama.cpp device id such as Vulkan0. ${APPLY_SIDECAR}`

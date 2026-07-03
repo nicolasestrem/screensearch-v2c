@@ -26,7 +26,8 @@ export const useToastStore = create<ToastState>((set) => ({
     set((s) => ({ toasts: [...s.toasts, { id, level, message }] }));
     return id;
   },
-  dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  dismiss: (id) =>
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
 /**
@@ -35,7 +36,9 @@ export const useToastStore = create<ToastState>((set) => ({
  */
 export const toast = {
   info: (message: string) => useToastStore.getState().push("info", message),
-  success: (message: string) => useToastStore.getState().push("success", message),
-  warning: (message: string) => useToastStore.getState().push("warning", message),
+  success: (message: string) =>
+    useToastStore.getState().push("success", message),
+  warning: (message: string) =>
+    useToastStore.getState().push("warning", message),
   error: (message: string) => useToastStore.getState().push("error", message),
 };

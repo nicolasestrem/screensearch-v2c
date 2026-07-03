@@ -16,7 +16,12 @@ export interface TimelineMinimapProps {
   height?: number;
 }
 
-export function TimelineMinimap({ buckets, range, onSeek, height = 28 }: TimelineMinimapProps) {
+export function TimelineMinimap({
+  buckets,
+  range,
+  onSeek,
+  height = 28,
+}: TimelineMinimapProps) {
   const wrapRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -41,7 +46,14 @@ export function TimelineMinimap({ buckets, range, onSeek, height = 28 }: Timelin
     canvas.height = Math.round(height * dpr);
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    drawDensityRibbon(ctx, { width, height, dpr, buckets, range, colors: readRibbonColors(wrap) });
+    drawDensityRibbon(ctx, {
+      width,
+      height,
+      dpr,
+      buckets,
+      range,
+      colors: readRibbonColors(wrap),
+    });
   }, [width, height, buckets, range]);
 
   const seekFromX = (clientX: number) => {
@@ -62,7 +74,10 @@ export function TimelineMinimap({ buckets, range, onSeek, height = 28 }: Timelin
       style={{ height }}
     >
       <canvas ref={canvasRef} className="block h-full w-full" />
-      <span className="scanlines pointer-events-none absolute inset-0" aria-hidden="true" />
+      <span
+        className="scanlines pointer-events-none absolute inset-0"
+        aria-hidden="true"
+      />
     </button>
   );
 }

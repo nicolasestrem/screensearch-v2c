@@ -4,4 +4,4 @@ import type { JobStats } from "./JobStats";
 /**
  * Job-queue progress snapshot (`job_progress` event).
  */
-export type JobProgress = { stats: JobStats, };
+export type JobProgress = { stats: JobStats };
