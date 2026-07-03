@@ -28,9 +28,9 @@ mod privacy;
 mod trigger;
 mod wgc;
 
+pub use idle::user_idle_ms;
 #[cfg(windows)]
 pub use privacy::foreground_window_rect;
-pub use idle::user_idle_ms;
 use wgc::CaptureRequest;
 
 /// Enumerates connected monitors as user-facing metadata. The raw `HMONITOR`s stay

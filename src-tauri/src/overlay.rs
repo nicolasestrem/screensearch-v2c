@@ -252,16 +252,10 @@ fn foreground_point() -> Option<(i32, i32)> {
     }
 }
 
-fn point_in_work_area(
-    (x, y): (i32, i32),
-    area: &tauri::PhysicalRect<i32, u32>,
-) -> bool {
+fn point_in_work_area((x, y): (i32, i32), area: &tauri::PhysicalRect<i32, u32>) -> bool {
     let left = area.position.x;
     let top = area.position.y;
-    x >= left
-        && x < left + area.size.width as i32
-        && y >= top
-        && y < top + area.size.height as i32
+    x >= left && x < left + area.size.width as i32 && y >= top && y < top + area.size.height as i32
 }
 
 fn overlay_window<R: Runtime>(app: &AppHandle<R>) -> Result<WebviewWindow<R>, String> {

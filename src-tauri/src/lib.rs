@@ -1058,17 +1058,21 @@ pub fn run() {
             overlay::open_moment
         ])
         .on_window_event(|window, event| {
-            if window.label() != "overlay" {
-                return;
-            }
             match event {
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                    // The hidden overlay is a real WebView window, so closing the main window
+                    // would otherwise leave the process alive. Treat main-window close as quit.
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
                 tauri::WindowEvent::Focused(false)
-                    if std::env::var_os("SCREENSEARCH_OVERLAY_STICKY").is_none() =>
+                    if window.label() == "overlay"
+                        && std::env::var_os("SCREENSEARCH_OVERLAY_STICKY").is_none() =>
                 {
                     let _ = window.hide();
                     let _ = window.emit("overlay_hidden", ());
                 }
-                tauri::WindowEvent::CloseRequested { api, .. } => {
+                tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "overlay" => {
                     api.prevent_close();
                     let _ = window.hide();
                     let _ = window.emit("overlay_hidden", ());
