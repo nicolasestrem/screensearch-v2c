@@ -44,3 +44,30 @@
   `cargo test -p kernel` green (new `stop_capture_notifies_ocr_provider`); `npm run lint` clean;
   `npm run build` exit 0; `cargo build -p screensearch` → `Finished ... in 20.84s`. Full
   workspace `fmt`/`clippy`/`test` + live `npm run tauri dev` walkthrough recorded on the PR.
+
+---
+
+## 2026-07-04 — Flow overlay default hotkey → Ctrl+Alt+Z (+ one-shot remap)
+
+- **Change:** Default Flow overlay chord changed `Ctrl+Alt+Space` → `Ctrl+Alt+Z` in the three
+  sources of truth (`crates/traits/src/ipc.rs`, `src-tauri/src/overlay.rs`,
+  `ui/src/components/domain/HotkeyField.tsx`), Settings hint text updated
+  (`ui/src/routes/Settings.tsx`), and a load-path one-shot migration
+  `kernel::settings::load_overlay_hotkey` that remaps a stored exact `Ctrl+Alt+Space` to the new
+  default, leaving custom chords untouched. The migration is gated by a persisted marker
+  (`overlay.hotkey_migrated`) so it runs at most once per install — a later deliberate
+  `Ctrl+Alt+Space` is then honored verbatim — and the marker is latched **only after** the remap
+  rewrite succeeds, so a failed rewrite is retried on the next load instead of being abandoned.
+  Living source-of-truth docs updated to the new default (`specs/03`, `specs/02`,
+  `specs/UI_REFERENCE.md`, `README.md`, `docs/TESTING.md`, `docs/ARCHITECTURE.md`); the shipped
+  `docs/0.3.0.md` arc record keeps `Ctrl+Alt+Space` (0.3.0 shipped it; this is a post-0.3.0 fix).
+- **Why:** The old default collided with Claude Desktop's global quick-entry shortcut (`03 §8`
+  hotkey config). The remap lives in the load path, not the startup sweep, for the same reason as
+  `load_tier` (the composition root registers the chord straight from `load_settings`' output).
+  Marker gating + latch-on-success come from PR #80 review (codex/claude P2): a value-only remap
+  re-fired every load (breaking the reversible escape hatch), and an unconditional marker latched
+  a failed rewrite forever (`07` #94).
+- **Verification:** `cargo test -p kernel --test settings` (new remap + durability + failed-retry
+  tests; updated persisted-value assertions derive the expected from `Settings::default()`);
+  `npm run lint`/`build` clean; full `fmt`/`clippy`/`build`/`test` + a live hotkey walkthrough
+  recorded on the PR.

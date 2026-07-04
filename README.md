@@ -63,7 +63,7 @@ The **0.3.0 arc** (shipped) was the surface-reduction + flow-recall pass:
 | Feature | What it changes | Status |
 |---|---|---|
 | **Surface reduction** | Removes click/scroll/clipboard/typing triggers, the Beta model tier, and the unused image-embedding lane | ✅ Shipped |
-| **Flow overlay** | `Ctrl+Alt+Space` opens a protected always-on-top Search/Ask overlay over your current app | ✅ Shipped |
+| **Flow overlay** | `Ctrl+Alt+Z` opens a protected always-on-top Search/Ask overlay over your current app | ✅ Shipped |
 | **Where-was-i + marks** | Resume context (`where_was_i`) and mark-this-moment (`Ctrl+Alt+M`, diff-gate-bypassing `capture_now`) | ✅ Shipped |
 | **Local API + MCP wrapper** | Opt-in localhost API (127.0.0.1 + bearer token), JSON export, and the `screensearch-mcp` stdio wrapper | ✅ Shipped |
 
@@ -83,7 +83,7 @@ citations, and **Recall reports** (Daily / Weekly / Custom, citing their source 
 local **llama.cpp sidecar**; the full Command-Deck UI surfaces all of it. An optional **enrichment
 throttle** eases off background work under sustained CPU/GPU pressure without ever pausing capture,
 OCR, or storage. Retention purges run at startup and hourly when enabled, and the StatusRail shows
-real DB/frame storage usage. `Ctrl+Alt+Space` opens the **Flow overlay**: a second, capture-protected
+real DB/frame storage usage. `Ctrl+Alt+Z` opens the **Flow overlay**: a second, capture-protected
 Tauri window for quick Search/Ask without leaving the foreground app; `Esc` hides it and `Enter`
 opens the selected Moment in the main Command Deck. An **opt-in local HTTP API** (off by default,
 `127.0.0.1` + bearer token) exposes search/ask/frames/marks to local scripts and agents, and

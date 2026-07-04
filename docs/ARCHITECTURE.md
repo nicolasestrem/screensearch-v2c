@@ -358,7 +358,7 @@ rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_te
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
 `answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
-`sidecar.device`. **0.3.0 keys:** `overlay.hotkey` (`Ctrl+Alt+Space`) and
+`sidecar.device`. **0.3.0 keys:** `overlay.hotkey` (`Ctrl+Alt+Z`) and
 `overlay.max_results` (default `8`, sanitized to `1..=50`); `resume.min_dwell_secs` (default `120`,
 the where-was-i dwell threshold) and `marks.hotkey` (`Ctrl+Alt+M`); the local-API trio
 `api.enabled` (default `false`), `api.port` (default `43210`), and `api.token` (generated on first

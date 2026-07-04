@@ -724,7 +724,10 @@ impl Default for Settings {
             // 0.3.0 Flow overlay (docs/0.3.0.md PR5): a configurable non-OS-reserved
             // summon chord plus the top-N result cap. Chord validity/conflicts are
             // shell concerns so registration failure can surface loudly in Settings.
-            overlay_hotkey: "Ctrl+Alt+Space".to_string(),
+            // Changed from the original "Ctrl+Alt+Space", which collided with Claude Desktop's
+            // global quick-entry shortcut. Existing installs still holding the old default are
+            // migrated once on load (`kernel::settings::load_overlay_hotkey`).
+            overlay_hotkey: "Ctrl+Alt+Z".to_string(),
             overlay_max_results: 8,
             // 0.3.0 flow recall (docs/0.3.0.md PR6): 120 s min sustained-context dwell
             // for where-was-i (D9), and the mark-this-moment chord (D6, non-OS-reserved,

@@ -68,3 +68,50 @@ For each build pass, append an entry:
   read `self.config.lock().budget` fresh under the `respawn_gate` (the spawn now owns reading
   the live config); log lines use the fresh `budget` too. Residual two-save micro-race recorded
   in `07` #95 (not human-reachable, self-heals). No signature/IPC change → bindings stay clean.
+
+---
+
+## Pass 2 — 2026-07-04 — Post-0.3.0: Flow overlay default hotkey `Ctrl+Alt+Z` + one-shot remap
+
+- **Implemented:** Changed the Flow overlay default summon chord from `Ctrl+Alt+Space` (collided
+  with Claude Desktop's global quick-entry shortcut) to `Ctrl+Alt+Z` in all three sources of
+  truth (`crates/traits/src/ipc.rs` default, `src-tauri/src/overlay.rs` `OVERLAY_DEFAULT_CHORD`,
+  `ui/src/components/domain/HotkeyField.tsx` `DEFAULT_OVERLAY_HOTKEY`), plus a one-shot load-path
+  remap (`kernel::settings::load_overlay_hotkey`, mirroring the `load_tier` beta→quality
+  precedent) that rewrites a persisted `Ctrl+Alt+Space` to the new default exactly once and
+  leaves any custom chord untouched. RegisterHotKey failure was already surfaced in Settings
+  (D6 prior art, `overlay.rs` `failed_status`+`emit_hotkey_warning`) — reused, not rebuilt.
+  - Verification (verbatim): `cargo test -p kernel --test settings` →
+    `test result: ok. 13 passed; 0 failed` (incl. new `overlay_hotkey_legacy_default_remaps_once`
+    + `overlay_hotkey_custom_value_survives`; updated the persisted-value assertion in
+    `overlay_hotkey_empty_string_resets_to_default` to the new default). `npm run lint` clean.
+- **Skipped / deferred:** TODO-3 (a Settings-level cross-chord conflict *check* between the two
+  hotkeys) stays open — deferred by decision; this change doesn't implement it.
+- **Hallucinated / corrected:** none.
+- **Still risky:** the AZERTY/AltGr caveat (AltGr reported as Ctrl+Alt) is unchanged; `Ctrl+Alt+Z`
+  on AZERTY is produced by AltGr+Z where Z is a letter, but the overlay registers the chord, not
+  a character, so no typing conflict — confirm on a live AZERTY session in the walkthrough.
+- **Review follow-up (PR #80, 2026-07-04):** addressed the inline review comments across two
+  rounds (all bot-authored; evaluated on merits, not replied to). Round 1: (1) **codex P2 — the
+  remap wasn't truly one-shot.** It was value-only, so a user who deliberately set `Ctrl+Alt+Space`
+  back had it re-remapped to `Ctrl+Alt+Z` on the next `load_settings`, breaking the reversible
+  escape hatch the CHANGELOG / `07` #94 promised. Fixed by gating the remap behind a persisted
+  marker (`overlay.hotkey_migrated`), latched on the first load regardless of stored value, so it
+  fires at most once per install and the stored chord is honored verbatim afterward; new test
+  `overlay_hotkey_deliberate_legacy_survives_after_migration` proves it. (2) **gemini — hint
+  hardcoded the chord:** `Settings.tsx` now interpolates the imported `DEFAULT_OVERLAY_HOTKEY`.
+  (3) **gemini — test hardcoded the default JSON:** the two persisted-value assertions now derive
+  the expected string from `serde_json::to_string(&Settings::default().overlay_hotkey)`. Round 2
+  (on the marker fix itself): (4) **codex/claude P2 — don't latch a failed remap.** The marker was
+  written unconditionally, so a *failed* `overlay.hotkey` rewrite followed by a *successful* marker
+  write latched the migration anyway — the stale `Ctrl+Alt+Space` would then be honored forever and
+  the promised retry never happened. Fixed: the marker is now written **only after** the remap
+  rewrite succeeds (a custom value / fresh install still latches immediately, since there is no
+  rewrite to fail); a failed rewrite leaves the migration un-run so the next load retries; test
+  `overlay_hotkey_failed_remap_is_retried_not_latched`. (5) **codex/claude — source-of-truth docs
+  still said `Ctrl+Alt+Space`:** updated every *living* reference to `Ctrl+Alt+Z` (`specs/03`,
+  `specs/02`, `specs/UI_REFERENCE.md`, `README.md`, `docs/TESTING.md`, `docs/ARCHITECTURE.md`);
+  `docs/0.3.0.md` (the shipped-arc design record) and the build-loop logs are left citing
+  `Ctrl+Alt+Space` on purpose — 0.3.0 genuinely shipped that default and this is a post-0.3.0 fix.
+  CHANGELOG + `07` #94 corrected (the reversibility claim now actually holds). No IPC shape change
+  → bindings clean.

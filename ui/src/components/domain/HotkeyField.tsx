@@ -3,7 +3,9 @@ import { useId, useState, type KeyboardEvent } from "react";
 import { Button } from "../primitives";
 import { cn } from "../../lib/cn";
 
-export const DEFAULT_OVERLAY_HOTKEY = "Ctrl+Alt+Space";
+// "Ctrl+Alt+Z": the original "Ctrl+Alt+Space" collided with Claude Desktop's quick-entry
+// shortcut. Must match the Rust default (`Settings::default().overlay_hotkey`).
+export const DEFAULT_OVERLAY_HOTKEY = "Ctrl+Alt+Z";
 export const DEFAULT_MARKS_HOTKEY = "Ctrl+Alt+M";
 
 const MODIFIER_CODES = new Set([

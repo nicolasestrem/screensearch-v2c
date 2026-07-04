@@ -153,7 +153,7 @@ shipped app, **not** a retrofit of the phases above. It is tracked in detail in 
 | WGC capture integration (new code path) | `CaptureSource` trait + an early P2 spike; fall back to a simpler capture if WGC misbehaves. |
 | Sidecar orphan/hang | Job Object KILL_ON_JOB_CLOSE + startup reap + heartbeat/restart (hard requirement). |
 | Resource spikes surprising users | On-demand/timed by default; explicit schedule UI; idle-only option; per-job budgets. |
-| Global hotkey conflicts (PowerToys, IMEs, games) — 0.3.0 | Non-default combos (`Ctrl+Alt+Space` / `Ctrl+Alt+M`), both configurable; a failed registration is a **visible Settings warning + toast**, never a silent no-op (`§5c`; `03 §7b`/§8). |
+| Global hotkey conflicts (PowerToys, IMEs, games) — 0.3.0 | Non-default combos (`Ctrl+Alt+Z` / `Ctrl+Alt+M`), both configurable; a failed registration is a **visible Settings warning + toast**, never a silent no-op (`§5c`; `03 §7b`/§8). |
 | API token leakage → full-history read by local malware — 0.3.0 | API **off by default**, binds `127.0.0.1` only (hard-coded, not a setting); plain-language threat model in Settings + docs; a regenerate-token button (`03 §7c`). |
 | Scope creep | Automation + nice-to-haves are explicitly **out of v1.0**. |
 
