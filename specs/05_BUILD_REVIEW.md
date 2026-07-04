@@ -140,3 +140,116 @@ For each build pass, append an entry:
   the spec wording ("extension unchanged") still holds by construction. `06` stays empty — no
   spec contradiction surfaced while normalizing (verified: `03` carries no report-filename/
   footer contract; `UI_REFERENCE` had no nested-scroll text to replace).
+
+---
+
+## Pass 3 — 2026-07-04 — 0.3.1 PR2 Phase A profile-first baseline (#64)
+
+- **Scope / protocol (before fix code):** Profiled the current WebP tree on
+  `fix/0.3.1-pr2-vision-throughput` against the last pre-WebP tag `v0.2.1`
+  (`c22625c`) in a separate worktree `..\ss-v021-pr2-profile`. Per the user's runtime
+  correction, both live app runs used `npm run dev` so the Tauri WebView had a live
+  Vite server. Baseline worktree used a temporary local-only bundle identifier
+  `app.screensearchv2c.pr2baseline` (uncommitted) and junctioned `models`/`sidecar`
+  to the temp dev profile so both runs used the same downloaded quality vision model:
+  `Qwen3VL-8B-Instruct-Q4_K_M.gguf`. Workload: one warmup `vision_tag`, then 30
+  repeated `vision_tag` jobs against the same captured screen content; current run
+  used the stored native WebP frame
+  `frames/day-20638/1783174081669-0.webp` (3440x1440, 3,200,026 bytes), baseline
+  used a JPEG copy of that frame under the v0.2.1 storage shape
+  `frames/day-20638/1783174081669-0.jpg` (1280x536, 141,733 bytes, q80-equivalent
+  ffmpeg `-q:v 5`). Throttle and embedding lanes were disabled for both runs;
+  `enrich.worker_concurrency=2`.
+- **Throughput numbers (Phase A baseline):**
+  - Current WebP tree (`npm run dev`, schema v10, jobs 46-75): `done|30`;
+    `min(created_at)=1783175422214`, `max(updated_at)=1783175489000`,
+    frames/min = **26.95**. Per-minute grouping: `2026-07-04T16:30|16`,
+    `2026-07-04T16:31|14`.
+  - Pre-WebP baseline `v0.2.1` (`npm run dev`, schema v6, jobs 2-31): `done|30`;
+    `min(created_at)=1783175777815`, `max(updated_at)=1783175807000`,
+    frames/min = **61.68**. Per-minute grouping: `2026-07-04T16:36|30`.
+  - Regression size: current WebP throughput is **43.7%** of the pre-WebP baseline
+    (56.3% slower), far outside the PR2 acceptance band.
+- **GPU utilization shape (`Get-Counter '\GPU Engine(*)\Utilization Percentage'`,
+  1s samples; summed all engines + max single engine):**
+  - Current WebP: 55 samples, sum avg **42.35%**, median **37.85%**, p95 **93.64%**,
+    max **97.05%**, min **3.50%**. Sample excerpt shows repeated idle valleys between
+    spikes: `3.516`, `9.062`, `81.336`, `28.425`, `58.674`, `3.613`, `50.216`,
+    `69.636`, `3.836`, `38.461`.
+  - Pre-WebP JPEG baseline: 25 samples, sum avg **59.53%**, median **59.71%**,
+    p95 **91.33%**, max **94.05%**, min **3.53%**. It still has job-bound variation,
+    but holds a substantially higher median/average during the batch and finishes in
+    less than half the wall time.
+- **Decode probe (app-equivalent `image::open(...).to_rgba8()`, release-mode local
+  probe under `target/pr2-profile/decode-probe`, not repo code):**
+  - Native WebP source: `dims=3440x1440`, 30 iterations, avg **44.73 ms**,
+    p50 **44.57 ms**, p95 **46.09 ms**.
+  - Pre-WebP JPEG source: `dims=1280x536`, 30 iterations, avg **3.09 ms**,
+    p50 **3.07 ms**, p95 **3.20 ms**.
+- **Call-site answer — does WebP block the next inference dispatch?** Yes on the
+  vision dispatch path, through synchronous decode rather than only encode:
+  `crates/kernel/src/worker_pool.rs::vision_tag_outcome` loads the stored capture with
+  `load_rgba(abs.clone()).await` before it calls `vision.analyze(&image).await`
+  (current lines 494 and 516). That means the sidecar/GPU request for each job cannot
+  be dispatched until CPU/file decode completes. The storage encode call site is
+  `crates/kernel/src/capture_loop.rs::process_frame`, which awaits `write_webp(...)`
+  before the frame row/text/jobs are stored (current line 109; encoder at line 213).
+  This blocks the capture cycle for new frames and competes for blocking-pool/CPU work,
+  but the measured regression is decode-dominant for already queued `vision_tag` jobs.
+- **Decision gate:** The slowdown is attributable to the WebP format path (native
+  WebP decode before VLM dispatch, with capture-side lossless WebP encode as secondary
+  contention), not to degrade-to-text or model-side behavior. PR2 may proceed to Phase B
+  under D5. No schema change and no new user-facing setting are indicated.
+
+---
+
+## Pass 4 — 2026-07-04 — 0.3.1 PR2 Phase B fix + acceptance profile (#64)
+
+- **Implemented:** `crates/kernel/src/vision_proxy.rs` adds an internal, bounded JPEG vision
+  proxy beside stored WebP captures (`<frame>.vision.jpg`, max edge 1280 px, q80). The capture
+  loop owns a bounded writer queue (capacity 8) and flushes it on capture-loop shutdown; if the
+  queue is full or an older WebP has no proxy yet, the worker pool lazily creates the same proxy
+  once, then dispatches vision jobs from the cheap JPEG decode path. The stored `frames.image_path`
+  remains the WebP; no schema, UI, setting, API, or storage-format change. Retention/self-capture
+  purge now delete the sidecar proxy when deleting a WebP.
+- **Why:** Phase A showed `worker_pool::vision_tag_outcome` synchronously decoded native WebP
+  before `vision.analyze`, producing 26.95 jobs/min vs. 61.68 jobs/min on the last pre-WebP
+  baseline. The proxy restores the pre-WebP 1280 px vision workload without reverting storage
+  away from WebP and follows D5's first preference: remove WebP work from the vision hot path
+  before trying encoder knobs or a format escape hatch.
+- **Acceptance profile (`npm run dev`, same temp dev DB/model/settings/workload as Pass 3):**
+  - Warmup: job `76|done|0||1783176370886|1783176380000`; proxy created at
+    `frames/day-20638/1783174081669-0.vision.jpg`, 147,174 bytes.
+  - Fixed current tree (`npm run dev`, jobs 77-106): `done|30`;
+    `min(created_at)=1783176405822`, `max(updated_at)=1783176435000`,
+    frames/min = **61.69**. Per-minute grouping: `2026-07-04T14:46|12`,
+    `2026-07-04T14:47|18`.
+  - Acceptance math: fixed current = **100.0%** of the pre-WebP v0.2.1 baseline
+    (61.69 vs. 61.68 jobs/min), comfortably inside the required within-10% band.
+- **GPU utilization shape after fix (`target/pr2-profile/gpu-current-fixed-proxy-dev-getcounter.csv`):**
+  21 samples; summed engines avg **61.18%**, median **54.95%**, p95 **91.55%**, max
+  **94.09%**, min **28.48%**; max single engine avg **53.03%**, median **46.83%**, p95
+  **87.80%**, max **90.21%**, min **19.60%**. The repeated near-idle 3-4% valleys seen in
+  Phase A's WebP run disappeared from the measured batch.
+- **Decode probe after fix (same app-equivalent release-mode probe):**
+  - WebP source still costs `dims=3440x1440`, avg **46.83 ms**, p50 **46.46 ms**,
+    p95 **51.18 ms**.
+  - Vision proxy costs `dims=1280x536`, avg **3.08 ms**, p50 **3.06 ms**,
+    p95 **3.24 ms**.
+- **Verification (verbatim):** `cargo test -p kernel` →
+  `test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out`;
+  integration suites also passed: `9 passed`, `12 passed`, `15 passed`, `2 passed`.
+  Full CI-order pass:
+  `npm --prefix ui ci` → `added 347 packages, and audited 348 packages in 5s` /
+  `found 0 vulnerabilities`;
+  `npm --prefix ui run lint` → `> eslint .`;
+  `npm --prefix ui run build` → `✓ built in 1.76s`;
+  `node scripts/stage-mcp.mjs` → `[stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe`;
+  `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 2.82s`;
+  `cargo build --workspace` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 8.08s`;
+  `cargo test --workspace` →
+  `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 9.82s` with all non-ignored
+  suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.

@@ -215,7 +215,8 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
     )
     .await;
 
-    // every frame: row stored with OCR text + foreground context + a WebP on disk.
+    // every frame: row stored with OCR text + foreground context, a WebP on disk, and
+    // the bounded vision proxy writer flushed before the capture loop returned.
     // content_text is a passthrough copy of raw_text in PR2 (03 §3b).
     for i in 0..3 {
         let id = i64::from(i) + 1;
@@ -238,6 +239,13 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
             data_dir.join(&detail.image_path).exists(),
             "capture image should be written at {}",
             detail.image_path
+        );
+        assert!(
+            data_dir
+                .join(&detail.image_path)
+                .with_extension("vision.jpg")
+                .exists(),
+            "capture image should have a vision proxy beside it"
         );
     }
 

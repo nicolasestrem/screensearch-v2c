@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaced in Settings, not swallowed.
 
 ### Fixed
+- **Vision throughput is back to the pre-WebP baseline.** The 0.3.0 switch to lossless WebP
+  storage made every vision job synchronously decode a native-resolution WebP before dispatching
+  to the local vision model, dropping the measured repeated-frame workload from 61.68 frames/min
+  (`v0.2.1` JPEG baseline) to 26.95 frames/min. ScreenSearch now keeps WebP as the stored image
+  format but prepares an internal 1280 px JPEG vision proxy beside each WebP and uses that for
+  vision dispatch. The fixed build measured 61.69 frames/min on the same workload/model, with GPU
+  utilization returning to the steady baseline shape. No schema, settings, or UI changes.
+
 - **UI Automation no longer leaves Chromium/Electron apps hung.** The UIA text source keeps
   an accessibility client connected, which flips apps like Chrome, Edge, Codex, and Claude
   Desktop into accessibility mode; previously that client was never released, so those apps

@@ -100,3 +100,27 @@
 - **Verification:** `git diff --name-only main` → only `.md` files (verbatim list on the PR);
   D1–D9 landing checklist grep output pasted on the PR. No build/test impact possible (docs
   only); CI runs the full suite on the PR regardless.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2: vision throughput regression fixed (#64)
+
+- **Change:** Added an internal vision proxy path for WebP captures. `crates/kernel/src/vision_proxy.rs`
+  creates `<frame>.vision.jpg` (max edge 1280 px, q80) beside the stored lossless WebP; the capture
+  loop enqueues proxy writes through a bounded worker and flushes it on shutdown; the worker pool
+  dispatches vision from the proxy and lazily creates one for older WebPs. Retention/self-capture
+  purge now remove the proxy when deleting the WebP. WebP remains the DB/API/storage image format;
+  no schema, settings, or UI surface changed.
+- **Why:** Phase A measured the #64 regression on the same quality Qwen3VL model: current WebP tree
+  26.95 vision frames/min vs. pre-WebP `v0.2.1` 61.68 frames/min. The blocking point was
+  `vision_tag_outcome` decoding native WebP before every `vision.analyze` call. The proxy removes
+  that CPU/file decode from the repeated inference dispatch path and restores the pre-WebP 1280 px
+  vision workload without using D5's lower-preference encoder-settings or format-revert escapes.
+- **Verification:** `cargo test -p kernel` passed; live `npm run dev` acceptance profile after the
+  fix: jobs 77-106 → `done|30`, `1783176405822|1783176435000|30|61.69`; GPU counter summary
+  avg/median summed engines **61.18%/54.95%** with no repeated 3-4% idle valleys; decode probe:
+  WebP source avg **46.83 ms**, proxy JPEG avg **3.08 ms**. Full CI-order verification passed:
+  `npm --prefix ui ci`, `npm --prefix ui run lint`, `npm --prefix ui run build`,
+  `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.

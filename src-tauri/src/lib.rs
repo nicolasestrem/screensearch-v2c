@@ -1605,7 +1605,7 @@ async fn run_retention_once(
     let mut degraded = 0_u64;
     for frame in candidates {
         if let Some(path) = safe_frame_path(data_dir, &frame.image_path) {
-            if let Err(e) = std::fs::remove_file(&path) {
+            if let Err(e) = remove_frame_image_and_proxy(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     // Leave image_purged=0 so a transient failure (AV/indexer sharing
                     // violation) is retried next sweep instead of marking the row text-only
@@ -1750,7 +1750,7 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
         let before = purged;
         for frame in batch {
             if let Some(path) = safe_frame_path(&data_dir, &frame.image_path) {
-                if let Err(e) = std::fs::remove_file(&path) {
+                if let Err(e) = remove_frame_image_and_proxy(&path) {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         // Skip the row delete so the JPEG isn't orphaned on a transient
                         // failure (e.g. an AV/indexer sharing violation), mirroring the
@@ -1802,6 +1802,41 @@ fn safe_frame_path(data_dir: &Path, image_path: &str) -> Option<PathBuf> {
         }
     }
     Some(data_dir.join(safe))
+}
+
+fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
+    let remove_main = std::fs::remove_file(path);
+    if let Err(e) = &remove_main {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return remove_main;
+        }
+    }
+    if let Some(proxy) = vision_proxy_path_for(path) {
+        match std::fs::remove_file(&proxy) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(
+                    path = %proxy.display(),
+                    error = %e,
+                    "could not delete vision proxy"
+                );
+            }
+        }
+    }
+    remove_main
+}
+
+fn vision_proxy_path_for(path: &Path) -> Option<PathBuf> {
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("webp"))
+    {
+        return None;
+    }
+    let mut file_name = path.file_stem()?.to_os_string();
+    file_name.push(".vision.jpg");
+    Some(path.with_file_name(file_name))
 }
 
 fn now_ms() -> i64 {

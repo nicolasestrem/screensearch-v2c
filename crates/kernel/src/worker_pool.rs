@@ -16,14 +16,15 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use traits::{ChunkSource, EmbeddingProvider, Job, JobCompleted, JobKind, Store, VisionProvider};
 
 use crate::events::KernelEvent;
+use crate::vision_proxy;
 
 /// Shared, runtime-settable embedding provider slot (`None` until the embedder loads
 /// off the launch thread). Behind an `Arc<RwLock>` so inference can start the worker
@@ -460,11 +461,12 @@ async fn embed_text_outcome(
     }
 }
 
-/// Run deferred vision tagging on a frame's stored JPEG via the sidecar provider
-/// (`03 §5`). The JPEG lives at `data_dir / image_path`: a transient IO error (AV,
-/// search indexer, or backup briefly holding the file on Windows) retries, a genuinely
-/// missing file is dead-lettered (it won't reappear). A purged frame is a no-op success.
-/// A sidecar/analyze error is retryable (the sidecar may be restarting).
+/// Run deferred vision tagging on a frame's stored capture image via the sidecar provider
+/// (`03 §5`). WebP captures use a bounded, internal JPEG vision proxy so the sidecar
+/// request path does not synchronously decode native WebP before every dispatch. A
+/// transient IO error (AV, search indexer, or backup briefly holding the file on Windows)
+/// retries, a genuinely missing file is dead-lettered (it won't reappear). A purged frame
+/// is a no-op success. A sidecar/analyze error is retryable (the sidecar may be restarting).
 async fn vision_tag_outcome(
     store: &Arc<dyn Store>,
     vision: Option<&Arc<dyn VisionProvider>>,
@@ -489,7 +491,9 @@ async fn vision_tag_outcome(
         Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
     };
     let abs = data_dir.join(&input.image_path);
-    let image = match load_rgba(abs.clone()).await {
+    let total_started = Instant::now();
+    let decode_started = Instant::now();
+    let image = match vision_proxy::load_for_vision(abs.clone()).await {
         Ok(img) => img,
         Err(e) => {
             return if abs.exists() {
@@ -499,6 +503,7 @@ async fn vision_tag_outcome(
             };
         }
     };
+    let decode_ms = decode_started.elapsed().as_millis();
     // Privacy-safe VLM request provenance (gap #44): frame id + the relative capture
     // path only — never image bytes/data-URL, OCR `content_text`, app/window title, or
     // the model reply (`init_tracing`'s "no screen content at info level" contract).
@@ -509,6 +514,7 @@ async fn vision_tag_outcome(
         image_path = %input.image_path,
         "vision_tag: sending frame image to VLM"
     );
+    let analyze_started = Instant::now();
     let analysis = match vision.analyze(&image).await {
         Ok(a) => a,
         // `{e:#}` prints the whole anyhow chain so the real sidecar cause (e.g.
@@ -516,19 +522,19 @@ async fn vision_tag_outcome(
         // top `.context("vision completion")`.
         Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e:#}")),
     };
+    let analyze_ms = analyze_started.elapsed().as_millis();
+    tracing::info!(
+        frame_id,
+        image_path = %input.image_path,
+        decode_ms,
+        analyze_ms,
+        total_ms = total_started.elapsed().as_millis(),
+        "vision_tag timing"
+    );
     match store.insert_vision(frame_id, analysis).await {
         Ok(()) => Outcome::Complete { changed_data: true },
         Err(e) => Outcome::Retry(format!("insert vision {frame_id}: {e}")),
     }
-}
-
-/// Decode a JPEG/PNG from disk into RGBA on the blocking pool (CPU + file IO).
-async fn load_rgba(path: PathBuf) -> Result<image::RgbaImage> {
-    tokio::task::spawn_blocking(move || -> Result<image::RgbaImage> {
-        Ok(image::open(&path)?.to_rgba8())
-    })
-    .await
-    .map_err(|e| anyhow!("image decode task failed: {e}"))?
 }
 
 #[cfg(test)]

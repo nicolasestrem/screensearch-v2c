@@ -9,6 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use tokio::sync::{broadcast, watch};
@@ -18,6 +19,7 @@ use traits::{
 };
 
 use crate::events::KernelEvent;
+use crate::vision_proxy::VisionProxyWriter;
 
 /// Why the capture loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +41,7 @@ pub type PendingDemand = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sende
 pub struct LoopCtx {
     pub store: Arc<dyn Store>,
     pub ocr: Arc<dyn OcrProvider>,
-    /// Absolute directory under which JPEGs are written (`<app-data>/frames`).
+    /// Absolute directory under which stored capture images are written (`<app-data>/frames`).
     pub frames_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
     /// `enrich.embed_text` — whether each stored frame enqueues an `embed_text` job.
@@ -72,39 +74,57 @@ pub async fn run_capture_loop(
     ctx: LoopCtx,
     mut stop: watch::Receiver<bool>,
 ) -> CaptureLoopExit {
-    loop {
+    let proxy_writer = VisionProxyWriter::spawn();
+    let exit = loop {
         tokio::select! {
             biased;
             _ = stop.changed() => {
                 tracing::info!("capture loop: stop requested");
-                return CaptureLoopExit::StopRequested;
+                break CaptureLoopExit::StopRequested;
             }
             res = capture.next_frame() => match res {
                 Ok(Some(frame)) => {
                     let monitor = frame.monitor_index;
-                    if let Err(e) = process_frame(&ctx, frame).await {
+                    if let Err(e) = process_frame(&ctx, &proxy_writer, frame).await {
                         // No frame content in the log (privacy, 03 §9) — just the error.
                         tracing::warn!(monitor, error = %e, "capture loop: dropping frame");
                     }
                 }
                 Ok(None) => {
                     tracing::info!("capture loop: source signaled shutdown");
-                    return CaptureLoopExit::SourceShutdown;
+                    break CaptureLoopExit::SourceShutdown;
                 }
                 Err(e) => tracing::warn!(error = %e, "capture loop: source error"),
             }
         }
-    }
+    };
+    proxy_writer.shutdown().await;
+    exit
 }
 
 /// OCR → encode → store one frame, then enqueue enrichment and emit the tick.
 /// OCR runs on the **full-resolution** pixels before the storage downscale (`03 §8`).
-async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
+async fn process_frame(
+    ctx: &LoopCtx,
+    proxy_writer: &VisionProxyWriter,
+    frame: CapturedFrame,
+) -> Result<()> {
     let ocr = ctx.ocr.recognize(&frame).await?;
 
     let (rel_db_path, abs_path) =
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
-    write_webp(frame.pixels.clone(), abs_path, ctx.max_width).await?;
+    let encode_started = Instant::now();
+    write_webp(frame.pixels.clone(), abs_path.clone(), ctx.max_width).await?;
+    let encoded_bytes = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+    tracing::info!(
+        captured_at = frame.captured_at,
+        monitor_index = frame.monitor_index,
+        encode_ms = encode_started.elapsed().as_millis(),
+        bytes = encoded_bytes,
+        image_path = %rel_db_path,
+        "capture encode: stored WebP"
+    );
+    proxy_writer.try_enqueue(frame.pixels.clone(), abs_path.clone());
 
     let frame_id = ctx
         .store
