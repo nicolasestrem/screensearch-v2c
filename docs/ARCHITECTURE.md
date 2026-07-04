@@ -1,7 +1,8 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together **as of 2026-07-03** — reflecting the active 0.3.0
-arc through PR5 (surface reduction plus the Flow overlay), on top of the shipped 0.2.x
+How ScreenSearch V2c is actually put together **as of 2026-07-04** — reflecting the complete 0.3.0
+arc (PR1–PR8: surface reduction, Flow overlay, where-was-i + marks, local HTTP API + export, MCP
+server), on top of the shipped 0.2.x
 attention-first / Recall work (capture -> OCR/UIA text -> content-text store -> text embeddings ->
 hybrid search -> **inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI
 and Flow overlay). This describes the
@@ -25,9 +26,14 @@ Where they ever disagree, the specs win — open an issue.
   now uses foreground/app-switch + idle only over the debounce/rate-ceiling/idle-edge state machine.
   The old clipboard, typing-pause, click, and scroll-stop triggers remain readable as legacy
   `CaptureTrigger` values, but new captures no longer emit them.
-- Implemented for 0.3.0 PR2-PR5: removed the invasive trigger surfaces, retired the Beta model
+- Implemented for 0.3.0 PR2–PR8: removed the invasive trigger surfaces, retired the Beta model
   tier, removed the unused image-embedding lane with schema v9, and added the Flow overlay with
-  configurable hotkey/status controls.
+  configurable hotkey/status controls (PR2–PR5); **where-was-i + mark-this-moment** — the
+  `kernel::resume` last-sustained-context heuristic, the schema-v10 `marks` table, the
+  `capture_now` diff-gate-bypass path, and a second global hotkey with a non-focus-stealing toast
+  (PR6); the **opt-in localhost HTTP API + JSON export** (`crates/api`, axum, 127.0.0.1-only,
+  bearer token — PR7); and the **`screensearch-mcp.exe` stdio MCP server** wrapping that API,
+  bundled via NSIS `externalBin` (PR8).
 - Still open: code signing and the remaining 0.3.0 follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
@@ -54,12 +60,16 @@ Where they ever disagree, the specs win — open an issue.
 
 ## 2. Crate map
 
-A 9-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
+A 13-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
 the store, spawns OCR, builds the `kernel`, loads the embedder + inference off-thread, owns the
-Flow overlay window/hotkey plumbing, and registers commands. `kernel` orchestrates (event bus,
-capture loop, worker pool, vision scheduler, readiness);
-the module crates — `capture` (WGC), `ocr` (WinRT), `store` (SQLite + sqlite-vec + FTS5),
-`embeddings` (fastembed), `inference` (Job-Object-bound `llama-server` sidecar), `doctor` — each
+Flow overlay window/hotkey plumbing and the local-API host, and registers commands. `kernel`
+orchestrates (event bus, capture loop, worker pool, vision scheduler, readiness, the where-was-i
+resume heuristic);
+the module crates — `capture` (WGC + triggers + privacy), `ocr` (WinRT), `uia` (UI-Automation text),
+`store` (SQLite + sqlite-vec + FTS5), `embeddings` (fastembed), `inference` (Job-Object-bound
+`llama-server` sidecar), `textfilter` (attention-first span classifier), `sysmon` (pressure probe),
+`doctor` (env smoke-check), `api` (opt-in localhost HTTP API + export), and `mcp` (the
+`screensearch-mcp.exe` stdio wrapper over that API) — each
 depend only on the contracts in `traits`, never on one another's concrete impls.
 
 **Authoritative crate map & dependency rule: `specs/03_MASTER_PRODUCTION_SPEC.md` §2.** The
@@ -72,19 +82,20 @@ per-crate file-level guide to where each concern lives is the rest of this docum
 Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
 Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
 `busy_timeout=5000`. **Authoritative as-built DDL (every table, column, index, trigger, and the full
-v1→v9 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 9`)** — this is code,
-so it never drifts. `03 §4` is the design contract for the schema; where the 0.2.x migrations have
+v1→v10 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 10`)** — this is
+code, so it never drifts. `03 §4` is the design contract for the schema; where the migrations have
 moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`, v5 adds the nullable
 `frames.capture_trigger`, v6 widens that trigger token set for click / scroll-stop, v7 adds
-`frames.image_purged` for degrade-to-text retention, and v8 adds the partial
-`idx_frames_image_retention` index for the retention sweep, and v9 drops the removed image-embedding
-lane), the code in `store::schema` wins.
+`frames.image_purged` for degrade-to-text retention, v8 adds the partial
+`idx_frames_image_retention` index for the retention sweep, v9 drops the removed image-embedding
+lane, and v10 adds the `marks` table — frame-cascading intention capture with `idx_marks_open`),
+the code in `store::schema` wins.
 
 Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
 vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
 FTS mirrors), the text embedding lane, vision analysis (P4), the durable `jobs`
-queue, tags, and `settings`. The notes below capture the two as-built decisions that the DDL alone
-doesn't convey.
+queue, tags, `marks` (0.3.0), and `settings`. The notes below capture the two as-built decisions
+that the DDL alone doesn't convey.
 
 Each embedding lives in **two** lock-step places — a metadata row and its `vec0` `FLOAT[768]` cosine
 shadow keyed by the same id. Upserts do both in one transaction; deletes are handled by
@@ -347,8 +358,11 @@ rows cannot wedge capture or sidecar controls. Enrichment keys: `enrich.embed_te
 `enrich.vision_timer_interval_ms` (60 min), `enrich.vision_idle_enabled` (false) +
 `enrich.vision_idle_secs` (5 min), `models.vision_tier` / `models.answer_tier` (`default`),
 `answer.thinking` (true), `sidecar.idle_ttl_secs` (180), `sidecar.ngl` (99), and optional
-`sidecar.device`. **0.3.0 overlay keys:** `overlay.hotkey` (`Ctrl+Alt+Space`) and
-`overlay.max_results` (default `8`, sanitized to `1..=50`). Model tiers and sidecar launch options are applied live for the next request that
+`sidecar.device`. **0.3.0 keys:** `overlay.hotkey` (`Ctrl+Alt+Space`) and
+`overlay.max_results` (default `8`, sanitized to `1..=50`); `resume.min_dwell_secs` (default `120`,
+the where-was-i dwell threshold) and `marks.hotkey` (`Ctrl+Alt+M`); the local-API trio
+`api.enabled` (default `false`), `api.port` (default `43210`), and `api.token` (generated on first
+enable, shown/regenerable in Settings). Model tiers and sidecar launch options are applied live for the next request that
 needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool from current
 settings after save. Capture's enqueue decisions for new `embed_text` jobs are still captured when a
 capture session starts, so changing that toggle affects capture enqueueing on the next capture start.
@@ -382,6 +396,38 @@ request id, and the UI ignores stale deltas.
 
 ---
 
+## 9b. Flow recall + open surface (0.3.0)
+
+- **Where-was-i** (`kernel::resume`, PR6): a pure, unit-tested heuristic over a bounded recent
+  window of frames — the *last sustained context* is the most recent run (same context key =
+  `app_hint`, refined by browser domain) that persisted ≥ `resume.min_dwell_secs` and ended before
+  the current foreground session began; ScreenSearch itself and excluded apps never qualify.
+  Surfaced via the `where_was_i` command in the overlay's empty state, a Deck card, and
+  `GET /v1/context/where-was-i`. Pull-based only (D14) — no notifications.
+- **Marks** (PR6): `Ctrl+Alt+M` (configurable, `marks.hotkey`) → `kernel::capture_now` requests one
+  frame from the live capture worker with a per-request **diff-gate bypass** (D8 — a demanded frame
+  is never dropped as "unchanged"), then inserts a `marks` row (schema v10, `ON DELETE CASCADE`).
+  A quiet overlay toast confirms without stealing focus; the Deck **Intentions** strip lists
+  unresolved marks (open / resolve / dismiss — no badge counts, D14). Marked frames follow normal
+  retention: the image may expire, the mark keeps the text reconstruction reachable (D10).
+- **Local HTTP API + export** (`crates/api` + `src-tauri::local_api`, PR7): default **off**; when
+  enabled the axum server binds **`127.0.0.1` only (hard-coded)** on `api.port` and every request
+  needs the `api.token` bearer (constant-time compare, 401 otherwise; D11). Endpoints: `/v1/health`,
+  `/v1/search`, `POST /v1/ask` (SSE; consumer disconnect aborts sidecar generation), `/v1/frames/{id}`
+  (`?image=1` → WebP), `/v1/context/where-was-i`, marks list/create/resolve (the only write surface),
+  and `/v1/export` (JSON, frames + content text + marks, **no images** — D12). The host is a seam
+  behind a trait, **not constructed at all** while disabled; the Settings "Export…" button calls the
+  same export code path directly, so export works with the API off. Reference: `docs/API.md`.
+- **MCP server** (`crates/mcp` → `screensearch-mcp.exe`, PR8): a dependency-thin **stdio** JSON-RPC
+  binary that never links the store (D13) — purely an HTTP client of the local API using
+  `SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`. Six tools (`search_screen_history`,
+  `ask_screen_history`, `get_moment`, `where_was_i`, `list_marks`, `add_mark`); API-off or bad-token
+  states return guided errors ("enable the API in ScreenSearch Settings"), never a crash. Staged as
+  the Tauri `externalBin` by `scripts/stage-mcp.mjs` and shipped inside the NSIS installer next to
+  `ScreenSearch.exe`. Reference: `docs/MCP.md`.
+
+---
+
 ## 10. Startup sequence (`src-tauri::run`)
 
 1. Resolve `<app-data>`; create `logs/`; init tracing (console + daily-rotating file).
@@ -392,8 +438,9 @@ request id, and the UI ignores stale deltas.
    (degrade-to-text), keeping the row + text. `0` disables it.
 4. Build the `Kernel` (store + OCR worker + WGC capture factory). Capture starts `Disabled`.
 5. Manage shell state, including the overlay hotkey/status state. Load settings and register the
-   overlay global shortcut with `tauri-plugin-global-shortcut`; conflicts emit a toast and are
-   visible via `get_hotkey_status`.
+   overlay + mark global shortcuts with `tauri-plugin-global-shortcut`; conflicts emit a toast and
+   are visible via `get_hotkey_status`. If `api.enabled`, start the local-API host (a bind failure —
+   e.g. port in use — is loud: toast + guided Settings state, never a silent no-op).
 6. Spawn `forward_events`. Set `embed_model = Initializing` and spawn `init_embeddings` (load model
    off-thread → `attach_embedder`: store embedder + embedder worker slot, `embed_model = Ready`,
    idempotently start the worker pool). Set `sidecar = Initializing` and spawn **`init_inference`**:
@@ -408,11 +455,16 @@ request id, and the UI ignores stale deltas.
    `supervisor.shutdown()` (kills the sidecar; the Job Object would anyway). All best-effort —
    correctness doesn't depend on it (the startup sweep requeues interrupted jobs).
 
-**Commands** (typed via `ts-rs`): `ping`, `get_readiness`, `get_job_stats`, `get_frame`, `search`,
-`capture_control`, **`enqueue_vision`**, **`ask`**, **`set_model_tier`**, `get_timeline`,
-`get_frames`, `get_nearest_frame`, `get_frame_context`, `get_insights`, `get_storage_stats`,
-`get_monitors`, `cancel_ask`, `list_sidecar_devices`, `get_settings`, `set_settings`,
-`get_hotkey_status`, `hide_overlay`, `overlay_shown_ack`, and `open_moment`.
+**Commands** (typed via `ts-rs`): `ping`, `get_readiness`, `get_job_stats`, `get_storage_stats`,
+`get_monitors`, `list_sidecar_devices`, `get_frame`, `get_frame_spans`, `search`,
+`capture_control`, **`enqueue_vision`**, **`ask`**, `cancel_ask`, `generate_report`,
+`cancel_report`, **`set_model_tier`**, `load_model`, `unload_model`, `get_timeline`, `get_frames`,
+`get_nearest_frame`, `get_frame_context`, `get_insights`, `get_settings`, `set_settings`,
+`get_text_filter_stats`, `get_throttle_status`; the overlay set — `get_hotkey_status`,
+`hide_overlay`, `overlay_shown_ack`, `open_moment`, `focus_overlay_for_note`,
+`dismiss_mark_toast`; the 0.3.0 flow-recall set — **`where_was_i`**, **`add_mark`**, `list_marks`,
+`resolve_mark`, `set_mark_note`; and the local-API set — `set_api_config`, `get_api_status`,
+`regenerate_api_token`, **`export_data`**.
 
 ---
 
@@ -426,7 +478,11 @@ request id, and the UI ignores stale deltas.
   embedder; the P4 `vision_tag` routing tests drive `process_job` with a fake `VisionProvider`
   (writes the analysis; retries with no provider). Store search tests cover the backend
   `SearchQuery.limit` clamp. PR5 adds a Tauri config guard proving the overlay window is pre-created,
-  hidden by default, and `contentProtected`.
+  hidden by default, and `contentProtected`. PR6 adds the `kernel::resume` heuristic unit suite, the
+  v10 marks migration test, and `capture_now` pipeline tests (diff-gate bypass, capture-off denial).
+  PR7 adds `crates/api/tests/http_api.rs` (fixture-DB integration: loopback-only bind assertion,
+  401s, every endpoint, SSE ask, export). PR8 adds `crates/mcp/tests/stdio_mcp.rs`, which spawns the
+  real compiled binary over stdio (handshake, six tools, guided API-off/wrong-token errors).
 - **Inference, deterministic (run in CI, no GPU/network):** the **no-orphan gate**
   (`tests/no_orphan.rs` — kill a parent, assert the Job-Object child dies), startup **reap**
   (`tests/reap.rs` — reaps a matching stray, never a foreign pid), the HTTP **client** against a

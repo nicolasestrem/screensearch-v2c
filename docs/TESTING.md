@@ -156,6 +156,14 @@ proven by a forward-only **v8 → v9** migration that drops *only derived, re-de
 (`docs/0.3.0.md` PR4, D5/D15). Quick live check on a real Windows desktop with `npm run tauri dev`,
 against a **backed-up copy** of a populated 0.2.x/PR3 profile (`<app-data>\screensearch.db`).
 
+> **PR9 audit note (2026-07-04):** the live populated-0.2.x-profile pass below was **waived by
+> user decision** — the app has zero installed users, so no real pre-v9 databases exist in the
+> wild. The migration chain stays proven by the automated populated-DB tests
+> (`migration_v9_drops_image_lane_and_embed_image_jobs`, `fresh_and_migrated_schemas_agree_at_latest`,
+> and PR6's `migration_v10_adds_marks_with_cascade`). The steps remain documented for any future
+> upgrade-path re-verification. The settings-tolerance checks (retired-key drop, `beta` remap)
+> need no 0.2.x profile and stay in the PR2/PR3 sections.
+
 - **Seed the legacy state (app closed).** In the backed-up DB:
   `INSERT INTO settings VALUES('enrich.image_embeddings','true');` and one leftover job —
   `INSERT INTO jobs (kind, frame_id, state) VALUES ('embed_image', <an existing frame id>, 'pending');`
