@@ -18,6 +18,32 @@
 
 ---
 
+## 2026-07-04 — 0.3.1 PR2 Phase A: #64 profiling instrumentation + stop-condition report
+
+- **Change:** (a) Instrumentation-only commit on `fix/0.3.1-pr2-vision-throughput-r2`
+  (`dbb1789`): per-job `decode_ms`/`analyze_ms` + source dimensions in
+  `crates/kernel/src/worker_pool.rs::vision_tag_outcome`; `acquire_ms`/`prep_ms`/`complete_ms`
+  + request dimensions in `crates/inference/src/vision.rs::analyze` (new `vlm_request_dims`
+  shared with `downscale_for_vlm` + pinning test); `encode_ms` + stored bytes in
+  `crates/kernel/src/capture_loop.rs::process_frame` (`write_webp` now returns the file size);
+  stale JPEG-era doc comments fixed. All privacy-safe (durations/dimensions/bytes/paths only).
+  (b) Phase A profiling record in `05` Pass 3; contradiction + PDH finding as `06` #22/#23.
+  **No fix code** — the PR2 stop condition triggered.
+- **Why:** `docs/0.3.1.md` PR2 Phase A + D9 (`04 §3`): numbers before fix code. Release-build
+  measurement (current tree vs the v0.2.1 pre-WebP tag, same Qwen3-VL-8B + llama-server)
+  attributes ~97 % of the ~2.5× per-job regression to the sidecar processing the 1.5×-pixel
+  VLM request (native-res storage → 1568 px cap vs the old 1280 px stored width); the encode
+  step (D5's target) measures 26 ms and got *cheaper* than v0.2.1's 42 ms. Stop condition:
+  the slowdown is not on the encode path → reported with options instead of fixing under
+  this PR (`06` #22).
+- **Verification:** `cargo fmt --all -- --check` clean; `cargo clippy -p kernel -p inference
+  --all-targets -- -D warnings` → `Finished dev profile ... in 20.11s` (no warnings);
+  `cargo test -p kernel -p inference` → all green (`105 passed` inference incl. new
+  `vlm_request_dims_match_encoded_output`; kernel suites all `ok`). Profiling evidence:
+  `05` Pass 3 tables (1263 baseline jobs / 509 current-tree jobs parsed from the timing logs).
+
+---
+
 ## 2026-07-04 — UIA client lifecycle teardown + per-app circuit breaker (hang fix)
 
 - **Change:** Fixed the shipped 0.3.0 defect where UI Automation left Chromium/Electron apps
