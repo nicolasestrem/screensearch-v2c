@@ -66,6 +66,27 @@
 
 ---
 
+## 2026-07-04 — 0.3.1 PR2 review round: comment hygiene + zero-dim guard (PR #85)
+
+- **Change:** (a) The three timing-log code comments no longer narrate the task
+  (`#64` / `0.3.1 PR2` / `D9` references dropped from `vision.rs` analyze timing,
+  `capture_loop.rs` encode timing, `worker_pool.rs` decode/analyze timing); the substantive
+  content (what is measured + the privacy contract) is kept. The `VISION_MAX_EDGE` const
+  doc and pinned-test rationale keep their spec citations — they record the *decision*, per
+  the codebase convention. (b) `vlm_request_dims` gains a zero-width/zero-height
+  pass-through guard (a scaled zero-area source would hand `image::imageops::resize` an
+  empty buffer, which can panic) + two test assertions. Unreachable from real decoders
+  (WebP/JPEG/PNG can't be 0-dim), so purely defensive — no behavior change for real frames.
+- **Why:** PR #85 review comments — the comment-hygiene rule (comments must not reference
+  the current task; it rots) and a defensive-input finding on the new pure helper.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → clean; `cargo clippy -p
+  inference -p kernel --all-targets -- -D warnings` → `Finished dev profile [unoptimized +
+  debuginfo] target(s) in 1.53s` (no warnings); `cargo test -p inference -p kernel` → every
+  suite `test result: ok` (0 failed; `inference` `105 passed` incl. the extended
+  `vlm_request_dims_match_encoded_output`).
+
+---
+
 ## 2026-07-04 — UIA client lifecycle teardown + per-app circuit breaker (hang fix)
 
 - **Change:** Fixed the shipped 0.3.0 defect where UI Automation left Chromium/Electron apps

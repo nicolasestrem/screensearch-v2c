@@ -183,10 +183,10 @@ impl VisionProvider for VisionSidecar {
             )
             .await
             .context("vision completion")?;
-        // Profiling instrumentation for the #64 throughput regression (0.3.1 PR2, D9):
-        // sidecar lease acquisition (includes a cold model spawn), CPU request prep
-        // (downscale + JPEG + base64), and the sidecar completion round-trip, with the
-        // request image dimensions. Privacy-safe: durations + dimensions only.
+        // Per-stage timing: sidecar lease acquisition (includes a cold model spawn),
+        // CPU request prep (downscale + JPEG + base64), and the sidecar completion
+        // round-trip, with the request image dimensions. Privacy-safe: durations +
+        // dimensions only.
         tracing::info!(
             acquire_ms,
             prep_ms,
@@ -297,7 +297,9 @@ fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
 /// of the image actually sent to the VLM. Split out so the analyze timing log can record
 /// the request dimensions without re-deriving them from the encoded payload.
 fn vlm_request_dims(width: u32, height: u32) -> (u32, u32) {
-    if width.max(height) <= VISION_MAX_EDGE {
+    // A zero-area source passes through untouched: scaling it would hand
+    // `image::imageops::resize` an empty source buffer, which can panic.
+    if width == 0 || height == 0 || width.max(height) <= VISION_MAX_EDGE {
         return (width, height);
     }
     let ratio = f64::from(VISION_MAX_EDGE) / f64::from(width.max(height));
@@ -375,6 +377,16 @@ mod tests {
         assert_eq!(vlm_request_dims(3440, 1440), (1280, 536));
         assert_eq!(vlm_request_dims(800, 600), (800, 600));
         assert_eq!(vlm_request_dims(1440, 3440), (536, 1280), "portrait cap");
+        assert_eq!(
+            vlm_request_dims(0, 2000),
+            (0, 2000),
+            "zero width passes through"
+        );
+        assert_eq!(
+            vlm_request_dims(2000, 0),
+            (2000, 0),
+            "zero height passes through"
+        );
     }
 
     #[test]

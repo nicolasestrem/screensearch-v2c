@@ -521,8 +521,7 @@ async fn vision_tag_outcome(
         Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e:#}")),
     };
     let analyze_ms = analyze_started.elapsed().as_millis() as u64;
-    // Profiling instrumentation for the #64 throughput regression (0.3.1 PR2, D9):
-    // per-job stored-image decode vs sidecar analyze wall time, plus the decoded source
+    // Per-job stored-image decode vs sidecar analyze wall time, plus the decoded source
     // dimensions. Privacy-safe: path + dimensions + durations only — no screen content.
     tracing::info!(
         frame_id,

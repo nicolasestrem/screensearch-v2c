@@ -107,9 +107,9 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
     let encode_started = std::time::Instant::now();
     let encoded_bytes = write_webp(frame.pixels.clone(), abs_path, ctx.max_width).await?;
-    // Profiling instrumentation for the #64 throughput regression (0.3.1 PR2, D9): how
-    // long the awaited storage encode holds the capture loop per frame, and the stored
-    // size. Privacy-safe: durations + dimensions + byte counts only — no screen content.
+    // Per-frame encode timing: how long the awaited storage encode holds the capture
+    // loop, and the stored file size. Privacy-safe: durations + dimensions + byte
+    // counts only — no screen content.
     tracing::info!(
         monitor = frame.monitor_index,
         encode_ms = encode_started.elapsed().as_millis() as u64,
