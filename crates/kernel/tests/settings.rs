@@ -365,6 +365,148 @@ async fn overlay_hotkey_deliberate_legacy_survives_after_migration() {
     );
 }
 
+/// A `Store` decorator that forwards to an inner `SqliteStore` but fails `set_setting` for one
+/// key. The real in-memory store never fails a write, so this is the only way to drive
+/// `load_overlay_hotkey`'s "remap write failed" branch. All other methods delegate unchanged.
+struct FailSetSettingFor {
+    inner: SqliteStore,
+    fail_key: &'static str,
+}
+
+#[async_trait::async_trait]
+impl Store for FailSetSettingFor {
+    async fn set_setting(&self, key: &str, value: &str) -> traits::Result<()> {
+        if key == self.fail_key {
+            return Err(anyhow::anyhow!("injected set_setting failure for {key}"));
+        }
+        self.inner.set_setting(key, value).await
+    }
+    async fn get_setting(&self, key: &str) -> traits::Result<Option<String>> {
+        self.inner.get_setting(key).await
+    }
+    async fn insert_frame(&self, f: traits::NewFrame) -> traits::Result<i64> {
+        self.inner.insert_frame(f).await
+    }
+    async fn insert_ocr(&self, frame_id: i64, ocr: traits::OcrResult) -> traits::Result<()> {
+        self.inner.insert_ocr(frame_id, ocr).await
+    }
+    async fn insert_vision(&self, frame_id: i64, v: traits::VisionAnalysis) -> traits::Result<()> {
+        self.inner.insert_vision(frame_id, v).await
+    }
+    async fn upsert_text_embedding(
+        &self,
+        frame_id: i64,
+        chunk_index: i32,
+        chunk_text: &str,
+        source: traits::ChunkSource,
+        emb: &traits::Embedding,
+        model: &str,
+    ) -> traits::Result<()> {
+        self.inner
+            .upsert_text_embedding(frame_id, chunk_index, chunk_text, source, emb, model)
+            .await
+    }
+    async fn hybrid_search(
+        &self,
+        q: &traits::SearchQuery,
+    ) -> traits::Result<Vec<traits::SearchHit>> {
+        self.inner.hybrid_search(q).await
+    }
+    async fn get_enrichment_input(
+        &self,
+        frame_id: i64,
+    ) -> traits::Result<Option<traits::FrameEnrichmentInput>> {
+        self.inner.get_enrichment_input(frame_id).await
+    }
+    async fn enqueue_job(&self, job: traits::NewJob) -> traits::Result<i64> {
+        self.inner.enqueue_job(job).await
+    }
+    async fn claim_jobs(
+        &self,
+        kinds: &[traits::JobKind],
+        limit: u32,
+        now: i64,
+    ) -> traits::Result<Vec<traits::Job>> {
+        self.inner.claim_jobs(kinds, limit, now).await
+    }
+    async fn complete_job(&self, id: i64) -> traits::Result<()> {
+        self.inner.complete_job(id).await
+    }
+    async fn fail_job(&self, id: i64, err: &str, retry_at: Option<i64>) -> traits::Result<()> {
+        self.inner.fail_job(id, err, retry_at).await
+    }
+    async fn job_stats(&self) -> traits::Result<traits::JobStats> {
+        self.inner.job_stats().await
+    }
+    async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> traits::Result<u64> {
+        self.inner.reset_stale_running_jobs(older_than_ms).await
+    }
+    async fn delete_settings(&self, keys: &[&str]) -> traits::Result<Vec<String>> {
+        self.inner.delete_settings(keys).await
+    }
+}
+
+#[tokio::test]
+async fn overlay_hotkey_failed_remap_is_retried_not_latched() {
+    // If the remap rewrite fails, the migration marker must NOT latch — otherwise the next load
+    // sees `migrated` and honors the stale `Ctrl+Alt+Space` forever (PR #80 codex/claude P2).
+    // Instead the one-shot retries, and once the write can succeed the chord is remapped.
+    let inner = SqliteStore::open_in_memory().expect("open in-memory store");
+    inner
+        .set_setting("overlay.hotkey", "\"Ctrl+Alt+Space\"")
+        .await
+        .unwrap();
+    let failing = FailSetSettingFor {
+        inner,
+        fail_key: "overlay.hotkey",
+    };
+
+    // First load: the rewrite fails, so this session still uses the new default…
+    let dyn_failing: &dyn Store = &failing;
+    assert_eq!(
+        load_settings(dyn_failing).await.overlay_hotkey,
+        Settings::default().overlay_hotkey
+    );
+    // …but nothing latched — the DB still holds the legacy chord and no migration marker exists.
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"Ctrl+Alt+Space\""),
+        "a failed remap must not rewrite the stored chord"
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("overlay.hotkey_migrated")
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed remap must not latch the one-shot marker"
+    );
+
+    // Recovery: a load against the now-healthy store completes the one-shot and latches.
+    let dyn_ok: &dyn Store = &failing.inner;
+    assert_eq!(
+        load_settings(dyn_ok).await.overlay_hotkey,
+        Settings::default().overlay_hotkey
+    );
+    let expected_default = serde_json::to_string(&Settings::default().overlay_hotkey).unwrap();
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(expected_default.as_str()),
+        "once the write can succeed the retired chord is remapped"
+    );
+}
+
 #[tokio::test]
 async fn overlay_hotkey_custom_value_survives() {
     // A chord the user deliberately set (anything but the exact retired default) is never

@@ -82,7 +82,7 @@ AppShell
      /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention · performance throttle (0.2.1) · hotkeys + local API (0.3.0)
      *            NotFound
 
- ┄ FlowOverlay (0.3.0) — a SEPARATE always-on-top hotkey window, NOT a NavRail route: Ctrl+Alt+Space
+ ┄ FlowOverlay (0.3.0) — a SEPARATE always-on-top hotkey window, NOT a NavRail route: Ctrl+Alt+Z
                          summons instant search-as-you-type / Ask over content text; Esc dismisses,
                          Enter jumps to the Moment; an empty query shows the where-was-i strip.
 ```
@@ -97,7 +97,7 @@ surfaces the live CPU/GPU pressure (or "GPU not monitored" when PDH counters are
 status indicator, not a control — the toggle and thresholds live in Settings.
 
 **Flow overlay (0.3.0).** A second always-on-top window summoned by a global hotkey
-(`overlay.hotkey`, default `Ctrl+Alt+Space`; `03 §8`) — recall without switching context. It must
+(`overlay.hotkey`, default `Ctrl+Alt+Z`; `03 §8`) — recall without switching context. It must
 **read as ScreenSearch**, not a generic launcher: the Scanline-Timeline signature (a thin scan-head
 strip), one-accent discipline (signal-orange only), Windows-native fonts, **tokens only** (`§1`/`§2`;
 the `--bg-overlay` token + `overlay` z-layer already exist). Frameless, transparent, centered

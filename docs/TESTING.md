@@ -187,7 +187,7 @@ for quick Search/Ask over the current foreground context (`docs/0.3.0.md` PR5, D
 real Windows desktop with `npm run tauri dev`, capture enabled, and at least a few searchable frames
 in the profile.
 
-- **Default hotkey and keyboard loop.** Focus an unrelated app, press `Ctrl+Alt+Space`: the overlay
+- **Default hotkey and keyboard loop.** Focus an unrelated app, press `Ctrl+Alt+Z`: the overlay
   appears over that app, the input is focused, and the taskbar does not gain a second ScreenSearch
   entry. Type a query, use `ArrowDown`/`ArrowUp` to move the active row, press `Enter`: the overlay
   hides and the main window opens the selected Moment. Reopen, press `Tab`: Search/Ask mode toggles.
@@ -195,7 +195,7 @@ in the profile.
   hides and any in-flight Ask stream is cancelled.
 - **Settings hotkey controls.** Settings -> Hotkeys -> Flow overlay records a modifier chord, ignores
   pure modifiers, saves through `set_settings`, and `get_hotkey_status` reports the active chord as
-  registered. Reset restores `Ctrl+Alt+Space`. Settings -> Overlay results clamps direct entry to
+  registered. Reset restores `Ctrl+Alt+Z`. Settings -> Overlay results clamps direct entry to
   `1..=50`.
 - **Registration conflict is loud (D6).** Hold a chord with another local app or a tiny test program,
   then set the overlay hotkey to that same chord. Expected: a warning toast appears and Settings
@@ -223,7 +223,7 @@ real Windows desktop with `npm run tauri dev`, capture enabled, and a few minute
 
 - **Where-was-i offers the work context (the core flow).** Spend ≥ 2 minutes (the default
   `resume.min_dwell_secs = 120`) in one app (e.g. VS Code), then switch to a browser for a short detour
-  and stay there. Press the overlay hotkey (`Ctrl+Alt+Space`) with the query empty: the strip reads
+  and stay there. Press the overlay hotkey (`Ctrl+Alt+Z`) with the query empty: the strip reads
   **"Jump back: <window> — <app>, until HH:MM"** for the work app, not the browser. Press `Enter` (or
   click): the main window opens that Moment. The Deck's **"Where was I?"** card shows the same.
 - **Honest empty.** On a fresh profile, or when you never left one app, the strip/card reads **"Nothing

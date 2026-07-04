@@ -18,6 +18,35 @@
 
 ---
 
+## 2026-07-04 — UIA client lifecycle teardown + per-app circuit breaker (hang fix)
+
+- **Change:** Fixed the shipped 0.3.0 defect where UI Automation left Chromium/Electron apps
+  hung, persisting after the user disabled capture. (a) `crates/uia/src/worker.rs`: walk reply
+  now carries `over_budget`; `worker_main` times the whole walk and owns the rate-limited
+  over-budget warn; per-request `cancel` + provider `shutdown` flags checked at both deadline
+  checkpoints; worker-exit signal via a dropped `mpsc::Sender`. (b) `crates/uia/src/lib.rs`:
+  `UiaTextProvider` gains `shutdown()` / `take_exit_signal()` / `recognize_detailed()`
+  (returns a `WalkEnd` for the breaker). (c) New pure `crates/uia/src/breaker.rs`: per-app
+  `AppBreaker` (3 consecutive over-budget/timed-out walks → 30-min OCR cooldown; good walk
+  resets), fully CI-unit-tested. (d) `crates/traits/src/contracts.rs`: additive
+  `OcrProvider::on_capture_stopped()` default-no-op. (e) `crates/kernel/src/lib.rs`:
+  `stop_capture` calls it (once, only when a handle existed). (f) `src-tauri/src/lib.rs`:
+  `UiaWithOcrFallback` reworked to hold the client in a teardown-able slot with lazy respawn,
+  a `UiaRuntimeConfig` snapshot, and the breaker; `apply_settings` swaps config + tears down on
+  change (every UIA knob now hot-applies); `spawn_ocr` returns the concrete composite; removed
+  the `AppState.uia_enabled` AtomicBool. (g) `ui/src/routes/Settings.tsx`: seven UIA hints
+  `APPLY_RESTART`→`APPLY_NOW`; breaker note added to the interactive-walk warning.
+- **Why:** `03 §2/§3` (composition-root wiring; provider contracts) and the `07`/#48 UIA hang
+  lineage. The 0.3.0 client was never released (held in `Kernel.ocr` for the process lifetime),
+  so Chromium kept its accessibility engine on and the hangs outlived "disable capture". User
+  decision: breaker-only (no Chromium window-class skip), constants not settings (`07` #92/#93).
+- **Verification:** `cargo test -p uia --lib` → `26 passed; 0 failed; 3 ignored`;
+  `cargo test -p kernel` green (new `stop_capture_notifies_ocr_provider`); `npm run lint` clean;
+  `npm run build` exit 0; `cargo build -p screensearch` → `Finished ... in 20.84s`. Full
+  workspace `fmt`/`clippy`/`test` + live `npm run tauri dev` walkthrough recorded on the PR.
+
+---
+
 ## 2026-07-04 — Flow overlay default hotkey → Ctrl+Alt+Z (+ one-shot remap)
 
 - **Change:** Default Flow overlay chord changed `Ctrl+Alt+Space` → `Ctrl+Alt+Z` in the three
@@ -25,10 +54,20 @@
   `ui/src/components/domain/HotkeyField.tsx`), Settings hint text updated
   (`ui/src/routes/Settings.tsx`), and a load-path one-shot migration
   `kernel::settings::load_overlay_hotkey` that remaps a stored exact `Ctrl+Alt+Space` to the new
-  default (persists it, logs once), leaving custom chords untouched.
+  default, leaving custom chords untouched. The migration is gated by a persisted marker
+  (`overlay.hotkey_migrated`) so it runs at most once per install — a later deliberate
+  `Ctrl+Alt+Space` is then honored verbatim — and the marker is latched **only after** the remap
+  rewrite succeeds, so a failed rewrite is retried on the next load instead of being abandoned.
+  Living source-of-truth docs updated to the new default (`specs/03`, `specs/02`,
+  `specs/UI_REFERENCE.md`, `README.md`, `docs/TESTING.md`, `docs/ARCHITECTURE.md`); the shipped
+  `docs/0.3.0.md` arc record keeps `Ctrl+Alt+Space` (0.3.0 shipped it; this is a post-0.3.0 fix).
 - **Why:** The old default collided with Claude Desktop's global quick-entry shortcut (`03 §8`
   hotkey config). The remap lives in the load path, not the startup sweep, for the same reason as
   `load_tier` (the composition root registers the chord straight from `load_settings`' output).
-- **Verification:** `cargo test -p kernel --test settings` → `13 passed; 0 failed` (two new remap
-  tests + updated persisted-value assertion); `npm run lint` clean. Full `fmt`/`clippy`/`build`/
-  `test` + a live hotkey walkthrough recorded on the PR.
+  Marker gating + latch-on-success come from PR #80 review (codex/claude P2): a value-only remap
+  re-fired every load (breaking the reversible escape hatch), and an unconditional marker latched
+  a failed rewrite forever (`07` #94).
+- **Verification:** `cargo test -p kernel --test settings` (new remap + durability + failed-retry
+  tests; updated persisted-value assertions derive the expected from `Settings::default()`);
+  `npm run lint`/`build` clean; full `fmt`/`clippy`/`build`/`test` + a live hotkey walkthrough
+  recorded on the PR.

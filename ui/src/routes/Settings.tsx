@@ -698,7 +698,7 @@ export function Component() {
             max={2000}
             value={draft.capture_uia_latency_budget_ms}
             onChange={intHandler("capture_uia_latency_budget_ms")}
-            hint={`Give up on the UIA read past this and fall back to OCR for that frame. ${APPLY_RESTART}`}
+            hint={`Give up on the UIA read past this and fall back to OCR for that frame. ${APPLY_NOW}`}
           />
           <Field
             label="UIA minimum text (chars)"
@@ -707,19 +707,19 @@ export function Component() {
             max={10000}
             value={draft.capture_uia_min_text_chars}
             onChange={intHandler("capture_uia_min_text_chars")}
-            hint={`If UIA returns fewer characters than this, use OCR for that frame instead (0 disables). ${APPLY_RESTART}`}
+            hint={`If UIA returns fewer characters than this, use OCR for that frame instead (0 disables). ${APPLY_NOW}`}
           />
           <Toggle
             label="Run UIA on click and scroll"
             checked={draft.capture_uia_run_on_interactive}
             onChange={(v) => set("capture_uia_run_on_interactive", v)}
-            hint={`Off (recommended): click/scroll frames use OCR instead of UI Automation. Scrolling a large page (e.g. a big web grid) with this on can make some apps — Chrome, Edge, Electron apps — briefly stop responding. ${APPLY_RESTART}`}
+            hint={`Off (recommended): click/scroll frames use OCR instead of UI Automation. Scrolling a large page (e.g. a big web grid) with this on can make some apps — Chrome, Edge, Electron apps — briefly stop responding. If an app repeatedly stalls, ScreenSearch automatically backs off UI Automation for that app for 30 minutes. ${APPLY_NOW}`}
           />
           <Toggle
             label="Use control view only (faster)"
             checked={draft.capture_uia_view_control_only}
             onChange={(v) => set("capture_uia_view_control_only", v)}
-            hint={`On (recommended): walk only meaningful controls, not every text fragment — far fewer cross-process calls on large pages. ${APPLY_RESTART}`}
+            hint={`On (recommended): walk only meaningful controls, not every text fragment — far fewer cross-process calls on large pages. ${APPLY_NOW}`}
           />
           <Field
             label="UIA max nodes per read"
@@ -728,7 +728,7 @@ export function Component() {
             max={20000}
             value={draft.capture_uia_max_nodes}
             onChange={intHandler("capture_uia_max_nodes")}
-            hint={`Upper bound on accessibility elements visited per frame, so a huge page can't stall the read. ${APPLY_RESTART}`}
+            hint={`Upper bound on accessibility elements visited per frame, so a huge page can't stall the read. ${APPLY_NOW}`}
           />
           <Field
             label="UIA max text reads per read"
@@ -737,7 +737,7 @@ export function Component() {
             max={4096}
             value={draft.capture_uia_max_textpattern_calls}
             onChange={intHandler("capture_uia_max_textpattern_calls")}
-            hint={`Upper bound on full-text reads per frame (the costliest UIA call); bounds a text-heavy page. ${APPLY_RESTART}`}
+            hint={`Upper bound on full-text reads per frame (the costliest UIA call); bounds a text-heavy page. ${APPLY_NOW}`}
           />
           <Field
             label="Pause UIA after input (ms)"
@@ -746,7 +746,7 @@ export function Component() {
             max={10000}
             value={draft.capture_uia_suppress_during_input_ms}
             onChange={intHandler("capture_uia_suppress_during_input_ms")}
-            hint={`Timer-driven frames skip UI Automation (using OCR) for this long after you type, click, scroll, or move the mouse, so an active scroll never triggers a tree walk against the app. 0 disables. ${APPLY_RESTART}`}
+            hint={`Timer-driven frames skip UI Automation (using OCR) for this long after you type, click, scroll, or move the mouse, so an active scroll never triggers a tree walk against the app. 0 disables. ${APPLY_NOW}`}
           />
         </div>
       </Panel>

@@ -661,7 +661,7 @@ leaves in default timer-only capture; `0` disables, bypassed when `uia_run_on_in
 
 **0.3.0 flow-recall + API keys** (all hotkeys/thresholds/ports are settings, never hardcoded — same
 guardrail as above; `§7b`/`§7c`):
-`overlay.hotkey` (`Ctrl+Alt+Space` — global summon; a failed registration is a **visible Settings
+`overlay.hotkey` (`Ctrl+Alt+Z` — global summon; a failed registration is a **visible Settings
 warning + toast**, never silent — D6) · `overlay.max_results` (8, clamped `1..=50` — top-N results in the overlay) ·
 `resume.min_dwell_secs` (120 — min sustained-context dwell for where-was-i, `§7b`; D9) ·
 `marks.hotkey` (`Ctrl+Alt+M` — mark-this-moment; same loud registration-failure handling as

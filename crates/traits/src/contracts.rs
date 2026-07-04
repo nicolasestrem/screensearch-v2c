@@ -33,6 +33,12 @@ pub trait CaptureSource: Send + Sync {
 #[async_trait]
 pub trait OcrProvider: Send + Sync {
     async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult>;
+
+    /// The capture loop has stopped. Providers may release per-session OS resources here.
+    /// The UIA-text composite (`src-tauri`) uses it to disconnect its UI Automation client so
+    /// Chromium/Electron apps leave accessibility mode instead of staying degraded after the
+    /// user stops capture. Default no-op — the plain OCR provider holds nothing to release.
+    fn on_capture_stopped(&self) {}
 }
 
 /// Dense embeddings (fastembed impl in `embeddings`, `03 §3`).

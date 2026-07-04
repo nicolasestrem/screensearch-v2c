@@ -132,6 +132,23 @@ impl OcrProvider for FakeOcr {
     }
 }
 
+/// OCR stand-in that counts `on_capture_stopped` calls, to prove the kernel notifies the
+/// provider when capture stops (the UIA composite relies on this to release its client).
+struct CountingOcr {
+    stopped: Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[async_trait]
+impl OcrProvider for CountingOcr {
+    async fn recognize(&self, frame: &CapturedFrame) -> Result<OcrResult> {
+        FakeOcr.recognize(frame).await
+    }
+    fn on_capture_stopped(&self) {
+        self.stopped
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// OCR provider used to model a missing WinRT OCR engine/language pack.
 struct ErrorOcr;
 
@@ -330,6 +347,98 @@ async fn kernel_start_then_stop_flips_capture_readiness() {
     assert!(!kernel.is_capturing().await);
     kernel.stop_capture().await;
     assert_eq!(kernel.readiness().capture.status, ComponentStatus::Disabled);
+}
+
+#[tokio::test]
+async fn stop_capture_notifies_ocr_provider() {
+    // The kernel must tell the OCR provider when capture stops so the UIA composite can
+    // disconnect its UI Automation client (Chromium/Electron apps then leave accessibility
+    // mode). It must fire exactly once per real stop, and never for an idempotent no-op stop.
+    let tmp = tempfile::tempdir().unwrap();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let stopped = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let ocr: Arc<dyn OcrProvider> = Arc::new(CountingOcr {
+        stopped: stopped.clone(),
+    });
+
+    let factory: CaptureFactory = Arc::new(|_cfg, _rx| {
+        Ok(Box::new(FakeCapture {
+            frames: VecDeque::new(),
+            after_frames: AfterFrames::Pending,
+        }) as Box<dyn CaptureSource>)
+    });
+
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    // Stopping capture that never started must NOT notify (no handle existed).
+    kernel.stop_capture().await;
+    assert_eq!(stopped.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    kernel.start_capture().await.unwrap();
+    kernel.stop_capture().await;
+    assert_eq!(
+        stopped.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "stop after a real start notifies exactly once"
+    );
+
+    // A second, idempotent stop (no live handle) must not re-notify.
+    kernel.stop_capture().await;
+    assert_eq!(
+        stopped.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "idempotent stop does not re-notify"
+    );
+}
+
+#[tokio::test]
+async fn source_shutdown_notifies_ocr_provider() {
+    // When the WGC capture source self-terminates (monitor disconnect, driver reset) the
+    // kernel must still call on_capture_stopped() so the UIA composite releases its client.
+    let tmp = tempfile::tempdir().unwrap();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let stopped = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let ocr: Arc<dyn OcrProvider> = Arc::new(CountingOcr {
+        stopped: stopped.clone(),
+    });
+
+    let factory: CaptureFactory = Arc::new(|_cfg, _rx| {
+        Ok(Box::new(FakeCapture {
+            frames: VecDeque::new(),
+            after_frames: AfterFrames::Shutdown,
+        }) as Box<dyn CaptureSource>)
+    });
+
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    kernel.start_capture().await.unwrap();
+
+    // Wait for the source to self-terminate.
+    for _ in 0..50 {
+        if !kernel.is_capturing().await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(!kernel.is_capturing().await);
+    assert_eq!(
+        stopped.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "SourceShutdown must notify on_capture_stopped exactly once"
+    );
 }
 
 #[tokio::test]
