@@ -11,7 +11,11 @@ a **clean-slate** project; it shares no code or data with any prior version.
 reports) is shipped; the 0.3.0 arc — "P7: surface reduction + flow recall + local API"
 (`docs/0.3.0.md`, `02 §5c`) — is complete (PR1–PR8: subtracted event-triggers/Beta-tier/image-lane;
 added the Flow overlay, where-was-i + marks, the opt-in localhost API + `screensearch-mcp` MCP
-wrapper; PR9 audited + released v0.3.0). The next arc is not yet defined.** The full app exists —
+wrapper; PR9 audited + released v0.3.0). The active arc is the 0.3.1 patch — "P7.1: post-0.3.0
+triage" (`docs/0.3.1.md`): PR1 specs contract → PR2 #64 vision-throughput regression (profile
+first) → PR3 polish (#59 inline Moment text, #65 report filename/footer, #57-partial version link)
+→ PR4 audit + tag; hard constraint — no new subsystems, no schema migrations, no new settings
+surface.** The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up.
 

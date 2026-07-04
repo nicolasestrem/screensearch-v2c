@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     now truly disconnects — then restart the affected browser/Electron app to clear its sticky
     accessibility mode.
 
+### Docs — 0.3.1 patch specs contract (PR1, specs-only; no code / schema / UI)
+The 0.3.1 roadmap (`docs/0.3.1.md` — "P7.1: post-0.3.0 triage", a regression-fix + polish patch)
+is normalized into the specs so the later PRs are implementable from the specs alone. **This
+change touches only specs and docs.** The contract locks in: the PR order (PR1 specs → PR2 the
+#64 vision-throughput regression, profile-first with a stop condition and a fixed fix-preference
+order → PR3 polish: #59 Moment text grows inline with no nested scrollbar, #65 dated report
+filenames (`screensearch-report-YYYY-MM-DD-HHmm.md`, local time) + a report footer stating app
+version/model/time span/filters, and the #57-partial version link — which lands in the **NavRail
+footer** and opens the GitHub repo → PR4 audit + tag `v0.3.1`), and the hard patch constraint (no
+new subsystems, no schema migrations, no new settings surface). Deferrals are recorded in
+known-gaps: **#69 auto-update → 0.3.2, hard-sequenced before 0.4.0 ships**; #56 systray + the
+#57 quick actions → the 0.3.2 lifecycle mini-arc, bound by the pull-based / non-shaming reminders
+principle; #54 closed and folded into the 0.4.0 sessions arc.
+
 ## Older versions
 
 Releases 0.3.0 and earlier are archived in [CHANGELOG-ARCHIVE.md](./CHANGELOG-ARCHIVE.md).

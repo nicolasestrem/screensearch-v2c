@@ -22,6 +22,10 @@ Rust + Tauri 2. Correctness over speed — there is no deadline.
 **For 0.3.0 work:** also read `docs/0.3.0.md` (surface reduction + flow recall + local API) plus
 `02 §5c` and `03 §7b`/`§7c` — the flow-recall + API contract. The **specs are the contract**, the
 roadmap is context (PR1 already normalized decisions D1–D15 into the specs).
+**For 0.3.1 work:** also read `docs/0.3.1.md` (P7.1 — the post-0.3.0 triage patch: the #64
+vision-throughput regression fix + polish). Hard patch constraint: **no new subsystems, no schema
+migrations, no new settings surface** (D8). The **specs are the contract** (the patch's PR1
+normalized its decisions D1–D9 into the specs); the roadmap is context.
 
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
@@ -31,6 +35,7 @@ roadmap is context (PR1 already normalized decisions D1–D15 into the specs).
 | Why are we doing this / scope / phases | `02` |
 | 0.2.x arc scope / PR order / content-text rationale | `docs/0.2.0.md` (+ `02 §5b`) |
 | 0.3.0 arc scope / PR order (subtraction + flow recall + local API) | `docs/0.3.0.md` (+ `02 §5c`) |
+| 0.3.1 patch scope / PR order (post-0.3.0 triage: regression fix + polish) | `docs/0.3.1.md` |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
 | UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
@@ -59,6 +64,20 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   precedes PR8. Schema-changing PRs (PR4, PR6) bump `schema_version` by one with a populated-DB
   migration test (`03 §4`, D15). Each PR is its own branch, runs the full verification suite, updates
   `05`–`08`, and **recycles this file (`04`) as its operating prompt**.
+- **0.3.1 patch (P7.1, `docs/0.3.1.md`):** **PR1 Specs contract** → **PR2 #64 vision-throughput
+  regression** → **PR3 Polish bundle (#59 + #65 + #57-partial)** → **PR4 Audit + tag (`v0.3.1`)**.
+  PR1 first, PR4 last; PR2 and PR3 are order-independent (parallel worktrees OK). **PR2 is
+  profile-first (D9):** Phase A numbers — frames-processed-per-minute + GPU-utilization shape vs.
+  the last pre-WebP tag, same workload/model — are recorded in `05`/`06` **before any fix code**
+  and quoted in the PR description; they are the baseline the acceptance criteria are measured
+  against. **Stop condition:** if profiling shows the slowdown is *not* on the encode path, STOP
+  and report — do not fix a different regression under this PR's flag. **Fix preference order
+  (D5), no skipping ahead:** async/off-hot-path WebP encode → cheaper encoder effort/quality
+  settings (preserving the 0.3.0 size win) → config-gated format revert (escape hatch, default
+  off, config-file flag not UI, recorded in `07`). **Zero schema changes (D8):** if a fix appears
+  to require one, that fix is wrong for a patch — stop and report. Each PR is its own branch, runs
+  the full verification suite, updates `05`–`08`, and **recycles this file (`04`) as its operating
+  prompt**.
 
 ## 4. Guardrails (hard rules — violating any = stop)
 - **No destructive git.** Feature branches only; never force-push or reset shared history; never

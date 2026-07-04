@@ -71,7 +71,7 @@ Spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48. Z-layers: base / rail / ove
 ```
 AppShell
  ├─ StatusRail (top): capture state · DB size · queue depth · sidecar/model · readiness · throttle   [telemetry]
- ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings
+ ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings · footer: version → repo link (0.3.1)
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
      /            Deck      — at-a-glance: capture status, today's activity, jump back in (0.3.0: where-was-i "Jump back" card + Intentions strip)
@@ -112,6 +112,15 @@ the existing **< 200 ms** search budget. **Reduced-motion:** ambient scan disabl
 the self-exclude capture gate — it must never appear in its own capture history (`03 §7b`, D7). A
 failed hotkey registration is a **visible Settings warning + toast**, never silent (D6).
 
+**NavRail version footer (0.3.1, D4 — the "quick menu" version line of issue #57).** The bottom of
+the NavRail carries a small footer line showing the **app version** (e.g. `v0.3.1`, mono data face,
+`--ink-faint`); it is a **link** — activating it (click or keyboard) opens
+`https://github.com/nicolasestrem/screensearch-v2c` in the **default browser** (external open, not
+in-app). Visible on every screen; quiet (no accent color — it is telemetry, not a primary action);
+keyboard-focusable with a visible focus ring (`§7`). Surface decided in `07` #99 (user, 2026-07-04).
+The rest of #57 — load/unload-model and start/stop-vision quick actions — does **not** land in
+0.3.1; it is deferred to the 0.3.2 lifecycle mini-arc (`07` #97).
+
 ## 4. Per-screen state matrix (the comprehensiveness guarantee)
 **Every view defines all of: `loading` · `empty` · `error` · `partial` · `populated`.** No screen
 ships with only the happy path; no mock data; no "Coming Soon."
@@ -121,9 +130,9 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding; **0.3.0:** where-was-i "Jump back" card + Intentions strip (unresolved marks, newest-first; open/resolve/dismiss; **no badge counts**) |
 | Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
 | Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
-| Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + model/tokens footer; honest empty on no-evidence ranges |
+| Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + footer; honest empty on no-evidence ranges. **0.3.1 (D2/D3, #65):** the download is named `screensearch-report-YYYY-MM-DD-HHmm.md` (**local time**; same-minute collisions append `-2`, `-3`, …; extension unchanged); the footer is one plain-text line block stating the **app version, model id used for generation, time span covered, and active filters** (plus the existing tokens count) — no new settings toggle |
 | Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank |
-| Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point |
+| Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point; **0.3.1 (D1, #59):** the recognized-text **and** raw-text regions **grow inline** with their content — full height, no internal max-height, **no nested scrollbar**; the page is one scroll context (the outer page scrolls) |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
 | Settings | — | save failed → keep form, explain | model downloading (progress) | optimistic + reconcile |
 | Settings · Performance throttle (0.2.1) | toggle OFF → readout collapsed to "Throttle disabled" (empty-off) | status probe failed → "Pressure unavailable", keep toggle + fields | partial: GPU unmonitored → CPU% shown + honest "GPU not monitored" | master toggle + live CPU/GPU + level readout + 8 threshold fields; loading = skeleton readout; populated = live CPU/GPU% + level (Normal/High/Sustained) |
@@ -134,15 +143,21 @@ Loading uses skeletons that match final layout (no spinner-only screens). Empty 
 **invitations to act**, not mood.
 
 ## 5. Component inventory (built once, reused)
-Shell: `AppShell`, `StatusRail`, `NavRail`, `CommandPalette`, `ReadinessBanner`.
+Shell: `AppShell`, `StatusRail`, `NavRail` (0.3.1: footer version link → opens the GitHub repo in
+the default browser — D4, `§3`), `CommandPalette`, `ReadinessBanner`.
 Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`, `Toast`,
 `EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`.
 Domain: `ScanlineTimeline`, `FrameTile`, `FrameImage` (lazy), `AnswerStream` (markdown + citations),
-`SearchResult`, `MomentDetail`, `JobQueueMeter`, `ModelTierPicker` (Default/Quality — 0.3.0 retired Beta),
+`SearchResult`, `MomentDetail` (0.3.1: recognized-text + raw-text regions grow inline — no internal
+max-height, no nested scrollbar; one scroll context — D1, `§4`), `JobQueueMeter`, `ModelTierPicker`
+(Default/Quality — 0.3.0 retired Beta),
 `ScheduleControl` (on-demand/timer/idle), `RetentionControl`.
 Domain (0.2.x): `RecallModeTabs` (Search/Ask/Reports), `TextSourceToggle` (content / include-chrome),
 `ReportBuilder` (daily/weekly/custom range → Generate), `ReportView` (markdown + clickable
-source-frame chips + Copy + `.md` download + model/tokens footer), `PromptCardGrid` (premade Ask
+source-frame chips + Copy + `.md` download — 0.3.1 D2: named `screensearch-report-YYYY-MM-DD-HHmm.md`,
+local time, `-2`/`-3` on same-minute collision — + footer, 0.3.1 D3: one plain-text line block with
+app version · model id used · time span covered · active filters, plus the existing tokens count;
+no new settings toggle), `PromptCardGrid` (premade Ask
 cards: Day Recap, Standup Update, Time Breakdown, Top of Mind, AI Habits — click fills + submits).
 Domain (0.2.1): `ThrottlePanel` (Settings: master `Toggle` + 8 threshold `Field`s + live readout),
 `ThrottleStatus` (live CPU/GPU pressure + level Normal/High/Sustained, honest "GPU not monitored"
