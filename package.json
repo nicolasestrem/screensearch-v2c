@@ -6,7 +6,8 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "stage:mcp": "node scripts/stage-mcp.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

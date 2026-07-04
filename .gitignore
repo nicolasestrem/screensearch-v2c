@@ -12,6 +12,8 @@ dist/
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+# Staged externalBin sidecar (built by scripts/stage-mcp.mjs; never commit — 0.3.0 PR8).
+src-tauri/binaries/
 
 # Models & data (downloaded at runtime — never commit)
 .models/

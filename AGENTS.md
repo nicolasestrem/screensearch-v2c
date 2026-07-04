@@ -68,9 +68,14 @@ Re-read each session — the files are the source of truth, not your memory.
 Order matters: build the UI first — `src-tauri`'s `generate_context!` embeds `ui/dist` (git-ignored),
 so cargo fails if the UI hasn't been built.
 1. UI: `cd ui && npm ci && npm run lint && npm run build`  (lint = Rules-of-Hooks error gate)
-2. Rust: `cargo fmt --all -- --check` · `cargo clippy --workspace --all-targets -- -D warnings` ·
+2. Stage the MCP sidecar: `node scripts/stage-mcp.mjs` — `src-tauri` declares
+   `screensearch-mcp.exe` as a `bundle.externalBin`, which `tauri-build` resolves on **every**
+   compile of the app crate (not just at bundle time). A fresh clone must run this once before
+   any `cargo` command or the workspace build fails (0.3.0 PR8). `beforeDevCommand`/
+   `beforeBuildCommand` run it automatically; CI runs it too.
+3. Rust: `cargo fmt --all -- --check` · `cargo clippy --workspace --all-targets -- -D warnings` ·
    `cargo build --workspace` · `cargo test --workspace`
-3. Binding guard: `cargo test` regenerates the ts-rs bindings —
+4. Binding guard: `cargo test` regenerates the ts-rs bindings —
    `git diff --exit-code -- ui/src/bindings` must be clean (commit regenerated bindings, or CI fails).
 - Run the app: `npm run tauri dev` (NOT `cargo tauri dev` — `cargo-tauri` is not installed).
   Package: `npm run build`.

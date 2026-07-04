@@ -41,6 +41,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # src-tauri declares the MCP binary as a bundle.externalBin; tauri-build resolves it on
+      # EVERY compile of the app crate (not just at bundle time), so it must be staged before
+      # any `cargo` step touches the workspace, or the build fails (0.3.0 PR8).
+      - name: stage MCP sidecar (externalBin)
+        run: node scripts/stage-mcp.mjs
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy (-D warnings)

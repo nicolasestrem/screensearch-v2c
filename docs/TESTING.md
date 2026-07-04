@@ -16,6 +16,7 @@ Run these. All must be clean:
 
 ```sh
 (cd ui && npm ci && npm run lint && npm run build)
+node scripts/stage-mcp.mjs   # once per clone — src-tauri's externalBin sidecar; bare cargo fails without it (0.3.0 PR8)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
