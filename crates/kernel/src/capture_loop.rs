@@ -133,14 +133,10 @@ impl FrameStoreWriter {
                 .map_err(|_| anyhow::anyhow!("capture demanded persistence queue stopped"))?;
             return Ok(());
         }
-        self.normal_sender.try_send(job).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => {
-                anyhow::anyhow!("capture persistence queue full")
-            }
-            mpsc::error::TrySendError::Closed(_) => {
-                anyhow::anyhow!("capture persistence queue stopped")
-            }
-        })?;
+        self.normal_sender
+            .send(job)
+            .await
+            .map_err(|_| anyhow::anyhow!("capture persistence queue stopped"))?;
         Ok(())
     }
 

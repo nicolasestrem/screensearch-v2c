@@ -30,7 +30,7 @@ pub mod reports;
 pub mod resume;
 pub mod settings;
 mod throttle;
-mod vision_proxy;
+pub mod vision_proxy;
 mod vision_scheduler;
 mod worker_pool;
 

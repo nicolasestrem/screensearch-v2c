@@ -383,3 +383,59 @@ For each build pass, append an entry:
   `cargo test --workspace` →
   `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 19.49s` with all non-ignored
   suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
+## Pass 8 — 2026-07-04 — 0.3.1 PR2 quit-path + backpressure follow-up (#64)
+
+- **Observed live symptom:** in the user's `npm run dev` log, clicking quit stopped the vision
+  scheduler at `2026-07-04T15:31:51.635069Z`, but capture persistence kept writing WebPs at
+  `15:32:00.637295Z`, `15:32:07.309643Z`, and `15:32:15.438766Z`. The exit handler stopped the
+  local API, scheduler, workers, and sidecar, but did not stop capture before waiting on workers;
+  a long VLM/download drain could leave capture producing screenshots during app shutdown.
+- **Change:** `src-tauri/src/lib.rs` exit handling now stops capture first, then throttle and the
+  vision scheduler, then waits for enrichment workers with a bounded 3 s timeout before continuing
+  to sidecar shutdown. This prevents new capture persistence during quit and avoids wedging exit
+  behind one long in-flight enrichment/vision job.
+- **PR #83 review follow-up:** a new bot review correctly flagged that the normal persistence queue
+  should not silently drop changed captures when saturated. `FrameStoreWriter::enqueue` now awaits
+  bounded normal-queue capacity instead of `try_send` dropping the frame; the demanded/manual queue
+  remains separate and biased so mark-this-moment still jumps ahead after the current encode.
+  A related helper-reuse thread was also addressed by making `kernel::vision_proxy` public for its
+  proxy-path helpers and reusing `proxy_path_for` / `temp_path_for` from `src-tauri` cleanup code
+  instead of keeping duplicate naming logic.
+- **Encoder-setting check:** I tested the only no-new-dependency pure-Rust lossless WebP knob
+  (`image-webp` predictor transform) against a captured frame. It did not materially improve debug
+  encode time and nearly doubled file size, so no encoder-setting code was kept:
+  `predictor=true bytes=922832 encode_ms=[985, 982, 1086]`;
+  `predictor=false bytes=1651900 encode_ms=[1038, 1016, 997]`.
+- **Runtime note:** a patched `npm run dev` run launched and wrote new WebP + `.vision.jpg` files
+  (`1783179815546-0.webp`, `1783179819988-0.webp`, plus proxies), but the current run's file logger
+  emitted WARN lines without the INFO `capture persistence` lines, so the live `encode_ms` telemetry
+  for this incremental pass was inconclusive.
+- **Verification (verbatim):** `cargo check -p kernel` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 3.50s`; focused checks:
+  `cargo test -p kernel capture_loop -- --nocapture` →
+  `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out` and
+  `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out`;
+  `cargo test -p kernel persist_queue_prefers_demanded_frame_when_ready -- --nocapture` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out`;
+  `cargo test -p screensearch --lib remove_frame_image_and_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out`.
+  After helper reuse, `cargo test -p kernel vision_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out`.
+  Full CI-order pass:
+  `npm --prefix ui ci` → `added 347 packages, and audited 348 packages in 4s` /
+  `found 0 vulnerabilities`;
+  `npm --prefix ui run lint` → `> eslint .`;
+  `npm --prefix ui run build` → `✓ built in 1.75s`;
+  `node scripts/stage-mcp.mjs` → `[stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe`
+  and `Finished \`release\` profile [optimized] target(s) in 0.21s`;
+  `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 6.53s`;
+  `cargo build --workspace` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 23.16s`;
+  `cargo test --workspace` →
+  `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 47.43s` with all non-ignored
+  suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.

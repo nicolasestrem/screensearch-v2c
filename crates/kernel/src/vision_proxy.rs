@@ -124,7 +124,7 @@ pub(crate) async fn load_for_vision(path: PathBuf) -> Result<RgbaImage> {
         .map_err(|e| anyhow!("vision proxy task failed: {e}"))?
 }
 
-pub(crate) fn proxy_path_for(path: &Path) -> Option<PathBuf> {
+pub fn proxy_path_for(path: &Path) -> Option<PathBuf> {
     if !path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("webp"))
@@ -182,7 +182,7 @@ fn write_proxy_jpeg(proxy: &RgbaImage, proxy_path: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create proxy dir {}", parent.display()))?;
     }
-    let tmp_path = temp_path_for(proxy_path)?;
+    let tmp_path = temp_path_for(proxy_path).context("proxy path has no file name")?;
     let rgb = rgba_to_rgb(proxy);
     let write_result = (|| -> Result<()> {
         let file = std::io::BufWriter::new(
@@ -235,13 +235,10 @@ fn rgba_to_rgb(proxy: &RgbaImage) -> RgbImage {
     rgb
 }
 
-fn temp_path_for(path: &Path) -> Result<PathBuf> {
-    let mut file_name = path
-        .file_name()
-        .context("proxy path has no file name")?
-        .to_os_string();
+pub fn temp_path_for(path: &Path) -> Option<PathBuf> {
+    let mut file_name = path.file_name()?.to_os_string();
     file_name.push(".partial");
-    Ok(path.with_file_name(file_name))
+    Some(path.with_file_name(file_name))
 }
 
 #[cfg(test)]

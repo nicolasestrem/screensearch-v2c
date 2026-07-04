@@ -49,6 +49,7 @@ const MIN_INSIGHTS_BUCKETS: u32 = 24;
 const MAX_INSIGHTS_BUCKETS: u32 = 720;
 const RETENTION_BATCH: u32 = 1000;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const EXIT_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const DAY_MS: i64 = 86_400_000;
 static NEXT_ASK_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1237,9 +1238,20 @@ pub fn run() {
                 tauri::async_runtime::block_on(local_api::stop_server(&api_runtime));
                 if let Some(kernel) = state.kernel.clone() {
                     tauri::async_runtime::block_on(async {
+                        // Stop capture first. Worker/sidecar shutdown can wait for an in-flight
+                        // vision job; capture must not keep producing frames while quit drains it.
+                        kernel.stop_capture().await;
                         kernel.stop_throttle().await;
                         kernel.stop_vision_scheduler().await;
-                        kernel.stop_workers().await;
+                        if tokio::time::timeout(EXIT_WORKER_SHUTDOWN_TIMEOUT, kernel.stop_workers())
+                            .await
+                            .is_err()
+                        {
+                            tracing::warn!(
+                                timeout_ms = EXIT_WORKER_SHUTDOWN_TIMEOUT.as_millis() as u64,
+                                "enrichment worker shutdown timed out; continuing app exit"
+                            );
+                        }
                     });
                 }
                 let supervisor = state.supervisor.lock().expect("supervisor slot").clone();
@@ -1811,9 +1823,9 @@ async fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
             return remove_main;
         }
     }
-    if let Some(proxy) = vision_proxy_path_for(path) {
+    if let Some(proxy) = kernel::vision_proxy::proxy_path_for(path) {
         remove_optional_sidecar(&proxy, "vision proxy").await?;
-        if let Some(temp) = vision_proxy_temp_path_for(&proxy) {
+        if let Some(temp) = kernel::vision_proxy::temp_path_for(&proxy) {
             remove_optional_sidecar(&temp, "vision proxy temp").await?;
         }
     }
@@ -1833,24 +1845,6 @@ async fn remove_optional_sidecar(path: &Path, label: &'static str) -> std::io::R
             Err(e)
         }
     }
-}
-
-fn vision_proxy_path_for(path: &Path) -> Option<PathBuf> {
-    if !path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("webp"))
-    {
-        return None;
-    }
-    let mut file_name = path.file_stem()?.to_os_string();
-    file_name.push(".vision.jpg");
-    Some(path.with_file_name(file_name))
-}
-
-fn vision_proxy_temp_path_for(path: &Path) -> Option<PathBuf> {
-    let mut file_name = path.file_name()?.to_os_string();
-    file_name.push(".partial");
-    Some(path.with_file_name(file_name))
 }
 
 fn now_ms() -> i64 {

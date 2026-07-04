@@ -174,8 +174,8 @@
 ## 2026-07-04 — 0.3.1 PR2 demanded persistence priority
 
 - **Change:** `FrameStoreWriter` now separates demanded/manual captures from normal timer captures.
-  Demanded frames use a reserved priority queue; normal frames use a bounded best-effort queue and
-  are dropped through the existing warning path if persistence is saturated. The worker uses biased
+  Demanded frames use a reserved priority queue; normal frames use the bounded persistence queue and
+  backpressure instead of silently dropping changed captures when saturated. The worker uses biased
   selection so mark-this-moment is no longer queued behind several normal WebP encodes. The WebP
   persistence log now says `capture persistence: stored WebP` and includes `demanded` plus
   `queue_wait_ms`, clarifying that `encode_ms` is worker encode time.
@@ -184,6 +184,34 @@
 - **Verification:** added `persist_queue_prefers_demanded_frame_when_ready`; focused
   `capture_loop`, `add_mark_capture_now`, and `vision_proxy` tests passed; full CI-order
   verification passed:
+  `npm --prefix ui ci`, `npm --prefix ui run lint`, `npm --prefix ui run build`,
+  `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 quit/backpressure hardening
+
+- **Change:** Tauri exit handling now stops capture before throttle/scheduler/worker/sidecar drain,
+  and worker shutdown is bounded to 3 s before process exit continues. Normal capture persistence
+  now awaits bounded queue capacity instead of dropping saturated timer frames, while demanded/manual
+  persistence keeps its reserved priority queue.
+- **Why:** A live quit log showed capture still writing WebPs after `vision scheduler stopped`, so
+  quit could wait behind an in-flight VLM/download while screenshots continued to persist. A new PR
+  #83 bot review also correctly flagged that silent normal-frame drops create holes in recall.
+  Related proxy-cleanup helper review feedback was addressed by reusing
+  `kernel::vision_proxy::{proxy_path_for,temp_path_for}` from `src-tauri` instead of duplicating the
+  naming logic.
+  The no-new-dependency lossless WebP predictor knob was benchmarked and rejected: no meaningful
+  speedup and much larger files. Further storage-speed reduction is a separate fidelity/format
+  decision recorded in `07` #100.
+- **Verification:** focused checks passed:
+  `cargo check -p kernel`, `cargo test -p kernel capture_loop -- --nocapture`,
+  `cargo test -p kernel persist_queue_prefers_demanded_frame_when_ready -- --nocapture`,
+  `cargo test -p kernel vision_proxy -- --nocapture`, and
+  `cargo test -p screensearch --lib remove_frame_image_and_proxy -- --nocapture`. Full CI-order
+  verification also passed:
   `npm --prefix ui ci`, `npm --prefix ui run lint`, `npm --prefix ui run build`,
   `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
