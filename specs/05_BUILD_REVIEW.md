@@ -290,3 +290,50 @@ For each build pass, append an entry:
   `cargo test --workspace` →
   `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 25.53s` with all non-ignored
   suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
+## Pass 6 — 2026-07-04 — 0.3.1 PR2 live encode follow-up + new PR #83 comments (#64)
+
+- **Observed live symptom:** while running `npm run dev`, capture logs still showed lossless WebP
+  storage encodes taking **1223-1483 ms** for native captures:
+  `capture encode: stored WebP ... encode_ms=1483`, then `1470`, `1293`, `1223`, `1234`.
+  That duration is plausible for debug/dev lossless WebP at 3440x1440, but after Pass 4 it was
+  still awaited by `capture_loop::process_frame`, so storage encode could still serialize the
+  capture side even though vision inference had moved to `.vision.jpg`.
+- **Change:** added a bounded `FrameStoreWriter` (`FRAME_STORE_QUEUE_CAP=4`) behind
+  `run_capture_loop`. `process_frame` now does full-resolution OCR and enqueues a persistence job;
+  the worker writes the canonical WebP, enqueues the bounded vision proxy, inserts the frame/OCR,
+  enqueues `embed_text`, emits `CaptureTick`, and flushes on shutdown. `CaptureTick` still fires
+  only after the WebP file and DB row exist. This keeps WebP as the storage format and adds no
+  schema/UI/settings surface.
+- **PR #83 comment follow-ups:** `write_proxy_jpeg` now converts RGBA→RGB without cloning the
+  whole proxy image into a `DynamicImage`; proxy temp files use `.partial`, are removed on
+  encode/publish failure, and retention/self-capture cleanup deletes both `.vision.jpg` and
+  `.vision.jpg.partial` siblings, propagating non-NotFound failures so the DB row remains retryable.
+  No bot replies were posted (user requested no bot replies).
+- **Tests added/updated:** frame/proxy cleanup now covers `.vision.jpg.partial`, including a
+  non-NotFound temp-delete failure retry case.
+- **Verification (verbatim):** focused checks:
+  `cargo test -p kernel vision_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out`;
+  `cargo test -p kernel capture_loop -- --nocapture` →
+  `test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out` and
+  `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out`;
+  `cargo test -p screensearch remove_frame_image_and_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out`.
+  Full CI-order pass:
+  `npm --prefix ui ci` → `added 347 packages, and audited 348 packages in 4s` /
+  `found 0 vulnerabilities`;
+  `npm --prefix ui run lint` → `> eslint .`;
+  `npm --prefix ui run build` → `✓ built in 1.70s`;
+  `node scripts/stage-mcp.mjs` → `[stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe`
+  and `Finished \`release\` profile [optimized] target(s) in 0.20s`;
+  `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 6.02s`;
+  `cargo build --workspace` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 17.88s`;
+  `cargo test --workspace` →
+  `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 23.61s` with all non-ignored
+  suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.

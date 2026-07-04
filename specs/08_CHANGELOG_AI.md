@@ -145,3 +145,26 @@
   `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo build --workspace`, `cargo test --workspace`, `git diff --exit-code -- ui/src/bindings`)
   all passed.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 storage encode moved off capture hot path
+
+- **Change:** After a live `npm run dev` run showed canonical WebP storage encodes still taking
+  ~1.2-1.5 s in debug/dev, `crates/kernel/src/capture_loop.rs` gained a bounded
+  `FrameStoreWriter`. The capture loop now OCRs a frame and queues persistence; the worker writes
+  the WebP, enqueues the vision proxy, inserts frame/OCR rows, enqueues `embed_text`, emits
+  `CaptureTick`, and flushes before shutdown returns. Ticks remain conservative: no UI/event tick
+  is emitted until the WebP file and frame row exist.
+- **PR #83 follow-ups:** `crates/kernel/src/vision_proxy.rs` no longer clones the whole proxy image
+  through `DynamicImage` just to convert RGBA→RGB; it writes via direct channel copy. Proxy temp
+  files now use `.partial` and are cleaned on encode/publish failure. `src-tauri/src/lib.rs`
+  retention/self-capture cleanup now removes `.vision.jpg.partial` as well as `.vision.jpg`, and
+  propagates non-NotFound failures so a screenshot sidecar cannot be orphaned after the DB row is
+  marked purged/deleted.
+- **Verification:** focused tests passed for `vision_proxy`, `capture_loop`, and
+  `remove_frame_image_and_proxy`; full CI-order verification passed:
+  `npm --prefix ui ci`, `npm --prefix ui run lint`, `npm --prefix ui run build`,
+  `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.

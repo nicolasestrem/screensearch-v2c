@@ -1812,20 +1812,27 @@ async fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
         }
     }
     if let Some(proxy) = vision_proxy_path_for(path) {
-        match tokio::fs::remove_file(&proxy).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                tracing::warn!(
-                    path = %proxy.display(),
-                    error = %e,
-                    "could not delete vision proxy"
-                );
-                return Err(e);
-            }
+        remove_optional_sidecar(&proxy, "vision proxy").await?;
+        if let Some(temp) = vision_proxy_temp_path_for(&proxy) {
+            remove_optional_sidecar(&temp, "vision proxy temp").await?;
         }
     }
     remove_main
+}
+
+async fn remove_optional_sidecar(path: &Path, label: &'static str) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "could not delete {label}"
+            );
+            Err(e)
+        }
+    }
 }
 
 fn vision_proxy_path_for(path: &Path) -> Option<PathBuf> {
@@ -1837,6 +1844,12 @@ fn vision_proxy_path_for(path: &Path) -> Option<PathBuf> {
     }
     let mut file_name = path.file_stem()?.to_os_string();
     file_name.push(".vision.jpg");
+    Some(path.with_file_name(file_name))
+}
+
+fn vision_proxy_temp_path_for(path: &Path) -> Option<PathBuf> {
+    let mut file_name = path.file_name()?.to_os_string();
+    file_name.push(".partial");
     Some(path.with_file_name(file_name))
 }
 
@@ -2321,13 +2334,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let frame = dir.path().join("100.webp");
         let proxy = dir.path().join("100.vision.jpg");
+        let proxy_temp = dir.path().join("100.vision.jpg.partial");
         tokio::fs::write(&frame, b"webp").await.unwrap();
         tokio::fs::write(&proxy, b"proxy").await.unwrap();
+        tokio::fs::write(&proxy_temp, b"proxy temp").await.unwrap();
 
         remove_frame_image_and_proxy(&frame).await.unwrap();
 
         assert!(!frame.exists());
         assert!(!proxy.exists());
+        assert!(!proxy_temp.exists());
     }
 
     #[tokio::test]
@@ -2345,6 +2361,24 @@ mod tests {
         assert!(
             proxy.exists(),
             "failed proxy delete should leave retry target"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_frame_image_and_proxy_propagates_proxy_temp_delete_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("100.webp");
+        let proxy_temp = dir.path().join("100.vision.jpg.partial");
+        tokio::fs::write(&frame, b"webp").await.unwrap();
+        tokio::fs::create_dir(&proxy_temp).await.unwrap();
+
+        let err = remove_frame_image_and_proxy(&frame).await.unwrap_err();
+
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!frame.exists(), "main frame delete should have succeeded");
+        assert!(
+            proxy_temp.exists(),
+            "failed proxy temp delete should leave retry target"
         );
     }
 

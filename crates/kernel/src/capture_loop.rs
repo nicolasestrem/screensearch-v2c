@@ -1,8 +1,8 @@
 //! The always-on capture pipeline (`02 §5`, `03 §5`): pull a *changed* frame from
-//! the [`CaptureSource`], OCR it on full resolution, lossless-WebP-encode it for storage,
-//! write `frames` + `ocr_text`, enqueue an `embed_text` job, and emit a
-//! `capture_tick`. This is the cheap half of the system; everything expensive is
-//! deferred to the job queue (consumed in P3+).
+//! the [`CaptureSource`], OCR it on full resolution, then queue bounded persistence:
+//! lossless-WebP storage, `frames` + `ocr_text`, optional `embed_text` job, and
+//! `capture_tick`. This keeps storage encoding off the capture hot path while preserving
+//! the invariant that ticks only fire after the screenshot and DB row exist.
 //!
 //! The loop is shell-agnostic and driven by the traits, so it is exercised
 //! end-to-end by fakes (`tests/pipeline.rs`) with no Windows APIs involved.
@@ -12,14 +12,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
+use tokio::task::JoinHandle;
 use traits::{
-    CaptureSource, CaptureTick, CapturedFrame, JobKind, NewFrame, NewJob, OcrProvider, Result,
-    Store, TextFilterContext,
+    CaptureSource, CaptureTick, CapturedFrame, JobKind, NewFrame, NewJob, OcrProvider, OcrResult,
+    Result, Store, TextFilterContext,
 };
 
 use crate::events::KernelEvent;
 use crate::vision_proxy::VisionProxyWriter;
+
+const FRAME_STORE_QUEUE_CAP: usize = 4;
 
 /// Why the capture loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +68,69 @@ pub struct LoopCtx {
     pub pending_demand: PendingDemand,
 }
 
+#[derive(Clone)]
+struct PersistCtx {
+    store: Arc<dyn Store>,
+    events: broadcast::Sender<KernelEvent>,
+    enrich_embed_text: bool,
+    max_width: u32,
+    chrome_suppress_min_seen: u32,
+    chrome_protect_min_chars: u32,
+    chrome_region_buckets: u32,
+    pending_demand: PendingDemand,
+}
+
+impl PersistCtx {
+    fn from_loop(ctx: &LoopCtx) -> Self {
+        Self {
+            store: ctx.store.clone(),
+            events: ctx.events.clone(),
+            enrich_embed_text: ctx.enrich_embed_text,
+            max_width: ctx.max_width,
+            chrome_suppress_min_seen: ctx.chrome_suppress_min_seen,
+            chrome_protect_min_chars: ctx.chrome_protect_min_chars,
+            chrome_region_buckets: ctx.chrome_region_buckets,
+            pending_demand: ctx.pending_demand.clone(),
+        }
+    }
+}
+
+struct PersistFrame {
+    frame: CapturedFrame,
+    ocr: OcrResult,
+    rel_db_path: String,
+    abs_path: PathBuf,
+}
+
+struct FrameStoreWriter {
+    sender: mpsc::Sender<PersistFrame>,
+    join: JoinHandle<()>,
+}
+
+impl FrameStoreWriter {
+    fn spawn(ctx: PersistCtx) -> Self {
+        let (sender, receiver) = mpsc::channel(FRAME_STORE_QUEUE_CAP);
+        let join = tokio::spawn(frame_store_writer_loop(ctx, receiver));
+        Self { sender, join }
+    }
+
+    async fn enqueue(&self, job: PersistFrame) -> Result<()> {
+        self.sender
+            .send(job)
+            .await
+            .map_err(|_| anyhow::anyhow!("capture persistence queue stopped"))?;
+        Ok(())
+    }
+
+    async fn shutdown(self) {
+        let Self { sender, join } = self;
+        drop(sender);
+        if let Err(e) = join.await {
+            tracing::warn!(error = %e, "capture persistence writer join failed");
+        }
+    }
+}
+
 /// Runs the capture loop until the source yields `None` (shutdown) or `stop` fires.
 /// Per-frame errors are logged and the frame is skipped — capture keeps going
 /// (`03 §12` "corrupt/oversized frame → mark + skip; capture continues"). Dropping
@@ -74,7 +140,7 @@ pub async fn run_capture_loop(
     ctx: LoopCtx,
     mut stop: watch::Receiver<bool>,
 ) -> CaptureLoopExit {
-    let proxy_writer = VisionProxyWriter::spawn();
+    let frame_writer = FrameStoreWriter::spawn(PersistCtx::from_loop(&ctx));
     let exit = loop {
         tokio::select! {
             biased;
@@ -85,7 +151,7 @@ pub async fn run_capture_loop(
             res = capture.next_frame() => match res {
                 Ok(Some(frame)) => {
                     let monitor = frame.monitor_index;
-                    if let Err(e) = process_frame(&ctx, &proxy_writer, frame).await {
+                    if let Err(e) = process_frame(&ctx, &frame_writer, frame).await {
                         // No frame content in the log (privacy, 03 §9) — just the error.
                         tracing::warn!(monitor, error = %e, "capture loop: dropping frame");
                     }
@@ -98,21 +164,55 @@ pub async fn run_capture_loop(
             }
         }
     };
-    proxy_writer.shutdown().await;
+    frame_writer.shutdown().await;
     exit
 }
 
-/// OCR → encode → store one frame, then enqueue enrichment and emit the tick.
+/// OCR → queue durable persistence for one frame.
 /// OCR runs on the **full-resolution** pixels before the storage downscale (`03 §8`).
 async fn process_frame(
     ctx: &LoopCtx,
-    proxy_writer: &VisionProxyWriter,
+    frame_writer: &FrameStoreWriter,
     frame: CapturedFrame,
 ) -> Result<()> {
     let ocr = ctx.ocr.recognize(&frame).await?;
 
     let (rel_db_path, abs_path) =
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
+    frame_writer
+        .enqueue(PersistFrame {
+            frame,
+            ocr,
+            rel_db_path,
+            abs_path,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn frame_store_writer_loop(ctx: PersistCtx, mut receiver: mpsc::Receiver<PersistFrame>) {
+    let proxy_writer = VisionProxyWriter::spawn();
+    while let Some(job) = receiver.recv().await {
+        let monitor = job.frame.monitor_index;
+        if let Err(e) = persist_frame(&ctx, &proxy_writer, job).await {
+            tracing::warn!(monitor, error = %e, "capture persistence writer: dropping frame");
+        }
+    }
+    proxy_writer.shutdown().await;
+}
+
+/// Encode → store one frame, then enqueue enrichment and emit the tick.
+async fn persist_frame(
+    ctx: &PersistCtx,
+    proxy_writer: &VisionProxyWriter,
+    job: PersistFrame,
+) -> Result<()> {
+    let PersistFrame {
+        frame,
+        ocr,
+        rel_db_path,
+        abs_path,
+    } = job;
     let encode_started = Instant::now();
     write_webp(frame.pixels.clone(), abs_path.clone(), ctx.max_width).await?;
     let encoded_bytes = tokio::fs::metadata(&abs_path)

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use image::{ExtendedColorType, ImageEncoder, RgbaImage};
+use image::{ExtendedColorType, ImageEncoder, Rgb, RgbImage, RgbaImage};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -180,8 +180,8 @@ fn write_proxy_jpeg(proxy: &RgbaImage, proxy_path: &Path) -> Result<()> {
             .with_context(|| format!("create proxy dir {}", parent.display()))?;
     }
     let tmp_path = temp_path_for(proxy_path)?;
-    let rgb = image::DynamicImage::ImageRgba8(proxy.clone()).into_rgb8();
-    {
+    let rgb = rgba_to_rgb(proxy);
+    let write_result = (|| -> Result<()> {
         let file = std::io::BufWriter::new(
             std::fs::File::create(&tmp_path)
                 .with_context(|| format!("create proxy temp {}", tmp_path.display()))?,
@@ -194,6 +194,11 @@ fn write_proxy_jpeg(proxy: &RgbaImage, proxy_path: &Path) -> Result<()> {
                 ExtendedColorType::Rgb8,
             )
             .with_context(|| format!("encode proxy {}", tmp_path.display()))?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
     }
     match std::fs::rename(&tmp_path, proxy_path) {
         Ok(()) => Ok(()),
@@ -206,14 +211,25 @@ fn write_proxy_jpeg(proxy: &RgbaImage, proxy_path: &Path) -> Result<()> {
             );
             Ok(())
         }
-        Err(e) => Err(e).with_context(|| {
-            format!(
-                "publish proxy {} from {}",
-                proxy_path.display(),
-                tmp_path.display()
-            )
-        }),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(e).with_context(|| {
+                format!(
+                    "publish proxy {} from {}",
+                    proxy_path.display(),
+                    tmp_path.display()
+                )
+            })
+        }
     }
+}
+
+fn rgba_to_rgb(proxy: &RgbaImage) -> RgbImage {
+    let mut rgb = RgbImage::new(proxy.width(), proxy.height());
+    for (src, dst) in proxy.pixels().zip(rgb.pixels_mut()) {
+        *dst = Rgb([src[0], src[1], src[2]]);
+    }
+    rgb
 }
 
 fn temp_path_for(path: &Path) -> Result<PathBuf> {
@@ -221,7 +237,7 @@ fn temp_path_for(path: &Path) -> Result<PathBuf> {
         .file_name()
         .context("proxy path has no file name")?
         .to_os_string();
-    file_name.push(".tmp");
+    file_name.push(".partial");
     Ok(path.with_file_name(file_name))
 }
 
