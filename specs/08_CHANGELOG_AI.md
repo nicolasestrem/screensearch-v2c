@@ -44,6 +44,28 @@
 
 ---
 
+## 2026-07-04 — 0.3.1 PR2 Phase B/C: VISION_MAX_EDGE 1568→1280 (#64 fix) + verification
+
+- **Change:** `crates/inference/src/vision.rs`: `VISION_MAX_EDGE` 1568 → 1280 (user decision
+  on `06` #22, option a) with the rationale in the const doc; pinned dimension tests updated
+  deliberately (`downscales_oversized_frame_to_max_edge` → 1280×536,
+  `vlm_request_dims_match_encoded_output` incl. portrait). `crates/inference/src/models.rs`:
+  stale 1568 doc reference updated. `CHANGELOG.md` `### Fixed` entry. `05` Pass 3 addendum
+  (Phase B/C record), `06` #22 → resolved.
+- **Why:** `06` #22 / `05` Pass 3 — restore VLM-request parity with the pre-WebP baseline;
+  keeps WebP + native-res storage, zero schema (D8), no settings/UI surface.
+- **Verification (verbatim):** like-for-like drain of the baseline's own 1280×536 JPEG frames
+  on the fixed tree: per-minute `89,91,88,93,96,94,96,87,89` (avg **91.4/min**) vs the v0.2.1
+  baseline **89.4/min** — within the ±10 % acceptance; per-job `total_ms` median **1173** vs
+  baseline **1234**; GPU (nvidia-smi) median 93 % both trees, no sawtooth. Full suite:
+  `cargo fmt --all -- --check` → exit 0 · `cargo clippy --workspace --all-targets -- -D
+  warnings` → `Finished dev profile ... in 6.49s` (clean) · `cargo build --workspace` →
+  `Finished dev profile ... in 22.65s` · `cargo test --workspace` → every suite
+  `test result: ok` (0 failed; incl. `inference` 105 passed) · `ui npm run lint` → clean ·
+  `npm run build` → `✓ built in 2.17s` · `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
 ## 2026-07-04 — UIA client lifecycle teardown + per-app circuit breaker (hang fix)
 
 - **Change:** Fixed the shipped 0.3.0 defect where UI Automation left Chromium/Electron apps

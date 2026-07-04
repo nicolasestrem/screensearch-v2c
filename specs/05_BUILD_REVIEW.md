@@ -210,3 +210,31 @@ bytes in `capture_loop`; same patch applied locally-uncommitted to the baseline 
 - **Still risky:** single-machine, single-GPU (NVIDIA/Vulkan) evidence; the 2.45× complete_ms
   ratio vs the 1.50× pixel ratio is consistent with attention-dominated vision encoding but
   was not decomposed further (would need llama-server-side timing).
+
+### Pass 3 addendum — Phase B (fix) + Phase C (verification), same day
+
+- **User decision on `06` #22: option (a)** — cap the VLM tag request at 1280 px.
+  Implemented as `VISION_MAX_EDGE` 1568 → 1280 (`crates/inference/src/vision.rs`, commit
+  `13d619e`), pinned dimension tests deliberately updated (3440×1440 → 1280×536; portrait
+  536×1280), stale 1568 references in `models.rs` docs updated. Stored captures untouched
+  (still native-res lossless WebP); zero schema change; no new setting; no UI.
+- **Phase C re-measure (fixed tree, release, same protocol):** three windows.
+  1. *Same frame population as the pre-fix A2 run* (native-WebP re-tags, busy screen content,
+     capture + embed jobs live): **33 → ~72 done/min** (2.2×); per-job total median
+     3061 → 1683 ms; complete_ms 2984 → 1624 ms at 1280×536.
+  2. *Like-for-like vs the v0.2.1 baseline* — the baseline's own 72 stored 1280×536 JPEG
+     frames were imported into the fixed tree's data dir (same files, same content) and
+     drained with capture off: **89,91,88,93,96,94,96,87,89 done/min (avg 91.4) vs the
+     baseline's 89.4 — 102 % of the pre-WebP baseline; acceptance (±10 %) met.** Per-job
+     total median **1173 ms vs 1234 ms** (fixed tree marginally faster on identical jobs);
+     complete_ms median 1158 vs 1217.
+  3. *GPU shape* (nvidia-smi, 1 s): fixed tree median 93 %, dips <10 % in 9–12 % of samples
+     (capture-on window included) — the same steady-under-load character as the v0.2.1
+     baseline (median 94 %, 13.2 % dips). No per-frame spike/idle sawtooth.
+  - The residual gap in window 1 (72 vs 89/min) is **content + pool competition, not the
+    request size**: on identical frames (window 2) the trees are at parity; the busier A2-era
+    frame population produces longer model generations (complete_ms 1624 vs 1158 at identical
+    request dims), and 172 `embed_text` jobs shared the 2-worker pool during window 1 while
+    the baseline ran nearly embed-free.
+- **Verification:** full suite green post-fix (verbatim in `08`); `cargo test -p inference`
+  105 passed with the updated pins; like-for-like numbers quoted in the PR description.
