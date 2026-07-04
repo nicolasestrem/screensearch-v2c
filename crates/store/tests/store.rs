@@ -2196,3 +2196,91 @@ async fn frames_with_app_hint_matches_case_insensitively() {
         .unwrap()
         .is_empty());
 }
+
+// ---- 0.3.0 PR7: streaming export cursor (`export_frames_page`, `03 §7c`) ----
+
+/// The keyset cursor pages through every frame in ascending id order and stops when a
+/// page returns fewer than `limit` rows (the terminal condition the export stream uses).
+#[tokio::test]
+async fn export_frames_page_pages_through_all_frames_in_id_order() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut ids = Vec::new();
+    for at in 0..250 {
+        ids.push(seed(&store, 1000 + at, &format!("content {at}"), None).await);
+    }
+
+    // Drain in pages of 100 with the keyset cursor advancing to each page's last id.
+    let mut seen = Vec::new();
+    let mut after = 0_i64;
+    loop {
+        let page = store
+            .export_frames_page(after, None, None, 100)
+            .await
+            .unwrap();
+        if page.is_empty() {
+            break;
+        }
+        // Strictly ascending within and across pages.
+        assert!(page.windows(2).all(|w| w[0].frame_id < w[1].frame_id));
+        after = page.last().unwrap().frame_id;
+        let short = page.len() < 100;
+        seen.extend(page.into_iter().map(|r| r.frame_id));
+        if short {
+            break;
+        }
+    }
+    assert_eq!(
+        seen, ids,
+        "cursor visits every frame exactly once, in id order"
+    );
+}
+
+/// The optional `[from, to)` window is half-open and excludes the `to` boundary,
+/// matching `TimeRange` semantics everywhere else in the store.
+#[tokio::test]
+async fn export_frames_page_honors_half_open_time_window() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    for at in [100, 200, 300, 400, 500] {
+        seed(&store, at, &format!("t{at}"), None).await;
+    }
+
+    let rows = store
+        .export_frames_page(0, Some(200), Some(500), 1000)
+        .await
+        .unwrap();
+    let times: Vec<i64> = rows.iter().map(|r| r.captured_at).collect();
+    // 200 included (>= from), 500 excluded (< to).
+    assert_eq!(times, vec![200, 300, 400]);
+}
+
+/// A frame with no `frame_text` row (never enriched) still exports — the LEFT JOIN
+/// yields `content_text = None` rather than dropping the frame.
+#[tokio::test]
+async fn export_frames_page_left_join_yields_none_content_for_textless_frames() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let textless = store.insert_frame(frame_at(100)).await.unwrap();
+    let with_text = seed(&store, 200, "has content", None).await;
+
+    let rows = store.export_frames_page(0, None, None, 1000).await.unwrap();
+    assert_eq!(rows.len(), 2, "textless frame is not dropped by the join");
+
+    let a = rows.iter().find(|r| r.frame_id == textless).unwrap();
+    assert_eq!(a.content_text, None);
+    assert_eq!(a.app_hint.as_deref(), Some("Firefox"));
+
+    let b = rows.iter().find(|r| r.frame_id == with_text).unwrap();
+    assert_eq!(b.content_text.as_deref(), Some("has content"));
+}
+
+/// `limit == 0` is the empty guard (mirrors `purged_frame_ids`), so a caller can't
+/// accidentally spin on an unbounded page.
+#[tokio::test]
+async fn export_frames_page_zero_limit_is_empty() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    seed(&store, 100, "x", None).await;
+    assert!(store
+        .export_frames_page(0, None, None, 0)
+        .await
+        .unwrap()
+        .is_empty());
+}

@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use rusqlite::{params, OptionalExtension};
 use textfilter::{classify, reconcile, ClassifyInput, FilterConfig};
 use traits::{
-    AppSuppression, CaptureTrigger, FrameDetail, FrameEnrichmentInput, NewFrame, OcrResult, Result,
-    SuppressReason, TextFilterContext, TextRole, TextSource, TextSpan, VisionAnalysis,
+    AppSuppression, CaptureTrigger, ExportFrameRow, FrameDetail, FrameEnrichmentInput, NewFrame,
+    OcrResult, Result, SuppressReason, TextFilterContext, TextRole, TextSource, TextSpan,
+    VisionAnalysis,
 };
 
 use crate::schema::{FILTER_VERSION, UNFILTERED_FILTER_VERSION};
@@ -840,6 +841,58 @@ impl SqliteStore {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
 
             Ok(Some(detail))
+        })
+        .await
+    }
+
+    /// One keyset-cursor page of frames for the streaming JSON export (0.3.0 PR7;
+    /// `03 §7c`, D12). Returns frames with `id > after_id`, ascending, LEFT JOINed to
+    /// `frame_text` for the attention-filtered `content_text` (never `raw_text`, never
+    /// image bytes), optionally bounded to the half-open window
+    /// `from <= captured_at < to`, up to `limit` rows.
+    ///
+    /// Keyset (`id > after_id ORDER BY id ASC`) rather than OFFSET so the export is
+    /// stable and flat-memory over an arbitrarily large history: the `api::export`
+    /// stream calls this once per page, advancing `after_id` to the last returned id,
+    /// so the single store connection is taken and released **per page** (like
+    /// [`Self::purged_frame_ids`]) and never held across the whole response — capture
+    /// and search keep their turn at the connection. `limit == 0` → empty.
+    pub async fn export_frames_page(
+        &self,
+        after_id: i64,
+        from: Option<i64>,
+        to: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ExportFrameRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT f.id, f.captured_at, f.app_hint, f.window_title, f.browser_url,
+                        f.activity_type, t.content_text
+                 FROM frames f
+                 LEFT JOIN frame_text t ON t.frame_id = f.id
+                 WHERE f.id > ?1
+                   AND (?2 IS NULL OR f.captured_at >= ?2)
+                   AND (?3 IS NULL OR f.captured_at < ?3)
+                 ORDER BY f.id ASC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt
+                .query_map(params![after_id, from, to, i64::from(limit)], |r| {
+                    Ok(ExportFrameRow {
+                        frame_id: r.get(0)?,
+                        captured_at: r.get(1)?,
+                        app_hint: r.get(2)?,
+                        window_title: r.get(3)?,
+                        browser_url: r.get(4)?,
+                        activity_type: r.get(5)?,
+                        content_text: r.get(6)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
         })
         .await
     }
