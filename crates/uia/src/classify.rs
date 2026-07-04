@@ -58,7 +58,7 @@ pub(crate) fn control_type_wants_textpattern(control_type: i32) -> bool {
 }
 
 /// Policy controlling which capture triggers run UIA, seeded from settings (`03 §3b`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiaTriggerPolicy {
     /// When `true`, even high-frequency interactive triggers (scroll/click) run UIA; when
     /// `false` (the default), they fall back to OCR (`capture.uia_run_on_interactive`, `07`

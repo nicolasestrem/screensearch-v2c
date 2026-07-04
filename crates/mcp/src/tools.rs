@@ -416,7 +416,10 @@ mod tests {
 
     #[test]
     fn add_mark_body_uses_integer_frame_id() {
-        assert_eq!(ok_body(json!({ "frame_id": 42 })), json!({ "frame_id": 42 }));
+        assert_eq!(
+            ok_body(json!({ "frame_id": 42 })),
+            json!({ "frame_id": 42 })
+        );
     }
 
     #[test]
