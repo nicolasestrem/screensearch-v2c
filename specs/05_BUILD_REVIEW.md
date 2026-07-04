@@ -73,6 +73,34 @@ change (stays v10). No UI/bindings change** (bindings guard trivially clean). Tw
   -32700/-32600`, tools-only capabilities) + a `claude mcp add` live step in `§PR8`. Sequential
   request processing means a mid-`ask` ping waits (bounded by the 600 s ask cap) — recorded in `07`.
 
+### Follow-up — PR #77 review round (4 bot findings addressed)
+Four automated review findings, each fixed with test coverage (no schema/bindings/UI change):
+- **Codex P2 — `add_mark` swallowed a malformed `frame_id` into a capture-now write** (`tools.rs`):
+  `args.get("frame_id").and_then(as_i64)` treated a stringified id (`{"frame_id":"1"}`, common from
+  MCP clients) the same as an omitted key → `now:true`, silently marking the *current* screen for a
+  bad argument. Extracted a pure `build_add_mark_body` that distinguishes absent/`null` (→ capture
+  now) from present-but-not-integer (→ `ToolError::Input`, self-correctable by the caller). 3 unit
+  tests (now/null, integer, reject string+float).
+- **Codex P2 — non-loopback `--url`/`SCREENSEARCH_API_URL` accepted, would ship the bearer token to
+  a remote host** (`config.rs`): the API only ever binds `127.0.0.1` (PR7), so a non-loopback URL can
+  never reach it — it can only leak the token after a typo/bad config. Added `is_loopback_url`
+  (reqwest URL parser; `127.0.0.0/8`, `::1`, `localhost`; http/https) and reject anything else as
+  `Cli::BadUsage` up front. 2 unit tests (accept loopback forms incl. `[::1]`; reject public IP /
+  domain / `0.0.0.0` / unparseable). Fixed one existing test that used a non-loopback `http://h:2`.
+- **claude — TOCTOU in `api_off_tool_calls_return_guided_error`** (`tests/stdio_mcp.rs`): the test
+  bound a port, dropped the listener, *then* spawned the child — a wide window where another process
+  could bind the port and turn the expected connection-refused into a foreign server, failing the
+  assert. Now holds the listener bound through spawn + handshake (the child connects lazily only on
+  the first tool call) and drops it immediately before that call, shrinking the reuse window to µs.
+- **Gemini (medium) — `SseLineBuffer::push` allocated a temp `Vec` + front-drained per line**
+  (`sse.rs`): rewrote to scan once, slice each line in place, and drain all consumed bytes in a
+  single shift; still splits on the `\n` byte before the UTF-8 decode so a multi-byte glyph across a
+  chunk boundary is never corrupted. The existing byte-boundary + CRLF reassembly tests stay green.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → `FMT_EXIT=0`; `cargo clippy --workspace
+  --all-targets -- -D warnings` → `WS_CLIPPY_EXIT=0`; `cargo test -p mcp` → `35 passed` (lib) +
+  `19 passed` (stdio integration), `0 failed`; `cargo test --workspace` → all suites `0 failed`;
+  `git diff --exit-code -- ui/src/bindings` → clean.
+
 ## Pass — 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
 
 The opt-in local HTTP API + streaming JSON export (`docs/0.3.0.md` Part III; `03 §7c`/`§7`/`§8`/

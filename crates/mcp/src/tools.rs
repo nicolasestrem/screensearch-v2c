@@ -272,22 +272,9 @@ async fn list_marks(client: &ApiClient) -> Result<Vec<Value>, ToolError> {
 }
 
 async fn add_mark(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> {
-    let mut body = serde_json::Map::new();
-    match args.get("frame_id").and_then(|v| v.as_i64()) {
-        Some(id) => {
-            body.insert("frame_id".to_string(), json!(id));
-        }
-        // No frame_id → capture the current screen now, past the diff gate (`03 §7b`, D8).
-        None => {
-            body.insert("now".to_string(), json!(true));
-        }
-    }
-    if let Some(note) = args.get("note").and_then(|v| v.as_str()) {
-        body.insert("note".to_string(), json!(note));
-    }
-
+    let body = build_add_mark_body(args)?;
     let resp = client
-        .post_json("/v1/marks", Value::Object(body))
+        .post_json("/v1/marks", body)
         .await
         .map_err(ToolError::Api)?;
     let text = match resp.get("mark_id").and_then(|v| v.as_i64()) {
@@ -295,6 +282,37 @@ async fn add_mark(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolEr
         None => pretty(&resp),
     };
     Ok(vec![text_block(text)])
+}
+
+/// Builds the `POST /v1/marks` body from the tool arguments.
+///
+/// `frame_id` absent (or JSON `null`) means "capture the current screen now, past the diff
+/// gate" (`03 §7b`, D8). A `frame_id` that is *present but not an integer* — e.g. a client
+/// that stringifies ids as `{"frame_id":"1"}` — is a client error, not a capture-now request:
+/// silently marking the current screen would turn a bad argument into a surprising write, so
+/// reject it and let the calling model correct the type.
+fn build_add_mark_body(args: &Value) -> Result<Value, ToolError> {
+    let mut body = serde_json::Map::new();
+    match args.get("frame_id") {
+        None | Some(Value::Null) => {
+            body.insert("now".to_string(), json!(true));
+        }
+        Some(v) => match v.as_i64() {
+            Some(id) => {
+                body.insert("frame_id".to_string(), json!(id));
+            }
+            None => {
+                return Err(ToolError::Input(
+                    "`frame_id` must be an integer (omit it to mark the current screen)"
+                        .to_string(),
+                ));
+            }
+        },
+    }
+    if let Some(note) = args.get("note").and_then(|v| v.as_str()) {
+        body.insert("note".to_string(), json!(note));
+    }
+    Ok(Value::Object(body))
 }
 
 const PURGED_NOTE: &str = "(screenshot purged by retention — the text reconstruction is preserved)";
@@ -378,5 +396,37 @@ mod tests {
         assert_eq!(r["isError"], true);
         assert_eq!(r["content"][0]["type"], "text");
         assert_eq!(r["content"][0]["text"], "boom");
+    }
+
+    fn ok_body(args: Value) -> Value {
+        match build_add_mark_body(&args) {
+            Ok(v) => v,
+            Err(e) => panic!("expected Ok, got error: {}", e.message()),
+        }
+    }
+
+    #[test]
+    fn add_mark_body_captures_now_when_frame_id_absent_or_null() {
+        assert_eq!(ok_body(json!({})), json!({ "now": true }));
+        assert_eq!(
+            ok_body(json!({ "frame_id": null, "note": "x" })),
+            json!({ "now": true, "note": "x" })
+        );
+    }
+
+    #[test]
+    fn add_mark_body_uses_integer_frame_id() {
+        assert_eq!(ok_body(json!({ "frame_id": 42 })), json!({ "frame_id": 42 }));
+    }
+
+    #[test]
+    fn add_mark_body_rejects_non_integer_frame_id() {
+        // A stringified id must NOT silently fall through to a capture-now write.
+        for bad in [json!({ "frame_id": "1" }), json!({ "frame_id": 1.5 })] {
+            assert!(
+                matches!(build_add_mark_body(&bad), Err(ToolError::Input(_))),
+                "expected Input error for {bad}"
+            );
+        }
     }
 }

@@ -28,6 +28,11 @@ tool listing over stdio, all six tools round-tripping against the running local 
 TCP + token auth), the API-off and wrong-token guided-error paths, and the installer carrying
 `screensearch-mcp.exe`.*
 
+Review-round hardening: `add_mark` now rejects a non-integer `frame_id` (e.g. a stringified id) as a
+tool-input error instead of silently marking the current screen; the server refuses a non-loopback API
+URL up front so a typo'd config can't ship your token to a remote host; and `get_moment`'s SSE line
+parsing was streamlined. All confined to `screensearch-mcp` — no behaviour change for existing tools.
+
 ### Added — Local HTTP API + export (0.3.0 PR7)
 ScreenSearch can now serve your screen history to local scripts and agents through an opt-in **local
 HTTP API** — the open-source ask since Rewind shut down. It is **off by default**. When you enable it

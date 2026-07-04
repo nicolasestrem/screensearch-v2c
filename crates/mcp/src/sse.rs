@@ -18,16 +18,27 @@ impl SseLineBuffer {
     }
 
     /// Pushes a chunk, returning every complete line it completed.
+    ///
+    /// Scans the buffer once, slicing each line in place (a trailing `\r` trimmed), then
+    /// drains all consumed bytes in a single shift — no per-line temporary `Vec` or repeated
+    /// front-drain. Splitting on the `\n` byte before the UTF-8 decode keeps every cut on a
+    /// character boundary, so a multi-byte glyph straddling a chunk edge is never corrupted.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(chunk);
         let mut lines = Vec::new();
-        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-            let mut line: Vec<u8> = self.buf.drain(..=pos).collect();
-            line.pop(); // drop the '\n'
-            if line.last() == Some(&b'\r') {
-                line.pop();
+        let mut start = 0;
+        for pos in 0..self.buf.len() {
+            if self.buf[pos] == b'\n' {
+                let mut end = pos; // exclusive; drop the '\n'
+                if end > start && self.buf[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                lines.push(String::from_utf8_lossy(&self.buf[start..end]).into_owned());
+                start = pos + 1;
             }
-            lines.push(String::from_utf8_lossy(&line).into_owned());
+        }
+        if start > 0 {
+            self.buf.drain(..start);
         }
         lines
     }

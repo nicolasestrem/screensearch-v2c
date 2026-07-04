@@ -620,11 +620,15 @@ async fn batch_line_is_invalid_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn api_off_tool_calls_return_guided_error() {
-    // A definitely-free port: bind, read it, drop the listener.
-    let port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
-    };
+    // Reserve a free loopback port and HOLD the listener bound through process spawn and the
+    // handshake, so no other process can steal the port during the slow setup window. (The
+    // old bind-then-immediately-drop left the port free for the tens of ms it takes to spawn
+    // the child — a TOCTOU race where another process binding that port would turn the
+    // expected connection-refused into a connection to a foreign server and fail the assert.)
+    // The child connects to the API lazily on its first tool call, never during the handshake,
+    // so holding the listener bound here is safe.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
     let mut mcp = McpChild::spawn(&base, Some(TEST_TOKEN));
 
@@ -632,6 +636,10 @@ async fn api_off_tool_calls_return_guided_error() {
     mcp.handshake();
     let list = mcp.request("tools/list", json!({}));
     assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
+
+    // Release the port now — immediately before the call that must hit connection-refused —
+    // shrinking the reuse window to the microseconds between here and the child's connect.
+    drop(listener);
 
     // But a tool call surfaces the guided "enable the API" error.
     let result = mcp.call_tool("search_screen_history", json!({ "query": "x" }));

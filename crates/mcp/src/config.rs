@@ -96,11 +96,47 @@ pub fn parse(args: &[String], env: impl Fn(&str) -> Option<String>) -> Cli {
         .unwrap_or_else(|| DEFAULT_URL.to_string());
     // Trim a trailing slash so `{url}/v1/...` never doubles up.
     let url = url.trim_end_matches('/').to_string();
+    // The local API only ever binds 127.0.0.1 (PR7 hard-codes it), so a non-loopback URL can
+    // never reach it — it can only leak the bearer token to a wrong host after a typo or a
+    // bad copied config. Reject anything but loopback up front (`03 §7c`, D13).
+    if !is_loopback_url(&url) {
+        return Cli::BadUsage(format!(
+            "--url must be a loopback address (127.0.0.1 / localhost / [::1]); got `{url}`"
+        ));
+    }
     let token = token_flag
         .or_else(|| env(ENV_TOKEN))
         .filter(|t| !t.is_empty());
 
     Cli::Run(Config { url, token })
+}
+
+/// Whether `raw` is an `http`/`https` URL whose host is the loopback interface.
+///
+/// Uses `reqwest`'s URL parser (already linked) so IPv6 brackets, ports, and userinfo are
+/// handled correctly; `host_str()` avoids naming the `url::Host` type so the crate needs no
+/// direct `url` dependency. An unparseable URL is not loopback.
+fn is_loopback_url(raw: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    match parsed.host_str() {
+        Some(host) if host.eq_ignore_ascii_case("localhost") => true,
+        Some(host) => {
+            // `host_str()` keeps an IPv6 literal in brackets — strip them before parsing.
+            let bare = host
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .unwrap_or(host);
+            bare.parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false)
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -152,12 +188,42 @@ mod tests {
     #[test]
     fn equals_and_space_flag_forms() {
         let space = run(parse(
-            &["--url".to_string(), "http://h:2".to_string()],
+            &["--url".to_string(), "http://127.0.0.1:2".to_string()],
             no_env,
         ));
-        let equals = run(parse(&["--url=http://h:2".to_string()], no_env));
+        let equals = run(parse(&["--url=http://127.0.0.1:2".to_string()], no_env));
         assert_eq!(space.url, equals.url);
-        assert_eq!(space.url, "http://h:2");
+        assert_eq!(space.url, "http://127.0.0.1:2");
+    }
+
+    #[test]
+    fn loopback_hosts_are_accepted() {
+        for u in [
+            "http://127.0.0.1:43210",
+            "http://localhost:43210",
+            "http://[::1]:43210",
+            "http://127.9.9.9:1",
+        ] {
+            assert!(
+                matches!(parse(&[format!("--url={u}")], no_env), Cli::Run(_)),
+                "{u} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn non_loopback_url_is_rejected() {
+        for u in [
+            "http://example.com:43210",
+            "http://10.0.0.5:43210",
+            "http://0.0.0.0:43210",
+            "not-a-url",
+        ] {
+            assert!(
+                matches!(parse(&[format!("--url={u}")], no_env), Cli::BadUsage(_)),
+                "{u} should be rejected"
+            );
+        }
     }
 
     #[test]
