@@ -115,7 +115,10 @@ async fn process_frame(
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
     let encode_started = Instant::now();
     write_webp(frame.pixels.clone(), abs_path.clone(), ctx.max_width).await?;
-    let encoded_bytes = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+    let encoded_bytes = tokio::fs::metadata(&abs_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
     tracing::info!(
         captured_at = frame.captured_at,
         monitor_index = frame.monitor_index,
@@ -124,7 +127,7 @@ async fn process_frame(
         image_path = %rel_db_path,
         "capture encode: stored WebP"
     );
-    proxy_writer.try_enqueue(frame.pixels.clone(), abs_path.clone());
+    proxy_writer.try_enqueue(frame.pixels.clone(), abs_path.clone(), ctx.max_width);
 
     let frame_id = ctx
         .store

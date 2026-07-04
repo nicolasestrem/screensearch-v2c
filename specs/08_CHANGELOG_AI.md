@@ -124,3 +124,24 @@
   `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
   `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 review follow-ups
+
+- **Change:** Addressed all actionable PR #83 review comments without posting bot replies. The
+  capture/vision async paths now avoid synchronous metadata/remove checks by using `tokio::fs`;
+  retention/self-capture cleanup now propagates proxy-delete failures so screenshot proxies cannot
+  be orphaned while the DB row is marked purged/deleted; and queued capture-side proxy generation
+  respects `storage.max_width` when that cap is below 1280 px. Added focused regression tests for
+  proxy max-width and proxy-delete failure propagation.
+- **Why:** Reviewers correctly identified two privacy/correctness risks: `.vision.jpg` could exceed
+  a user-configured storage width cap for newly captured frames, and a failed proxy deletion could
+  leave a screenshot derivative after the app considered the frame purged. The async I/O changes keep
+  the new cleanup/proxy checks from blocking executor threads.
+- **Verification:** `cargo test -p kernel vision_proxy -- --nocapture`, `cargo test -p screensearch
+  remove_frame_image_and_proxy -- --nocapture`, and the full CI-order sequence (`npm --prefix ui ci`,
+  `npm --prefix ui run lint`, `npm --prefix ui run build`, `node scripts/stage-mcp.mjs`,
+  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo build --workspace`, `cargo test --workspace`, `git diff --exit-code -- ui/src/bindings`)
+  all passed.

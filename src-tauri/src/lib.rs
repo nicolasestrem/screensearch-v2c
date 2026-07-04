@@ -1605,7 +1605,7 @@ async fn run_retention_once(
     let mut degraded = 0_u64;
     for frame in candidates {
         if let Some(path) = safe_frame_path(data_dir, &frame.image_path) {
-            if let Err(e) = remove_frame_image_and_proxy(&path) {
+            if let Err(e) = remove_frame_image_and_proxy(&path).await {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     // Leave image_purged=0 so a transient failure (AV/indexer sharing
                     // violation) is retried next sweep instead of marking the row text-only
@@ -1750,7 +1750,7 @@ async fn purge_self_captures(store: Arc<SqliteStore>, data_dir: PathBuf) {
         let before = purged;
         for frame in batch {
             if let Some(path) = safe_frame_path(&data_dir, &frame.image_path) {
-                if let Err(e) = remove_frame_image_and_proxy(&path) {
+                if let Err(e) = remove_frame_image_and_proxy(&path).await {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         // Skip the row delete so the JPEG isn't orphaned on a transient
                         // failure (e.g. an AV/indexer sharing violation), mirroring the
@@ -1804,15 +1804,15 @@ fn safe_frame_path(data_dir: &Path, image_path: &str) -> Option<PathBuf> {
     Some(data_dir.join(safe))
 }
 
-fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
-    let remove_main = std::fs::remove_file(path);
+async fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
+    let remove_main = tokio::fs::remove_file(path).await;
     if let Err(e) = &remove_main {
         if e.kind() != std::io::ErrorKind::NotFound {
             return remove_main;
         }
     }
     if let Some(proxy) = vision_proxy_path_for(path) {
-        match std::fs::remove_file(&proxy) {
+        match tokio::fs::remove_file(&proxy).await {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
@@ -1821,6 +1821,7 @@ fn remove_frame_image_and_proxy(path: &Path) -> std::io::Result<()> {
                     error = %e,
                     "could not delete vision proxy"
                 );
+                return Err(e);
             }
         }
     }
@@ -2313,6 +2314,38 @@ mod tests {
         assert!(safe_frame_path(&data, "../frames/100.jpg").is_none());
         assert!(safe_frame_path(&data, "screens/100.jpg").is_none());
         assert!(safe_frame_path(&data, "frames/../100.jpg").is_none());
+    }
+
+    #[tokio::test]
+    async fn remove_frame_image_and_proxy_deletes_webp_and_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("100.webp");
+        let proxy = dir.path().join("100.vision.jpg");
+        tokio::fs::write(&frame, b"webp").await.unwrap();
+        tokio::fs::write(&proxy, b"proxy").await.unwrap();
+
+        remove_frame_image_and_proxy(&frame).await.unwrap();
+
+        assert!(!frame.exists());
+        assert!(!proxy.exists());
+    }
+
+    #[tokio::test]
+    async fn remove_frame_image_and_proxy_propagates_proxy_delete_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = dir.path().join("100.webp");
+        let proxy = dir.path().join("100.vision.jpg");
+        tokio::fs::write(&frame, b"webp").await.unwrap();
+        tokio::fs::create_dir(&proxy).await.unwrap();
+
+        let err = remove_frame_image_and_proxy(&frame).await.unwrap_err();
+
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!frame.exists(), "main frame delete should have succeeded");
+        assert!(
+            proxy.exists(),
+            "failed proxy delete should leave retry target"
+        );
     }
 
     /// `07` #73a one-time backfill: it merges every purged frame's per-word spans to per-line,

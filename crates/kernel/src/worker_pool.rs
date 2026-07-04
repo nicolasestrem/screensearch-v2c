@@ -496,7 +496,7 @@ async fn vision_tag_outcome(
     let image = match vision_proxy::load_for_vision(abs.clone()).await {
         Ok(img) => img,
         Err(e) => {
-            return if abs.exists() {
+            return if tokio::fs::metadata(&abs).await.is_ok() {
                 Outcome::Retry(format!("load image {}: {e}", abs.display()))
             } else {
                 Outcome::DeadLetter(format!("image missing {}: {e}", abs.display()))

@@ -253,3 +253,40 @@ For each build pass, append an entry:
   `cargo test --workspace` →
   `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 9.82s` with all non-ignored
   suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
+## Pass 5 — 2026-07-04 — 0.3.1 PR2 review follow-ups (#64)
+
+- **Addressed PR #83 review threads:** (1) removed synchronous `proxy_path.exists()` from
+  `VisionProxyWriter::try_enqueue`; the blocking writer still does the idempotent existing-file
+  check before writing. (2) Replaced async-path synchronous metadata/remove calls with
+  `tokio::fs` in capture encode logging, vision proxy lookup/rebuild cleanup, worker-pool
+  image-existence classification, and retention/self-capture proxy cleanup. (3) Made
+  `remove_frame_image_and_proxy` async and return proxy-delete failures (except NotFound), so
+  retention/self-capture cleanup leaves the DB row retryable instead of orphaning a proxy when
+  Windows AV/indexer sharing blocks deletion. (4) Capped queued capture-side proxy generation by
+  `min(storage.max_width, 1280)` when a storage cap exists; lazy proxies still derive from the
+  already-stored WebP. No bot replies were posted (user requested no bot replies).
+- **Tests added:** `queued_proxy_respects_storage_max_width_below_proxy_cap`,
+  `remove_frame_image_and_proxy_deletes_webp_and_proxy`, and
+  `remove_frame_image_and_proxy_propagates_proxy_delete_failure`.
+- **Verification (verbatim):** focused checks:
+  `cargo test -p kernel vision_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out`;
+  `cargo test -p screensearch remove_frame_image_and_proxy -- --nocapture` →
+  `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out`.
+  Full CI-order pass:
+  `npm --prefix ui ci` → `added 347 packages, and audited 348 packages in 5s` /
+  `found 0 vulnerabilities`;
+  `npm --prefix ui run lint` → `> eslint .`;
+  `npm --prefix ui run build` → `✓ built in 1.82s`;
+  `node scripts/stage-mcp.mjs` → `[stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe`;
+  `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 3.42s`;
+  `cargo build --workspace` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 22.44s`;
+  `cargo test --workspace` →
+  `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 25.53s` with all non-ignored
+  suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.

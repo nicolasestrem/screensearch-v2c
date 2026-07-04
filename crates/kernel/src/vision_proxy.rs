@@ -25,6 +25,7 @@ pub(crate) struct VisionProxyWriter {
 struct ProxyJob {
     pixels: Arc<RgbaImage>,
     proxy_path: PathBuf,
+    max_edge: u32,
 }
 
 impl VisionProxyWriter {
@@ -34,14 +35,20 @@ impl VisionProxyWriter {
         Self { sender, join }
     }
 
-    pub(crate) fn try_enqueue(&self, pixels: Arc<RgbaImage>, stored_path: PathBuf) {
+    pub(crate) fn try_enqueue(
+        &self,
+        pixels: Arc<RgbaImage>,
+        stored_path: PathBuf,
+        storage_max_width: u32,
+    ) {
         let Some(proxy_path) = proxy_path_for(&stored_path) else {
             return;
         };
-        if proxy_path.exists() {
-            return;
-        }
-        let job = ProxyJob { pixels, proxy_path };
+        let job = ProxyJob {
+            pixels,
+            proxy_path,
+            max_edge: proxy_max_edge(storage_max_width),
+        };
         if let Err(e) = self.sender.try_send(job) {
             match e {
                 mpsc::error::TrySendError::Full(job) => tracing::warn!(
@@ -69,7 +76,7 @@ async fn proxy_writer_loop(mut receiver: mpsc::Receiver<ProxyJob>) {
     while let Some(job) = receiver.recv().await {
         let proxy_path = job.proxy_path.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let proxy = proxy_image(&job.pixels);
+            let proxy = proxy_image(&job.pixels, job.max_edge);
             write_proxy_jpeg(&proxy, &job.proxy_path)
         })
         .await;
@@ -93,10 +100,10 @@ pub(crate) async fn load_for_vision(path: PathBuf) -> Result<RgbaImage> {
     let Some(proxy_path) = proxy_path_for(&path) else {
         return decode_rgba(path).await;
     };
-    if !path.exists() {
-        return decode_rgba(path).await;
+    if let Err(e) = tokio::fs::metadata(&path).await {
+        return Err(e).with_context(|| format!("source image missing {}", path.display()));
     }
-    if proxy_path.exists() {
+    if tokio::fs::metadata(&proxy_path).await.is_ok() {
         match decode_rgba(proxy_path.clone()).await {
             Ok(image) => return Ok(image),
             Err(e) => {
@@ -105,7 +112,7 @@ pub(crate) async fn load_for_vision(path: PathBuf) -> Result<RgbaImage> {
                     error = %e,
                     "vision proxy decode failed; rebuilding from WebP"
                 );
-                let _ = std::fs::remove_file(&proxy_path);
+                let _ = tokio::fs::remove_file(&proxy_path).await;
             }
         }
     }
@@ -140,17 +147,25 @@ fn create_proxy_from_file(source_path: &Path, proxy_path: &Path) -> Result<RgbaI
     let image = image::open(source_path)
         .with_context(|| format!("decode WebP {}", source_path.display()))?
         .to_rgba8();
-    let proxy = proxy_image(&image);
+    let proxy = proxy_image(&image, VISION_PROXY_MAX_EDGE);
     write_proxy_jpeg(&proxy, proxy_path)?;
     Ok(proxy)
 }
 
-fn proxy_image(pixels: &RgbaImage) -> RgbaImage {
-    let max_edge = pixels.width().max(pixels.height());
-    if max_edge <= VISION_PROXY_MAX_EDGE {
+fn proxy_max_edge(storage_max_width: u32) -> u32 {
+    if storage_max_width == 0 {
+        VISION_PROXY_MAX_EDGE
+    } else {
+        storage_max_width.min(VISION_PROXY_MAX_EDGE)
+    }
+}
+
+fn proxy_image(pixels: &RgbaImage, target_max_edge: u32) -> RgbaImage {
+    let source_max_edge = pixels.width().max(pixels.height());
+    if source_max_edge <= target_max_edge {
         return pixels.clone();
     }
-    let ratio = f64::from(VISION_PROXY_MAX_EDGE) / f64::from(max_edge);
+    let ratio = f64::from(target_max_edge) / f64::from(source_max_edge);
     let new_w = ((f64::from(pixels.width()) * ratio).round() as u32).max(1);
     let new_h = ((f64::from(pixels.height()) * ratio).round() as u32).max(1);
     image::imageops::resize(pixels, new_w, new_h, image::imageops::FilterType::Triangle)
@@ -253,5 +268,24 @@ mod tests {
         let loaded = load_for_vision(webp).await.unwrap();
 
         assert_eq!((loaded.width(), loaded.height()), (320, 200));
+    }
+
+    #[tokio::test]
+    async fn queued_proxy_respects_storage_max_width_below_proxy_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let webp = tmp.path().join("frame.webp");
+        let proxy = proxy_path_for(&webp).unwrap();
+        let writer = VisionProxyWriter::spawn();
+        let rgba = Arc::new(RgbaImage::from_pixel(
+            1600,
+            800,
+            image::Rgba([70, 80, 90, 255]),
+        ));
+
+        writer.try_enqueue(rgba, webp, 640);
+        writer.shutdown().await;
+
+        let proxy_image = image::open(&proxy).unwrap();
+        assert_eq!((proxy_image.width(), proxy_image.height()), (640, 320));
     }
 }
