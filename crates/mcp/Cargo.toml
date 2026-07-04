@@ -1,0 +1,38 @@
+[package]
+name = "mcp"
+description = "ScreenSearch MCP server: a thin stdio wrapper over the local HTTP API (03 §7c, D13)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "screensearch-mcp"
+path = "src/main.rs"
+
+# The shipped binary is a pure HTTP client of the local API (D13: no store, no app
+# coupling) — it links reqwest/tokio/serde_json only, never axum and never a workspace
+# impl crate. `net` is added on top of the workspace tokio features so the binary's
+# `enable_all()` runtime has the IO driver.
+[dependencies]
+reqwest.workspace = true
+tokio = { workspace = true, features = ["net"] }
+serde_json.workspace = true
+futures-util.workspace = true
+base64.workspace = true
+
+# Test-only. The integration tests spin the real `crates/api` server in-process over a
+# fixture store and drive the compiled binary over stdio — dev-deps never enter the
+# shipped artifact, so D13's "no store, no app coupling" still holds for what ships.
+[dev-dependencies]
+api.workspace = true
+store.workspace = true
+traits.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true

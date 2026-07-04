@@ -19,6 +19,7 @@ members = [
     "crates/sysmon",
     "crates/doctor",
     "crates/api",
+    "crates/mcp",
 ]
 
 [workspace.package]
