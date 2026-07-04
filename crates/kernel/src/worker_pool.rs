@@ -460,10 +460,11 @@ async fn embed_text_outcome(
     }
 }
 
-/// Run deferred vision tagging on a frame's stored JPEG via the sidecar provider
-/// (`03 §5`). The JPEG lives at `data_dir / image_path`: a transient IO error (AV,
-/// search indexer, or backup briefly holding the file on Windows) retries, a genuinely
-/// missing file is dead-lettered (it won't reappear). A purged frame is a no-op success.
+/// Run deferred vision tagging on a frame's stored image (lossless WebP since 0.3.0;
+/// legacy frames may still be JPEG) via the sidecar provider (`03 §5`). The image lives
+/// at `data_dir / image_path`: a transient IO error (AV, search indexer, or backup
+/// briefly holding the file on Windows) retries, a genuinely missing file is
+/// dead-lettered (it won't reappear). A purged frame is a no-op success.
 /// A sidecar/analyze error is retryable (the sidecar may be restarting).
 async fn vision_tag_outcome(
     store: &Arc<dyn Store>,
@@ -489,6 +490,7 @@ async fn vision_tag_outcome(
         Err(e) => return Outcome::Retry(format!("read frame {frame_id}: {e}")),
     };
     let abs = data_dir.join(&input.image_path);
+    let decode_started = std::time::Instant::now();
     let image = match load_rgba(abs.clone()).await {
         Ok(img) => img,
         Err(e) => {
@@ -499,6 +501,7 @@ async fn vision_tag_outcome(
             };
         }
     };
+    let decode_ms = decode_started.elapsed().as_millis() as u64;
     // Privacy-safe VLM request provenance (gap #44): frame id + the relative capture
     // path only — never image bytes/data-URL, OCR `content_text`, app/window title, or
     // the model reply (`init_tracing`'s "no screen content at info level" contract).
@@ -509,6 +512,7 @@ async fn vision_tag_outcome(
         image_path = %input.image_path,
         "vision_tag: sending frame image to VLM"
     );
+    let analyze_started = std::time::Instant::now();
     let analysis = match vision.analyze(&image).await {
         Ok(a) => a,
         // `{e:#}` prints the whole anyhow chain so the real sidecar cause (e.g.
@@ -516,13 +520,28 @@ async fn vision_tag_outcome(
         // top `.context("vision completion")`.
         Err(e) => return Outcome::Retry(format!("vision analyze frame {frame_id}: {e:#}")),
     };
+    let analyze_ms = analyze_started.elapsed().as_millis() as u64;
+    // Profiling instrumentation for the #64 throughput regression (0.3.1 PR2, D9):
+    // per-job stored-image decode vs sidecar analyze wall time, plus the decoded source
+    // dimensions. Privacy-safe: path + dimensions + durations only — no screen content.
+    tracing::info!(
+        frame_id,
+        decode_ms,
+        analyze_ms,
+        total_ms = decode_ms + analyze_ms,
+        src_width = image.width(),
+        src_height = image.height(),
+        path = %input.image_path,
+        "vision_tag timing"
+    );
     match store.insert_vision(frame_id, analysis).await {
         Ok(()) => Outcome::Complete { changed_data: true },
         Err(e) => Outcome::Retry(format!("insert vision {frame_id}: {e}")),
     }
 }
 
-/// Decode a JPEG/PNG from disk into RGBA on the blocking pool (CPU + file IO).
+/// Decode a stored capture (lossless WebP since 0.3.0; legacy JPEG/PNG frames still
+/// decode) from disk into RGBA on the blocking pool (CPU + file IO).
 async fn load_rgba(path: PathBuf) -> Result<image::RgbaImage> {
     tokio::task::spawn_blocking(move || -> Result<image::RgbaImage> {
         Ok(image::open(&path)?.to_rgba8())
