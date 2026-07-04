@@ -290,6 +290,7 @@ impl Kernel {
         let capture_slot = self.capture.clone();
         let readiness = self.readiness.clone();
         let events = self.events.clone();
+        let ocr_for_shutdown = self.ocr.clone();
         let join = tokio::spawn(async move {
             let exit = run_capture_loop(capture, ctx, stop_rx).await;
             if exit == CaptureLoopExit::SourceShutdown {
@@ -306,6 +307,7 @@ impl Kernel {
                         level: ToastLevel::Error,
                         message: "Capture source shut down unexpectedly".to_string(),
                     }));
+                    ocr_for_shutdown.on_capture_stopped();
                 }
             }
         });
@@ -331,11 +333,10 @@ impl Kernel {
             if let Err(e) = h.join.await {
                 tracing::warn!(error = %e, "capture task join failed");
             }
-            // The loop has joined, so no `recognize` is in flight from it: notify the OCR
-            // provider that capture stopped. The UIA composite disconnects its UI Automation
-            // client here, so Chromium/Electron apps leave accessibility mode instead of
-            // staying degraded after the user stops capture. Only fire when a handle existed
-            // so an idempotent stop of already-stopped capture doesn't churn a respawn.
+            // The loop has joined — no `recognize` is in flight. Notify the OCR provider so
+            // the UIA composite can disconnect its client and release Chromium/Electron apps
+            // from accessibility mode. Only fires when a handle existed, so an idempotent stop
+            // of already-stopped capture doesn't churn a respawn.
             self.ocr.on_capture_stopped();
         }
         self.set_capture_readiness(ComponentStatus::Disabled, None);

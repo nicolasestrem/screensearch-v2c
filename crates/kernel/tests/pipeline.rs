@@ -398,6 +398,50 @@ async fn stop_capture_notifies_ocr_provider() {
 }
 
 #[tokio::test]
+async fn source_shutdown_notifies_ocr_provider() {
+    // When the WGC capture source self-terminates (monitor disconnect, driver reset) the
+    // kernel must still call on_capture_stopped() so the UIA composite releases its client.
+    let tmp = tempfile::tempdir().unwrap();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let stopped = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let ocr: Arc<dyn OcrProvider> = Arc::new(CountingOcr {
+        stopped: stopped.clone(),
+    });
+
+    let factory: CaptureFactory = Arc::new(|_cfg, _rx| {
+        Ok(Box::new(FakeCapture {
+            frames: VecDeque::new(),
+            after_frames: AfterFrames::Shutdown,
+        }) as Box<dyn CaptureSource>)
+    });
+
+    let kernel = Kernel::new(
+        store.clone(),
+        ocr,
+        factory,
+        tmp.path().join("frames"),
+        Readiness::default(),
+    );
+
+    kernel.start_capture().await.unwrap();
+
+    // Wait for the source to self-terminate.
+    for _ in 0..50 {
+        if !kernel.is_capturing().await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(!kernel.is_capturing().await);
+    assert_eq!(
+        stopped.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "SourceShutdown must notify on_capture_stopped exactly once"
+    );
+}
+
+#[tokio::test]
 async fn kernel_clears_capture_and_marks_error_when_source_shuts_down() {
     let tmp = tempfile::tempdir().unwrap();
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
