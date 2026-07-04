@@ -20,6 +20,59 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-04 — 0.3.0 PR8: MCP server (`feat/pr8-mcp-server`)
+
+The stdio MCP server wrapping PR7's local API (`docs/0.3.0.md` Part III; `03 §7c`/`§13b.7`; D13). New
+workspace bin crate `crates/mcp` → `screensearch-mcp.exe`, shipped in the NSIS installer. **No schema
+change (stays v10). No UI/bindings change** (bindings guard trivially clean). Two settled decisions
+(user-approved): hand-rolled minimal MCP (no SDK), and `get_moment.include_image`.
+
+### Implemented
+- **`crates/mcp`** (lib + bin; deps `reqwest`/`tokio`/`serde_json`/`futures-util`/`base64` only —
+  **no axum, no store, no app crate**, satisfying D13): `config` (arg/env, flag>env>default),
+  `rpc` (newline-delimited JSON-RPC 2.0 classify + responses), `sse` (chunk-boundary line buffer +
+  `AnswerDelta` aggregator), `client` (`ApiClient` over `127.0.0.1:<port>` + `ApiFailure` guided
+  mapping), `server` (initialize/ping/tools-list/tools-call/notification dispatch, version
+  negotiation), `tools` (the six tools). Single-threaded stdin loop + current-thread tokio runtime;
+  stdout is protocol-only, logs to stderr; flush-per-message; tolerates `\r`/BOM.
+- **Six tools** mapping to the API: `search_screen_history`, `ask_screen_history` (SSE aggregated;
+  thinking deltas discarded), `get_moment` (+`include_image` → base64 image block; purged image is a
+  note, not an error), `where_was_i` (null → human message), `list_marks`, `add_mark` (omit frame_id →
+  `now`). Bad args / API failures → `isError:true` tool results; unknown tool → `-32602`.
+- **Guided errors**: API-off (connect refused) and no-token both carry the verbatim phrase
+  *"enable the API in ScreenSearch Settings"*; 401 → "token rejected, copy the current one"; other
+  `{error,message}` bodies pass through (e.g. 503 `unavailable`).
+- **NSIS packaging**: `bundle.externalBin: ["binaries/screensearch-mcp"]` + `scripts/stage-mcp.mjs`
+  (builds `-p mcp --release`, stages the host-triple-suffixed sidecar), wired into
+  `beforeDevCommand`/`beforeBuildCommand` and CI. `src-tauri/binaries/` git-ignored;
+  `npm run stage:mcp`; fresh-clone note in `CLAUDE.md`/`AGENTS.md`/`TESTING.md`.
+
+### Verification (verbatim)
+- Full suite green: `cargo fmt --all -- --check` (exit 0), `cargo clippy --workspace --all-targets -- -D
+  warnings` (clean), `cargo build --workspace` (Finished), `cargo test --workspace` (**494 passed, 0
+  failed**), `ui` `npm run lint && npm run build` (built), `git diff --exit-code -- ui/src/bindings`
+  (exit 0). 30 mcp unit tests + 19 spawned-exe stdio integration tests included.
+- **Live cross-process** (real `crates/api` server on `127.0.0.1:43210` + the compiled exe over
+  scripted stdio): initialize → tools/list (6) → search (hit) → get_moment include_image (text+image
+  blocks) → where_was_i (null note) → add_mark → list_marks all round-tripped, `isError=false`.
+- **externalBin failure mode confirmed**: with the staged file removed, `cargo check -p screensearch`
+  fails **exit 101** (`resource path 'binaries\screensearch-mcp-…exe' doesn't exist`); restored → exit 0.
+  This is why CI/before-commands stage first.
+- **Installer**: `npm run tauri build` produced `ScreenSearch_0.2.2_x64-setup.exe`; `7z l` lists both
+  `screensearch.exe` and `screensearch-mcp.exe` (bundler strips the triple suffix).
+
+### Skipped / deferred
+- `ask` uses the SSE stream but the DoD's answer-model live path is covered by the integration test's
+  scripted provider; a real-model `ask` runs in the PR9 manual pass. Full desktop-shell live acceptance
+  (launch app → enable API in Settings UI → drive the exe) is scripted in `docs/TESTING.md §PR8` for the
+  PR9 audit — WebView2 Settings can't be toggled headlessly here; the API code paths themselves are
+  live-verified cross-process above.
+
+### Still risky
+- Protocol conformance vs real clients rests on the spec (echo-version/downgrade, `-32601/-32602/
+  -32700/-32600`, tools-only capabilities) + a `claude mcp add` live step in `§PR8`. Sequential
+  request processing means a mid-`ask` ping waits (bounded by the 600 s ask cap) — recorded in `07`.
+
 ## Pass — 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
 
 The opt-in local HTTP API + streaming JSON export (`docs/0.3.0.md` Part III; `03 §7c`/`§7`/`§8`/

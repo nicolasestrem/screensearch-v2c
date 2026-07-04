@@ -308,3 +308,42 @@ Settings → **Local API** after you enable it.
   the quit).
 - **Five panel states.** Exercise the Local API panel's loading / load-error / off / enabling /
   listening paths (toggle, retry, and the port-conflict path above).
+
+## Manual acceptance — MCP server (0.3.0 PR8)
+
+**0.3.0 PR8** adds `screensearch-mcp.exe`, a stdio MCP server wrapping the PR7 local API
+(`docs/0.3.0.md` Part III, D13; `03 §7c`/`§13b.7`). Full config in `docs/MCP.md`. Run on a real
+Windows desktop. First: `node scripts/stage-mcp.mjs` (once per clone — see "Before you push"), then
+`npm run tauri dev`, enable **Settings → Local API**, and copy the token.
+
+- **Handshake + tool listing over stdio.** Save a session file `mcp-session.jsonl` with one request
+  per line:
+  ```
+  {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"0"}}}
+  {"jsonrpc":"2.0","method":"notifications/initialized"}
+  {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+  {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_screen_history","arguments":{"query":"<a term you saw today>","limit":5}}}
+  {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_moment","arguments":{"frame_id":<id from #3>,"include_image":true}}}
+  {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"where_was_i","arguments":{}}}
+  {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"add_mark","arguments":{"note":"from MCP acceptance"}}}
+  {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_marks","arguments":{}}}
+  {"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ask_screen_history","arguments":{"query":"what did I read about <topic>?"}}}
+  ```
+  Run (PowerShell): `$env:SCREENSEARCH_API_TOKEN="<token>"; Get-Content mcp-session.jsonl | .\target\release\screensearch-mcp.exe`
+  — expect eight in-order responses: `initialize` reports `serverInfo.name = "screensearch-mcp"`;
+  `tools/list` lists the six tools; `#3` returns hits; `#4` carries a base64 **image** block; `#6`
+  creates a mark that appears in the Deck **Intentions** strip (with the "Marked ✓" toast); `#8`
+  returns the aggregated cited answer.
+- **API-off error path is clean.** Toggle the API **off** in Settings and rerun the session: ids `1`–`2`
+  still succeed, and every `tools/call` returns `isError: true` with text containing
+  **"enable the API in ScreenSearch Settings"** — never a crash or a hang.
+- **Wrong token.** With the API on but `$env:SCREENSEARCH_API_TOKEN="wrong"`, a tool call returns
+  `isError: true` mentioning the **401** and to copy the current token from Settings.
+- **A real client end-to-end.** `claude mcp add screensearch --env SCREENSEARCH_API_TOKEN=<token> -- "<abs path>\screensearch-mcp.exe"`,
+  then in a Claude Code session: *"search my screen history for X"*, *"what was I doing before this?"* —
+  the tool calls round-trip.
+- **Installer includes the binary.** `npm run tauri build`, then
+  `7z l "target\release\bundle\nsis\ScreenSearch_<ver>_x64-setup.exe" | findstr screensearch-mcp`
+  lists `screensearch-mcp.exe`. Install silently (`ScreenSearch_<ver>_x64-setup.exe /S`), confirm
+  `screensearch-mcp.exe` sits next to `ScreenSearch.exe` in the install dir and runs
+  `screensearch-mcp.exe --version`; uninstalling removes it.

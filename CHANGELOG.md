@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — MCP server (0.3.0 PR8)
+ScreenSearch now ships **`screensearch-mcp.exe`**, a small [Model Context Protocol](https://modelcontextprotocol.io)
+server that lets Claude Desktop, Claude Code, or any MCP client search, ask about, and mark your screen
+history — locally. It is a thin **stdio** wrapper over the local API from PR7: it holds no data of its
+own, links no app code, and talks only to `127.0.0.1:<port>` with your bearer token (taken from
+`SCREENSEARCH_API_TOKEN` / `SCREENSEARCH_API_URL` or `--token`/`--url`). It exposes six tools —
+`search_screen_history`, `ask_screen_history`, `get_moment` (optionally returning the screenshot),
+`where_was_i`, `list_marks`, and `add_mark` — mapping onto the same endpoints the app uses. If the API
+is off, every tool returns a clear *"enable the API in ScreenSearch Settings"* message instead of failing
+silently. The same trust posture as the API applies: any local process holding the token can read your
+whole history, so enabling it is a deliberate choice; the copy-paste client config and threat model are
+in `docs/MCP.md`.
+
+The binary is packaged **inside the NSIS installer**, next to `ScreenSearch.exe` (a new
+`bundle.externalBin` sidecar). There is no schema change. *Live-verified on Windows: the MCP handshake +
+tool listing over stdio, all six tools round-tripping against the running local API (cross-process, real
+TCP + token auth), the API-off and wrong-token guided-error paths, and the installer carrying
+`screensearch-mcp.exe`.*
+
 ### Added — Local HTTP API + export (0.3.0 PR7)
 ScreenSearch can now serve your screen history to local scripts and agents through an opt-in **local
 HTTP API** — the open-source ask since Rewind shut down. It is **off by default**. When you enable it
