@@ -502,6 +502,27 @@ pub struct AnswerOpts {
     pub max_tokens: u32,
 }
 
+/// One frame row of the v1 JSON export (0.3.0 PR7; `03 §7c`, D12): metadata +
+/// `content_text` only — never `raw_text`, never image paths/bytes. Produced by the
+/// store's `export_frames_page` cursor and serialized incrementally by
+/// `crates/api::export` (the same code path the HTTP `GET /v1/export` route and the
+/// Settings "Export…" command share). Serialize-only and *not* a `ts_rs` type: it is
+/// an external wire record, never part of the UI IPC contract, and lives here in
+/// `traits` so both `store` (producer) and `api` (consumer) reference it without a
+/// module→module dependency.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ExportFrameRow {
+    pub frame_id: i64,
+    /// Capture time, unix epoch milliseconds.
+    pub captured_at: i64,
+    pub app_hint: Option<String>,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
+    pub activity_type: Option<String>,
+    /// The attention-filtered content text (never the raw full-screen OCR).
+    pub content_text: Option<String>,
+}
+
 /// Which calendar range a recall report covers (`03 §8b`). Carried for honest
 /// framing (the range label + prose); the concrete `[start, end)` is resolved by
 /// the command (in local time) before the orchestrator runs.
