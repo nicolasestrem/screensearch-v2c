@@ -29,6 +29,9 @@ import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 import type { Mark } from "../../bindings/Mark";
 import type { ResumeContext } from "../../bindings/ResumeContext";
+import type { ApiStatus } from "../../bindings/ApiStatus";
+import type { ExportRequest } from "../../bindings/ExportRequest";
+import type { ExportResult } from "../../bindings/ExportResult";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -213,3 +216,28 @@ export const focusOverlayForNote = (): Promise<void> =>
 /** Dismiss the mark toast, restoring the overlay to focusable for the next summon. */
 export const dismissMarkToast = (): Promise<void> =>
   invoke<void>("dismiss_mark_toast");
+
+/** Enable/disable the local HTTP API (and set the port). Returns the new status; a
+ *  bind failure is reported as `enabled && !running && last_error` (loud + guided,
+ *  `03 §7c`), not an error. */
+export const setApiConfig = (args: {
+  enabled: boolean;
+  port?: number | null;
+}): Promise<ApiStatus> =>
+  invoke<ApiStatus>("set_api_config", {
+    enabled: args.enabled,
+    port: args.port ?? null,
+  });
+
+/** The current local-API status (enabled, running, port, token, last error). */
+export const getApiStatus = (): Promise<ApiStatus> =>
+  invoke<ApiStatus>("get_api_status");
+
+/** Regenerate the bearer token (no server restart — the middleware reads it live). */
+export const regenerateApiToken = (): Promise<ApiStatus> =>
+  invoke<ApiStatus>("regenerate_api_token");
+
+/** Export frames + content text + marks to a JSON file in Downloads (`03 §7c`, D12).
+ *  Works with the API disabled; returns the written path + counts. */
+export const exportData = (request: ExportRequest): Promise<ExportResult> =>
+  invoke<ExportResult>("export_data", { request });

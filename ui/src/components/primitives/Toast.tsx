@@ -1,7 +1,8 @@
 // Toast — transient client-side notification. `Toast` renders one item (and owns
 // its auto-dismiss timer); `ToastViewport` subscribes to the toast store and
-// stacks them in the toast z-layer. Toasts are driven by command success/failure
-// (the backend never emits a `toast` event — plan decision).
+// stacks them in the toast z-layer. Most toasts are driven by command success/failure,
+// but the backend also emits `toast` events for hotkey-registration (0.3.0 PR5/PR6) and
+// local-API bind (PR7) warnings; useLiveEvents forwards those into the same store.
 import { useEffect } from "react";
 import { cn } from "../../lib/cn";
 import { useToastStore, type ToastItem } from "../../state/toastStore";

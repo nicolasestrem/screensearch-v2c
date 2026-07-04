@@ -48,4 +48,7 @@ export const queryKeys = {
   // each summon (it depends on the live foreground context, not a data-change event).
   whereWasI: ["whereWasI"] as const,
   marks: ["marks"] as const,
+  // 0.3.0 local API (PR7): the Settings · Local API panel status. Changes only via our
+  // own mutations (enable/disable, regenerate) or at boot, so no live event drives it.
+  apiStatus: ["apiStatus"] as const,
 };

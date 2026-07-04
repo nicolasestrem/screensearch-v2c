@@ -23,6 +23,7 @@ import {
   Select,
 } from "../components/primitives";
 import {
+  ApiPanel,
   DEFAULT_OVERLAY_HOTKEY,
   DEFAULT_MARKS_HOTKEY,
   HotkeyField,
@@ -40,7 +41,11 @@ import {
   useTextFilterStats,
   useThrottleStatus,
 } from "../lib/ipc/queries";
-import { useSetModelTier, useSetSettings } from "../lib/ipc/mutations";
+import {
+  useExportData,
+  useSetModelTier,
+  useSetSettings,
+} from "../lib/ipc/mutations";
 import { toast } from "../state/toastStore";
 import type { Settings } from "../bindings/Settings";
 import type { ModelLane } from "../bindings/ModelLane";
@@ -345,6 +350,7 @@ export function Component() {
   const gpuMonitored = throttleStatus.data?.gpu_monitored ?? true;
   const setSettings = useSetSettings();
   const setTier = useSetModelTier();
+  const exportData = useExportData();
 
   // The form's working copy and the last-saved snapshot it's diffed against. The two
   // free-text list fields keep their own raw buffers so typing (trailing commas etc.)
@@ -1140,6 +1146,41 @@ export function Component() {
               }
             />
           )}
+        </div>
+      </Panel>
+
+      {/* Local HTTP API (0.3.0 PR7) — off by default; its own command surface, not the
+          bulk Save (enabling has a fallible bind side-effect). */}
+      <ApiPanel />
+
+      {/* Data export (0.3.0 PR7). Separate from the API panel so it reads as independent:
+          it streams to a JSON file in Downloads and works even with the API disabled. */}
+      <Panel group title="Data export">
+        <div className="flex flex-col gap-3">
+          <span className="text-body text-ink-muted font-body">
+            Export your captured frames, content text, and marks to a JSON file in your
+            Downloads folder. Screenshots are not included. Works with the API off.
+          </span>
+          <div>
+            <Button
+              variant="secondary"
+              disabled={exportData.isPending}
+              onClick={() =>
+                exportData.mutate(
+                  { from: null, to: null },
+                  {
+                    onSuccess: (r) =>
+                      toast.success(
+                        `Exported ${r.frames} frames and ${r.marks} marks → ${r.path}`,
+                      ),
+                    onError: (e) => toast.error(`Export failed: ${String(e)}`),
+                  },
+                )
+              }
+            >
+              {exportData.isPending ? "Exporting…" : "Export…"}
+            </Button>
+          </div>
         </div>
       </Panel>
     </div>
