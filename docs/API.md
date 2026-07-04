@@ -45,9 +45,9 @@ clients can parse errors uniformly:
 
 | Status | `error`         | When |
 |--------|-----------------|------|
-| 400    | `bad_request`   | Malformed params/body (e.g. missing `q`, `from`/`to` not paired, `format` ≠ `json`, both `frame_id` and `now`). |
+| 400    | `bad_request`   | Malformed params/body (e.g. missing `q`, `from`/`to` not paired, `from` > `to`, `format` ≠ `json`, both `frame_id` and `now`). |
 | 401    | `unauthorized`  | Missing or wrong bearer token. |
-| 404    | `not_found`     | Unknown frame or mark. |
+| 404    | `not_found`     | Unknown frame or mark — or an unknown endpoint path. |
 | 404    | `image_purged`  | The frame exists but its screenshot was retention-purged (text is preserved). |
 | 503    | `unavailable`   | A dependency is unavailable (answer model not loaded; capture off for `POST /v1/marks {"now":true}`). |
 | 500    | `internal`      | Unexpected store failure. |

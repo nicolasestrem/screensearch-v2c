@@ -428,6 +428,49 @@ async fn frame_detail_image_and_not_found() {
     server.stop().await;
 }
 
+/// An unknown path answers on the JSON error contract, not axum's default plaintext 404.
+#[tokio::test]
+async fn unknown_route_is_json_404() {
+    let (base, server, _t) = start_server(fixture_host(false).await).await;
+    let r = client()
+        .get(format!("{base}/v1/does-not-exist"))
+        .headers(bearer(TEST_TOKEN))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+    server.stop().await;
+}
+
+/// An inverted `from > to` window is rejected up front (400) rather than silently empty,
+/// on both search and export.
+#[tokio::test]
+async fn inverted_time_range_is_400() {
+    let (base, server, _t) = start_server(fixture_host(false).await).await;
+
+    let r = client()
+        .get(format!("{base}/v1/search?q=x&from=3000&to=1000"))
+        .headers(bearer(TEST_TOKEN))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "bad_request");
+
+    let r = client()
+        .get(format!("{base}/v1/export?from=3000&to=1000"))
+        .headers(bearer(TEST_TOKEN))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn where_was_i_returns_null_when_nothing_qualifies() {
     let (base, server, _t) = start_server(fixture_host(false).await).await;

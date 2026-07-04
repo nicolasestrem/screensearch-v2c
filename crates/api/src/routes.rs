@@ -17,6 +17,12 @@ use crate::error::ApiError;
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::{build_search_query, now_ms, ApiState};
 
+/// Router fallback for any unmatched path — keeps unknown/removed endpoints on the JSON
+/// error contract instead of axum's default plaintext 404 (`03 §7c`).
+pub async fn not_found() -> ApiError {
+    ApiError::NotFound("no such endpoint".to_string())
+}
+
 /// `GET /v1/health` — liveness + a little state (`03 §7c`).
 #[derive(Serialize)]
 pub struct HealthResponse {

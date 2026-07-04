@@ -206,6 +206,9 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/marks/{id}/resolve", post(routes::resolve_mark))
         .route("/v1/ask", post(routes::ask))
         .route("/v1/export", get(export::export))
+        // Unmatched paths still answer on the JSON error contract (not axum's default 404
+        // body). Registered before the auth layer so it, too, requires a token.
+        .fallback(routes::not_found)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -247,7 +250,14 @@ pub(crate) fn build_search_query(
     default_include_chrome: bool,
 ) -> Result<SearchQuery, error::ApiError> {
     let time_range = match (from, to) {
-        (Some(start), Some(end)) => Some(traits::TimeRange { start, end }),
+        (Some(start), Some(end)) => {
+            if start > end {
+                return Err(error::ApiError::BadRequest(
+                    "`from` must be less than or equal to `to`".to_string(),
+                ));
+            }
+            Some(traits::TimeRange { start, end })
+        }
         (None, None) => None,
         _ => {
             return Err(error::ApiError::BadRequest(

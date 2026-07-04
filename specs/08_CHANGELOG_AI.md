@@ -74,6 +74,29 @@
   61) · `ui` `npm run lint && npm run build` · `git diff --exit-code -- ui/src/bindings` clean. Verbatim
   in `05`.
 
+## 2026-07-04 — 0.3.0 PR7 review fixes, round 2 (PR #76; Gemini + Codex)
+- **Change:** Seven more inline suggestions from a later bot pass (bots not replied to).
+  - `crates/api/src/export.rs`: extracted `drain_to_file` (owns + drops the file handle on return) so
+    `export_to_file` can delete the `.partial` after the handle is closed — the round-1 cleanup failed
+    on **Windows** (sharing violation) with the write handle still open (Gemini HIGH). Added
+    `validate_window` (`from ≤ to` → 400) on the `/v1/export` route.
+  - `src-tauri/src/local_api.rs`: `ApiRuntime.config_lock: tokio::Mutex<()>` held across the whole
+    `apply_api_config` transition, so overlapping enable/disable can't leave the API running against a
+    disabled intent (Codex P2). `export_data` command rejects `from > to`.
+  - `crates/api/src/lib.rs`: `build_router` gains a `.fallback(routes::not_found)` (before the auth
+    layer) so unknown paths return `{error:"not_found"}` not axum's plaintext 404 (Codex P2);
+    `build_search_query` rejects `from > to` (Gemini).
+  - `crates/inference/src/answer.rs`: `emit_segment` returns whether the channel is still open;
+    `pump_deltas` returns `Cancelled` on the first failed send, so a disconnected consumer stops the
+    pump (and aborts the sidecar) immediately instead of draining the backlog (Gemini). Completed path
+    unchanged.
+  - Tests: `unknown_route_is_json_404`, `inverted_time_range_is_400`; docs API.md/CHANGELOG/05.
+- **Why:** review hardening on the open PR; the Windows partial-cleanup bug is the notable one (this is
+  a Windows-only app). No schema or ts-rs type change (bindings untouched).
+- **Verification:** `cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` (exit 0)
+  · `cargo test --workspace` (all green; `api` http_api **14 passed**/1 ignored, `inference` 104,
+  `store` 61) · `git diff --exit-code -- ui/src/bindings` clean. Verbatim in `05`.
+
 ## 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 - **Change:** Added the flow-recall core — a where-was-i heuristic and mark-this-moment — end to end.
   - `crates/traits`: `FrameContextRow`, `CaptureNowRequest`/`CaptureNowReceiver`, `CapturedFrame.demanded`;

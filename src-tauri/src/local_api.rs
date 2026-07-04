@@ -42,6 +42,11 @@ pub struct ApiRuntime {
     server: tokio::sync::Mutex<Option<ApiServer>>,
     token: SharedToken,
     last_error: StdMutex<Option<String>>,
+    /// Serializes a whole config transition (persist → stop → start). Without it, two
+    /// overlapping `set_api_config` calls could interleave — e.g. a disable seeing no
+    /// server while an enable is still binding, then the enable storing a running server
+    /// after `api.enabled=false`, leaving the API serving against the disabled intent.
+    config_lock: tokio::sync::Mutex<()>,
 }
 
 impl ApiRuntime {
@@ -50,6 +55,7 @@ impl ApiRuntime {
             server: tokio::sync::Mutex::new(None),
             token: Arc::new(RwLock::new(String::new())),
             last_error: StdMutex::new(None),
+            config_lock: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -246,6 +252,8 @@ pub async fn apply_api_config(
     enabled: bool,
     port: Option<u16>,
 ) -> ApiStatus {
+    // Serialize the whole transition so overlapping enable/disable calls can't interleave.
+    let _config_guard = runtime.config_lock.lock().await;
     let (_, current_port, _) = read_api_config(store).await;
     let target_port = clamp_api_port(port.unwrap_or(current_port));
     let _ = store
@@ -397,6 +405,11 @@ pub async fn export_data(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ExportResult, String> {
+    if let (Some(from), Some(to)) = (request.from, request.to) {
+        if from > to {
+            return Err("`from` must be less than or equal to `to`".to_string());
+        }
+    }
     let host = state
         .api_host
         .clone()

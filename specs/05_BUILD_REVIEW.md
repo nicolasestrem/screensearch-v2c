@@ -145,6 +145,34 @@ Addressed the five applicable inline suggestions on the open PR (bots not replie
   workspace 0 failed); `cd ui && npm run lint && npm run build` → exit 0 / built; `git diff
   --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
 
+### Follow-up — PR #76 second review round (7 more bot comments)
+A later Gemini + Codex pass raised seven more; all applied:
+1. **Partial cleanup failed on Windows (Gemini HIGH).** The round-1 `.partial` cleanup called
+   `remove_file` while the write handle was still open — a sharing violation on Windows (this app's
+   only target), so the partial survived anyway. Extracted `drain_to_file`, which owns the handle and
+   **drops it on return** (Ok or Err); `export_to_file` now deletes the partial only after the handle
+   is closed, on both the drain-error and failed-rename paths.
+2. **Config transitions could interleave (Codex P2).** `apply_api_config` took the server lock only
+   for the `take()`, releasing it across stop/start — a rapid enable→disable could end with the API
+   running against `enabled=false`. Added a `config_lock: tokio::Mutex<()>` to `ApiRuntime`, held
+   across the whole persist→stop→start transition.
+3. **Unknown routes bypassed the error contract (Codex P2).** The router had no fallback, so a bad
+   `/v1/...` path got axum's plaintext 404. Added `routes::not_found` as `.fallback(..)` (before the
+   auth layer, so it's authed too) → `{error:"not_found"}`.
+4. **Inverted `from > to` silently returned empty (Gemini ×3).** Added an up-front `400` in
+   `build_search_query` (search), a shared `export::validate_window` (the `/v1/export` route), and the
+   `export_data` command.
+5. **`pump_deltas` drained the backlog after disconnect (Gemini).** In the `select!`, a `prx.recv()`
+   win while `tx` was closed sent into a dead channel and kept processing buffered pieces. `emit_segment`
+   now returns whether the channel is still open, and the loop returns `Cancelled` on the first failed
+   send — the guard aborts the sidecar immediately. Completed path unchanged.
+- **New tests:** `unknown_route_is_json_404`, `inverted_time_range_is_400` (search + export); the
+  existing cancel test still gates `pump_deltas`.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all green (`api`
+  http_api.rs **14 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**; 0 failed);
+  `git diff --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
+
 ## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 
 The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and

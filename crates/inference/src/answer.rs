@@ -207,13 +207,17 @@ async fn pump_deltas(
         tokio::select! {
             piece = prx.recv() => match piece {
                 Some(StreamPiece::Reasoning(text)) => {
-                    if opts.thinking {
-                        let _ = tx.send(AnswerDelta::Thinking { text }).await;
+                    // A closed channel means the consumer hung up mid-piece: stop pumping
+                    // now (the guard aborts the sidecar) rather than draining the backlog.
+                    if opts.thinking && tx.send(AnswerDelta::Thinking { text }).await.is_err() {
+                        return PumpOutcome::Cancelled;
                     }
                 }
                 Some(StreamPiece::Content(text)) => {
                     for (is_thinking, chunk) in splitter.push(&text) {
-                        emit_segment(tx, is_thinking, chunk, opts.thinking).await;
+                        if !emit_segment(tx, is_thinking, chunk, opts.thinking).await {
+                            return PumpOutcome::Cancelled;
+                        }
                     }
                 }
                 Some(StreamPiece::Done) | None => break,
@@ -304,24 +308,26 @@ impl AnswerProvider for AnswerSidecar {
     }
 }
 
+/// Emits one segment. Returns `false` iff the send failed because the consumer dropped the
+/// receiver — the caller stops pumping. A skipped (empty/suppressed) segment returns `true`.
 async fn emit_segment(
     tx: &Sender<AnswerDelta>,
     is_thinking: bool,
     text: String,
     thinking_on: bool,
-) {
+) -> bool {
     if text.is_empty() {
-        return;
+        return true;
     }
     let delta = if is_thinking {
         if !thinking_on {
-            return; // thinking suppressed by the request
+            return true; // thinking suppressed by the request
         }
         AnswerDelta::Thinking { text }
     } else {
         AnswerDelta::Token { text }
     };
-    let _ = tx.send(delta).await;
+    tx.send(delta).await.is_ok()
 }
 
 /// Chat-template + role-tag overhead reserved on top of the system prompt and question,

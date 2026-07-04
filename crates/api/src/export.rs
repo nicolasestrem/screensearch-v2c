@@ -193,11 +193,48 @@ pub async fn export(
             "only `format=json` is supported in v1".to_string(),
         ));
     }
+    validate_window(params.from, params.to)?;
     let stats = Arc::new(ExportStats::default());
     let stream = export_json_stream(state.host.clone(), params.from, params.to, stats)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() });
     let body = axum::body::Body::from_stream(stream);
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+/// Rejects an inverted `[from, to)` window early so a client gets a clean `400` instead of
+/// a silently empty export. Shared by the HTTP route and the store cursor's callers.
+pub fn validate_window(from: Option<i64>, to: Option<i64>) -> Result<(), ApiError> {
+    if let (Some(from), Some(to)) = (from, to) {
+        if from > to {
+            return Err(ApiError::BadRequest(
+                "`from` must be less than or equal to `to`".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Drains the export stream to `path`, returning the byte count. Owns the file handle for
+/// its whole lifetime and **drops it on return** (Ok or Err) — so the caller can safely
+/// delete the `.partial` file on failure, which on Windows would fail while a write handle
+/// is still open (sharing violation).
+async fn drain_to_file(
+    path: &Path,
+    host: Arc<dyn ApiHost>,
+    from: Option<i64>,
+    to: Option<i64>,
+    stats: Arc<ExportStats>,
+) -> anyhow::Result<u64> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let stream = export_json_stream(host, from, to, stats);
+    futures_util::pin_mut!(stream);
+    let mut bytes: u64 = 0;
+    while let Some(chunk) = stream.try_next().await? {
+        file.write_all(&chunk).await?;
+        bytes += chunk.len() as u64;
+    }
+    file.flush().await?;
+    Ok(bytes)
 }
 
 /// Drains the same export stream to `<dir>/screensearch-export-<UTC stamp>.json`, writing
@@ -215,30 +252,15 @@ pub async fn export_to_file(
     let partial_path = dir.join(format!("{filename}.partial"));
 
     let stats = Arc::new(ExportStats::default());
-    let mut bytes: u64 = 0;
-    {
-        let mut file = tokio::fs::File::create(&partial_path).await?;
-        let stream = export_json_stream(host, from, to, stats.clone());
-        futures_util::pin_mut!(stream);
-        // On any error, best-effort remove the partial before propagating.
-        while let Some(chunk) = match stream.try_next().await {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tokio::fs::remove_file(&partial_path).await;
-                return Err(e);
-            }
-        } {
-            if let Err(e) = file.write_all(&chunk).await {
-                let _ = tokio::fs::remove_file(&partial_path).await;
-                return Err(e.into());
-            }
-            bytes += chunk.len() as u64;
-        }
-        if let Err(e) = file.flush().await {
+    // `drain_to_file` drops the file handle before returning, so removing the partial on
+    // failure (or after a failed rename) succeeds even on Windows.
+    let bytes = match drain_to_file(&partial_path, host, from, to, stats.clone()).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
             let _ = tokio::fs::remove_file(&partial_path).await;
-            return Err(e.into());
+            return Err(e);
         }
-    }
+    };
     if let Err(e) = tokio::fs::rename(&partial_path, &final_path).await {
         let _ = tokio::fs::remove_file(&partial_path).await;
         return Err(e.into());
