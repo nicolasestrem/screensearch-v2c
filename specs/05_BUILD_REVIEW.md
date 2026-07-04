@@ -20,6 +20,125 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-04 — 0.3.0 PR9: integration audit + release (`feat/pr9-audit-release`)
+
+The arc-closing audit + release PR (`03 §13b.8`; `docs/0.3.0.md` PR9). Every §13b.1–.7 acceptance
+line verified end-to-end on a real Windows desktop against a fresh profile (no prior install
+existed on this machine); doc sweeps (`06` #20, `07` #81) landed; version bumped to 0.3.0;
+CHANGELOG cut with removals first; 0.3.0 history archived per `04 §7` (folded into this PR by
+user decision). Raw evidence transcript: local-only `docs/audits/AUDIT_0.3.0_PR9_2026-07-04.md`
+(+ `pr9-*.log` files, git-ignored); this entry is the tracked record.
+
+**Scope decisions (user, 2026-07-04):** live populated-0.2.x-profile checks **waived** — the app
+has zero installed users, so no pre-v9 databases exist in the wild; the automated migration tests
+remain the proof (`07` #92). The `04 §7` archival sweep is **folded into PR9** rather than a
+post-tag follow-up PR.
+
+### Audit verdicts (per §13b line; key verbatim evidence)
+- **§13b.1 (trigger trim) — PASS.** Grep gates: `WH_MOUSE_LL`/`AddClipboardFormatListener`/
+  `typing_pause` only in history docs, the CHECK, `RETIRED_SETTINGS_KEYS`, and the D2 legacy
+  read-paths (matches the PR2-recorded exemptions). Fresh profile: event capture off, no removed
+  toggles. Live fire (event mode on): alt-tab → `foreground_change|3`, 9 s input silence →
+  `idle|1`, static screen → a `timer` fallback frame. Seeded retired keys dropped with exactly one
+  warn naming all five (`settings: dropped retired keys keys=["capture.event_on_clipboard",
+  "capture.event_on_typing_pause", "capture.event_on_click", "capture.event_on_scroll_stop",
+  "capture.event_typing_pause_ms"]`), silent relaunch. A seeded legacy frame renders
+  "**Captured via: Click**" in the Moment.
+- **§13b.2 (Beta retired) — PASS.** `Nemotron`/`Qwen3.5-9B`: zero hits in `crates/`, `src-tauri/`,
+  `ui/`. Settings → Models shows exactly DEFAULT | QUALITY per lane. **All four (lane, tier)
+  pairs downloaded, resolved per `MODEL_REGISTRY §4`, loaded, and produced real output**:
+  answer/default `Ministral-3-3B-Reasoning-2512` (2.1 GB, loaded), answer/quality
+  `Qwen3-4B-Thinking-2507` (2.5 GB, SSE ask streamed thinking+tokens+citations),
+  vision/default `Qwen3-VL-4B-Instruct` (3.3 GB + mmproj, tagged frame 14: activity=`terminal`,
+  confidence 0.95), vision/quality `Qwen3-VL-8B-Instruct` (6.2 GB, tagged frame 1:
+  activity=`coding`). Seeded `"beta"` remapped with one warn per lane
+  (`settings: retired 'beta' tier mapped to 'quality'`), DB rewritten to `"quality"`, silent
+  relaunch.
+- **§13b.3 (image lane) — PASS.** `nomic`/`image_embedding`/`EmbedImage`: only the frozen
+  MIGRATION_V1 DDL + v9 DROPs, the migration-test seed, the retired-key literal, docs (and one
+  false positive: "ergo**nomic**s"). Fresh boot applied the full v1→v10 chain. Migration +
+  schema-parity proof = the automated suite (`migration_v9_*`, `migration_v10_*`,
+  `fresh_and_migrated_schemas_agree_at_latest` — baseline run green). Parity/perf fixture:
+  `hybrid_search over 10000 frames: median = 27.2627ms, p95 = 67.5133ms (20 queries)` —
+  `1 passed; 0 failed`, 20 parity digests.
+- **§13b.4 (overlay) — PASS.** `overlay_perf` warm (debug build): `visible_ms=9`/`6`,
+  `input_ready_ms=23`/`17` (bar 150 ms); first results inside the 200 ms budget (67.5 ms p95 at
+  10k frames). Keyboard loop: summon over a focused third-party window → typed query landed in
+  the overlay → Enter hid it and opened the selected Moment in the main window. **D7 self-
+  exclusion at OS level:** the overlay is WDA-excluded — invisible even to the audit's own GDI
+  screenshots taken at the exact second `overlay_perf` proves it visible; the exact overlay-only
+  phrase appears **0** times across all stored raw/content text although a frame was captured at
+  that second. **D6 conflict loud — natural repro:** `Ctrl+Alt+M` is genuinely held by another
+  app on this machine; Settings showed the persistent red "HotKey already registered … Try a
+  different combination."; rebinding to `Ctrl+Alt+F9` registered cleanly and persisted.
+- **§13b.5 (where-was-i + marks) — PASS.** Unit fixture = the 14-test `kernel::resume` suite
+  (baseline green). Live: >7 min in one app → detour → `GET /v1/context/where-was-i` returned
+  that app's run (span + last frame) and the Deck card read "JUMP BACK — Claude — claude, until
+  11:24". **D8:** on a screen static 9–30 s (diff gate would drop), the mark hotkey landed a
+  `manual` frame **135 ms** after the press + the mark row. Intentions strip: newest-first,
+  thumbnail/note/age, OPEN/DONE/DISMISS (DONE resolved 1→2), **"Text kept"** row after the
+  backdated marked frame's image was purged by the retention sweep (`retention sweep expired
+  screenshots (text kept) degraded=1`) — D10. Honest refusals: capture off → no mark; excluded
+  app (notepad, focused) → no mark; ScreenSearch-focused `capture_now` via API → 503
+  `"a ScreenSearch window is focused"` (only the diff gate is bypassed — `07` #85d).
+  Multi-monitor determinism (pre-disconnect): API mark captured both monitors and attached to
+  the foreground monitor's frame.
+- **§13b.6 (API) — PASS.** Fresh profile: nothing listens (netstat empty, no `api.*` keys).
+  Enabled: `TCP 127.0.0.1:43210 … LISTENING` (loopback only; `binds_loopback_only` in the suite
+  asserts 0.0.0.0 impossible). 401 without/with wrong token; health 200. Every endpoint
+  exercised live: search (real hits), frames ±`?image=1` (200 `image/webp`, RIFF-verified),
+  where-was-i, marks CRUD (201/400 "exactly one"/404s), malformed → JSON 400, unknown route →
+  JSON 404. SSE ask streamed `thinking`/`token`/`citation`/`done` (120+5+1); consumer disconnect
+  → `answer stream cancelled by consumer; aborting sidecar generation`. Port conflict → "port in
+  use" badge + red inline os-error-10048 + "RETRY ON THIS PORT" + warning toast; release+retry →
+  bound. Live port change → "RESTART ON 43211" → rebound, old port freed. Regenerate → old 401,
+  new 200, same server. Export with API **off** → valid `screensearch.export.v1` JSON in
+  Downloads (CSPRNG-suffixed name). Quit → port freed, no process, **no orphaned llama-server**.
+- **§13b.7 (MCP) — PASS.** Real compiled exe over scripted stdio: initialize (serverInfo
+  `screensearch-mcp`, protocol 2025-06-18) → tools/list (6, in order) → all six tools
+  round-tripped against the live app (get_moment carried a ~900 KB base64 image block +
+  the vision analysis; ask returned an aggregated real-model answer with "Cited frames: …").
+  API-off: ids 1–2 succeed, every call → guided `isError` ("enable the API in ScreenSearch
+  Settings"), exit 0. Wrong token → guided 401 message. **Real client:** `claude mcp add` →
+  "✔ Connected"; a headless Claude Code session round-tripped `search_screen_history`
+  (`HITS=3 FIRST_APP=WindowsTerminal`). Installer inclusion: verified at the 0.3.0 release build
+  (§ "Release build" below).
+- **§13b.9 — PASS twice.** Baseline suite on the untouched tip 6a46dc0: ALL GREEN (fmt/clippy/
+  build/test 0 failed/ui lint+build/BINDINGS CLEAN — `docs/audits/pr9-baseline-suite.log`).
+  Re-run on the final branch tip before the PR (recorded below).
+
+### New finding (recorded, non-blocking)
+- **Monitor hot-unplug stalls capture silently (`07` #91).** The 3440×1440 primary display
+  disconnected mid-audit (DP power-save): one `WARN capture::wgc: capture: readback failed
+  monitor=1 error=no frame available from the capture device`, then **no frames for ~4 min**
+  despite foreground events while `/v1/health` kept reporting `capturing:true`; a mark pressed
+  during the transition produced a frame but **no mark row and no visible toast** (silent loss).
+  **Recovery: Deck STOP → START immediately restored frame flow.** Bounded (manual recovery, no
+  corruption) — post-0.3.0 hardening: react to WM_DISPLAYCHANGE/WGC Closed, or flip readiness +
+  toast instead of staying "capturing".
+
+### Skipped / not runnable (recorded honestly)
+- `07` #58 multi-DPI: still needs ≥2 monitors at *different* DPI scales (both ran at identical
+  scaling here, then one disconnected). Open, owner user.
+- Exclusive-fullscreen canary: accepted imperfection per contract; not exercised.
+- Overlay five-states visual + toast pixels: the overlay window is capture-protected (WDA) — not
+  screenshotable by design; covered by the config-guard test + behavioral checks (mark rows,
+  focus behavior, strip states).
+- Live populated-0.2.x upgrade boot: waived (user decision; zero installed users).
+
+### Release mechanics (this PR)
+- `06` #20 closed (03 §2 → 13-crate tree); `07` #81 closed (ARCHITECTURE/README/CLAUDE/AGENTS
+  swept current to PR8, TESTING annotated).
+- `05` backfill: the missing PR5 pass entry added retroactively below (clearly labeled).
+- CHANGELOG cut: `[Unreleased]` → `[0.3.0] — 2026-07-04`, **removals first** with rationale;
+  PR9 audit summary section added.
+- Version bump 0.2.2 → 0.3.0 (workspace `Cargo.toml`, `tauri.conf.json`, both `package.json`s,
+  lockfiles, `docs/API.md` example) + the 0.3.0 release build/installer evidence + archival
+  sweep per `04 §7` — recorded in the commits of this PR.
+
+### Release build (0.3.0, recorded when performed)
+- See the "installer evidence" addendum below (appended after the version-bump commit).
+
 ## Pass — 2026-07-04 — 0.3.0 PR8: MCP server (`feat/pr8-mcp-server`)
 
 The stdio MCP server wrapping PR7's local API (`docs/0.3.0.md` Part III; `03 §7c`/`§13b.7`; D13). New
@@ -333,6 +452,27 @@ clean. Live desktop pass per `docs/TESTING.md` PR6.
 - The static-screen `pool.Recreate` path and the non-focus-stealing `set_focusable(false)` summon are
   Windows-runtime behaviours that unit tests can't exercise — both are covered by the `docs/TESTING.md`
   PR6 live checks (mark a static fullscreen app; keep typing through the toast).
+
+## Pass — 2026-07-04 — 0.3.0 PR5: Flow overlay (`feat/pr5-flow-overlay`) — *backfilled*
+
+> **Backfilled during PR9** (the PR5 pass was recorded in `08` and `CHANGELOG.md` but this file
+> never received its entry — noticed in the PR9 sweep). Reconstructed from `08`'s PR5 entry and
+> PR #74; live acceptance was **re-proven in the PR9 audit pass above** (latency, self-exclusion,
+> conflict path, keyboard loop), so no verification output is fabricated here.
+
+- **Implemented:** the global-hotkey Flow overlay (`03 §7b`, D6/D7) — a second, pre-created,
+  hidden, `contentProtected`, always-on-top, taskbar-skipped Tauri window (`overlay.html`);
+  `tauri-plugin-global-shortcut` registration with loud conflict handling (toast +
+  `get_hotkey_status`); debounced search-as-you-type over the existing hybrid-search IPC; `Enter`
+  → `open_moment` in the main window; `Tab`/`?` Ask mode streaming over the existing ask
+  pipeline; `Esc`/blur hides (env `SCREENSEARCH_OVERLAY_STICKY` for tests); placement on the
+  foreground-window monitor with primary fallback; `overlay.hotkey` + `overlay.max_results`
+  settings (+ Settings Hotkeys UI); `overlay_perf` tracing around summon/shown/ack.
+- **Verification (as shipped in PR #74):** full suite green at merge; the Tauri config guard
+  `overlay_window_is_precreated_hidden_and_capture_protected` pins the window contract; PR9
+  re-measured summon latency live (6–9 ms visible, 17–23 ms input-ready) and re-proved D7.
+- **Skipped/deferred at the time:** exclusive-fullscreen suppression accepted (`07` #84); the
+  where-was-i empty-state strip landed with PR6.
 
 ## Pass — 2026-07-03 — 0.3.0 PR4: image-embedding lane removal (`feat/pr4-image-lane-removal`)
 

@@ -17,6 +17,41 @@
 
 ---
 
+## 2026-07-04 — 0.3.0 PR9: integration audit + release (`feat/pr9-audit-release`)
+- **Change:** The arc-closing audit + release PR — no feature code; docs, audit evidence, version,
+  and release mechanics only.
+  - **Audit:** every `03 §13b.1–.7` acceptance line verified end-to-end on a real Windows desktop
+    (fresh profile — none existed): grep gates; event-mode live-fire (foreground/idle/timer
+    fallback); all four (lane, tier) model pairs downloaded + loaded + used (real vision tags at
+    0.95 confidence, real SSE ask with citations); overlay latency 6–9 ms visible / 17–23 ms
+    input-ready vs the 150 ms bar; D7 self-exclusion proven at OS level (WDA — the overlay is
+    invisible even to external capture) + 0 hits for overlay-only text across stored frame text;
+    the D6 conflict path demonstrated against a *real* pre-existing `Ctrl+Alt+M` holder;
+    where-was-i correct-run + honest-empty; D8 static-screen mark at +135 ms; capture-off /
+    excluded-app / own-window honest refusals; D10 "Text kept" after retention purge; the full
+    API curl matrix (401s, SSE + disconnect-cancel, loud port conflict + guided retry, live port
+    change, regenerate, export-with-API-off, exit-frees-port, no orphaned sidecar); MCP stdio
+    session + API-off/wrong-token guided errors + a real `claude mcp add` client round-trip;
+    warn-once settings migrations re-proven on seeded boots. Tracked record: `05` PR9 pass; raw
+    transcript: local-only `docs/audits/AUDIT_0.3.0_PR9_2026-07-04.md`.
+  - **Docs:** `03 §2` crate tree → 13 crates (`06` #20 ✅); `docs/ARCHITECTURE.md` current to PR8
+    (13-crate map, v1→v10, new §9b, command list, 0.3.0 settings keys) + `README.md` +
+    `CLAUDE.md`/`AGENTS.md` swept (`07` #81 ✅); `docs/TESTING.md` PR4 section annotated with the
+    0.2.x-waiver; `05` PR5 pass backfilled (labeled).
+  - **Gaps:** new `07` #91 (monitor hot-unplug stalls capture silently; bounded, post-0.3.0) and
+    #92 (populated-0.2.x live-check waiver, user decision).
+  - **Release:** CHANGELOG cut to `[0.3.0] — 2026-07-04` with **removals first** + an Audited
+    section; version bump 0.2.2 → 0.3.0 across the four manifests + lockfiles + `docs/API.md`
+    example; 0.3.0 NSIS build with `screensearch-mcp.exe` inclusion verified; `04 §7` archival
+    sweep folded into this PR (user decision): live `05`–`08` + CHANGELOG history →
+    `specs/archive/*.v0.3.0.md` + `CHANGELOG-ARCHIVE.md`.
+- **Why:** `03 §13b.8` + `docs/0.3.0.md` PR9 — the audit is the arc's definition of done; the
+  release mechanics follow `04 §7`.
+- **Verification:** baseline suite ALL GREEN on the untouched tip `6a46dc0` and re-run green on the
+  final branch tip (fmt --check / clippy -D warnings / build / test 0 failed / ui lint+build /
+  bindings diff clean — verbatim in `05` and `docs/audits/pr9-baseline-suite.log`); perf fixture
+  `10000 frames: median 27.26 ms, p95 67.51 ms — 1 passed, 0 failed`.
+
 ## 2026-07-04 — 0.3.0 PR8: MCP server (`feat/pr8-mcp-server`)
 - **Change:** Added `crates/mcp` → `screensearch-mcp.exe`, a stdio MCP server wrapping the PR7 local API.
   - `crates/mcp` (lib + bin): hand-rolled newline-delimited JSON-RPC 2.0 (`rpc`), config resolution
