@@ -190,7 +190,7 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_suppress_during_input_ms,
         )
         .await,
-        overlay_hotkey: json(store, "overlay.hotkey", d.overlay_hotkey).await,
+        overlay_hotkey: load_overlay_hotkey(store, d.overlay_hotkey).await,
         overlay_max_results: num(store, "overlay.max_results", d.overlay_max_results).await,
         resume_min_dwell_secs: num(store, "resume.min_dwell_secs", d.resume_min_dwell_secs).await,
         marks_hotkey: json(store, "marks.hotkey", d.marks_hotkey).await,
@@ -755,6 +755,54 @@ async fn load_tier(store: &dyn Store, key: &str, default: ModelTier) -> ModelTie
     }
     tracing::warn!(key, raw = %raw, "settings: unparsable tier; using default");
     default
+}
+
+/// The pre-remap Flow-overlay default, retired because it collided with Claude Desktop's
+/// global quick-entry shortcut.
+const LEGACY_OVERLAY_HOTKEY: &str = "Ctrl+Alt+Space";
+
+/// Reads `overlay.hotkey`, one-shot remapping the retired default `Ctrl+Alt+Space` to the
+/// current default (`Ctrl+Alt+Z`). Only an **exact** match of the old default is migrated;
+/// any other chord — including one the user deliberately set — is returned untouched. A user
+/// who had intentionally chosen `Ctrl+Alt+Space` is indistinguishable from a stale default and
+/// is remapped once (accepted; they can set it back — `07`). Persisting the new value means the
+/// warn logs **once** and the next load returns it without re-entering this branch (same
+/// "log once" mechanism as [`load_tier`]). The write is best-effort (load must never error,
+/// `04 §4`); a failure is logged and the next load simply retries.
+///
+/// Lives in the load path (not the startup-maintenance sweep) for the same reason as
+/// [`load_tier`]: the composition root registers the overlay hotkey straight from
+/// `load_settings`' output, so a sweep-side remap would race it and the first post-upgrade
+/// session would still try to register the colliding chord.
+async fn load_overlay_hotkey(store: &dyn Store, default: String) -> String {
+    let raw = match store.get_setting("overlay.hotkey").await {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return default,
+        Err(e) => {
+            tracing::warn!(key = "overlay.hotkey", error = %e, "settings: read failed; using default");
+            return default;
+        }
+    };
+    let stored = match serde_json::from_str::<String>(&raw) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(key = "overlay.hotkey", error = %e, "settings: unparsable JSON; using default");
+            return default;
+        }
+    };
+    if stored == LEGACY_OVERLAY_HOTKEY {
+        tracing::warn!(
+            old = LEGACY_OVERLAY_HOTKEY,
+            new = %default,
+            "settings: retired overlay hotkey remapped (old default collided with Claude Desktop)"
+        );
+        let encoded = serde_json::to_string(&default).expect("String always serializes to JSON");
+        if let Err(e) = store.set_setting("overlay.hotkey", &encoded).await {
+            tracing::warn!(error = %e, "settings: failed to persist overlay-hotkey remap");
+        }
+        return default;
+    }
+    stored
 }
 
 #[cfg(test)]

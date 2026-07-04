@@ -16,7 +16,9 @@ use traits::{HotkeyStatus, MarkToast, OpenMoment, Toast, ToastLevel};
 const OVERLAY_LABEL: &str = "overlay";
 const MAIN_LABEL: &str = "main";
 const OVERLAY_HOTKEY_ID: &str = "overlay.hotkey";
-const OVERLAY_DEFAULT_CHORD: &str = "Ctrl+Alt+Space";
+// "Ctrl+Alt+Z": the original "Ctrl+Alt+Space" collided with Claude Desktop's quick-entry
+// shortcut. Must match `Settings::default().overlay_hotkey` and the UI `DEFAULT_OVERLAY_HOTKEY`.
+const OVERLAY_DEFAULT_CHORD: &str = "Ctrl+Alt+Z";
 const MARKS_HOTKEY_ID: &str = "marks.hotkey";
 const MARKS_DEFAULT_CHORD: &str = "Ctrl+Alt+M";
 const FALLBACK_WIDTH: u32 = 640;

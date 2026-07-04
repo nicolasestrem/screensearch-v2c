@@ -284,7 +284,61 @@ async fn overlay_hotkey_empty_string_resets_to_default() {
             .await
             .unwrap()
             .as_deref(),
-        Some("\"Ctrl+Alt+Space\"")
+        Some("\"Ctrl+Alt+Z\"")
+    );
+}
+
+#[tokio::test]
+async fn overlay_hotkey_legacy_default_remaps_once() {
+    // An install upgraded from before the default changed still holds "Ctrl+Alt+Space" (which
+    // collided with Claude Desktop). Loading must remap it once to the current default, persist
+    // that, and never re-enter the remap branch afterwards.
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    store
+        .set_setting("overlay.hotkey", "\"Ctrl+Alt+Space\"")
+        .await
+        .unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
+    // The remap is persisted, so the stored row now holds the new default…
+    assert_eq!(
+        store
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"Ctrl+Alt+Z\"")
+    );
+    // …and a second load returns it without the legacy value ever reappearing.
+    assert_eq!(
+        load_settings(dyn_store).await.overlay_hotkey,
+        Settings::default().overlay_hotkey
+    );
+}
+
+#[tokio::test]
+async fn overlay_hotkey_custom_value_survives() {
+    // A chord the user deliberately set (anything but the exact retired default) is never
+    // touched by the one-shot remap.
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    store
+        .set_setting("overlay.hotkey", "\"Ctrl+Shift+P\"")
+        .await
+        .unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.overlay_hotkey, "Ctrl+Shift+P");
+    assert_eq!(
+        store
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"Ctrl+Shift+P\""),
+        "a custom chord is left untouched in the DB"
     );
 }
 
