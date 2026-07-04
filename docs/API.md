@@ -59,7 +59,7 @@ All paths are under `http://127.0.0.1:<port>`.
 ### `GET /v1/health`
 
 ```json
-{ "version": "0.2.2", "uptime_secs": 128, "capturing": true }
+{ "version": "0.3.0", "uptime_secs": 128, "capturing": true }
 ```
 
 ### `GET /v1/search`

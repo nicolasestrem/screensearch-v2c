@@ -4,12 +4,13 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status — 0.3.0 arc in progress.** Capture → OCR/UIA text → deferred enrichment →
+> **Status — v0.3.0 shipped.** Capture → OCR/UIA text → deferred enrichment →
 > **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
 > the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
 > The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
-> capture, and a smart enrichment throttle; the active 0.3.0 arc trims invasive surfaces (event
-> triggers, Beta tier, image embeddings) and adds faster recall surfaces. The unsigned **NSIS
+> capture, and a smart enrichment throttle; the 0.3.0 arc trimmed invasive surfaces (event
+> triggers, Beta tier, image embeddings) and added flow recall — where-was-i + marks — plus an
+> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**. The unsigned **NSIS
 > installer** ships today; **code-signing** is the lone remaining packaging follow-up. Design lives
 > in [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project — no shared
@@ -57,14 +58,14 @@ capture refinements:
 | **UIA text source** | Foreground-window text via UI Automation, with automatic OCR fallback | ✅ Shipped |
 | **Smart enrichment throttle** | Opt-in CPU/GPU backpressure that eases off background work under load — capture/OCR/storage never pause | ✅ Shipped |
 
-The **0.3.0 arc** is the current surface-reduction + flow-recall pass:
+The **0.3.0 arc** (shipped) was the surface-reduction + flow-recall pass:
 
 | Feature | What it changes | Status |
 |---|---|---|
 | **Surface reduction** | Removes click/scroll/clipboard/typing triggers, the Beta model tier, and the unused image-embedding lane | ✅ Shipped |
-| **Flow overlay** | `Ctrl+Alt+Space` opens a protected always-on-top Search/Ask overlay over your current app | ✅ Implemented |
-| **Where-was-i + marks** | Resume context and mark-this-moment workflows | 🚧 Next |
-| **Local API + MCP wrapper** | Opt-in localhost API, export path, and thin MCP wrapper | 🚧 Planned |
+| **Flow overlay** | `Ctrl+Alt+Space` opens a protected always-on-top Search/Ask overlay over your current app | ✅ Shipped |
+| **Where-was-i + marks** | Resume context (`where_was_i`) and mark-this-moment (`Ctrl+Alt+M`, diff-gate-bypassing `capture_now`) | ✅ Shipped |
+| **Local API + MCP wrapper** | Opt-in localhost API (127.0.0.1 + bearer token), JSON export, and the `screensearch-mcp` stdio wrapper | ✅ Shipped |
 
 > Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
 > not pushed).
@@ -101,7 +102,7 @@ Desktop / Claude Code (`docs/API.md`, `docs/MCP.md`).
 - **Grounded, reasoning answers** — RAG over your screen history via a local llama.cpp model with
   a *thinking* mode. *(P4 — done)*
 - **Fast recall overlay** — a protected global-hotkey window for Search and Ask over the current
-  working context. *(0.3.0 PR5 — implemented)*
+  working context. *(0.3.0 — done)*
 
 ## Architecture (summary)
 

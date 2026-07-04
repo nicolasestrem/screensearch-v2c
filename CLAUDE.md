@@ -8,12 +8,12 @@ makes it searchable by text and meaning, and answers questions about it — full
 a **clean-slate** project; it shares no code or data with any prior version.
 
 **Current state: v0.1.0 shipped 2026-06-24; the 0.2.x arc (attention-first text signal + recall
-reports) is shipped. The active arc is 0.3.0 — "P7: surface reduction + flow recall + local API"
-(`docs/0.3.0.md`, `02 §5c`): subtract event-triggers/Beta-tier/image-lane, add a Flow overlay,
-where-was-i + marks, an opt-in localhost API + MCP wrapper. PR1 (the specs contract) is the entry
-point.** The full app exists — a 9-crate Rust workspace + a React/TS UI. The specs remain the
-contract; the build-loop docs (`05`/`06`/`07`/`08`) are the live status of record. Packaging is
-still the deferred follow-up.
+reports) is shipped; the 0.3.0 arc — "P7: surface reduction + flow recall + local API"
+(`docs/0.3.0.md`, `02 §5c`) — is complete (PR1–PR8: subtracted event-triggers/Beta-tier/image-lane;
+added the Flow overlay, where-was-i + marks, the opt-in localhost API + `screensearch-mcp` MCP
+wrapper; PR9 audited + released v0.3.0). The next arc is not yet defined.** The full app exists —
+a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
+(`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up.
 
 ## ⛔ Read the spec before doing anything (mandatory order)
 1. `specs/01_PROJECT_CONTEXT.md` — what is true today (env, constraints, non-goals)
@@ -33,10 +33,14 @@ Re-read each session — the files are the source of truth, not your memory.
 ## Where the code lives
 - `src-tauri/` — Tauri 2 shell + composition root (wires all impls; commands/IPC).
 - `crates/traits` — module contracts + shared types · `crates/kernel` — orchestrator (event bus,
-  worker pool, model supervisor, vision scheduler) · `crates/store` — SQLite + sqlite-vec + FTS5
-  store & job queue · `crates/capture` — WGC capture + diff gate + privacy · `crates/ocr` — WinRT
-  Media.Ocr · `crates/embeddings` — fastembed (in-process ONNX) · `crates/inference` — llama.cpp
-  sidecar client + Job-Object supervisor · `crates/doctor` — env smoke-check.
+  worker pool, model supervisor, vision scheduler, where-was-i resume heuristic) · `crates/store` —
+  SQLite + sqlite-vec + FTS5 store & job queue · `crates/capture` — WGC capture + diff gate +
+  privacy + event triggers · `crates/ocr` — WinRT Media.Ocr · `crates/uia` — UI-Automation text
+  source (OCR fallback) · `crates/embeddings` — fastembed (in-process ONNX) · `crates/inference` —
+  llama.cpp sidecar client + Job-Object supervisor · `crates/textfilter` — attention-first span
+  classifier · `crates/sysmon` — CPU/GPU pressure probe · `crates/doctor` — env smoke-check ·
+  `crates/api` — opt-in localhost HTTP API + export · `crates/mcp` — `screensearch-mcp.exe` stdio
+  MCP wrapper over that API.
 - `ui/` — React + TS + Vite; typed IPC bindings are generated into `ui/src/bindings/` — never
   hand-edit them.
 - Module crates depend on `traits` only, never on each other's impls (`Cargo.toml`, spec `03 §2`).

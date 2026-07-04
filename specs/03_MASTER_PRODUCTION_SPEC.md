@@ -29,16 +29,22 @@ Tauri WebView2 UI ──(commands/events, ts-rs)── Kernel
 
 ```
 screensearch-v2c/
-├── src-tauri/                 # Tauri app shell + command handlers + main()
+├── src-tauri/                 # Tauri app shell + command handlers + main() (composition root)
 │   └── Cargo.toml
 ├── crates/
-│   ├── kernel/                # orchestrator, event bus, ModelSupervisor, worker pool
+│   ├── kernel/                # orchestrator, event bus, ModelSupervisor, worker pool, resume heuristic
 │   ├── traits/                # the module contracts + shared domain types (no impls)
 │   ├── store/                 # Store/JobQueue impl on SQLite + sqlite-vec + FTS5
-│   ├── capture/               # CaptureSource (WGC) + diff gate
+│   ├── capture/               # CaptureSource (WGC) + diff gate + privacy gates + event triggers
 │   ├── ocr/                   # OcrProvider (WinRT Media.Ocr, STA worker)
-│   ├── embeddings/            # EmbeddingProvider (fastembed)
-│   └── inference/             # VisionProvider + AnswerProvider (sidecar HTTP client) + supervisor
+│   ├── uia/                   # OcrProvider via UI Automation (target-window text, COM MTA; OCR fallback — 0.2.x)
+│   ├── embeddings/            # EmbeddingProvider (fastembed, text-only since 0.3.0 PR4)
+│   ├── inference/             # VisionProvider + AnswerProvider (sidecar HTTP client) + supervisor
+│   ├── textfilter/            # attention-first span classifier → filtered content_text (0.2.x, §3b)
+│   ├── sysmon/                # PressureProbe (CPU GetSystemTimes + GPU PDH) for the enrichment throttle
+│   ├── doctor/                # environment smoke-check: WebView2 / Vulkan / llama-server
+│   ├── api/                   # opt-in local HTTP API (axum, 127.0.0.1-only, bearer token) + export (0.3.0, §7c)
+│   └── mcp/                   # → screensearch-mcp.exe: stdio MCP wrapper over the HTTP API (0.3.0, D13)
 ├── ui/                        # React 18 + TS + Vite ("Command Deck")
 ├── specs/
 ├── Cargo.toml                 # workspace
