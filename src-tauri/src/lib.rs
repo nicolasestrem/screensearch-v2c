@@ -1986,7 +1986,7 @@ impl UiaWithOcrFallback {
     /// hasn't failed). The blocking `spawn` (a COM `CoCreateInstance` + ready handshake, ~ms)
     /// runs on `spawn_blocking` off the executor, serialized by `respawn_gate` so a burst of
     /// frames after teardown creates exactly one client.
-    async fn get_or_spawn_uia(&self, cfg: &UiaRuntimeConfig) -> Option<Arc<uia::UiaTextProvider>> {
+    async fn get_or_spawn_uia(&self) -> Option<Arc<uia::UiaTextProvider>> {
         let existing = self.uia.read().expect("uia slot lock").clone();
         if let Some(p) = existing {
             return Some(p);
@@ -2003,14 +2003,20 @@ impl UiaWithOcrFallback {
         if self.spawn_failed.load(std::sync::atomic::Ordering::Relaxed) {
             return None;
         }
-        let budget = cfg.budget;
+        // Read the budget fresh under the gate rather than trusting the caller's snapshot: a
+        // settings save can land between `recognize` snapshotting its `cfg` and this spawn, and
+        // while the slot is still empty that save's teardown is a no-op — so the stale snapshot
+        // would otherwise get baked permanently into the worker. Reading the live config here
+        // keeps "every UIA setting hot-applies" true across the capture-start → first-spawn
+        // window. (A second save racing this exact in-progress spawn self-heals on the next save.)
+        let budget = self.config.lock().expect("uia config lock").budget;
         match tokio::task::spawn_blocking(move || uia::UiaTextProvider::spawn(budget)).await {
             Ok(Ok(provider)) => {
                 let arc = Arc::new(provider);
                 *self.uia.write().expect("uia slot lock") = Some(arc.clone());
                 tracing::info!(
-                    budget_ms = cfg.budget.latency_ms,
-                    control_view = cfg.budget.control_view,
+                    budget_ms = budget.latency_ms,
+                    control_view = budget.control_view,
                     "UI Automation client connected (OCR fallback)"
                 );
                 Some(arc)
@@ -2109,7 +2115,7 @@ impl OcrProvider for UiaWithOcrFallback {
                 .as_deref()
                 .is_some_and(|k| self.breaker.lock().expect("breaker lock").is_open(k, now));
             if !breaker_open {
-                if let Some(provider) = self.get_or_spawn_uia(&cfg).await {
+                if let Some(provider) = self.get_or_spawn_uia().await {
                     let outcome = provider.recognize_detailed(frame).await;
                     if let Some(k) = app_key.as_deref() {
                         let signal = uia::breaker::signal(outcome.end);

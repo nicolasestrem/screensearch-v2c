@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A walk that blows its hard timeout is now **cancelled** instead of running to completion
     against the struggling app.
   - **Every UIA setting now takes effect immediately** on save (budget, node caps, control
-    view, input-suppression) — no app restart, matching the "Applies now" hints.
+    view, input-suppression) — no app restart, matching the "Applies now" hints. (A settings
+    save that raced the very first client spawn could previously bake the pre-save budget into
+    the new client; the client now reads the live config at spawn time, closing that window.)
   - **Recovery for an already-hung app:** disable UI Automation text (or stop capture) — which
     now truly disconnects — then restart the affected browser/Electron app to clear its sticky
     accessibility mode.

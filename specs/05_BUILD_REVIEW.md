@@ -59,3 +59,12 @@ For each build pass, append an entry:
 - **Still risky:** The live-desktop UIA lifecycle test (`uia_worker_exits_on_shutdown`) and the
   hang-doesn't-recur behavior are `#[ignore]`d in CI (need a real session) — must be run locally
   (`cargo test -p uia -- --ignored`) + a `npm run tauri dev` walkthrough before merge.
+- **Review follow-up (PR #79, 2026-07-04):** addressed the one substantive review finding (a
+  `claude`-bot inline comment; gemini/codex left no actionable comments). `get_or_spawn_uia`
+  baked the *caller's* stale `cfg.budget` snapshot: a settings save landing while the slot was
+  still empty (capture-start → first-spawn window) swaps `config` + tears down a **no-op empty
+  slot**, then the racing frame spawned the client with the pre-save budget — persisting until
+  the next save, contradicting "every UIA setting hot-applies." Fix: drop the `cfg` param and
+  read `self.config.lock().budget` fresh under the `respawn_gate` (the spawn now owns reading
+  the live config); log lines use the fresh `budget` too. Residual two-save micro-race recorded
+  in `07` #95 (not human-reachable, self-heals). No signature/IPC change → bindings stay clean.
