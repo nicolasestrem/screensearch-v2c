@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::Stream;
@@ -20,6 +20,7 @@ use tokio::io::AsyncWriteExt;
 use traits::ExportResult;
 
 use crate::error::ApiError;
+use crate::extract::ApiQuery;
 use crate::{now_ms, ApiHost, ApiState};
 
 /// The export document's `schema` tag — a version marker so consumers can detect the v1
@@ -185,7 +186,7 @@ pub struct ExportParams {
 
 pub async fn export(
     State(state): State<ApiState>,
-    Query(params): Query<ExportParams>,
+    ApiQuery(params): ApiQuery<ExportParams>,
 ) -> Result<Response, ApiError> {
     if params.format.as_deref().unwrap_or("json") != "json" {
         return Err(ApiError::BadRequest(
@@ -233,9 +234,15 @@ pub async fn export_to_file(
             }
             bytes += chunk.len() as u64;
         }
-        file.flush().await?;
+        if let Err(e) = file.flush().await {
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            return Err(e.into());
+        }
     }
-    tokio::fs::rename(&partial_path, &final_path).await?;
+    if let Err(e) = tokio::fs::rename(&partial_path, &final_path).await {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(e.into());
+    }
 
     Ok(ExportResult {
         path: final_path.to_string_lossy().into_owned(),

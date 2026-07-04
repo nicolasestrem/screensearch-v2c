@@ -288,6 +288,14 @@ Settings → **Local API** after you enable it.
   "Listening…".
 - **Regenerate token — no restart.** While listening, click **Regenerate**. The old token now gets
   `401`, the new token `200`, on the **same** running server (no toggle-off/on needed).
+- **Change the port while running (PR #76 fix).** While listening, edit the port field to a different
+  free port: a **"Restart on {port}"** button appears with the "differs from the running port" note.
+  Click it — the server rebinds and reads "Listening on 127.0.0.1:{new port}", and `netstat` shows the
+  new port LISTENING (the old one freed).
+- **Malformed request → JSON 400 (PR #76 fix).** With the API on,
+  `curl -s -H "Authorization: Bearer <token>" "http://127.0.0.1:43210/v1/search?limit=10"` (no `q`) and
+  `.../v1/frames/not-a-number` each return `{"error":"bad_request","message":…}` with
+  `content-type: application/json` — not a plaintext framework rejection.
 - **Export works with the API disabled.** Turn the API **off**. Click Settings → Data export →
   **Export…**: a success toast shows the written path in your Downloads folder
   (`screensearch-export-<stamp>.json`). Validate it: `jq . "%USERPROFILE%\Downloads\screensearch-export-*.json"`

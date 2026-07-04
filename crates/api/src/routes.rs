@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use traits::{AnswerDelta, AnswerOpts, Mark, ResumeContext, SearchHit};
 
 use crate::error::ApiError;
+use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::{build_search_query, now_ms, ApiState};
 
 /// `GET /v1/health` — liveness + a little state (`03 §7c`).
@@ -46,7 +47,7 @@ pub struct SearchParams {
 
 pub async fn search(
     State(state): State<ApiState>,
-    Query(params): Query<SearchParams>,
+    ApiQuery(params): ApiQuery<SearchParams>,
 ) -> Result<Json<Vec<SearchHit>>, ApiError> {
     let settings = state.host.settings().await;
     let query = build_search_query(
@@ -75,8 +76,8 @@ pub struct FrameParams {
 
 pub async fn frame(
     State(state): State<ApiState>,
-    Path(id): Path<i64>,
-    Query(params): Query<FrameParams>,
+    ApiPath(id): ApiPath<i64>,
+    ApiQuery(params): ApiQuery<FrameParams>,
 ) -> Result<Response, ApiError> {
     if params.image == Some(1) {
         match state
@@ -156,7 +157,7 @@ pub struct CreatedMark {
 
 pub async fn create_mark(
     State(state): State<ApiState>,
-    Json(body): Json<CreateMarkBody>,
+    ApiJson(body): ApiJson<CreateMarkBody>,
 ) -> Result<Response, ApiError> {
     match (body.frame_id, body.now) {
         (Some(frame_id), false) => {
@@ -202,7 +203,7 @@ pub struct ResolvedMark {
 
 pub async fn resolve_mark(
     State(state): State<ApiState>,
-    Path(id): Path<i64>,
+    ApiPath(id): ApiPath<i64>,
 ) -> Result<Json<ResolvedMark>, ApiError> {
     // Marks are user-created (tens, not millions), so an O(n) existence check avoids a
     // new store method while still giving a clean 404.
@@ -238,7 +239,7 @@ pub struct AskBody {
 
 pub async fn ask(
     State(state): State<ApiState>,
-    Json(body): Json<AskBody>,
+    ApiJson(body): ApiJson<AskBody>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
     let provider = state
         .host

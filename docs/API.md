@@ -35,7 +35,9 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:43210/v1/health
 
 ## Errors
 
-Every non-2xx response is a JSON body:
+Every non-2xx response is a JSON body — including malformed query strings, bodies, and path
+segments, which are mapped to `400 bad_request` rather than a framework plaintext rejection, so
+clients can parse errors uniformly:
 
 ```json
 { "error": "not_found", "message": "frame 42 not found" }

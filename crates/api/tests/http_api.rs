@@ -352,7 +352,7 @@ async fn search_returns_hits_from_fixture() {
         "only the invoice frame matches"
     );
 
-    // Missing `q` → 400 (axum query rejection).
+    // Missing `q` → 400 on the JSON error contract, not axum's plaintext rejection.
     let r = client()
         .get(format!("{base}/v1/search?limit=10"))
         .headers(bearer(TEST_TOKEN))
@@ -360,6 +360,16 @@ async fn search_returns_hits_from_fixture() {
         .await
         .unwrap();
     assert_eq!(r.status(), 400);
+    assert!(r
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "bad_request");
+    assert!(body["message"].is_string());
 
     server.stop().await;
 }
@@ -403,6 +413,17 @@ async fn frame_detail_image_and_not_found() {
     assert_eq!(r.status(), 404);
     let body: serde_json::Value = r.json().await.unwrap();
     assert_eq!(body["error"], "not_found");
+
+    // A non-integer id → 400 on the JSON error contract (path rejection mapped).
+    let r = client()
+        .get(format!("{base}/v1/frames/not-a-number"))
+        .headers(bearer(TEST_TOKEN))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "bad_request");
 
     server.stop().await;
 }

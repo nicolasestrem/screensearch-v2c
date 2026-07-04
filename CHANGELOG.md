@@ -33,6 +33,12 @@ There is no schema change in this release. *Live-verified on Windows: off by def
 the 401 posture, the loud port-conflict retry, token regeneration without a restart, SSE cancellation
 on disconnect, and a valid export produced with the API off.*
 
+Review hardening (PR #76): malformed requests (a bad query string, body, or path segment) now return
+the same `{ "error", "message" }` 400 as every other error instead of a framework plaintext body; the
+port can be changed while the API is running via a "Restart on {port}" button (previously the edited
+port was inert); the port field clamps to `1024–65535`; a failed export never leaves a `.partial` file
+behind; and a screenshot missing on disk returns a clean `404` rather than a `500`.
+
 ### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
 Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing
 before this detour?" — open the Flow overlay with an empty query (or look at the Deck) and, when it can,

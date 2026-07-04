@@ -23,6 +23,8 @@ const THREAT_MODEL =
   "Any local process holding the token can read your entire screen history — enabling this is an explicit trust decision.";
 
 const DEFAULT_PORT = 43210;
+const PORT_MIN = 1024;
+const PORT_MAX = 65535;
 
 export function ApiPanel() {
   const status = useApiStatus();
@@ -71,9 +73,12 @@ export function ApiPanel() {
   const busy = setConfig.isPending || regenerate.isPending;
   const bindFailed = s.enabled && !s.running && Boolean(s.last_error);
 
+  // Clamp to the backend's accepted band so a stray value never fails IPC deserialization
+  // into `u16` (the backend clamps to the floor too; this keeps the UI honest).
   const parsedPort = (): number => {
     const n = Number.parseInt(portDraft, 10);
-    return Number.isFinite(n) ? n : DEFAULT_PORT;
+    if (!Number.isInteger(n)) return DEFAULT_PORT;
+    return Math.max(PORT_MIN, Math.min(PORT_MAX, n));
   };
 
   const toggle = (next: boolean) => {
@@ -94,7 +99,9 @@ export function ApiPanel() {
     );
   };
 
-  const retryBind = () => {
+  // (Re)start the server on the drafted port — used both to retry after a bind failure and
+  // to apply a port change while the server is running (a config change is a restart).
+  const restartOnPort = () => {
     setConfig.mutate(
       { enabled: true, port: parsedPort() },
       {
@@ -103,10 +110,13 @@ export function ApiPanel() {
             toast.success(`Local API listening on 127.0.0.1:${result.port}.`);
           }
         },
-        onError: (e) => toast.error(`Could not start the local API: ${String(e)}`),
+        onError: (e) => toast.error(`Could not restart the local API: ${String(e)}`),
       },
     );
   };
+
+  // While running, the drafted port differs from the live one → offer an explicit apply.
+  const portChangedWhileRunning = s.running && parsedPort() !== s.port;
 
   const copyToken = async () => {
     if (!s.token) return;
@@ -177,10 +187,22 @@ export function ApiPanel() {
           />
         )}
 
+        {/* Apply a port change while running — otherwise the edited port is inert (D6 mirror). */}
+        {portChangedWhileRunning && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" onClick={restartOnPort} disabled={busy}>
+              Restart on {parsedPort()}
+            </Button>
+            <span className="text-caption text-ink-faint">
+              Port {parsedPort()} differs from the running port {s.port}.
+            </span>
+          </div>
+        )}
+
         {/* Loud guided-change: the port was in use, so offer a retry (D6 mirror). */}
         {bindFailed && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={retryBind} disabled={busy}>
+            <Button variant="secondary" onClick={restartOnPort} disabled={busy}>
               Retry on this port
             </Button>
             <span className="text-caption text-ink-faint">

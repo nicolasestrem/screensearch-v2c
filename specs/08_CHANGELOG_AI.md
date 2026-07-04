@@ -54,6 +54,26 @@
   images), `format=csv`→400, unknown frame→404, and a second bind on 43210 → `AddrInUse` (the loud
   port-conflict path). Verbatim in `05`.
 
+## 2026-07-04 — 0.3.0 PR7 review fixes (PR #76; Gemini + Codex)
+- **Change:** Addressed the five applicable inline bot suggestions on the open PR (bots not replied to).
+  - `crates/api/src/extract.rs` (new): `ApiQuery`/`ApiPath`/`ApiJson` wrappers that map axum's
+    stock extractor rejections to `ApiError::BadRequest`, so malformed query/body/path values stay on
+    the `{error,message}` JSON contract (Codex P2). Wired into every route (`routes.rs`, `export.rs`);
+    2 integration assertions strengthened (missing `q`, non-integer frame id → `bad_request` JSON).
+  - `ui/.../ApiPanel.tsx`: a "Restart on {port}" affordance when the drafted port differs from the
+    live one, so `api.port` is configurable while running (Codex P2); `parsedPort` now clamps to
+    `1024..=65535` (Gemini) so a stray value can't fail `u16` IPC deserialization.
+  - `crates/api/src/export.rs`: `export_to_file` removes the `.partial` file if `flush`/`rename`
+    fails (Gemini) — a failed export never leaves a plausible file.
+  - `src-tauri/src/local_api.rs`: `frame_image` maps a `NotFound` file read to `Ok(None)` → clean
+    404 instead of 500 (Gemini).
+- **Why:** review hardening on the open PR #76; no behavior change for well-formed requests, no schema
+  or ts-rs type change (bindings untouched).
+- **Verification:** `cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` (exit 0)
+  · `cargo test --workspace` (all green; `api` http_api 12 passed/1 ignored, `inference` 104, `store`
+  61) · `ui` `npm run lint && npm run build` · `git diff --exit-code -- ui/src/bindings` clean. Verbatim
+  in `05`.
+
 ## 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 - **Change:** Added the flow-recall core — a where-was-i heuristic and mark-this-moment — end to end.
   - `crates/traits`: `FrameContextRow`, `CaptureNowRequest`/`CaptureNowReceiver`, `CapturedFrame.demanded`;

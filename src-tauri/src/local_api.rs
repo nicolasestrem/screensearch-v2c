@@ -125,7 +125,13 @@ impl ApiHost for TauriApiHost {
         let Some(path) = safe_frame_path(&self.data_dir, &detail.image_path) else {
             return Ok(None);
         };
-        let bytes = tokio::fs::read(&path).await?;
+        // A file missing on disk (manual delete, sync gap) is not a server fault — return
+        // `None` so the route answers a clean 404 rather than a 500.
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
         // Pre-WebP frames are JPEG; current frames are WebP (`07` #73). Extension decides.
         let content_type = if detail.image_path.to_ascii_lowercase().ends_with(".webp") {
             "image/webp"

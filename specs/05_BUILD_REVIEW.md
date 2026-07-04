@@ -115,6 +115,36 @@ is documented in `docs/TESTING.md` for the PR9 audit.
 - The export cursor scans ids from 0 even for a late window (`07` #89c) — correct, bounded, not
   optimal.
 
+### Follow-up — PR #76 review fixes (Gemini + Codex bot comments)
+Addressed the five applicable inline suggestions on the open PR (bots not replied to, per request):
+1. **Malformed requests broke the JSON error contract (Codex P2).** Axum's stock `Query`/`Json`/
+   `Path` extractors reject *before* the handler, returning a plaintext body that bypasses
+   `ApiError` — so `GET /v1/search` (no `q`) or `/v1/frames/not-a-number` returned a non-`{error,
+   message}` 400, contradicting `docs/API.md`. Added `crates/api/src/extract.rs` — `ApiQuery`/
+   `ApiPath`/`ApiJson` wrappers that delegate to the stock extractors and map every rejection to
+   `ApiError::BadRequest`. Swapped them into all routes (`routes.rs`, `export.rs`). Two integration
+   assertions strengthened (`search` missing-`q` and `frames/not-a-number` now assert
+   `error=="bad_request"` + JSON content-type).
+2. **Port edits were inert while the API ran (Codex P2).** The port `Field` was editable when
+   running but there was no apply action, and the hint claimed a change "restarts the server" — so
+   `api.port` was effectively unconfigurable from the normal path. Added a "Restart on {port}"
+   affordance (`ApiPanel.tsx`) shown when the drafted port differs from the live one; it reuses the
+   bind-retry restart (the D6-mirror pattern), making the hint honest.
+3. **Front-end port not clamped (Gemini).** `parsedPort` only checked finiteness, so a negative or
+   >65535 value would fail IPC deserialization into `u16`. Now clamps to `1024..=65535` (the backend
+   clamps to the floor too).
+4. **`.partial` left on flush/rename failure (Gemini).** `export_to_file` cleaned up the partial on
+   a stream/write error but the trailing `file.flush()` and `rename` still used bare `?`. Both now
+   remove the partial before returning the error — a failed export never leaves a plausible file.
+5. **Missing image file → 500 (Gemini).** `TauriApiHost::frame_image` used `tokio::fs::read(..)?`,
+   so a file missing on disk (manual delete/sync gap) surfaced as 500. Now maps `NotFound` to
+   `Ok(None)`, letting the route answer a clean 404.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all suites ok
+  (`api` http_api.rs **12 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**;
+  workspace 0 failed); `cd ui && npm run lint && npm run build` → exit 0 / built; `git diff
+  --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
+
 ## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 
 The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and
