@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-04 — 0.3.0 PR8: MCP server (`feat/pr8-mcp-server`)
+- **Change:** Added `crates/mcp` → `screensearch-mcp.exe`, a stdio MCP server wrapping the PR7 local API.
+  - `crates/mcp` (lib + bin): hand-rolled newline-delimited JSON-RPC 2.0 (`rpc`), config resolution
+    (`config`, flag>env>default), an `ApiClient` over `127.0.0.1:<port>` with guided `ApiFailure` mapping
+    (`client`), SSE line-buffer + `AnswerDelta` aggregator (`sse`), method dispatch + version negotiation
+    (`server`), and the six tools (`tools`): `search_screen_history`, `ask_screen_history`, `get_moment`
+    (+`include_image`), `where_was_i`, `list_marks`, `add_mark`. Deps: reqwest/tokio/serde_json/
+    futures-util/base64 only — **no axum, no store, no app crate** (D13); `api`/`store`/`traits` are
+    test-only dev-deps.
+  - Packaging: `bundle.externalBin: ["binaries/screensearch-mcp"]` + `scripts/stage-mcp.mjs` (builds
+    `-p mcp --release`, stages `screensearch-mcp-<host-triple>.exe`), wired into `beforeDevCommand`/
+    `beforeBuildCommand` + a CI step; `src-tauri/binaries/` git-ignored; `npm run stage:mcp`.
+  - Docs: `docs/MCP.md` (client config + threat model + tool table + troubleshooting); `docs/TESTING.md`
+    §PR8 manual acceptance; `CHANGELOG.md`; fresh-clone staging note in `CLAUDE.md`/`AGENTS.md`.
+- **Why:** `03 §7c` (MCP server, D13) + `§13b.7` DoD; `docs/0.3.0.md` PR8. Meets the agent ecosystem where
+  it is without moving a byte off-device — the open-source audience's "no API, no automations" ask.
+- **Verification:** full suite green — `cargo fmt --all -- --check` (exit 0), `cargo clippy --workspace
+  --all-targets -- -D warnings` (clean), `cargo build --workspace` (Finished), `cargo test --workspace`
+  (**494 passed, 0 failed**; 30 mcp unit + 19 spawned-exe stdio integration tests), `ui` lint+build,
+  `git diff --exit-code -- ui/src/bindings` (exit 0, no bindings touched). Live cross-process: the exe
+  driven over scripted stdio against the real API on `127.0.0.1:43210` round-tripped every tool. externalBin
+  failure mode confirmed (`cargo check -p screensearch` exit 101 with the sidecar removed, 0 restored).
+  `npm run tauri build` produced `ScreenSearch_0.2.2_x64-setup.exe`; `7z l` shows both `screensearch.exe`
+  and `screensearch-mcp.exe`. No schema change (v10); protocol-underspecification resolution recorded
+  (`07` #90), stale `03 §2` crate tree flagged for PR9 (`06` #20).
+
 ## 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
 - **Change:** Added the opt-in local HTTP API and streaming JSON export, end to end.
   - `crates/traits`: `ApiStatus`/`ExportRequest`/`ExportResult` ts-rs types (+ `no_bigint` guards,

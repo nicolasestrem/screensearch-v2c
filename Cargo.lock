@@ -2791,6 +2791,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "api",
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde_json",
+ "store",
+ "tokio",
+ "traits",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

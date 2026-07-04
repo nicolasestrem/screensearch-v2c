@@ -84,7 +84,10 @@ throttle** eases off background work under sustained CPU/GPU pressure without ev
 OCR, or storage. Retention purges run at startup and hourly when enabled, and the StatusRail shows
 real DB/frame storage usage. `Ctrl+Alt+Space` opens the **Flow overlay**: a second, capture-protected
 Tauri window for quick Search/Ask without leaving the foreground app; `Esc` hides it and `Enter`
-opens the selected Moment in the main Command Deck.
+opens the selected Moment in the main Command Deck. An **opt-in local HTTP API** (off by default,
+`127.0.0.1` + bearer token) exposes search/ask/frames/marks to local scripts and agents, and
+`screensearch-mcp.exe` — bundled in the installer — wraps it as a stdio **MCP server** for Claude
+Desktop / Claude Code (`docs/API.md`, `docs/MCP.md`).
 
 ## What it does (v1.0 target)
 
