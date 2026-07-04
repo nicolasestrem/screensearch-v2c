@@ -31,6 +31,7 @@ use kernel::{CaptureFactory, IdleSource, Kernel, KernelEvent};
 use store::SqliteStore;
 use tokio::task::JoinHandle;
 
+mod local_api;
 mod overlay;
 
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
@@ -109,6 +110,13 @@ struct AppState {
     embed_models_dir: PathBuf,
     db_path: PathBuf,
     frames_dir: PathBuf,
+    /// The opt-in local HTTP API runtime (0.3.0 PR7). Holds the server slot + live token;
+    /// the server is constructed only when `api.enabled` (`03 §7c`).
+    api_runtime: Arc<local_api::ApiRuntime>,
+    /// The `ApiHost` adapter the API/export commands run against; `None` only when the DB
+    /// failed to open (no store/kernel to adapt). It holds the app-start instant for the
+    /// `/v1/health` uptime anchor.
+    api_host: Option<Arc<local_api::TauriApiHost>>,
 }
 
 /// Liveness probe for the typed IPC bridge (P0 smoke test, retained).
@@ -1109,6 +1117,21 @@ pub fn run() {
                 ));
             }
 
+            // Build the local-API host adapter (0.3.0 PR7) when the spine is up. The
+            // server itself is not started here — `local_api::autostart` starts it only
+            // when `api.enabled`, after `AppState` is managed.
+            let started_at_ms = now_ms();
+            let api_host = match (&store, &kernel) {
+                (Some(store), Some(kernel)) => Some(Arc::new(local_api::TauriApiHost::new(
+                    store.clone(),
+                    kernel.clone(),
+                    app.handle().clone(),
+                    data_dir.clone(),
+                    started_at_ms,
+                ))),
+                _ => None,
+            };
+
             app.manage(AppState {
                 store,
                 kernel,
@@ -1123,7 +1146,12 @@ pub fn run() {
                 embed_models_dir,
                 db_path,
                 frames_dir,
+                api_runtime: Arc::new(local_api::ApiRuntime::new()),
+                api_host,
             });
+
+            // Start the local API if it was left enabled (loud on a bind failure, D6).
+            local_api::autostart(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1164,7 +1192,11 @@ pub fn run() {
             add_mark,
             list_marks,
             resolve_mark,
-            set_mark_note
+            set_mark_note,
+            local_api::set_api_config,
+            local_api::get_api_status,
+            local_api::regenerate_api_token,
+            local_api::export_data
         ])
         .on_window_event(|window, event| {
             match event {
@@ -1198,6 +1230,10 @@ pub fn run() {
             // would terminate the sidecar anyway (`03 §6`).
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
+                // Stop the local API server first (bounded graceful shutdown), so an open
+                // `/v1/ask` SSE connection can't wedge exit (`03 §7c`).
+                let api_runtime = state.api_runtime.clone();
+                tauri::async_runtime::block_on(local_api::stop_server(&api_runtime));
                 if let Some(kernel) = state.kernel.clone() {
                     tauri::async_runtime::block_on(async {
                         kernel.stop_throttle().await;
