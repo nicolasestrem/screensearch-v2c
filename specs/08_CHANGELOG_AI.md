@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
+- **Change:** Added the opt-in local HTTP API and streaming JSON export, end to end.
+  - `crates/traits`: `ApiStatus`/`ExportRequest`/`ExportResult` ts-rs types (+ `no_bigint` guards,
+    committed bindings) and a Serialize-only `ExportFrameRow` in `domain`. Token lives on `ApiStatus`,
+    never the `Settings` struct.
+  - `crates/store`: inherent `export_frames_page(after_id, from, to, limit)` — keyset cursor,
+    `frames LEFT JOIN frame_text`, half-open window, connection released per page. 4 tests.
+  - `crates/inference`: fixed the SSE cancellation leak (`§7c`) — `AnswerSidecar::run`'s consume loop
+    extracted to `pump_deltas` with a `tokio::select!` on `tx.closed()` + an `AbortOnDrop` guard on the
+    detached stream task; a dropped receiver (SSE disconnect / `cancel_ask`) now aborts the sidecar so
+    generation actually stops. 2 tests.
+  - `crates/api` (new crate, depends on `traits` only): `ApiHost` trait seam; `ApiServer`
+    (`127.0.0.1`-only by construction — `BIND_IP` const, no address param; bind-before-spawn;
+    graceful 3s-then-abort stop); bearer-auth middleware on every route (constant-time compare, live
+    `RwLock` token); `ApiError`/`ErrorBody`; routes health/search/frames(+image)/where-was-i/marks/
+    ask(SSE)/export(streamed); one export code path shared by `GET /v1/export` and `export_to_file`
+    (`.partial`+rename to Downloads). axum 0.8 the sole new dep. 14 tests + an `#[ignore]` curl harness.
+  - `src-tauri`: `local_api.rs` — `TauriApiHost` over the concrete store/kernel + existing helpers;
+    `ApiRuntime` slot + live token in `AppState`; `apply_api_config` (persist `api.*` KV, token-on-
+    first-enable, restart, loud bind-failure state); 4 commands; autostart on boot; server stopped
+    first on exit. 4 tests. Added `anyhow` + `api` deps.
+  - `ui`: `ApiPanel` (five states, threat-model copy, token reveal/copy/regenerate, port-in-use
+    retry) + a Data export button (Downloads, works with the API off); `apiStatus` query/key + 3
+    mutations + 4 command wrappers; fixed the stale "backend never emits toast" comments.
+  - Docs: `docs/API.md` (new); `docs/TESTING.md` PR7 manual-acceptance; `CHANGELOG.md`; `05`/`06`/`07`
+    (#88 export-destination decision, #89 v1 residuals, #80 shipped); `UI_REFERENCE §5` `ExportPanel`.
+- **Why:** 0.3.0 PR7 (`docs/0.3.0.md` Part III; `03 §7c`/`§7`/`§8`/`§13b.6`; D11/D12). Turns the app
+  into a local platform (the open-source ask) without moving a byte off the machine — reusing hybrid
+  search, the ask pipeline, where-was-i, and marks; no new retrieval code.
+- **Verification:** `cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` ·
+  `cargo build --workspace` · `cargo test --workspace` (all green; new: 4 store + 2 inference + 14 api
+  + 4 local_api + 3 ts-rs guards) · `ui` `npm run lint && npm run build` · bindings diff clean. **Live:**
+  a real `ApiServer` over the fixture store on `127.0.0.1:43210`, exercised by external `curl` —
+  401/401/200 auth, every endpoint round-tripped, export valid JSON (frames + content text + marks, no
+  images), `format=csv`→400, unknown frame→404, and a second bind on 43210 → `AddrInUse` (the loud
+  port-conflict path). Verbatim in `05`.
+
 ## 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 - **Change:** Added the flow-recall core — a where-was-i heuristic and mark-this-moment — end to end.
   - `crates/traits`: `FrameContextRow`, `CaptureNowRequest`/`CaptureNowReceiver`, `CapturedFrame.demanded`;

@@ -20,6 +20,101 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
+
+The opt-in local HTTP API + streaming JSON export (`docs/0.3.0.md` Part III; `03 §7c`/`§7`/`§8`/
+`§13b.6`; D11/D12). Built bottom-up: shared types → store cursor → the inference cancellation fix →
+the `crates/api` crate → the composition-root wiring → the UI → docs. No schema change (stays v10).
+
+### Implemented
+- **Shared types** (`crates/traits`): `ApiStatus`/`ExportRequest`/`ExportResult` (ts-rs, exported to
+  `ui/src/bindings`, added to the `no_bigint_in_ipc_types` guard) + `ExportFrameRow` (Serialize-only,
+  in `domain`, shared by store↔api without a module→module dep). The bearer token rides `ApiStatus`
+  (Settings reveal/copy) but **never** the `Settings` struct, so it can't leak via `get_settings`.
+- **Store cursor** (`crates/store/src/records.rs::export_frames_page`): keyset `id > after_id` +
+  half-open `[from,to)`, `frames LEFT JOIN frame_text` for `content_text`, one `with_conn` hop per
+  page (connection released between pages). 4 unit tests (paging/window/left-join/zero-limit).
+- **SSE cancellation fix** (`crates/inference/src/answer.rs`): the detached `stream_task` is wrapped
+  in an `AbortOnDrop` guard and the consume loop became `pump_deltas` with a `tokio::select!` on
+  `tx.closed()`. A dropped `/v1/ask` receiver (or `cancel_ask`) now aborts the sidecar stream,
+  freeing the GPU instead of generating into a closed socket (the leak `§7c` calls out). Completed
+  path byte-identical. 2 unit tests (cancel-aborts + normal-completes).
+- **`crates/api`** (new; depends on `traits` only): `ApiHost` trait seam; `ApiServer` binds
+  `127.0.0.1` from a `const BIND_IP` (no address parameter → a `0.0.0.0` bind is impossible by
+  construction), binds **before** spawn (synchronous port-conflict `Err`), graceful shutdown (3s cap
+  then abort); bearer-auth middleware on every `/v1` route with a constant-time compare and a live
+  `RwLock` token (regenerate needs no restart); one `ApiError`/`ErrorBody` shape; routes for health/
+  search/frames(+`?image=1`)/where-was-i/marks/ask(SSE)/export(streamed). axum 0.8 is the lone new
+  dependency (reuses the in-tree hyper/tower/http stack). 14 integration/unit tests.
+- **Composition root** (`src-tauri/src/local_api.rs`): `TauriApiHost` adapts the concrete store/kernel
+  via the existing private helpers (`ask_context`, `safe_frame_path`, `kernel::resume::where_was_i`);
+  `ApiRuntime` holds the server slot + live token; `apply_api_config` persists `api.*` KV keys,
+  generates the token on first enable, (re)starts/stops the server, and leaves `enabled=true` +
+  `running=false` + `last_error` on a bind conflict (loud + guided, `07` #80); the 4 commands
+  (`set_api_config`/`get_api_status`/`regenerate_api_token`/`export_data`); autostart on boot; server
+  stopped first on exit. 4 unit tests (fresh-off/clamp/token-once/bind-failure).
+- **UI**: `ApiPanel` (five states, threat-model copy, token reveal/copy/regenerate, port-in-use
+  retry) + a separate Data export button (Downloads, works with the API off); the `apiStatus`
+  query/key + 3 mutations + 4 command wrappers. Fixed the stale "backend never emits toast" comments.
+- **Docs**: `docs/API.md` (new, OpenAPI-lite); `docs/TESTING.md` PR7 manual-acceptance section;
+  `CHANGELOG.md`; `06`/`07` (export-destination decision #88, v1 residuals #89, #80 marked shipped);
+  `UI_REFERENCE §5` gains the `ExportPanel` line.
+
+### Verification (Windows, verbatim)
+Full suite green:
+```
+cargo fmt --all -- --check                                  → exit 0 (no diff)
+cargo clippy --workspace --all-targets -- -D warnings       → Finished (exit 0)
+cargo build --workspace                                     → Finished (exit 0)
+cargo test --workspace                                      → all suites ok; new:
+    api        (unit)          2 passed
+    api        http_api.rs    12 passed
+    inference  (unit)        104 passed  (incl. 2 new pump_deltas tests)
+    store      store.rs       61 passed  (incl. 4 new export_frames_page tests)
+    screensearch_lib (unit)   12 passed  (incl. 4 new local_api tests)
+    traits     (unit)         65 passed  (incl. the 3 new ts-rs guards)
+cd ui && npm run lint                                       → exit 0
+cd ui && npm run build                                      → built (exit 0)
+git diff --exit-code -- ui/src/bindings                     → clean (exit 0)
+```
+Live out-of-process check — a real `ApiServer` served the fixture store on `127.0.0.1:43210` and was
+exercised by external **`curl`** (not the in-process reqwest tests):
+```
+GET  /v1/health         (no token)   → 401 {"error":"unauthorized",…}
+GET  /v1/health         (wrong token)→ 401
+GET  /v1/health         (token)      → 200 {"version":…,"uptime_secs":…,"capturing":false}
+GET  /v1/search?q=invoice            → 200 [{"frame_id":1,"snippet":"quarterly [invoice] total",…}]
+GET  /v1/frames/1                     → 200 {"frame_id":1,"width":1920,…}
+GET  /v1/context/where-was-i          → 200 null
+POST /v1/marks {"frame_id":1,…}       → 201 {"mark_id":1}
+POST /v1/marks {"frame_id":1,"now":true} → 400
+GET  /v1/marks                        → 200 [{"mark_id":1,"note":"live check",…}]
+GET  /v1/export?format=json           → 200 {"schema":"screensearch.export.v1",…,"frames":[…×2],"marks":[…]}
+GET  /v1/export?format=csv            → 400
+GET  /v1/frames/999                    → 404
+```
+A second harness instance binding the occupied 43210 returned `AddrInUse` — the synchronous
+port-conflict `Err` the loud/guided path relies on. The `live_server_for_curl` harness (`#[ignore]`)
+reproduces this. Full interactive desktop pass (enable via the Settings UI → curl → exit-frees-port)
+is documented in `docs/TESTING.md` for the PR9 audit.
+
+### Skipped / deferred
+- Live SSE `/v1/ask` over curl (needs a loaded answer model) — covered by the `pump_deltas` unit test
+  (cancellation) + `ask_streams_sse_deltas` integration test (scripted provider). Non-JSON export
+  formats, a rate limiter, and a `captured_at`-seeded export cursor are recorded deferrals (`07` #89).
+
+### Hallucinated / corrected
+- Initially wired the ask/export routes into `build_router` before their handlers existed; merged the
+  route wiring with the handlers so the crate landed as one compiling unit. Forgot `anyhow` as a
+  direct `src-tauri` dep (used by the `ApiHost` impl's `anyhow::Result`); added it. `Chip` has no
+  `info`/`muted` tones — used `accent`/`neutral`.
+
+### Still risky
+- `pump_deltas` touches the Ask/reports hot path; the completed path is unchanged and gated by the
+  existing inference suite, but a live long-answer + mid-stream cancel is worth the PR9 desktop pass.
+- The export cursor scans ids from 0 even for a late window (`07` #89c) — correct, bounded, not
+  optimal.
+
 ## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 
 The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and

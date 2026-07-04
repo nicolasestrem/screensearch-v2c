@@ -142,6 +142,37 @@ impl ApiHost for TestHost {
     }
 }
 
+/// Live manual-verification harness (ignored by default). Serves the real API over an
+/// on-disk store (from `SCREENSEARCH_LIVE_DB`, else a fixture) on port 43210 with a known
+/// token, then stays up so an external `curl` can exercise every endpoint — a genuine
+/// out-of-process live check without disturbing the running desktop app.
+/// Run: `cargo test -p api --test http_api -- --ignored --nocapture live_server_for_curl`
+#[tokio::test]
+#[ignore]
+async fn live_server_for_curl() {
+    let token: SharedToken = Arc::new(std::sync::RwLock::new(TEST_TOKEN.to_string()));
+    let host: Arc<TestHost> = match std::env::var("SCREENSEARCH_LIVE_DB") {
+        Ok(path) => {
+            let store = Arc::new(SqliteStore::open_path(std::path::Path::new(&path)).unwrap());
+            Arc::new(TestHost {
+                store,
+                answer: None,
+                started_at_ms: 0,
+            })
+        }
+        Err(_) => fixture_host(false).await,
+    };
+    let server = ApiServer::start(host, token, 43210)
+        .await
+        .expect("bind 43210");
+    println!(
+        "LIVE_API_READY addr={} token={TEST_TOKEN}",
+        server.local_addr()
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(90)).await;
+    server.stop().await;
+}
+
 /// A frame with content text at the given capture time; returns its id.
 async fn seed_frame(store: &SqliteStore, captured_at: i64, text: &str) -> i64 {
     let id = store
