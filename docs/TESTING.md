@@ -298,7 +298,8 @@ Settings → **Local API** after you enable it.
   `content-type: application/json` — not a plaintext framework rejection.
 - **Export works with the API disabled.** Turn the API **off**. Click Settings → Data export →
   **Export…**: a success toast shows the written path in your Downloads folder
-  (`screensearch-export-<stamp>.json`). Validate it: `jq . "%USERPROFILE%\Downloads\screensearch-export-*.json"`
+  (`screensearch-export-<stamp>-<rand>.json` — the random suffix keeps same-second exports from
+  colliding). Validate it: `jq . "%USERPROFILE%\Downloads\screensearch-export-*.json"`
   parses, with `schema:"screensearch.export.v1"`, a `frames` array (metadata + `content_text`, **no**
   image bytes), and a `marks` array.
 - **Exit frees the port.** With the API listening, quit the app. `netstat -ano | findstr 43210` shows

@@ -247,7 +247,14 @@ pub async fn export_to_file(
     dir: &Path,
 ) -> anyhow::Result<ExportResult> {
     tokio::fs::create_dir_all(dir).await?;
-    let filename = format!("screensearch-export-{}.json", utc_stamp(now_ms()));
+    // A short random suffix keeps two exports started within the same second from colliding
+    // on the same final/`.partial` path — which on Windows would make `rename` fail (the
+    // destination already exists) and let concurrent runs trample a shared partial.
+    let filename = format!(
+        "screensearch-export-{}-{}.json",
+        utc_stamp(now_ms()),
+        rand_suffix()
+    );
     let final_path = dir.join(&filename);
     let partial_path = dir.join(format!("{filename}.partial"));
 
@@ -272,6 +279,14 @@ pub async fn export_to_file(
         marks: stats.marks.load(Ordering::Relaxed) as u32,
         bytes,
     })
+}
+
+/// Six hex chars of CSPRNG for the export filename's uniqueness suffix. Best-effort — a
+/// (practically impossible) RNG failure falls back to zeros, still a valid name.
+fn rand_suffix() -> String {
+    let mut b = [0u8; 3];
+    let _ = getrandom::fill(&mut b);
+    format!("{:02x}{:02x}{:02x}", b[0], b[1], b[2])
 }
 
 /// Formats a unix-epoch-ms instant as `YYYYMMDD-HHMMSS` (UTC), for the export filename.

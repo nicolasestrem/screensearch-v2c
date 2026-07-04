@@ -41,7 +41,10 @@ clamps to `1024–65535`; a failed export never leaves a `.partial` file behind 
 the open file handle blocked cleanup); a screenshot missing on disk returns a clean `404` rather than a
 `500`; overlapping enable/disable calls are serialized so a race can't leave the API running against a
 disabled intent; and a client that disconnects mid-answer now stops the stream immediately instead of
-draining the model's backlog first.
+draining the model's backlog first. A further round: regenerating the token can no longer be clobbered
+by a concurrent config change; a failed settings write is now surfaced as an error rather than silently
+leaving the API enabled on disk after a disable; and export filenames carry a random suffix so two
+exports in the same second can't collide.
 
 ### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
 Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing

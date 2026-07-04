@@ -243,25 +243,30 @@ pub async fn current_status(store: &SqliteStore, runtime: &ApiRuntime) -> ApiSta
 /// Persists `{enabled, port}`, generates the token on first enable, then (re)starts or
 /// stops the server. A bind failure leaves `enabled = true` persisted, `running = false`,
 /// and `last_error` set — the loud guided-change state (`03 §7c`); the command wrapper
-/// adds the warning toast. Returns the resulting status either way (the error is data,
-/// not an `Err` — it mirrors `HotkeyStatus`).
+/// adds the warning toast (that's *data*, not an `Err`). An **`Err`** is reserved for a
+/// failed persistence write: we return before touching the running server, so a disable can
+/// never stop the server yet leave `enabled = true` on disk (which would autostart again).
 pub async fn apply_api_config(
     store: &SqliteStore,
     runtime: &ApiRuntime,
     host: Arc<dyn ApiHost>,
     enabled: bool,
     port: Option<u16>,
-) -> ApiStatus {
+) -> Result<ApiStatus, String> {
     // Serialize the whole transition so overlapping enable/disable calls can't interleave.
     let _config_guard = runtime.config_lock.lock().await;
     let (_, current_port, _) = read_api_config(store).await;
     let target_port = clamp_api_port(port.unwrap_or(current_port));
-    let _ = store
+    // Persist the intent *before* touching the running server; if the DB write fails, bail
+    // now so on-disk state and the live server can't diverge.
+    store
         .set_setting(API_PORT_KEY, &target_port.to_string())
-        .await;
-    let _ = store
+        .await
+        .map_err(|e| format!("could not persist api.port: {e}"))?;
+    store
         .set_setting(API_ENABLED_KEY, if enabled { "true" } else { "false" })
-        .await;
+        .await
+        .map_err(|e| format!("could not persist api.enabled: {e}"))?;
 
     // Stop any running server first (a config change is a deterministic restart).
     let existing = runtime.server.lock().await.take();
@@ -271,23 +276,30 @@ pub async fn apply_api_config(
     *runtime.last_error.lock().expect("api last_error lock") = None;
 
     if enabled {
-        // Ensure a token exists — generate it on first enable, persist, and sync the live
-        // token the middleware reads.
-        let token = match store
-            .get_setting(API_TOKEN_KEY)
-            .await
-            .ok()
-            .flatten()
-            .filter(|t| !t.is_empty())
-        {
-            Some(t) => t,
-            None => {
-                let t = api::generate_token();
-                let _ = store.set_setting(API_TOKEN_KEY, &t).await;
-                t
-            }
-        };
-        *runtime.token.write().expect("api token lock") = token;
+        // The live token is authoritative once populated — `regenerate_api_token` keeps the
+        // DB and `runtime.token` in sync. Only read/populate it on first enable (empty live
+        // token, e.g. a fresh boot's autostart); re-writing it here from a stale DB read
+        // could clobber a concurrent regenerate.
+        if runtime.token.read().expect("api token lock").is_empty() {
+            let token = match store
+                .get_setting(API_TOKEN_KEY)
+                .await
+                .ok()
+                .flatten()
+                .filter(|t| !t.is_empty())
+            {
+                Some(t) => t,
+                None => {
+                    let t = api::generate_token();
+                    store
+                        .set_setting(API_TOKEN_KEY, &t)
+                        .await
+                        .map_err(|e| format!("could not persist api.token: {e}"))?;
+                    t
+                }
+            };
+            *runtime.token.write().expect("api token lock") = token;
+        }
 
         match ApiServer::start(host, runtime.token.clone(), target_port).await {
             Ok(server) => {
@@ -301,7 +313,7 @@ pub async fn apply_api_config(
         }
     }
 
-    current_status(store, runtime).await
+    Ok(current_status(store, runtime).await)
 }
 
 /// Stops the server if running (bounded graceful shutdown). Called on app exit.
@@ -327,8 +339,10 @@ pub fn autostart(app: &AppHandle) {
             return;
         }
         let host: Arc<dyn ApiHost> = host;
-        let status = apply_api_config(store.as_ref(), &runtime, host, true, None).await;
-        warn_on_bind_failure(&app, &status);
+        match apply_api_config(store.as_ref(), &runtime, host, true, None).await {
+            Ok(status) => warn_on_bind_failure(&app, &status),
+            Err(e) => tracing::error!(error = %e, "local API autostart failed"),
+        }
     });
 }
 
@@ -364,7 +378,7 @@ pub async fn set_api_config(
         .api_host
         .clone()
         .ok_or_else(|| "api host unavailable".to_string())?;
-    let status = apply_api_config(store.as_ref(), &state.api_runtime, host, enabled, port).await;
+    let status = apply_api_config(store.as_ref(), &state.api_runtime, host, enabled, port).await?;
     warn_on_bind_failure(&app, &status);
     Ok(status)
 }
@@ -523,7 +537,9 @@ mod tests {
         let store = SqliteStore::open_in_memory().unwrap();
         let runtime = ApiRuntime::new();
 
-        let status = apply_api_config(&store, &runtime, host(), true, Some(0)).await;
+        let status = apply_api_config(&store, &runtime, host(), true, Some(0))
+            .await
+            .unwrap();
         assert!(status.enabled);
         assert!(status.running, "server started on the ephemeral port");
         let token = status
@@ -533,16 +549,22 @@ mod tests {
         assert_eq!(token.len(), 64, "32 random bytes as hex");
 
         // Re-enable: same token.
-        let status2 = apply_api_config(&store, &runtime, host(), true, Some(0)).await;
+        let status2 = apply_api_config(&store, &runtime, host(), true, Some(0))
+            .await
+            .unwrap();
         assert_eq!(status2.token, Some(token.clone()));
 
         // Disable then re-enable: still the same token (persisted, not regenerated).
-        let disabled = apply_api_config(&store, &runtime, host(), false, None).await;
+        let disabled = apply_api_config(&store, &runtime, host(), false, None)
+            .await
+            .unwrap();
         assert!(!disabled.enabled);
         assert!(!disabled.running);
         assert_eq!(disabled.token, Some(token.clone()));
 
-        let reenabled = apply_api_config(&store, &runtime, host(), true, Some(0)).await;
+        let reenabled = apply_api_config(&store, &runtime, host(), true, Some(0))
+            .await
+            .unwrap();
         assert_eq!(reenabled.token, Some(token));
 
         stop_server(&runtime).await;
@@ -558,7 +580,9 @@ mod tests {
 
         let store = SqliteStore::open_in_memory().unwrap();
         let runtime = ApiRuntime::new();
-        let status = apply_api_config(&store, &runtime, host(), true, Some(port)).await;
+        let status = apply_api_config(&store, &runtime, host(), true, Some(port))
+            .await
+            .unwrap();
 
         assert!(status.enabled, "intent is preserved");
         assert!(!status.running, "the server did not start");

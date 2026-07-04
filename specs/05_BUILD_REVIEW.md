@@ -173,6 +173,30 @@ A later Gemini + Codex pass raised seven more; all applied:
   http_api.rs **14 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**; 0 failed);
   `git diff --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
 
+### Follow-up — PR #76 third review round (3 more bot comments)
+1. **Token-update race (claude bot).** `regenerate_api_token` writes `runtime.token` under no lock; a
+   concurrent `apply_api_config` read the DB token at the top of its critical section and wrote it
+   back to `runtime.token` after the bind — so a regenerate landing between those steps would be
+   clobbered (DB/UI show the new token, middleware holds the old → 401 until the next toggle). Fixed
+   in `apply_api_config`: the live token is authoritative once populated, so it now writes
+   `runtime.token` **only when empty** (first enable / fresh-boot autostart) instead of every enable;
+   a running regenerate is never overwritten. (No `config_lock` in regenerate — that would block the
+   token button behind a slow bind for no gain now that the overwrite is gone.)
+2. **Unpropagated setting-write failures (Codex P2).** `apply_api_config` ignored the `set_setting`
+   results, so on a read-only/full DB a disable could stop the server yet leave `enabled=true` on
+   disk (autostarting next launch). It now returns `Result<ApiStatus, String>`, persisting the intent
+   **before** touching the server and bailing with `Err` if any of the `api.port`/`api.enabled`/
+   `api.token` writes fail; `set_api_config` propagates it, `autostart` logs it.
+3. **Non-unique export filename on Windows (Codex P2).** The second-granularity stamp meant two
+   exports in the same second targeted the same final/`.partial` path — and `rename` fails on Windows
+   when the destination exists. Added a 6-hex CSPRNG suffix (`export::rand_suffix`) so names are
+   unique: `screensearch-export-<stamp>-<rand>.json`.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all green (`api`
+  http_api.rs **14 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**;
+  `screensearch_lib` **12 passed** incl. the 4 `local_api` units updated for the new `Result`; 0
+  failed); `git diff --exit-code -- ui/src/bindings` → clean.
+
 ## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 
 The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and

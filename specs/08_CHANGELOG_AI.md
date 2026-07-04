@@ -97,6 +97,23 @@
   · `cargo test --workspace` (all green; `api` http_api **14 passed**/1 ignored, `inference` 104,
   `store` 61) · `git diff --exit-code -- ui/src/bindings` clean. Verbatim in `05`.
 
+## 2026-07-04 — 0.3.0 PR7 review fixes, round 3 (PR #76; claude + Codex)
+- **Change:** Three more inline suggestions (bots not replied to).
+  - `src-tauri/src/local_api.rs`: `apply_api_config` now writes `runtime.token` **only when empty**
+    (first enable / autostart) so a concurrent `regenerate_api_token` can't be clobbered by a stale
+    DB read (claude bot token race). It also returns `Result<ApiStatus, String>` — persistence
+    (`api.port`/`api.enabled`/`api.token`) happens before the server is touched and a failed write is
+    an `Err`, so a disable can't stop the server while leaving `enabled=true` on disk (Codex P2);
+    `set_api_config` propagates the `Err`, `autostart` logs it, the 4 unit tests unwrap the `Result`.
+  - `crates/api/src/export.rs`: `export_to_file` filename gains a 6-hex CSPRNG suffix
+    (`rand_suffix`) so two same-second exports don't collide on the final/`.partial` path — a
+    Windows `rename`-over-existing failure (Codex P2).
+- **Why:** review hardening on the open PR; concurrency + Windows-filesystem correctness. No schema or
+  ts-rs type change (bindings untouched).
+- **Verification:** `cargo fmt --check` · `cargo clippy --workspace --all-targets -D warnings` (exit 0)
+  · `cargo test --workspace` (all green; `api` http_api 14/1 ignored, `inference` 104, `store` 61,
+  `screensearch_lib` 12) · `git diff --exit-code -- ui/src/bindings` clean. Verbatim in `05`.
+
 ## 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 - **Change:** Added the flow-recall core — a where-was-i heuristic and mark-this-moment — end to end.
   - `crates/traits`: `FrameContextRow`, `CaptureNowRequest`/`CaptureNowReceiver`, `CapturedFrame.demanded`;
