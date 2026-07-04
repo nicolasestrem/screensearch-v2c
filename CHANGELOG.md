@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaced in Settings, not swallowed.
 
 ### Fixed
+- **Vision tagging is fast again — throughput restored to the pre-WebP baseline (#64).**
+  The 0.3.0 switch to native-resolution WebP storage silently grew the image sent to the
+  vision model from 1280×536 (the old stored size) to a 1568 px cap, and release-build
+  profiling showed the model doing ~2.4× the work per frame accounted for ~97 % of the
+  slowdown — the WebP encode/decode itself measured in the tens of milliseconds (the encode
+  is actually *cheaper* than the old resize-to-1280+JPEG). The tag request is now capped at
+  1280 px again (matching the pre-WebP request exactly), restoring ~90 tags/min on the
+  reference setup (from ~33/min). Stored captures are untouched — still native-resolution
+  lossless WebP; only the transient image handed to the vision model is smaller. Profiling
+  record: `specs/05_BUILD_REVIEW.md` Pass 3, `specs/06_PATCH_PLAN.md` #22.
 - **UI Automation no longer leaves Chromium/Electron apps hung.** The UIA text source keeps
   an accessibility client connected, which flips apps like Chrome, Edge, Codex, and Claude
   Desktop into accessibility mode; previously that client was never released, so those apps

@@ -140,3 +140,101 @@ For each build pass, append an entry:
   the spec wording ("extension unchanged") still holds by construction. `06` stays empty — no
   spec contradiction surfaced while normalizing (verified: `03` carries no report-filename/
   footer contract; `UI_REFERENCE` had no nested-scroll text to replace).
+
+---
+
+## Pass 3 — 2026-07-04 — 0.3.1 PR2 Phase A (#64 profiling) — **STOP CONDITION TRIGGERED**
+
+Profile-first per D9 (`04 §3`), release builds only (the closed PR #83 profiled under
+`npm run dev`; debug skews CPU-bound image work 10–50× and produced misleading numbers —
+its "1.1–1.5 s WebP encodes" measure **26 ms** in release). Branch
+`fix/0.3.1-pr2-vision-throughput-r2`, instrumentation-only commit `dbb1789` (decode/analyze
+split in `worker_pool`, acquire/prep/complete split in `inference::vision`, encode timing +
+bytes in `capture_loop`; same patch applied locally-uncommitted to the baseline worktree).
+
+- **Method (all disclosures):**
+  - Current tree: release exe (`cargo build --release -p screensearch --features
+    tauri/custom-protocol` — without the feature flag a raw cargo release build loads the
+    devUrl and is not the shipped app). Isolated data dir via an **uncommitted**
+    `tauri.conf.json` identifier edit → `app.screensearchv2c.pr2current`.
+  - Baseline: `v0.2.1` (= c22625c, the last pre-WebP tag) in worktree `..\ss-v021-pr2-profile`,
+    identifier edited (uncommitted) → `app.screensearchv2c.pr2baseline`, same release build.
+  - Both data dirs junction `models` + `sidecar` to the live install → **same
+    `Qwen3VL-8B-Instruct-Q4_K_M.gguf` (Quality tier), same mmproj, same `llama-server`
+    build** on both sides. Same machine, same 3440×1440 monitor, same animated workload
+    page (1 Hz clock/text page kept visible), capture timer 1000 ms, vision timer 60 s /
+    batch 500, `enrich.worker_concurrency=2` (default) on both sides. v0.2.1's
+    `enrich.image_embeddings` was forced **off** (parity: the lane doesn't exist post-0.3.0).
+  - Saturation: the vision queue was kept non-empty throughout the measured windows by
+    re-enqueueing `vision_tag` jobs for already-tagged frames (`insert_vision` is an upsert;
+    the per-job code path — claim → decode → VLM → upsert — is identical). Rates below are
+    from minutes where pending > 0.
+  - GPU shape via `nvidia-smi -l 1` (ground truth). The PDH `\GPU Engine(*)\Utilization
+    Percentage` counters the roadmap suggested (and that `sysmon` uses) read **~1–2 % while
+    nvidia-smi showed 80–100 %** — PDH does not attribute this Vulkan compute workload.
+    Recorded in `06`/`07`.
+- **Numbers (steady-state, saturated queue, ≥15 min & ≥500 jobs per side):**
+
+  | metric | v0.2.1 (pre-WebP) | current tree (0.3.1 base) | ratio |
+  |---|---|---|---|
+  | stored frame | 1280×536 JPEG q80 (~113 KB) | 3440×1440 lossless WebP (~950 KB) | 8.4× bytes |
+  | VLM request | 1280×536 (stored as-is) | **1568×656** (native → `VISION_MAX_EDGE` cap) | 1.50× pixels |
+  | vision jobs done/min | **~89–95** (12-min window: 72,101,95,96,97,94,95,62,89,98,91,83) | **~31–35** (29,35,32,30,32,34 · 31,25,37,41,35,39,38) | **~0.36×** |
+  | per-job total_ms (median/avg) | 1234 / 1406 | 3061 / 3185 | 2.48× |
+  | decode_ms (median) | 3 | 23 | +20 ms |
+  | prep_ms (median: VLM downscale+JPEG+base64) | 12 | 47 | +35 ms |
+  | **complete_ms (median: sidecar round-trip)** | **1217** | **2984** | **+1767 ms (≈97 % of the delta)** |
+  | capture encode_ms (median) | 42 (resize→1280 + JPEG) | 26 (native lossless WebP) | encode got *faster* |
+  | GPU shape (nvidia-smi, saturated) | median 94 %, dips <10 % in 13 % of samples | median 90 %, dips <10 % in 18 % of samples | same character |
+
+- **Finding (the decision gate):** the throughput regression is real (~2.5–2.9×) and is
+  attributable to the #58 storage change as a *bundle* — but **~97 % of the per-job delta is
+  sidecar compute on the 1.5×-pixel VLM request** (native-res storage means
+  `downscale_for_vlm` now caps at 1568 px instead of receiving a 1280 px stored image; the
+  Qwen3-VL vision encoder + prefill scale super-linearly with patch count). The encode step
+  measures 26 ms and **got cheaper than v0.2.1's** 42 ms resize+JPEG; decode adds 20 ms.
+  The D5 fix ladder (async encode → cheaper encoder settings → format revert) addresses
+  ≤55 ms of a ~1830 ms per-job regression and **cannot reach the ±10 % acceptance**, and the
+  roadmap's premise ("the signature of the encode step landing synchronously on the vision
+  hot path and serializing work") is contradicted by the release measurements: under load
+  both trees hold the GPU at 80–100 % with the same brief per-job dips. Per the PR2 stop
+  condition (`04 §3`, `docs/0.3.1.md`): **STOP — reported to the user with options instead
+  of fixing a different regression under this PR.** No fix code written.
+- **Skipped / deferred:** Phase B not entered (stop condition). The instrumentation commit
+  stands on its own (privacy-safe timing logs + stale JPEG-era doc-comment fixes).
+- **Hallucinated / corrected:** the initial profiling runs captured zero frames — the
+  profiling DB had persisted `capture.event_driven_enabled=true` (and the diff gate blocks a
+  static screen; user pointed at both). Fixed by seeding timer mode + keeping the animated
+  page visible. Also `models.vision_tier` must be seeded as the JSON string `"quality"`, not
+  the bare word (parse falls back to Default and logs `unparsable tier`).
+- **Still risky:** single-machine, single-GPU (NVIDIA/Vulkan) evidence; the 2.45× complete_ms
+  ratio vs the 1.50× pixel ratio is consistent with attention-dominated vision encoding but
+  was not decomposed further (would need llama-server-side timing).
+
+### Pass 3 addendum — Phase B (fix) + Phase C (verification), same day
+
+- **User decision on `06` #22: option (a)** — cap the VLM tag request at 1280 px.
+  Implemented as `VISION_MAX_EDGE` 1568 → 1280 (`crates/inference/src/vision.rs`, commit
+  `13d619e`), pinned dimension tests deliberately updated (3440×1440 → 1280×536; portrait
+  536×1280), stale 1568 references in `models.rs` docs updated. Stored captures untouched
+  (still native-res lossless WebP); zero schema change; no new setting; no UI.
+- **Phase C re-measure (fixed tree, release, same protocol):** three windows.
+  1. *Same frame population as the pre-fix A2 run* (native-WebP re-tags, busy screen content,
+     capture + embed jobs live): **33 → ~72 done/min** (2.2×); per-job total median
+     3061 → 1683 ms; complete_ms 2984 → 1624 ms at 1280×536.
+  2. *Like-for-like vs the v0.2.1 baseline* — the baseline's own 72 stored 1280×536 JPEG
+     frames were imported into the fixed tree's data dir (same files, same content) and
+     drained with capture off: **89,91,88,93,96,94,96,87,89 done/min (avg 91.4) vs the
+     baseline's 89.4 — 102 % of the pre-WebP baseline; acceptance (±10 %) met.** Per-job
+     total median **1173 ms vs 1234 ms** (fixed tree marginally faster on identical jobs);
+     complete_ms median 1158 vs 1217.
+  3. *GPU shape* (nvidia-smi, 1 s): fixed tree median 93 %, dips <10 % in 9–12 % of samples
+     (capture-on window included) — the same steady-under-load character as the v0.2.1
+     baseline (median 94 %, 13.2 % dips). No per-frame spike/idle sawtooth.
+  - The residual gap in window 1 (72 vs 89/min) is **content + pool competition, not the
+    request size**: on identical frames (window 2) the trees are at parity; the busier A2-era
+    frame population produces longer model generations (complete_ms 1624 vs 1158 at identical
+    request dims), and 172 `embed_text` jobs shared the 2-worker pool during window 1 while
+    the baseline ran nearly embed-free.
+- **Verification:** full suite green post-fix (verbatim in `08`); `cargo test -p inference`
+  105 passed with the updated pins; like-for-like numbers quoted in the PR description.

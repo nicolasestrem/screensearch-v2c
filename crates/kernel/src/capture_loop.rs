@@ -39,7 +39,8 @@ pub type PendingDemand = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sende
 pub struct LoopCtx {
     pub store: Arc<dyn Store>,
     pub ocr: Arc<dyn OcrProvider>,
-    /// Absolute directory under which JPEGs are written (`<app-data>/frames`).
+    /// Absolute directory under which stored captures (lossless WebP) are written
+    /// (`<app-data>/frames`).
     pub frames_dir: PathBuf,
     pub events: broadcast::Sender<KernelEvent>,
     /// `enrich.embed_text` — whether each stored frame enqueues an `embed_text` job.
@@ -104,7 +105,19 @@ async fn process_frame(ctx: &LoopCtx, frame: CapturedFrame) -> Result<()> {
 
     let (rel_db_path, abs_path) =
         image_paths(&ctx.frames_dir, frame.captured_at, frame.monitor_index);
-    write_webp(frame.pixels.clone(), abs_path, ctx.max_width).await?;
+    let encode_started = std::time::Instant::now();
+    let encoded_bytes = write_webp(frame.pixels.clone(), abs_path, ctx.max_width).await?;
+    // Per-frame encode timing: how long the awaited storage encode holds the capture
+    // loop, and the stored file size. Privacy-safe: durations + dimensions + byte
+    // counts only — no screen content.
+    tracing::info!(
+        monitor = frame.monitor_index,
+        encode_ms = encode_started.elapsed().as_millis() as u64,
+        encoded_bytes,
+        src_width = frame.width,
+        src_height = frame.height,
+        "capture encode"
+    );
 
     let frame_id = ctx
         .store
@@ -190,9 +203,9 @@ fn image_paths(frames_dir: &std::path::Path, captured_at: i64, monitor: u32) -> 
 /// **lossless WebP**, creating parent dirs. Lossless keeps text crisp (no JPEG ringing on
 /// an ultra-wide capture) and compresses flat UI well; the constant alpha of an opaque
 /// screen is dropped to RGB. Runs on the blocking pool (CPU + file IO). `storage_jpeg_quality`
-/// does not apply to the lossless encoder.
-async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Result<()> {
-    tokio::task::spawn_blocking(move || -> Result<()> {
+/// does not apply to the lossless encoder. Returns the encoded file size in bytes.
+async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Result<u64> {
+    tokio::task::spawn_blocking(move || -> Result<u64> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -205,7 +218,10 @@ async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Re
             rgb.height(),
             ExtendedColorType::Rgb8,
         )?;
-        Ok(())
+        // The byte count is observational (timing log only) — a post-write metadata
+        // failure (AV scan holding the file, transient ACL) must not fail the frame,
+        // which is already safely on disk. `0` in the log flags the anomaly.
+        Ok(std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0))
     })
     .await?
 }

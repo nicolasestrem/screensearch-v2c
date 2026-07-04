@@ -18,6 +18,82 @@
 
 ---
 
+## 2026-07-04 — 0.3.1 PR2 Phase A: #64 profiling instrumentation + stop-condition report
+
+- **Change:** (a) Instrumentation-only commit on `fix/0.3.1-pr2-vision-throughput-r2`
+  (`dbb1789`): per-job `decode_ms`/`analyze_ms` + source dimensions in
+  `crates/kernel/src/worker_pool.rs::vision_tag_outcome`; `acquire_ms`/`prep_ms`/`complete_ms`
+  + request dimensions in `crates/inference/src/vision.rs::analyze` (new `vlm_request_dims`
+  shared with `downscale_for_vlm` + pinning test); `encode_ms` + stored bytes in
+  `crates/kernel/src/capture_loop.rs::process_frame` (`write_webp` now returns the file size);
+  stale JPEG-era doc comments fixed. All privacy-safe (durations/dimensions/bytes/paths only).
+  (b) Phase A profiling record in `05` Pass 3; contradiction + PDH finding as `06` #22/#23.
+  **No fix code** — the PR2 stop condition triggered.
+- **Why:** `docs/0.3.1.md` PR2 Phase A + D9 (`04 §3`): numbers before fix code. Release-build
+  measurement (current tree vs the v0.2.1 pre-WebP tag, same Qwen3-VL-8B + llama-server)
+  attributes ~97 % of the ~2.5× per-job regression to the sidecar processing the 1.5×-pixel
+  VLM request (native-res storage → 1568 px cap vs the old 1280 px stored width); the encode
+  step (D5's target) measures 26 ms and got *cheaper* than v0.2.1's 42 ms. Stop condition:
+  the slowdown is not on the encode path → reported with options instead of fixing under
+  this PR (`06` #22).
+- **Verification:** `cargo fmt --all -- --check` clean; `cargo clippy -p kernel -p inference
+  --all-targets -- -D warnings` → `Finished dev profile ... in 20.11s` (no warnings);
+  `cargo test -p kernel -p inference` → all green (`105 passed` inference incl. new
+  `vlm_request_dims_match_encoded_output`; kernel suites all `ok`). Profiling evidence:
+  `05` Pass 3 tables (1263 baseline jobs / 509 current-tree jobs parsed from the timing logs).
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 Phase B/C: VISION_MAX_EDGE 1568→1280 (#64 fix) + verification
+
+- **Change:** `crates/inference/src/vision.rs`: `VISION_MAX_EDGE` 1568 → 1280 (user decision
+  on `06` #22, option a) with the rationale in the const doc; pinned dimension tests updated
+  deliberately (`downscales_oversized_frame_to_max_edge` → 1280×536,
+  `vlm_request_dims_match_encoded_output` incl. portrait). `crates/inference/src/models.rs`:
+  stale 1568 doc reference updated. `CHANGELOG.md` `### Fixed` entry. `05` Pass 3 addendum
+  (Phase B/C record), `06` #22 → resolved.
+- **Why:** `06` #22 / `05` Pass 3 — restore VLM-request parity with the pre-WebP baseline;
+  keeps WebP + native-res storage, zero schema (D8), no settings/UI surface.
+- **Verification (verbatim):** like-for-like drain of the baseline's own 1280×536 JPEG frames
+  on the fixed tree: per-minute `89,91,88,93,96,94,96,87,89` (avg **91.4/min**) vs the v0.2.1
+  baseline **89.4/min** — within the ±10 % acceptance; per-job `total_ms` median **1173** vs
+  baseline **1234**; GPU (nvidia-smi) median 93 % both trees, no sawtooth. Full suite:
+  `cargo fmt --all -- --check` → exit 0 · `cargo clippy --workspace --all-targets -- -D
+  warnings` → `Finished dev profile ... in 6.49s` (clean) · `cargo build --workspace` →
+  `Finished dev profile ... in 22.65s` · `cargo test --workspace` → every suite
+  `test result: ok` (0 failed; incl. `inference` 105 passed) · `ui npm run lint` → clean ·
+  `npm run build` → `✓ built in 2.17s` · `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 review round: comment hygiene + zero-dim guard (PR #85)
+
+- **Change:** (a) The three timing-log code comments no longer narrate the task
+  (`#64` / `0.3.1 PR2` / `D9` references dropped from `vision.rs` analyze timing,
+  `capture_loop.rs` encode timing, `worker_pool.rs` decode/analyze timing); the substantive
+  content (what is measured + the privacy contract) is kept. The `VISION_MAX_EDGE` const
+  doc and pinned-test rationale keep their spec citations — they record the *decision*, per
+  the codebase convention. (b) `vlm_request_dims` gains a zero-width/zero-height
+  pass-through guard (a scaled zero-area source would hand `image::imageops::resize` an
+  empty buffer, which can panic) + two test assertions. Unreachable from real decoders
+  (WebP/JPEG/PNG can't be 0-dim), so purely defensive — no behavior change for real frames.
+- **Why:** PR #85 review comments — the comment-hygiene rule (comments must not reference
+  the current task; it rots) and a defensive-input finding on the new pure helper.
+- **Round 2 (same day):** (c) `capture_loop.rs::write_webp`: the post-write
+  `fs::metadata` byte-count read is now non-fatal (`unwrap_or(0)`) — the count is
+  observational (timing log only), and a transient AV/ACL failure after a successful write
+  must not propagate out of `process_frame` and silently drop an on-disk frame from the
+  DB. (d) Remaining task-ID references trimmed (`VISION_MAX_EDGE` const doc, `models.rs`
+  `default_ctx_for` doc, two test comments): GitHub-issue/arc labels dropped; the
+  regression rationale + the durable `06` #22 spec-row citation kept (codebase convention).
+- **Verification (verbatim):** `cargo fmt --all -- --check` → clean; `cargo clippy -p
+  inference -p kernel --all-targets -- -D warnings` → `Finished dev profile [unoptimized +
+  debuginfo] target(s)` (no warnings, both rounds); `cargo test -p inference -p kernel` →
+  every suite `test result: ok` (0 failed; `inference` `105 passed` incl. the extended
+  `vlm_request_dims_match_encoded_output`).
+
+---
+
 ## 2026-07-04 — UIA client lifecycle teardown + per-app circuit breaker (hang fix)
 
 - **Change:** Fixed the shipped 0.3.0 defect where UI Automation left Chromium/Electron apps

@@ -41,7 +41,14 @@ const JPEG_QUALITY: u8 = 80;
 /// `exceed_context_size_error`; capping the longest edge keeps the request well under the
 /// window *and* speeds up prefill. The stored capture (timeline/reconstruction) keeps full
 /// resolution — only the tag request is downscaled (`encode_data_url`).
-const VISION_MAX_EDGE: u32 = 1568;
+///
+/// **1280, matching the pre-WebP stored width.** The switch to native-resolution storage
+/// silently grew the tag request from 1280×536 (the old stored size) to a 1568 px cap —
+/// release-build profiling attributed ~97 % of the resulting ~2.5× vision-throughput
+/// regression to the sidecar processing that 1.5×-pixel request (`06` #22). Capping back
+/// to 1280 restores request parity with the v0.2.x baseline, trading marginal tag
+/// fidelity for throughput.
+const VISION_MAX_EDGE: u32 = 1280;
 // No literal value is shown for `confidence` — an earlier prompt pinned `0.0` and the
 // model dutifully echoed it, recording a fabricated score (`07` #20). The field is
 // described, not demonstrated; the response-format grammar and `parse_vision` enforce
@@ -159,8 +166,14 @@ impl VisionProvider for VisionSidecar {
     async fn analyze(&self, image: &image::RgbaImage) -> Result<VisionAnalysis> {
         let spec = self.ensure_spec().await?;
         let model = model_label(&spec);
+        let acquire_started = std::time::Instant::now();
         let lease = self.supervisor.acquire(spec).await?;
+        let acquire_ms = acquire_started.elapsed().as_millis() as u64;
+        let prep_started = std::time::Instant::now();
         let data_url = encode_data_url(image)?;
+        let prep_ms = prep_started.elapsed().as_millis() as u64;
+        let (req_width, req_height) = vlm_request_dims(image.width(), image.height());
+        let complete_started = std::time::Instant::now();
         let content = lease
             .client()
             .complete(
@@ -170,6 +183,18 @@ impl VisionProvider for VisionSidecar {
             )
             .await
             .context("vision completion")?;
+        // Per-stage timing: sidecar lease acquisition (includes a cold model spawn),
+        // CPU request prep (downscale + JPEG + base64), and the sidecar completion
+        // round-trip, with the request image dimensions. Privacy-safe: durations +
+        // dimensions only.
+        tracing::info!(
+            acquire_ms,
+            prep_ms,
+            complete_ms = complete_started.elapsed().as_millis() as u64,
+            req_width,
+            req_height,
+            "vision analyze timing"
+        );
         Ok(parse_vision(&content, &model))
     }
 }
@@ -268,6 +293,21 @@ fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
     ))
 }
 
+/// The dimensions [`downscale_for_vlm`] produces for a `width`×`height` source — the size
+/// of the image actually sent to the VLM. Split out so the analyze timing log can record
+/// the request dimensions without re-deriving them from the encoded payload.
+fn vlm_request_dims(width: u32, height: u32) -> (u32, u32) {
+    // A zero-area source passes through untouched: scaling it would hand
+    // `image::imageops::resize` an empty source buffer, which can panic.
+    if width == 0 || height == 0 || width.max(height) <= VISION_MAX_EDGE {
+        return (width, height);
+    }
+    let ratio = f64::from(VISION_MAX_EDGE) / f64::from(width.max(height));
+    let nwidth = ((f64::from(width) * ratio).round() as u32).max(1);
+    let nheight = ((f64::from(height) * ratio).round() as u32).max(1);
+    (nwidth, nheight)
+}
+
 /// Downscales a frame so its longest edge is at most [`VISION_MAX_EDGE`], preserving aspect
 /// ratio; returns it unscaled when it already fits. A native full-screen capture is otherwise
 /// thousands of vision tokens (`exceed_context_size_error`); shrinking the request image keeps
@@ -275,16 +315,14 @@ fn encode_data_url(img: &image::RgbaImage) -> Result<String> {
 /// enough fidelity for activity/app tagging.
 fn downscale_for_vlm(img: &image::RgbaImage) -> image::DynamicImage {
     let (width, height) = (img.width(), img.height());
-    if width.max(height) <= VISION_MAX_EDGE {
+    let (nwidth, nheight) = vlm_request_dims(width, height);
+    if (nwidth, nheight) == (width, height) {
         return image::DynamicImage::ImageRgba8(img.clone());
     }
     // Resize the borrowed frame directly — `DynamicImage::resize` would force a full-resolution
-    // clone (~20 MB for a 3440×1440 capture) only to discard it. The fitted dimensions use the
-    // same round-to-nearest scale `resize` applies (ratio = VISION_MAX_EDGE / longest edge), so
-    // the cap math is unchanged.
-    let ratio = f64::from(VISION_MAX_EDGE) / f64::from(width.max(height));
-    let nwidth = ((f64::from(width) * ratio).round() as u32).max(1);
-    let nheight = ((f64::from(height) * ratio).round() as u32).max(1);
+    // clone (~20 MB for a 3440×1440 capture) only to discard it. The fitted dimensions come from
+    // `vlm_request_dims` (round-to-nearest scale, ratio = VISION_MAX_EDGE / longest edge), the
+    // same math `resize` applies, so the cap behavior is unchanged.
     let resized =
         image::imageops::resize(img, nwidth, nheight, image::imageops::FilterType::Triangle);
     image::DynamicImage::ImageRgba8(resized)
@@ -327,7 +365,28 @@ mod tests {
             VISION_MAX_EDGE,
             "longest edge must be capped"
         );
-        assert_eq!((decoded.width(), decoded.height()), (1568, 656));
+        // 1280×536 = the pre-WebP stored size; the cap pins request parity with it.
+        assert_eq!((decoded.width(), decoded.height()), (1280, 536));
+    }
+
+    #[test]
+    fn vlm_request_dims_match_encoded_output() {
+        // The timing log's request dimensions must agree with what `encode_data_url`
+        // actually sends (both capped and pass-through cases). 1280 matches the
+        // pre-WebP stored width (see `VISION_MAX_EDGE`).
+        assert_eq!(vlm_request_dims(3440, 1440), (1280, 536));
+        assert_eq!(vlm_request_dims(800, 600), (800, 600));
+        assert_eq!(vlm_request_dims(1440, 3440), (536, 1280), "portrait cap");
+        assert_eq!(
+            vlm_request_dims(0, 2000),
+            (0, 2000),
+            "zero width passes through"
+        );
+        assert_eq!(
+            vlm_request_dims(2000, 0),
+            (2000, 0),
+            "zero height passes through"
+        );
     }
 
     #[test]
