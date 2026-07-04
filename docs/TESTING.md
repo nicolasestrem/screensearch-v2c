@@ -246,3 +246,64 @@ real Windows desktop with `npm run tauri dev`, capture enabled, and a few minute
   the text reconstruction — the mark is never orphaned.
 - **Five overlay states.** Exercise the overlay empty-state strip's loading / error / null / populated
   paths (e.g. via `?__devState=…` where supported, or by toggling capture/data).
+
+## Manual acceptance — local API + export (0.3.0 PR7)
+
+**0.3.0 PR7** adds the opt-in local HTTP API and JSON export (`docs/0.3.0.md` Part III, D11/D12;
+`03 §7c`). Run on a real Windows desktop with `npm run tauri dev`, capture enabled, and a few minutes
+of history. Use a terminal with `curl` (and `jq` for readability). The token is shown in
+Settings → **Local API** after you enable it.
+
+- **Off by default (fresh profile: nothing listens).** On a profile that never enabled the API, open
+  Settings → Local API: the panel reads **"API disabled — nothing is listening"** and shows the
+  threat-model line. Confirm nothing is bound: `netstat -ano | findstr 43210` returns no LISTENING row.
+- **Enable → listening + token.** Toggle **Enable local HTTP API** on. The panel flips to **"Listening
+  on 127.0.0.1:43210"** with a masked token (Reveal / Copy / Regenerate). `netstat -ano | findstr
+  43210` now shows a LISTENING row on `127.0.0.1`.
+- **401 without / with a wrong token.** With the API on:
+  - `curl -s -o NUL -w "%{http_code}" http://127.0.0.1:43210/v1/health` → **401**.
+  - `curl -s -o NUL -w "%{http_code}" -H "Authorization: Bearer wrong" http://127.0.0.1:43210/v1/health`
+    → **401**.
+  - `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:43210/v1/health` → **200** with
+    `{"version":…,"uptime_secs":…,"capturing":…}`.
+- **Every endpoint round-trips.** With the token set (e.g. `set TOKEN=<token>` then
+  `-H "Authorization: Bearer %TOKEN%"`):
+  - `GET /v1/search?q=<term>` returns matching hits (the same as the UI search).
+  - `GET /v1/frames/<id>` returns metadata + text; `GET /v1/frames/<id>?image=1 --output f.webp` writes
+    the screenshot (or `404 image_purged` if it expired).
+  - `GET /v1/context/where-was-i` returns the resume context (or `null`).
+  - `GET /v1/marks` lists marks; `POST /v1/marks` with `{"frame_id":<id>}` creates one (`201`);
+    `{"now":true}` captures + marks now; `POST /v1/marks/<id>/resolve` resolves it. Both `frame_id` and
+    `now` together → `400`; an unknown frame/mark → `404`.
+- **SSE ask, and disconnect cancels generation.** With an answer model loaded,
+  `curl -N -H "Authorization: Bearer %TOKEN%" -H "Content-Type: application/json" -d "{\"query\":\"what
+  did I read about X\"}" http://127.0.0.1:43210/v1/ask` streams `data:` events (`token`, then `citation`,
+  then `done`). Start another and press `Ctrl+C` mid-answer: the log shows **"answer stream cancelled by
+  consumer; aborting sidecar generation"** and the sidecar stops (GPU/CPU settle) rather than finishing
+  into a closed socket.
+- **Port conflict is loud + guided.** Occupy the port first (in another terminal:
+  `python -m http.server 43210` or any listener), then toggle the API on: a **warning toast** fires and
+  the panel shows **"port in use"** with an inline **Retry** and the error under the port field. Change
+  the port field to a free port and Retry (or disable the other listener): it binds and reads
+  "Listening…".
+- **Regenerate token — no restart.** While listening, click **Regenerate**. The old token now gets
+  `401`, the new token `200`, on the **same** running server (no toggle-off/on needed).
+- **Change the port while running (PR #76 fix).** While listening, edit the port field to a different
+  free port: a **"Restart on {port}"** button appears with the "differs from the running port" note.
+  Click it — the server rebinds and reads "Listening on 127.0.0.1:{new port}", and `netstat` shows the
+  new port LISTENING (the old one freed).
+- **Malformed request → JSON 400 (PR #76 fix).** With the API on,
+  `curl -s -H "Authorization: Bearer <token>" "http://127.0.0.1:43210/v1/search?limit=10"` (no `q`) and
+  `.../v1/frames/not-a-number` each return `{"error":"bad_request","message":…}` with
+  `content-type: application/json` — not a plaintext framework rejection.
+- **Export works with the API disabled.** Turn the API **off**. Click Settings → Data export →
+  **Export…**: a success toast shows the written path in your Downloads folder
+  (`screensearch-export-<stamp>-<rand>.json` — the random suffix keeps same-second exports from
+  colliding). Validate it: `jq . "%USERPROFILE%\Downloads\screensearch-export-*.json"`
+  parses, with `schema:"screensearch.export.v1"`, a `frames` array (metadata + `content_text`, **no**
+  image bytes), and a `marks` array.
+- **Exit frees the port.** With the API listening, quit the app. `netstat -ano | findstr 43210` shows
+  no LISTENING row afterward (the server is stopped on exit; an in-flight `curl -N` ask does not wedge
+  the quit).
+- **Five panel states.** Exercise the Local API panel's loading / load-error / off / enabling /
+  listening paths (toggle, retry, and the port-conflict path above).

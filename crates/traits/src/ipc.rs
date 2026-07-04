@@ -1067,6 +1067,60 @@ pub struct ThrottleStatus {
     pub gpu_monitored: bool,
 }
 
+/// State of the opt-in local HTTP API for the Settings panel (0.3.0 PR7; `03 §7c`,
+/// D11) — the return of `get_api_status` / `set_api_config` / `regenerate_api_token`.
+/// `enabled` is the persisted intent; `running` is whether the socket is actually
+/// bound. The two diverge in exactly one case: `enabled && !running && last_error` is
+/// the **loud guided-change** state — the port was in use on enable, so the server did
+/// not start, the intent is preserved, and the Settings panel shows the warning + a
+/// "pick another port" retry (mirrors the D6 hotkey-conflict pattern). `token` carries
+/// the bearer token so Settings can reveal/copy it (`§7c`: "shown/copyable"); it is
+/// `None` only before the first enable ever generated one. The token lives in the
+/// `settings` KV table, **never** in the `Settings` struct, so it cannot leak through
+/// `get_settings`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ApiStatus {
+    /// Persisted intent — the master toggle.
+    pub enabled: bool,
+    /// Whether the HTTP server is currently bound and serving.
+    pub running: bool,
+    /// The configured port (default 43210); the bind is always `127.0.0.1`.
+    pub port: u16,
+    /// The bearer token (revealed/copied in Settings); `None` before first enable.
+    pub token: Option<String>,
+    /// Why the server is not running despite `enabled` (e.g. "port 43210 in use").
+    pub last_error: Option<String>,
+}
+
+/// Input to the `export_data` command (0.3.0 PR7; `03 §7c`, D12). Bounds the export
+/// to an optional half-open `[from, to)` window (unix epoch ms), matching the
+/// `GET /v1/export?from=&to=` query. Both `None` (the Settings "Export…" button) =
+/// full history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ExportRequest {
+    #[ts(type = "number | null")]
+    pub from: Option<i64>,
+    #[ts(type = "number | null")]
+    pub to: Option<i64>,
+}
+
+/// Result of the `export_data` command (0.3.0 PR7; `03 §7c`, D12) — the streamed JSON
+/// file the Settings "Export…" button produced. `path` is the absolute file path (in
+/// the user's Downloads folder); `frames`/`marks` are the counts written; `bytes` is
+/// the file size. The same streaming code path backs `GET /v1/export`, so the export
+/// works even with the API disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct ExportResult {
+    pub path: String,
+    pub frames: u32,
+    pub marks: u32,
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
 #[cfg(test)]
 mod ts_number_guard {
     use super::*;
@@ -1102,6 +1156,9 @@ mod ts_number_guard {
             ("MarkToast", MarkToast::inline()),
             ("PressureSample", PressureSample::inline()),
             ("ThrottleStatus", ThrottleStatus::inline()),
+            ("ApiStatus", ApiStatus::inline()),
+            ("ExportRequest", ExportRequest::inline()),
+            ("ExportResult", ExportResult::inline()),
         ];
         for (name, decl) in decls {
             assert!(

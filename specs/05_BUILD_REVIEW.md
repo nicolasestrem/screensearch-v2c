@@ -20,6 +20,183 @@ For each build pass, append an entry:
 
 ---
 
+## Pass — 2026-07-04 — 0.3.0 PR7: local HTTP API + export (`feat/pr7-local-api`)
+
+The opt-in local HTTP API + streaming JSON export (`docs/0.3.0.md` Part III; `03 §7c`/`§7`/`§8`/
+`§13b.6`; D11/D12). Built bottom-up: shared types → store cursor → the inference cancellation fix →
+the `crates/api` crate → the composition-root wiring → the UI → docs. No schema change (stays v10).
+
+### Implemented
+- **Shared types** (`crates/traits`): `ApiStatus`/`ExportRequest`/`ExportResult` (ts-rs, exported to
+  `ui/src/bindings`, added to the `no_bigint_in_ipc_types` guard) + `ExportFrameRow` (Serialize-only,
+  in `domain`, shared by store↔api without a module→module dep). The bearer token rides `ApiStatus`
+  (Settings reveal/copy) but **never** the `Settings` struct, so it can't leak via `get_settings`.
+- **Store cursor** (`crates/store/src/records.rs::export_frames_page`): keyset `id > after_id` +
+  half-open `[from,to)`, `frames LEFT JOIN frame_text` for `content_text`, one `with_conn` hop per
+  page (connection released between pages). 4 unit tests (paging/window/left-join/zero-limit).
+- **SSE cancellation fix** (`crates/inference/src/answer.rs`): the detached `stream_task` is wrapped
+  in an `AbortOnDrop` guard and the consume loop became `pump_deltas` with a `tokio::select!` on
+  `tx.closed()`. A dropped `/v1/ask` receiver (or `cancel_ask`) now aborts the sidecar stream,
+  freeing the GPU instead of generating into a closed socket (the leak `§7c` calls out). Completed
+  path byte-identical. 2 unit tests (cancel-aborts + normal-completes).
+- **`crates/api`** (new; depends on `traits` only): `ApiHost` trait seam; `ApiServer` binds
+  `127.0.0.1` from a `const BIND_IP` (no address parameter → a `0.0.0.0` bind is impossible by
+  construction), binds **before** spawn (synchronous port-conflict `Err`), graceful shutdown (3s cap
+  then abort); bearer-auth middleware on every `/v1` route with a constant-time compare and a live
+  `RwLock` token (regenerate needs no restart); one `ApiError`/`ErrorBody` shape; routes for health/
+  search/frames(+`?image=1`)/where-was-i/marks/ask(SSE)/export(streamed). axum 0.8 is the lone new
+  dependency (reuses the in-tree hyper/tower/http stack). 14 integration/unit tests.
+- **Composition root** (`src-tauri/src/local_api.rs`): `TauriApiHost` adapts the concrete store/kernel
+  via the existing private helpers (`ask_context`, `safe_frame_path`, `kernel::resume::where_was_i`);
+  `ApiRuntime` holds the server slot + live token; `apply_api_config` persists `api.*` KV keys,
+  generates the token on first enable, (re)starts/stops the server, and leaves `enabled=true` +
+  `running=false` + `last_error` on a bind conflict (loud + guided, `07` #80); the 4 commands
+  (`set_api_config`/`get_api_status`/`regenerate_api_token`/`export_data`); autostart on boot; server
+  stopped first on exit. 4 unit tests (fresh-off/clamp/token-once/bind-failure).
+- **UI**: `ApiPanel` (five states, threat-model copy, token reveal/copy/regenerate, port-in-use
+  retry) + a separate Data export button (Downloads, works with the API off); the `apiStatus`
+  query/key + 3 mutations + 4 command wrappers. Fixed the stale "backend never emits toast" comments.
+- **Docs**: `docs/API.md` (new, OpenAPI-lite); `docs/TESTING.md` PR7 manual-acceptance section;
+  `CHANGELOG.md`; `06`/`07` (export-destination decision #88, v1 residuals #89, #80 marked shipped);
+  `UI_REFERENCE §5` gains the `ExportPanel` line.
+
+### Verification (Windows, verbatim)
+Full suite green:
+```
+cargo fmt --all -- --check                                  → exit 0 (no diff)
+cargo clippy --workspace --all-targets -- -D warnings       → Finished (exit 0)
+cargo build --workspace                                     → Finished (exit 0)
+cargo test --workspace                                      → all suites ok; new:
+    api        (unit)          2 passed
+    api        http_api.rs    12 passed
+    inference  (unit)        104 passed  (incl. 2 new pump_deltas tests)
+    store      store.rs       61 passed  (incl. 4 new export_frames_page tests)
+    screensearch_lib (unit)   12 passed  (incl. 4 new local_api tests)
+    traits     (unit)         65 passed  (incl. the 3 new ts-rs guards)
+cd ui && npm run lint                                       → exit 0
+cd ui && npm run build                                      → built (exit 0)
+git diff --exit-code -- ui/src/bindings                     → clean (exit 0)
+```
+Live out-of-process check — a real `ApiServer` served the fixture store on `127.0.0.1:43210` and was
+exercised by external **`curl`** (not the in-process reqwest tests):
+```
+GET  /v1/health         (no token)   → 401 {"error":"unauthorized",…}
+GET  /v1/health         (wrong token)→ 401
+GET  /v1/health         (token)      → 200 {"version":…,"uptime_secs":…,"capturing":false}
+GET  /v1/search?q=invoice            → 200 [{"frame_id":1,"snippet":"quarterly [invoice] total",…}]
+GET  /v1/frames/1                     → 200 {"frame_id":1,"width":1920,…}
+GET  /v1/context/where-was-i          → 200 null
+POST /v1/marks {"frame_id":1,…}       → 201 {"mark_id":1}
+POST /v1/marks {"frame_id":1,"now":true} → 400
+GET  /v1/marks                        → 200 [{"mark_id":1,"note":"live check",…}]
+GET  /v1/export?format=json           → 200 {"schema":"screensearch.export.v1",…,"frames":[…×2],"marks":[…]}
+GET  /v1/export?format=csv            → 400
+GET  /v1/frames/999                    → 404
+```
+A second harness instance binding the occupied 43210 returned `AddrInUse` — the synchronous
+port-conflict `Err` the loud/guided path relies on. The `live_server_for_curl` harness (`#[ignore]`)
+reproduces this. Full interactive desktop pass (enable via the Settings UI → curl → exit-frees-port)
+is documented in `docs/TESTING.md` for the PR9 audit.
+
+### Skipped / deferred
+- Live SSE `/v1/ask` over curl (needs a loaded answer model) — covered by the `pump_deltas` unit test
+  (cancellation) + `ask_streams_sse_deltas` integration test (scripted provider). Non-JSON export
+  formats, a rate limiter, and a `captured_at`-seeded export cursor are recorded deferrals (`07` #89).
+
+### Hallucinated / corrected
+- Initially wired the ask/export routes into `build_router` before their handlers existed; merged the
+  route wiring with the handlers so the crate landed as one compiling unit. Forgot `anyhow` as a
+  direct `src-tauri` dep (used by the `ApiHost` impl's `anyhow::Result`); added it. `Chip` has no
+  `info`/`muted` tones — used `accent`/`neutral`.
+
+### Still risky
+- `pump_deltas` touches the Ask/reports hot path; the completed path is unchanged and gated by the
+  existing inference suite, but a live long-answer + mid-stream cancel is worth the PR9 desktop pass.
+- The export cursor scans ids from 0 even for a late window (`07` #89c) — correct, bounded, not
+  optimal.
+
+### Follow-up — PR #76 review fixes (Gemini + Codex bot comments)
+Addressed the five applicable inline suggestions on the open PR (bots not replied to, per request):
+1. **Malformed requests broke the JSON error contract (Codex P2).** Axum's stock `Query`/`Json`/
+   `Path` extractors reject *before* the handler, returning a plaintext body that bypasses
+   `ApiError` — so `GET /v1/search` (no `q`) or `/v1/frames/not-a-number` returned a non-`{error,
+   message}` 400, contradicting `docs/API.md`. Added `crates/api/src/extract.rs` — `ApiQuery`/
+   `ApiPath`/`ApiJson` wrappers that delegate to the stock extractors and map every rejection to
+   `ApiError::BadRequest`. Swapped them into all routes (`routes.rs`, `export.rs`). Two integration
+   assertions strengthened (`search` missing-`q` and `frames/not-a-number` now assert
+   `error=="bad_request"` + JSON content-type).
+2. **Port edits were inert while the API ran (Codex P2).** The port `Field` was editable when
+   running but there was no apply action, and the hint claimed a change "restarts the server" — so
+   `api.port` was effectively unconfigurable from the normal path. Added a "Restart on {port}"
+   affordance (`ApiPanel.tsx`) shown when the drafted port differs from the live one; it reuses the
+   bind-retry restart (the D6-mirror pattern), making the hint honest.
+3. **Front-end port not clamped (Gemini).** `parsedPort` only checked finiteness, so a negative or
+   >65535 value would fail IPC deserialization into `u16`. Now clamps to `1024..=65535` (the backend
+   clamps to the floor too).
+4. **`.partial` left on flush/rename failure (Gemini).** `export_to_file` cleaned up the partial on
+   a stream/write error but the trailing `file.flush()` and `rename` still used bare `?`. Both now
+   remove the partial before returning the error — a failed export never leaves a plausible file.
+5. **Missing image file → 500 (Gemini).** `TauriApiHost::frame_image` used `tokio::fs::read(..)?`,
+   so a file missing on disk (manual delete/sync gap) surfaced as 500. Now maps `NotFound` to
+   `Ok(None)`, letting the route answer a clean 404.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all suites ok
+  (`api` http_api.rs **12 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**;
+  workspace 0 failed); `cd ui && npm run lint && npm run build` → exit 0 / built; `git diff
+  --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
+
+### Follow-up — PR #76 second review round (7 more bot comments)
+A later Gemini + Codex pass raised seven more; all applied:
+1. **Partial cleanup failed on Windows (Gemini HIGH).** The round-1 `.partial` cleanup called
+   `remove_file` while the write handle was still open — a sharing violation on Windows (this app's
+   only target), so the partial survived anyway. Extracted `drain_to_file`, which owns the handle and
+   **drops it on return** (Ok or Err); `export_to_file` now deletes the partial only after the handle
+   is closed, on both the drain-error and failed-rename paths.
+2. **Config transitions could interleave (Codex P2).** `apply_api_config` took the server lock only
+   for the `take()`, releasing it across stop/start — a rapid enable→disable could end with the API
+   running against `enabled=false`. Added a `config_lock: tokio::Mutex<()>` to `ApiRuntime`, held
+   across the whole persist→stop→start transition.
+3. **Unknown routes bypassed the error contract (Codex P2).** The router had no fallback, so a bad
+   `/v1/...` path got axum's plaintext 404. Added `routes::not_found` as `.fallback(..)` (before the
+   auth layer, so it's authed too) → `{error:"not_found"}`.
+4. **Inverted `from > to` silently returned empty (Gemini ×3).** Added an up-front `400` in
+   `build_search_query` (search), a shared `export::validate_window` (the `/v1/export` route), and the
+   `export_data` command.
+5. **`pump_deltas` drained the backlog after disconnect (Gemini).** In the `select!`, a `prx.recv()`
+   win while `tx` was closed sent into a dead channel and kept processing buffered pieces. `emit_segment`
+   now returns whether the channel is still open, and the loop returns `Cancelled` on the first failed
+   send — the guard aborts the sidecar immediately. Completed path unchanged.
+- **New tests:** `unknown_route_is_json_404`, `inverted_time_range_is_400` (search + export); the
+  existing cancel test still gates `pump_deltas`.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all green (`api`
+  http_api.rs **14 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**; 0 failed);
+  `git diff --exit-code -- ui/src/bindings` → clean (no ts-rs type changed).
+
+### Follow-up — PR #76 third review round (3 more bot comments)
+1. **Token-update race (claude bot).** `regenerate_api_token` writes `runtime.token` under no lock; a
+   concurrent `apply_api_config` read the DB token at the top of its critical section and wrote it
+   back to `runtime.token` after the bind — so a regenerate landing between those steps would be
+   clobbered (DB/UI show the new token, middleware holds the old → 401 until the next toggle). Fixed
+   in `apply_api_config`: the live token is authoritative once populated, so it now writes
+   `runtime.token` **only when empty** (first enable / fresh-boot autostart) instead of every enable;
+   a running regenerate is never overwritten. (No `config_lock` in regenerate — that would block the
+   token button behind a slow bind for no gain now that the overwrite is gone.)
+2. **Unpropagated setting-write failures (Codex P2).** `apply_api_config` ignored the `set_setting`
+   results, so on a read-only/full DB a disable could stop the server yet leave `enabled=true` on
+   disk (autostarting next launch). It now returns `Result<ApiStatus, String>`, persisting the intent
+   **before** touching the server and bailing with `Err` if any of the `api.port`/`api.enabled`/
+   `api.token` writes fail; `set_api_config` propagates it, `autostart` logs it.
+3. **Non-unique export filename on Windows (Codex P2).** The second-granularity stamp meant two
+   exports in the same second targeted the same final/`.partial` path — and `rename` fails on Windows
+   when the destination exists. Added a 6-hex CSPRNG suffix (`export::rand_suffix`) so names are
+   unique: `screensearch-export-<stamp>-<rand>.json`.
+- **Verification (verbatim):** `cargo fmt --all -- --check` → exit 0; `cargo clippy --workspace
+  --all-targets -- -D warnings` → Finished (exit 0); `cargo test --workspace` → all green (`api`
+  http_api.rs **14 passed**, 1 ignored; `inference` **104 passed**; `store` **61 passed**;
+  `screensearch_lib` **12 passed** incl. the 4 `local_api` units updated for the new `Result`; 0
+  failed); `git diff --exit-code -- ui/src/bindings` → clean.
+
 ## Pass — 2026-07-04 — 0.3.0 PR6: where-was-i + mark-this-moment (`pr6-where-was-i-and-marks`)
 
 The ADHD core of the arc: a where-was-i heuristic (overlay empty state + Deck card) and

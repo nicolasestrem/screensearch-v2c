@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Local HTTP API + export (0.3.0 PR7)
+ScreenSearch can now serve your screen history to local scripts and agents through an opt-in **local
+HTTP API** — the open-source ask since Rewind shut down. It is **off by default**. When you enable it
+in Settings it binds `127.0.0.1` only (never your network — that is hard-coded, not a setting) and
+mints a **bearer token**: every request must carry it, and anything without it — or with the wrong
+one — gets a `401`. The token is shown in Settings to reveal, copy, and regenerate (regenerating takes
+effect immediately, no restart). The threat model is stated plainly next to the switch: any local
+process holding the token can read your entire screen history, so enabling it is an explicit trust
+decision. If the port (default `43210`) is already in use, enabling fails **loudly** — a warning, and
+an inline "pick another port" retry — never a silent no-op.
+
+The v1 API mirrors the app: `GET /v1/health`, `GET /v1/search`, `POST /v1/ask` (a streamed, grounded
+answer over Server-Sent Events — and disconnecting the client now actually stops the model generating,
+freeing the GPU), `GET /v1/frames/{id}` (with `?image=1` for the screenshot),
+`GET /v1/context/where-was-i`, and marks (`GET`/`POST` and resolve — the only write surface). Full
+docs, with copy-paste examples, are in `docs/API.md`.
+
+A new **Export…** button in Settings writes your frames, content text, and marks to a JSON file in your
+Downloads folder (screenshots are not included). It streams to disk, so exporting months of history
+stays memory-flat, and it shares the API's export code path — so it works even with the API disabled.
+There is no schema change in this release. *Live-verified on Windows: off by default (nothing listens),
+the 401 posture, the loud port-conflict retry, token regeneration without a restart, SSE cancellation
+on disconnect, and a valid export produced with the API off.*
+
+Review hardening (PR #76): malformed requests (a bad query string, body, or path segment) — and now
+unknown endpoint paths and an inverted `from > to` window — return the same `{ "error", "message" }`
+error as every other response instead of a framework plaintext body; the port can be changed while the
+API is running via a "Restart on {port}" button (previously the edited port was inert); the port field
+clamps to `1024–65535`; a failed export never leaves a `.partial` file behind (fixed for Windows, where
+the open file handle blocked cleanup); a screenshot missing on disk returns a clean `404` rather than a
+`500`; overlapping enable/disable calls are serialized so a race can't leave the API running against a
+disabled intent; and a client that disconnects mid-answer now stops the stream immediately instead of
+draining the model's backlog first. A further round: regenerating the token can no longer be clobbered
+by a concurrent config change; a failed settings write is now surfaced as an error rather than silently
+leaving the API enabled on disk after a disable; and export filenames carry a random suffix so two
+exports in the same second can't collide.
+
 ### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
 Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing
 before this detour?" — open the Flow overlay with an empty query (or look at the Deck) and, when it can,

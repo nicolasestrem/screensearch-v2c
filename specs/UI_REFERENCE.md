@@ -153,7 +153,10 @@ text, where-was-i empty state, five states per `§4`), `WhereWasICard` (Deck "Ju
 Moment), `IntentionsStrip` (Deck: unresolved marks, newest-first, open/resolve/dismiss, **no badge
 counts**), `HotkeyField` (Settings: records a chord for `overlay.hotkey`/`marks.hotkey`, shows a loud
 warning on registration conflict), `ApiPanel` (Settings: master `Toggle` + port `Field` + token
-reveal/copy/regenerate + threat-model copy + the loud port-in-use "pick another" affordance).
+reveal/copy/regenerate + threat-model copy + the loud port-in-use "pick another" affordance),
+`ExportPanel` (Settings "Data export": an **Export…** `Button` → `export_data`, streaming
+frames + content text + marks to a JSON file in the user's Downloads folder, **no images**;
+its own panel so it reads as independent of the API — it **works with the API off** — D12).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
 
 ## 6. Data & state (reliability by construction)

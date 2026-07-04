@@ -109,57 +109,134 @@ impl AnswerSidecar {
         let (messages, cited) = build_messages(query, context, ctx_size, max_tokens);
 
         // Bridge the client's low-level SSE pieces onto the typed AnswerDelta stream.
-        let (ptx, mut prx) = mpsc::channel::<StreamPiece>(64);
+        let (ptx, prx) = mpsc::channel::<StreamPiece>(64);
         let client = lease.client().clone();
         let stream_task =
             tokio::spawn(async move { client.stream(messages, max_tokens, &ptx).await });
 
-        let mut splitter = ThinkSplitter::default();
-        while let Some(piece) = prx.recv().await {
-            match piece {
-                StreamPiece::Reasoning(text) => {
-                    if opts.thinking {
-                        let _ = tx.send(AnswerDelta::Thinking { text }).await;
-                    }
+        // Drain the stream until it completes — or until the consumer goes away (a UI
+        // cancel, or a dropped `/v1/ask` SSE), in which case the sidecar is aborted so it
+        // stops generating instead of streaming into a closed socket (`03 §7c`).
+        match pump_deltas(stream_task, prx, tx, opts).await {
+            // The consumer closed the channel; nothing reads further deltas.
+            PumpOutcome::Cancelled => Ok(()),
+            PumpOutcome::Failed(e) => {
+                let _ = tx
+                    .send(AnswerDelta::Error {
+                        message: e.to_string(),
+                    })
+                    .await;
+                Ok(())
+            }
+            PumpOutcome::Completed => {
+                // Source-frame provenance: one per included context frame (already
+                // deduped, in order). Only frames that fit the context budget are
+                // emitted, so each id corresponds to text the model actually saw; the UI
+                // labels these as checked context rather than proof of a positive claim.
+                for frame_id in &cited {
+                    let _ = tx
+                        .send(AnswerDelta::Citation {
+                            frame_id: *frame_id,
+                        })
+                        .await;
                 }
-                StreamPiece::Content(text) => {
-                    for (is_thinking, chunk) in splitter.push(&text) {
-                        emit_segment(tx, is_thinking, chunk, opts.thinking).await;
-                    }
-                }
-                StreamPiece::Done => break,
+                let _ = tx.send(AnswerDelta::Done).await;
+                Ok(())
             }
         }
-        if let Some((is_thinking, rest)) = splitter.flush() {
-            emit_segment(tx, is_thinking, rest, opts.thinking).await;
-        }
+    }
+}
 
-        let stream_result = stream_task
-            .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("answer stream task panicked: {e}")));
+/// Aborts the wrapped task on drop unless disarmed via [`Self::into_inner`]. Wrapping
+/// the sidecar stream task in this guard is what makes cancellation actually free the
+/// sidecar: whenever [`pump_deltas`] returns early because the downstream `AnswerDelta`
+/// consumer went away, the stream task is aborted, which drops reqwest's response body,
+/// closes the HTTP connection to llama.cpp, and stops generation. Without it the
+/// detached stream task keeps draining the sidecar to `[DONE]` even though nothing reads
+/// the result — the leak `03 §7c` calls out (and the reason the old `cancel_ask`, which
+/// only aborted the outer task, never stopped generation).
+struct AbortOnDrop<T>(Option<tokio::task::JoinHandle<T>>);
 
-        if let Err(e) = stream_result {
-            let _ = tx
-                .send(AnswerDelta::Error {
-                    message: e.to_string(),
-                })
-                .await;
-            return Ok(());
-        }
+impl<T> AbortOnDrop<T> {
+    fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(Some(handle))
+    }
 
-        // Source-frame provenance: one per included context frame (already deduped, in
-        // order). Only frames that fit the context budget are emitted, so each id
-        // corresponds to text the model actually saw; the UI labels these as checked
-        // context rather than proof of a positive claim.
-        for frame_id in &cited {
-            let _ = tx
-                .send(AnswerDelta::Citation {
-                    frame_id: *frame_id,
-                })
-                .await;
+    /// Disarms the guard and returns the handle — the normal-completion path awaits it
+    /// for the stream's result instead of aborting it.
+    fn into_inner(mut self) -> tokio::task::JoinHandle<T> {
+        self.0.take().expect("AbortOnDrop handle taken twice")
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.0 {
+            handle.abort();
         }
-        let _ = tx.send(AnswerDelta::Done).await;
-        Ok(())
+    }
+}
+
+/// Outcome of draining the sidecar stream in [`pump_deltas`].
+enum PumpOutcome {
+    /// The sidecar reached `Done`; the caller emits citations + a terminal `Done`.
+    Completed,
+    /// The sidecar stream task failed; the caller surfaces the error as a terminal delta.
+    Failed(anyhow::Error),
+    /// The downstream consumer closed the channel (UI cancel / SSE disconnect); the
+    /// sidecar stream task was aborted and no further deltas should be sent.
+    Cancelled,
+}
+
+/// Drains the client's low-level SSE pieces (`prx`) into typed `AnswerDelta` sends on
+/// `tx`, splitting inline `<think>` reasoning as it goes, until the stream completes —
+/// or until `tx`'s receiver is dropped, in which case the sidecar `stream_task` is
+/// aborted (via the [`AbortOnDrop`] guard) so it stops generating. This is the single
+/// place the cancel-on-disconnect contract (`03 §7c`) is enforced; it also fixes the
+/// pre-existing `cancel_ask` leak, since aborting the outer answer task drops `tx`,
+/// which closes the channel observed here.
+async fn pump_deltas(
+    stream_task: tokio::task::JoinHandle<Result<()>>,
+    mut prx: mpsc::Receiver<StreamPiece>,
+    tx: &Sender<AnswerDelta>,
+    opts: AnswerOpts,
+) -> PumpOutcome {
+    let stream_task = AbortOnDrop::new(stream_task);
+    let mut splitter = ThinkSplitter::default();
+    loop {
+        tokio::select! {
+            piece = prx.recv() => match piece {
+                Some(StreamPiece::Reasoning(text)) => {
+                    // A closed channel means the consumer hung up mid-piece: stop pumping
+                    // now (the guard aborts the sidecar) rather than draining the backlog.
+                    if opts.thinking && tx.send(AnswerDelta::Thinking { text }).await.is_err() {
+                        return PumpOutcome::Cancelled;
+                    }
+                }
+                Some(StreamPiece::Content(text)) => {
+                    for (is_thinking, chunk) in splitter.push(&text) {
+                        if !emit_segment(tx, is_thinking, chunk, opts.thinking).await {
+                            return PumpOutcome::Cancelled;
+                        }
+                    }
+                }
+                Some(StreamPiece::Done) | None => break,
+            },
+            // The receiver was dropped: the consumer hung up. Stop consuming and let the
+            // guard abort the sidecar stream (freeing GPU/CPU) as this fn returns.
+            _ = tx.closed() => {
+                tracing::info!("answer stream cancelled by consumer; aborting sidecar generation");
+                return PumpOutcome::Cancelled;
+            }
+        }
+    }
+    if let Some((is_thinking, rest)) = splitter.flush() {
+        emit_segment(tx, is_thinking, rest, opts.thinking).await;
+    }
+    match stream_task.into_inner().await {
+        Ok(Ok(())) => PumpOutcome::Completed,
+        Ok(Err(e)) => PumpOutcome::Failed(e),
+        Err(e) => PumpOutcome::Failed(anyhow::anyhow!("answer stream task panicked: {e}")),
     }
 }
 
@@ -231,24 +308,26 @@ impl AnswerProvider for AnswerSidecar {
     }
 }
 
+/// Emits one segment. Returns `false` iff the send failed because the consumer dropped the
+/// receiver — the caller stops pumping. A skipped (empty/suppressed) segment returns `true`.
 async fn emit_segment(
     tx: &Sender<AnswerDelta>,
     is_thinking: bool,
     text: String,
     thinking_on: bool,
-) {
+) -> bool {
     if text.is_empty() {
-        return;
+        return true;
     }
     let delta = if is_thinking {
         if !thinking_on {
-            return; // thinking suppressed by the request
+            return true; // thinking suppressed by the request
         }
         AnswerDelta::Thinking { text }
     } else {
         AnswerDelta::Token { text }
     };
-    let _ = tx.send(delta).await;
+    tx.send(delta).await.is_ok()
 }
 
 /// Chat-template + role-tag overhead reserved on top of the system prompt and question,
@@ -712,5 +791,103 @@ mod tests {
             out.chars().all(|c| c == '世'),
             "no split / replacement chars"
         );
+    }
+
+    /// The cancel-on-disconnect contract (`03 §7c`): when the `AnswerDelta` consumer
+    /// drops its receiver mid-stream, `pump_deltas` returns `Cancelled` promptly and the
+    /// still-generating sidecar stream task is aborted (not left running to `[DONE]`).
+    /// This is the mechanism that both a dropped `/v1/ask` SSE and `cancel_ask` rely on.
+    #[tokio::test]
+    async fn pump_deltas_cancels_and_aborts_sidecar_on_consumer_drop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        // Records when the sidecar stream task's future is dropped — i.e. when the
+        // AbortOnDrop guard aborts it.
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_in_task = aborted.clone();
+
+        let (ptx, prx) = mpsc::channel::<StreamPiece>(4);
+        // A never-ending sidecar stream: keeps emitting content until its channel is gone
+        // or it is aborted. Stands in for llama.cpp generating a long answer.
+        let stream_task = tokio::spawn(async move {
+            let _flag = DropFlag(aborted_in_task);
+            loop {
+                if ptx
+                    .send(StreamPiece::Content("token ".to_string()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok(())
+        });
+
+        let (tx, rx) = mpsc::channel::<AnswerDelta>(1);
+        let opts = AnswerOpts {
+            thinking: false,
+            max_tokens: 128,
+        };
+        let pump = tokio::spawn(async move { pump_deltas(stream_task, prx, &tx, opts).await });
+
+        // Let a little output flow, then simulate the consumer disconnecting.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(rx);
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), pump)
+            .await
+            .expect("pump_deltas returns promptly after the consumer drops")
+            .expect("pump task joins");
+        assert!(matches!(outcome, PumpOutcome::Cancelled));
+
+        // The sidecar stream task was aborted, so llama.cpp stops generating.
+        for _ in 0..40 {
+            if aborted.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "sidecar stream task aborted on consumer disconnect (no generation leak)"
+        );
+    }
+
+    /// The normal path is unchanged: a stream that reaches `Done` yields `Completed`, so
+    /// the caller still emits citations + the terminal `Done`.
+    #[tokio::test]
+    async fn pump_deltas_completes_when_stream_finishes() {
+        let (ptx, prx) = mpsc::channel::<StreamPiece>(8);
+        let stream_task = tokio::spawn(async move {
+            ptx.send(StreamPiece::Content("hello".to_string()))
+                .await
+                .unwrap();
+            ptx.send(StreamPiece::Done).await.unwrap();
+            Ok(())
+        });
+        let (tx, mut rx) = mpsc::channel::<AnswerDelta>(16);
+        let opts = AnswerOpts {
+            thinking: false,
+            max_tokens: 128,
+        };
+        let outcome = pump_deltas(stream_task, prx, &tx, opts).await;
+        assert!(matches!(outcome, PumpOutcome::Completed));
+        // The content token was forwarded before completion.
+        let mut got_token = false;
+        while let Ok(delta) = rx.try_recv() {
+            if matches!(delta, AnswerDelta::Token { .. }) {
+                got_token = true;
+            }
+        }
+        assert!(got_token, "content forwarded as a Token delta");
     }
 }

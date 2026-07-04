@@ -23,6 +23,7 @@ import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 import type { Mark } from "../../bindings/Mark";
 import type { ResumeContext } from "../../bindings/ResumeContext";
+import type { ApiStatus } from "../../bindings/ApiStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -280,4 +281,15 @@ export function useMarks(enabled = true) {
     enabled,
   });
   return useMaybeOverride(q, queryKeys.marks);
+}
+
+/** Local-API status for the Settings panel (`03 §7c`). No live event drives it — it
+ *  changes only via our own mutations (enable/disable, regenerate token) or at boot —
+ *  so it is a plain fetch that our mutations invalidate. */
+export function useApiStatus() {
+  const q = useQuery<ApiStatus>({
+    queryKey: queryKeys.apiStatus,
+    queryFn: cmd.getApiStatus,
+  });
+  return useMaybeOverride(q, queryKeys.apiStatus);
 }

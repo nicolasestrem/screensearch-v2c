@@ -1,0 +1,32 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# The opt-in local HTTP API (0.3.0 PR7, `03 §7c`). Depends on `traits` only (the
+# module-dependency rule, `03 §2`): the composition root implements `ApiHost` over the
+# concrete store/kernel and wires the server in, so this crate never links an impl.
+[dependencies]
+traits = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+getrandom = { workspace = true }
+futures-util = { workspace = true }
+# `net` for the TcpListener bind; `fs`/`io-util` for the export-to-file path (PR7 §7c).
+tokio = { workspace = true, features = ["net", "fs", "io-util"] }
+
+[dev-dependencies]
+# Integration tests spin the real server over a populated in-memory store (via the
+# store + kernel crates — tests only, not a runtime dependency) and drive it with reqwest.
+store = { workspace = true }
+kernel = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
