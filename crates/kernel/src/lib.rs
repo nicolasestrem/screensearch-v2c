@@ -336,27 +336,7 @@ impl Kernel {
             // client here, so Chromium/Electron apps leave accessibility mode instead of
             // staying degraded after the user stops capture. Only fire when a handle existed
             // so an idempotent stop of already-stopped capture doesn't churn a respawn.
-        let ocr_for_shutdown = self.ocr.clone();
-        let join = tokio::spawn(async move {
-            let exit = run_capture_loop(capture, ctx, stop_rx).await;
-            if exit == CaptureLoopExit::SourceShutdown {
-                let mut guard = capture_slot.lock().await;
-                if guard.as_ref().is_some_and(|h| h.id == id) {
-                    *guard = None;
-                    set_capture_readiness(
-                        &readiness,
-                        &events,
-                        ComponentStatus::Error,
-                        Some("capture source shut down unexpectedly".to_string()),
-                    );
-                    let _ = events.send(KernelEvent::Toast(Toast {
-                        level: ToastLevel::Error,
-                        message: "Capture source shut down unexpectedly".to_string(),
-                    }));
-                    ocr_for_shutdown.on_capture_stopped();
-                }
-            }
-        });
+            self.ocr.on_capture_stopped();
         }
         self.set_capture_readiness(ComponentStatus::Disabled, None);
         tracing::info!("capture stopped");
