@@ -168,3 +168,23 @@
   `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
   `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.
+
+---
+
+## 2026-07-04 — 0.3.1 PR2 demanded persistence priority
+
+- **Change:** `FrameStoreWriter` now separates demanded/manual captures from normal timer captures.
+  Demanded frames use a reserved priority queue; normal frames use a bounded best-effort queue and
+  are dropped through the existing warning path if persistence is saturated. The worker uses biased
+  selection so mark-this-moment is no longer queued behind several normal WebP encodes. The WebP
+  persistence log now says `capture persistence: stored WebP` and includes `demanded` plus
+  `queue_wait_ms`, clarifying that `encode_ms` is worker encode time.
+- **PR #83 follow-up:** `proxy_writer_loop` checks whether the proxy already exists before resizing
+  in the blocking task, avoiding redundant CPU work on duplicate proxy jobs.
+- **Verification:** added `persist_queue_prefers_demanded_frame_when_ready`; focused
+  `capture_loop`, `add_mark_capture_now`, and `vision_proxy` tests passed; full CI-order
+  verification passed:
+  `npm --prefix ui ci`, `npm --prefix ui run lint`, `npm --prefix ui run build`,
+  `node scripts/stage-mcp.mjs`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace`,
+  `cargo test --workspace`, and `git diff --exit-code -- ui/src/bindings`.

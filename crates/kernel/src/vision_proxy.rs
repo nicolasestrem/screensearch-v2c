@@ -76,6 +76,9 @@ async fn proxy_writer_loop(mut receiver: mpsc::Receiver<ProxyJob>) {
     while let Some(job) = receiver.recv().await {
         let proxy_path = job.proxy_path.clone();
         let result = tokio::task::spawn_blocking(move || {
+            if job.proxy_path.exists() {
+                return Ok(());
+            }
             let proxy = proxy_image(&job.pixels, job.max_edge);
             write_proxy_jpeg(&proxy, &job.proxy_path)
         })

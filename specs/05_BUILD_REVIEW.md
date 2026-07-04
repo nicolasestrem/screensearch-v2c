@@ -337,3 +337,49 @@ For each build pass, append an entry:
   `cargo test --workspace` →
   `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 23.61s` with all non-ignored
   suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.
+
+---
+
+## Pass 7 — 2026-07-04 — 0.3.1 PR2 demanded-capture priority follow-up (#64)
+
+- **Observed live symptom:** a second `npm run dev` run still showed WebP persistence worker
+  encodes at **1157-1389 ms** (`encode_ms=1157`, `1303`, `1389`, `1147`, `1256`). That remains
+  expected for debug/dev lossless WebP at native capture size; the question is queue impact, not
+  whether the encode can take that long.
+- **PR #83 review follow-ups:** (1) `proxy_writer_loop` now checks whether `.vision.jpg` already
+  exists inside the blocking task before resizing, avoiding CPU work on duplicate proxy jobs; the
+  existing publish-time check remains for races. (2) `FrameStoreWriter` now has a reserved
+  demanded/manual queue and a normal best-effort queue. The worker selects demanded jobs with
+  biased priority, so `capture_now`/mark-this-moment can jump ahead of queued timer captures after
+  the currently-running encode. (3) Normal captures use `try_send` and drop with the existing
+  per-frame warning path if persistence is saturated; demanded captures await their reserved queue
+  so the single serialized manual request is not discarded. (4) The WebP log message is now
+  `capture persistence: stored WebP` and includes `demanded` + `queue_wait_ms`, making it clear
+  that `encode_ms` is persistence-worker time, not capture-loop dispatch time.
+- **Tests added/updated:** `persist_queue_prefers_demanded_frame_when_ready` pins the priority
+  selector; existing mark-capture tests cover the manual path.
+- **Verification (verbatim):** focused checks:
+  `cargo test -p kernel capture_loop -- --nocapture` →
+  `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out` and
+  `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out`;
+  `cargo test -p kernel persist_queue_prefers_demanded_frame_when_ready -- --nocapture` →
+  `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out`;
+  `cargo test -p kernel add_mark_capture_now -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out`;
+  `cargo test -p kernel vision_proxy -- --nocapture` →
+  `test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out`.
+  Full CI-order pass:
+  `npm --prefix ui ci` → `added 347 packages, and audited 348 packages in 4s` /
+  `found 0 vulnerabilities`;
+  `npm --prefix ui run lint` → `> eslint .`;
+  `npm --prefix ui run build` → `✓ built in 1.66s`;
+  `node scripts/stage-mcp.mjs` → `[stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe`
+  and `Finished \`release\` profile [optimized] target(s) in 0.20s`;
+  `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 2.72s`;
+  `cargo build --workspace` →
+  `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 17.70s`;
+  `cargo test --workspace` →
+  `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 19.49s` with all non-ignored
+  suites passing; `git diff --exit-code -- ui/src/bindings` → exit 0.

@@ -100,31 +100,58 @@ struct PersistFrame {
     ocr: OcrResult,
     rel_db_path: String,
     abs_path: PathBuf,
+    enqueued_at: Instant,
 }
 
 struct FrameStoreWriter {
-    sender: mpsc::Sender<PersistFrame>,
+    normal_sender: mpsc::Sender<PersistFrame>,
+    demanded_sender: mpsc::Sender<PersistFrame>,
     join: JoinHandle<()>,
 }
 
 impl FrameStoreWriter {
     fn spawn(ctx: PersistCtx) -> Self {
-        let (sender, receiver) = mpsc::channel(FRAME_STORE_QUEUE_CAP);
-        let join = tokio::spawn(frame_store_writer_loop(ctx, receiver));
-        Self { sender, join }
+        let (normal_sender, normal_receiver) = mpsc::channel(FRAME_STORE_QUEUE_CAP);
+        let (demanded_sender, demanded_receiver) = mpsc::channel(FRAME_STORE_QUEUE_CAP);
+        let join = tokio::spawn(frame_store_writer_loop(
+            ctx,
+            demanded_receiver,
+            normal_receiver,
+        ));
+        Self {
+            normal_sender,
+            demanded_sender,
+            join,
+        }
     }
 
     async fn enqueue(&self, job: PersistFrame) -> Result<()> {
-        self.sender
-            .send(job)
-            .await
-            .map_err(|_| anyhow::anyhow!("capture persistence queue stopped"))?;
+        if job.frame.demanded {
+            self.demanded_sender
+                .send(job)
+                .await
+                .map_err(|_| anyhow::anyhow!("capture demanded persistence queue stopped"))?;
+            return Ok(());
+        }
+        self.normal_sender.try_send(job).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => {
+                anyhow::anyhow!("capture persistence queue full")
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                anyhow::anyhow!("capture persistence queue stopped")
+            }
+        })?;
         Ok(())
     }
 
     async fn shutdown(self) {
-        let Self { sender, join } = self;
-        drop(sender);
+        let Self {
+            normal_sender,
+            demanded_sender,
+            join,
+        } = self;
+        drop(normal_sender);
+        drop(demanded_sender);
         if let Err(e) = join.await {
             tracing::warn!(error = %e, "capture persistence writer join failed");
         }
@@ -185,20 +212,65 @@ async fn process_frame(
             ocr,
             rel_db_path,
             abs_path,
+            enqueued_at: Instant::now(),
         })
         .await?;
     Ok(())
 }
 
-async fn frame_store_writer_loop(ctx: PersistCtx, mut receiver: mpsc::Receiver<PersistFrame>) {
+async fn frame_store_writer_loop(
+    ctx: PersistCtx,
+    mut demanded_receiver: mpsc::Receiver<PersistFrame>,
+    mut normal_receiver: mpsc::Receiver<PersistFrame>,
+) {
     let proxy_writer = VisionProxyWriter::spawn();
-    while let Some(job) = receiver.recv().await {
-        let monitor = job.frame.monitor_index;
-        if let Err(e) = persist_frame(&ctx, &proxy_writer, job).await {
-            tracing::warn!(monitor, error = %e, "capture persistence writer: dropping frame");
+    let mut demanded_closed = false;
+    let mut normal_closed = false;
+    while !(demanded_closed && normal_closed) {
+        let job = recv_next_persist_frame(
+            &mut demanded_receiver,
+            &mut normal_receiver,
+            &mut demanded_closed,
+            &mut normal_closed,
+        )
+        .await;
+        if let Some(job) = job {
+            let monitor = job.frame.monitor_index;
+            if let Err(e) = persist_frame(&ctx, &proxy_writer, job).await {
+                tracing::warn!(monitor, error = %e, "capture persistence writer: dropping frame");
+            }
         }
     }
     proxy_writer.shutdown().await;
+}
+
+async fn recv_next_persist_frame(
+    demanded_receiver: &mut mpsc::Receiver<PersistFrame>,
+    normal_receiver: &mut mpsc::Receiver<PersistFrame>,
+    demanded_closed: &mut bool,
+    normal_closed: &mut bool,
+) -> Option<PersistFrame> {
+    tokio::select! {
+        biased;
+        job = demanded_receiver.recv(), if !*demanded_closed => {
+            match job {
+                Some(job) => Some(job),
+                None => {
+                    *demanded_closed = true;
+                    None
+                }
+            }
+        }
+        job = normal_receiver.recv(), if !*normal_closed => {
+            match job {
+                Some(job) => Some(job),
+                None => {
+                    *normal_closed = true;
+                    None
+                }
+            }
+        }
+    }
 }
 
 /// Encode → store one frame, then enqueue enrichment and emit the tick.
@@ -212,7 +284,9 @@ async fn persist_frame(
         ocr,
         rel_db_path,
         abs_path,
+        enqueued_at,
     } = job;
+    let queue_wait_ms = enqueued_at.elapsed().as_millis();
     let encode_started = Instant::now();
     write_webp(frame.pixels.clone(), abs_path.clone(), ctx.max_width).await?;
     let encoded_bytes = tokio::fs::metadata(&abs_path)
@@ -222,10 +296,12 @@ async fn persist_frame(
     tracing::info!(
         captured_at = frame.captured_at,
         monitor_index = frame.monitor_index,
+        demanded = frame.demanded,
+        queue_wait_ms,
         encode_ms = encode_started.elapsed().as_millis(),
         bytes = encoded_bytes,
         image_path = %rel_db_path,
-        "capture encode: stored WebP"
+        "capture persistence: stored WebP"
     );
     proxy_writer.try_enqueue(frame.pixels.clone(), abs_path.clone(), ctx.max_width);
 
@@ -351,9 +427,13 @@ fn maybe_resize(pixels: &RgbaImage, max_width: u32) -> RgbaImage {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_paths, maybe_resize};
-    use image::RgbaImage;
+    use super::{image_paths, maybe_resize, recv_next_persist_frame, PersistFrame};
+    use image::{Rgba, RgbaImage};
     use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::sync::mpsc;
+    use traits::{CaptureTrigger, CapturedFrame, OcrResult};
 
     /// Stored captures are WebP, sharded into per-day buckets by `captured_at`.
     #[test]
@@ -388,5 +468,66 @@ mod tests {
         let img = RgbaImage::new(1280, 720);
         let out = maybe_resize(&img, 4000);
         assert_eq!((out.width(), out.height()), (1280, 720));
+    }
+
+    #[tokio::test]
+    async fn persist_queue_prefers_demanded_frame_when_ready() {
+        let (demanded_tx, mut demanded_rx) = mpsc::channel(4);
+        let (normal_tx, mut normal_rx) = mpsc::channel(4);
+        normal_tx
+            .send(test_persist_frame(1_000, false))
+            .await
+            .unwrap();
+        demanded_tx
+            .send(test_persist_frame(2_000, true))
+            .await
+            .unwrap();
+        let mut demanded_closed = false;
+        let mut normal_closed = false;
+
+        let job = recv_next_persist_frame(
+            &mut demanded_rx,
+            &mut normal_rx,
+            &mut demanded_closed,
+            &mut normal_closed,
+        )
+        .await
+        .unwrap();
+
+        assert!(job.frame.demanded);
+        assert_eq!(job.frame.captured_at, 2_000);
+    }
+
+    fn test_persist_frame(captured_at: i64, demanded: bool) -> PersistFrame {
+        let pixels = RgbaImage::from_pixel(4, 4, Rgba([10, 20, 30, 255]));
+        PersistFrame {
+            frame: CapturedFrame {
+                monitor_index: 0,
+                width: 4,
+                height: 4,
+                captured_at,
+                pixels: Arc::new(pixels),
+                content_hash: format!("hash-{captured_at}"),
+                app_hint: None,
+                window_title: None,
+                target_rect: None,
+                foreground_hwnd: None,
+                trigger: if demanded {
+                    CaptureTrigger::Manual
+                } else {
+                    CaptureTrigger::Timer
+                },
+                demanded,
+            },
+            ocr: OcrResult {
+                text: String::new(),
+                mean_confidence: -1.0,
+                engine: "test".to_string(),
+                spans: Vec::new(),
+            },
+            rel_db_path: format!("frames/day-0/{captured_at}-0.webp"),
+            abs_path: Path::new("/tmp").join(format!("{captured_at}.webp")),
+            enqueued_at: Instant::now(),
+        }
     }
 }
