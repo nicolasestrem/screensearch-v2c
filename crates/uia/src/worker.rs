@@ -43,9 +43,26 @@ pub(crate) struct Request {
     /// bails (→ OCR) on a mismatch, so a focus change between capture and recognize can't
     /// attribute another window's text to this frame (`07` #48).
     pub foreground_hwnd: Option<i64>,
+    /// Per-request cancellation flag. The caller sets it when its hard timeout fires so the
+    /// worker abandons a wedged walk at its next deadline checkpoint instead of hammering the
+    /// (already struggling) target to completion. Shared `Arc` — the caller keeps a clone.
+    pub cancel: Arc<AtomicBool>,
     /// A `tokio` oneshot so the async caller awaits the reply directly (no `spawn_blocking`):
     /// on a caller-side timeout the receiver is dropped and `send` below simply fails.
-    pub resp: oneshot::Sender<Result<OcrResult>>,
+    pub resp: oneshot::Sender<WalkReply>,
+}
+
+/// One walk's reply: the outcome plus whether it ran over budget, so the caller can feed the
+/// per-app circuit breaker. An over-budget walk that still succeeded returns its text
+/// (`outcome` is `Ok`) but must count as "bad" for the breaker — hence `over_budget` is
+/// surfaced separately rather than folded into the `Result`. (The elapsed time itself is
+/// consumed in `worker_main` for the rate-limited over-budget warning and doesn't cross here.)
+pub(crate) struct WalkReply {
+    pub outcome: Result<OcrResult>,
+    /// The walk consumed at least the full latency budget — the target app was heavy. The
+    /// soft deadline only fires *between* cross-process calls, so an over-budget walk was
+    /// almost certainly truncated mid-tree.
+    pub over_budget: bool,
 }
 
 /// Hard caps so a pathological accessibility tree can't blow the latency budget or memory.
@@ -69,11 +86,18 @@ const WARN_EVERY: u64 = 64;
 /// the async provider: this worker — the sole authority — sets it on receiving a request and
 /// clears it (RAII) when the walk returns, so `recognize` can skip a frame to OCR whenever a
 /// walk is already running, even after the caller's hard timeout abandoned the future.
+///
+/// `shutdown` is the provider-level cancellation flag: once set (by `UiaTextProvider::shutdown`
+/// on teardown), a walk in progress bails at its next deadline checkpoint and any queued
+/// request is answered with an error instead of started. The worker still exits only when the
+/// channel closes (all `SyncSender` clones dropped) → `CoUninitialize`; `shutdown` just makes
+/// that exit prompt even if a heavy walk was under way.
 pub(crate) fn worker_main(
     rx: mpsc::Receiver<Request>,
     ready: mpsc::Sender<Result<()>>,
     budget: UiaBudget,
     in_flight: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 ) {
     // SAFETY: COM apartment init for the dedicated UIA worker thread. UIA prefers MTA.
     if let Err(e) = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok() {
@@ -130,10 +154,40 @@ pub(crate) fn worker_main(
     }
 
     while let Ok(req) = rx.recv() {
+        // Teardown in progress: refuse the queued walk (don't touch the target app) and let
+        // the loop spin until the channel closes and the worker exits.
+        if shutdown.load(Ordering::Acquire) {
+            let _ = req.resp.send(WalkReply {
+                outcome: Err(anyhow::anyhow!("UIA worker shutting down")),
+                over_budget: false,
+            });
+            continue;
+        }
         in_flight.store(true, Ordering::Release);
         let _guard = InFlight(&in_flight);
-        let result = read_foreground(&automation, &req, &budget);
-        let _ = req.resp.send(result);
+        // Time the whole walk (incl. `ElementFromHandle`/cache setup) — the wall-clock the
+        // target's UI thread was blocked, which is what the breaker reasons about.
+        let started = Instant::now();
+        let outcome = read_foreground(&automation, &req, &budget, &shutdown);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let over_budget = elapsed_ms >= budget.latency_ms;
+        // A walk that consumed its full latency budget was almost certainly truncated
+        // mid-tree (the soft deadline only fires between calls), i.e. the target app is heavy.
+        // Surface it — rate-limited — so sustained pressure is visible in the log without
+        // per-frame spam. (Hoisted here from `read_foreground` so it also covers over-budget
+        // *error* walks, not just successful ones.)
+        if over_budget && OVER_BUDGET_WARNS.fetch_add(1, Ordering::Relaxed) % WARN_EVERY == 0 {
+            tracing::warn!(
+                elapsed_ms,
+                budget_ms = budget.latency_ms,
+                warn_every = WARN_EVERY,
+                "uia walk hit its latency budget; target app under load (rate-limited)"
+            );
+        }
+        let _ = req.resp.send(WalkReply {
+            outcome,
+            over_budget,
+        });
         // `_guard` drops → in_flight = false, admitting the next frame.
     }
 
@@ -149,6 +203,7 @@ fn read_foreground(
     automation: &IUIAutomation,
     req: &Request,
     budget: &UiaBudget,
+    shutdown: &AtomicBool,
 ) -> Result<OcrResult> {
     // On a multi-monitor capture, `target_rect` is `Some` only for the frame whose monitor
     // holds the foreground window (capture's `normalize_window_rect` returns `None` for every
@@ -224,7 +279,15 @@ fn read_foreground(
     let mut stack: Vec<(IUIAutomationElement, u32)> = vec![(root, 0)];
     let mut nodes: u32 = 0;
     while let Some((elem, depth)) = stack.pop() {
-        if nodes >= budget.max_nodes || spans.len() >= MAX_SPANS || Instant::now() >= deadline {
+        // Stop on any bound: node cap, span cap, soft deadline, per-request cancel (the
+        // caller's hard timeout fired), or provider shutdown (teardown). Cancel/shutdown let
+        // us stop marshalling calls into a struggling target the moment we give up on it.
+        if nodes >= budget.max_nodes
+            || spans.len() >= MAX_SPANS
+            || Instant::now() >= deadline
+            || req.cancel.load(Ordering::Acquire)
+            || shutdown.load(Ordering::Acquire)
+        {
             break;
         }
         nodes += 1;
@@ -313,7 +376,11 @@ fn read_foreground(
             if let Ok(first) = unsafe { walker.GetFirstChildElement(&elem) } {
                 let mut child = first;
                 loop {
-                    if stack.len() >= MAX_STACK || Instant::now() >= deadline {
+                    if stack.len() >= MAX_STACK
+                        || Instant::now() >= deadline
+                        || req.cancel.load(Ordering::Acquire)
+                        || shutdown.load(Ordering::Acquire)
+                    {
                         break;
                     }
                     let next = unsafe { walker.GetNextSiblingElement(&child) }.ok();
@@ -329,20 +396,9 @@ fn read_foreground(
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
     tracing::debug!(nodes, spans = spans.len(), elapsed_ms, "uia walk complete");
-    // A walk that consumed its full latency budget was almost certainly truncated mid-tree
-    // (the soft deadline only fires between calls), i.e. the target app is heavy. Surface it
-    // — rate-limited — so sustained pressure is visible in the log without per-frame spam.
-    if elapsed_ms >= budget.latency_ms
-        && OVER_BUDGET_WARNS.fetch_add(1, Ordering::Relaxed) % WARN_EVERY == 0
-    {
-        tracing::warn!(
-            nodes,
-            elapsed_ms,
-            budget_ms = budget.latency_ms,
-            warn_every = WARN_EVERY,
-            "uia walk hit its latency budget; target app under load (rate-limited)"
-        );
-    }
+    // NOTE: the rate-limited "hit its latency budget" warning now lives in `worker_main`,
+    // which times the whole walk (including this fn's early bails) so it also covers
+    // over-budget *error* walks and feeds the per-app circuit breaker (`over_budget`).
 
     let text = text.trim_end().to_string();
     let chars = text.chars().count();

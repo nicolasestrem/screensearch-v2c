@@ -103,10 +103,11 @@ struct AppState {
     ask_tasks: AskTasks,
     /// In-flight report cancel flags keyed by request id; `cancel_report` sets them.
     report_tasks: ReportTasks,
-    /// Shared toggle for the UIA-text composite provider (`docs/0.2.0.md` #48). The
-    /// composite reads it per frame; `set_settings` flips it so the user can switch UIA on/
-    /// off live without restarting capture.
-    uia_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// The UIA-text composite provider (`docs/0.2.0.md` #48), when OCR is available. Held
+    /// concretely (the kernel only sees it as `dyn OcrProvider`) so `set_settings` can call
+    /// `apply_settings` — which hot-applies every UIA knob by tearing down + respawning the
+    /// UI Automation client. `None` only when OCR itself is unavailable.
+    uia: Option<Arc<UiaWithOcrFallback>>,
     embed_models_dir: PathBuf,
     db_path: PathBuf,
     frames_dir: PathBuf,
@@ -873,13 +874,14 @@ async fn set_settings(
     overlay::reregister_overlay_hotkey(&app, &settings.overlay_hotkey);
     overlay::reregister_marks_hotkey(&app, &settings.marks_hotkey);
 
-    // Hot-apply the UIA enable toggle: the composite OcrProvider reads this per frame, so
-    // switching UIA text on/off takes effect immediately with no capture restart
-    // (`docs/0.2.0.md` #48). The latency/min-chars budget is baked in at spawn (restart).
-    state.uia_enabled.store(
-        settings.capture_uia_text_enabled,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // Hot-apply every UIA knob: the composite swaps its config and, if anything changed, tears
+    // down + lazily respawns its UI Automation client so the new values (enable, budget, node
+    // caps, view, input-suppression) all take effect immediately — no capture restart, no app
+    // restart. Disabling UIA here also releases the client, so Chromium/Electron apps leave
+    // accessibility mode (`docs/0.2.0.md` #48; the "disable didn't stop the hangs" fix).
+    if let Some(uia) = &state.uia {
+        uia.apply_settings(&settings);
+    }
 
     // Hot-apply sidecar lane settings; embedding workers are handled below. The launch
     // params (ngl/device/ctx/KV/flash) are all launch args, so they take effect when the
@@ -1032,16 +1034,15 @@ pub fn run() {
                 ..Default::default()
             };
 
-            // Shared UIA enable flag: the composite OcrProvider reads it per frame and
-            // `set_settings` flips it live, so toggling UIA needs no capture restart
-            // (`docs/0.2.0.md` #48). Seeded from settings inside `spawn_ocr`; default true.
-            let uia_enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
-
             // Build the kernel only if the spine opened. It owns the live readiness
-            // (capture starts Disabled) and the event bus.
+            // (capture starts Disabled) and the event bus. `spawn_ocr` also hands back the
+            // concrete UIA composite (when OCR is available) so `set_settings` can hot-apply
+            // UIA knobs; the kernel only sees it as `dyn OcrProvider`.
+            let mut uia_composite: Option<Arc<UiaWithOcrFallback>> = None;
             let kernel = store.as_ref().map(|store| {
                 let dyn_store: Arc<dyn Store> = store.clone();
-                let (ocr, ocr_unavailable) = spawn_ocr(store, &uia_enabled);
+                let (ocr, uia, ocr_unavailable) = spawn_ocr(store);
+                uia_composite = uia;
                 match ocr_unavailable {
                     Some(reason) => Arc::new(Kernel::new_with_ocr_unavailable(
                         dyn_store,
@@ -1142,7 +1143,7 @@ pub fn run() {
                 sidecar_binary: sidecar_binary_slot,
                 ask_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 report_tasks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-                uia_enabled,
+                uia: uia_composite,
                 embed_models_dir,
                 db_path,
                 frames_dir,
@@ -1820,8 +1821,11 @@ fn now_ms() -> i64 {
 /// calls a single `Arc<dyn OcrProvider>`.
 fn spawn_ocr(
     store: &Arc<SqliteStore>,
-    uia_enabled: &Arc<std::sync::atomic::AtomicBool>,
-) -> (Arc<dyn OcrProvider>, Option<String>) {
+) -> (
+    Arc<dyn OcrProvider>,
+    Option<Arc<UiaWithOcrFallback>>,
+    Option<String>,
+) {
     let (ocr, ocr_unavailable): (Arc<dyn OcrProvider>, Option<String>) =
         match ocr::WinRtOcr::spawn() {
             Ok(engine) => {
@@ -1842,91 +1846,243 @@ fn spawn_ocr(
 
     // No OCR floor → capture is blocked regardless; skip UIA entirely.
     if ocr_unavailable.is_some() {
-        return (ocr, ocr_unavailable);
+        return (ocr, None, ocr_unavailable);
     }
 
-    // Read the UIA settings (sync setup context → block on the async load) and seed the
-    // shared enable flag. Budget/min-chars are baked into the provider at spawn (changing
-    // them applies on restart); the enable toggle hot-applies via the flag.
+    // Read the UIA settings (sync setup context → block on the async load). Every UIA knob now
+    // hot-applies: the composite tears down + lazily respawns its UI Automation client on a
+    // settings save, so nothing is "baked at spawn" anymore. The worker itself is spawned
+    // lazily on the first eligible frame (its `CoCreateInstance` is the capability probe); a
+    // session where UIA can't initialize just runs OCR-only from then on.
     let settings = kernel::settings::sanitize_settings(tauri::async_runtime::block_on(
         kernel::settings::load_settings(store.as_ref()),
     ));
-    uia_enabled.store(
-        settings.capture_uia_text_enabled,
-        std::sync::atomic::Ordering::Relaxed,
+    let config = uia_runtime_config(&settings);
+    tracing::info!(
+        enabled = config.enabled,
+        run_on_interactive = config.trigger_policy.run_on_interactive,
+        control_view = config.budget.control_view,
+        suppress_during_input_ms = config.suppress_during_input_ms,
+        "UI Automation text composite ready (lazy client; OCR fallback)"
     );
-    let budget = uia::UiaBudget {
-        latency_ms: u64::from(settings.capture_uia_latency_budget_ms),
-        min_text_chars: settings.capture_uia_min_text_chars as usize,
-        max_nodes: settings.capture_uia_max_nodes,
-        max_textpattern_calls: settings.capture_uia_max_textpattern_calls,
-        control_view: settings.capture_uia_view_control_only,
-    };
-    let trigger_policy = uia::classify::UiaTriggerPolicy {
-        run_on_interactive: settings.capture_uia_run_on_interactive,
-    };
+    let composite = Arc::new(UiaWithOcrFallback::new(ocr, config));
+    let dyn_ocr: Arc<dyn OcrProvider> = composite.clone();
+    (dyn_ocr, Some(composite), None)
+}
 
-    match uia::UiaTextProvider::spawn(budget) {
-        Ok(provider) => {
-            tracing::info!(
-                enabled = settings.capture_uia_text_enabled,
-                run_on_interactive = settings.capture_uia_run_on_interactive,
-                control_view = settings.capture_uia_view_control_only,
-                suppress_during_input_ms = settings.capture_uia_suppress_during_input_ms,
-                "UI Automation text ready (OCR fallback)"
-            );
-            let composite: Arc<dyn OcrProvider> = Arc::new(UiaWithOcrFallback {
-                uia: Arc::new(provider),
-                ocr,
-                uia_enabled: uia_enabled.clone(),
-                trigger_policy,
-                suppress_during_input_ms: settings.capture_uia_suppress_during_input_ms,
-            });
-            (composite, None)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "UI Automation unavailable; using OCR only");
-            (ocr, None)
-        }
+/// All the UIA-composite knobs, snapshotted from [`Settings`]. Swapped atomically on a
+/// settings save; a change tears the client down so the next frame respawns with the new
+/// values (so every UIA setting hot-applies — no app restart).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct UiaRuntimeConfig {
+    enabled: bool,
+    budget: uia::UiaBudget,
+    trigger_policy: uia::classify::UiaTriggerPolicy,
+    suppress_during_input_ms: u32,
+}
+
+fn uia_runtime_config(s: &Settings) -> UiaRuntimeConfig {
+    UiaRuntimeConfig {
+        enabled: s.capture_uia_text_enabled,
+        budget: uia::UiaBudget {
+            latency_ms: u64::from(s.capture_uia_latency_budget_ms),
+            min_text_chars: s.capture_uia_min_text_chars as usize,
+            max_nodes: s.capture_uia_max_nodes,
+            max_textpattern_calls: s.capture_uia_max_textpattern_calls,
+            control_view: s.capture_uia_view_control_only,
+        },
+        trigger_policy: uia::classify::UiaTriggerPolicy {
+            run_on_interactive: s.capture_uia_run_on_interactive,
+        },
+        suppress_during_input_ms: s.capture_uia_suppress_during_input_ms,
+    }
+}
+
+/// Logs a breaker open/close exactly once per transition (the breaker returns `Some` only on
+/// a state change), so a struggling app shows up in the log without per-frame spam.
+fn log_breaker_transition(app: &str, transition: uia::breaker::BreakerTransition) {
+    match transition {
+        uia::breaker::BreakerTransition::Opened => tracing::warn!(
+            app = app,
+            cooldown_mins = uia::breaker::BREAKER_COOLDOWN_MS / 60_000,
+            "UIA circuit breaker opened for app; routing it to OCR during cooldown \
+             (repeated over-budget / timed-out walks — target app was struggling)"
+        ),
+        uia::breaker::BreakerTransition::Closed => tracing::info!(
+            app = app,
+            "UIA circuit breaker closed for app; UI Automation re-enabled"
+        ),
     }
 }
 
 /// Composite [`OcrProvider`]: UI Automation primary, OCR fallback (`docs/0.2.0.md` #48).
-/// It lives in the composition root because it is the one place allowed to wire two
-/// concrete impls (`03 §2`). Per frame: when UIA is enabled, try it and on any `Err`
-/// (error / latency-timeout / thin yield) fall back to OCR; when disabled, go straight to
-/// OCR. The enable flag is shared with [`AppState`] so `set_settings` toggles it live.
+/// It lives in the composition root because it is the one place allowed to wire two concrete
+/// impls (`03 §2`).
+///
+/// Per frame: when UIA is enabled, the trigger runs UIA, the input gate is open, and the
+/// per-app circuit breaker for this frame's app is closed, walk the tree (lazily spawning the
+/// client on first use); on any `Err` (error / latency-timeout / thin yield) fall back to OCR.
+/// Otherwise go straight to OCR.
+///
+/// Lifecycle (the fix for "disabling capture doesn't stop the Chromium hangs"): the UI
+/// Automation client is held in a slot that [`teardown`](Self::teardown) empties — dropping our
+/// `Arc` closes the worker's channel, which exits the "uia-mta" thread and releases the client
+/// so Chromium/Electron apps leave accessibility mode. Teardown fires when UIA is disabled or
+/// its settings change ([`apply_settings`](Self::apply_settings)) and when capture stops
+/// ([`OcrProvider::on_capture_stopped`]); the next eligible frame lazily respawns.
 struct UiaWithOcrFallback {
-    uia: Arc<dyn OcrProvider>,
     ocr: Arc<dyn OcrProvider>,
-    uia_enabled: Arc<std::sync::atomic::AtomicBool>,
-    /// Which capture triggers run UIA (`capture.uia_run_on_interactive`). Baked at spawn,
-    /// like the budget; changing it applies on restart.
-    trigger_policy: uia::classify::UiaTriggerPolicy,
-    /// Skip UIA for `Timer` frames captured within this many ms of the last input
-    /// (`capture.uia_suppress_during_input_ms`, `07` #71); `0` disables. Baked at spawn.
-    suppress_during_input_ms: u32,
+    /// `Some` while the UI Automation client is connected; `None` after teardown. Lazily
+    /// (re)spawned on the next eligible frame. `RwLock` because reads (the hot path) dominate.
+    uia: std::sync::RwLock<Option<Arc<uia::UiaTextProvider>>>,
+    /// All UIA knobs; hot-swapped by `apply_settings`.
+    config: StdMutex<UiaRuntimeConfig>,
+    /// Serializes lazy respawn so a burst of frames after teardown spawns exactly one client.
+    respawn_gate: tokio::sync::Mutex<()>,
+    /// Latched after a spawn failure so we don't retry every frame; cleared on `apply_settings`.
+    spawn_failed: std::sync::atomic::AtomicBool,
+    /// Per-app circuit breaker: repeated over-budget/timed-out walks against one app route it
+    /// to OCR for a cooldown, so a heavy Chromium/Electron app isn't re-hammered every frame.
+    breaker: StdMutex<uia::breaker::AppBreaker>,
 }
 
 impl UiaWithOcrFallback {
+    fn new(ocr: Arc<dyn OcrProvider>, config: UiaRuntimeConfig) -> Self {
+        Self {
+            ocr,
+            uia: std::sync::RwLock::new(None),
+            config: StdMutex::new(config),
+            respawn_gate: tokio::sync::Mutex::new(()),
+            spawn_failed: std::sync::atomic::AtomicBool::new(false),
+            breaker: StdMutex::new(uia::breaker::AppBreaker::new(
+                uia::breaker::BREAKER_CONSECUTIVE_BAD,
+                uia::breaker::BREAKER_COOLDOWN_MS,
+            )),
+        }
+    }
+
     /// Whether the input-activity gate routes this frame to OCR instead of a UIA walk
     /// (`07` #71). The scroll/click trigger gate is inert in the default timer-only capture
     /// path (every frame is a `Timer`), so this reads the live system idle time and skips the
     /// walk for `Timer` frames captured while the user is actively interacting. If the OS
     /// can't report idle time the gate stays open (unknown activity must not silently disable
     /// UIA). Cheap (the decision short-circuits before the syscall when the window is `0`).
-    fn input_gate_skips(&self, trigger: traits::CaptureTrigger) -> bool {
-        if self.suppress_during_input_ms == 0 {
+    fn input_gate_skips(&self, trigger: traits::CaptureTrigger, cfg: &UiaRuntimeConfig) -> bool {
+        if cfg.suppress_during_input_ms == 0 {
             return false;
         }
         match uia::input::ms_since_last_input() {
             Some(ms) => uia::classify::input_gate_skips_uia(
                 trigger,
                 ms,
-                self.suppress_during_input_ms,
-                self.trigger_policy,
+                cfg.suppress_during_input_ms,
+                cfg.trigger_policy,
             ),
             None => false,
+        }
+    }
+
+    /// Returns the live UIA client, lazily spawning it if the slot is empty (and a prior spawn
+    /// hasn't failed). The blocking `spawn` (a COM `CoCreateInstance` + ready handshake, ~ms)
+    /// runs on `spawn_blocking` off the executor, serialized by `respawn_gate` so a burst of
+    /// frames after teardown creates exactly one client.
+    async fn get_or_spawn_uia(&self, cfg: &UiaRuntimeConfig) -> Option<Arc<uia::UiaTextProvider>> {
+        let existing = self.uia.read().expect("uia slot lock").clone();
+        if let Some(p) = existing {
+            return Some(p);
+        }
+        if self.spawn_failed.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        let _gate = self.respawn_gate.lock().await;
+        // Re-check under the gate: another frame may have spawned it while we waited.
+        let existing = self.uia.read().expect("uia slot lock").clone();
+        if let Some(p) = existing {
+            return Some(p);
+        }
+        if self.spawn_failed.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        let budget = cfg.budget;
+        match tokio::task::spawn_blocking(move || uia::UiaTextProvider::spawn(budget)).await {
+            Ok(Ok(provider)) => {
+                let arc = Arc::new(provider);
+                *self.uia.write().expect("uia slot lock") = Some(arc.clone());
+                tracing::info!(
+                    budget_ms = cfg.budget.latency_ms,
+                    control_view = cfg.budget.control_view,
+                    "UI Automation client connected (OCR fallback)"
+                );
+                Some(arc)
+            }
+            Ok(Err(e)) => {
+                self.spawn_failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                tracing::warn!(error = %e, "UI Automation unavailable; using OCR only until settings change");
+                None
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "UIA spawn task panicked; using OCR only for now");
+                None
+            }
+        }
+    }
+
+    /// Disconnect the UI Automation client now (idempotent). Flags the worker to abandon a
+    /// wedged walk at its next checkpoint, drops our `Arc` (closing the channel → the
+    /// "uia-mta" thread exits → `CoUninitialize`), and logs the exit **without joining** — a
+    /// wedged walk ends on its own (bounded by the worker's per-call COM timeouts) and must
+    /// not block the caller. An in-flight `recognize` on another task holds its own `Arc`
+    /// clone, so the channel actually closes ≤ one hard-timeout later — bounded and fine.
+    fn teardown(&self, reason: &'static str) {
+        let provider = self.uia.write().expect("uia slot lock").take();
+        if let Some(provider) = provider {
+            provider.shutdown();
+            let exit_rx = provider.take_exit_signal();
+            drop(provider); // release our Arc; the worker exits when the last clone drops
+            if let Some(exit_rx) = exit_rx {
+                std::thread::spawn(move || {
+                    match exit_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                        // Sender dropped = worker returned = client released. (No value is
+                        // ever sent, so `Ok` can't happen, but treat it as exited too.)
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) | Ok(()) => {
+                            tracing::info!(
+                                reason,
+                                "UIA worker exited; UI Automation client released"
+                            );
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            tracing::warn!(
+                                reason,
+                                "UIA worker still finishing a walk 5s after teardown; detached (it exits when the walk ends)"
+                            );
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    /// Swap in fresh UIA settings and, if anything changed, tear the client down so the next
+    /// frame respawns with the new values — this is what makes every UIA knob hot-apply. A
+    /// no-op when the UIA config is unchanged, so unrelated settings saves don't churn the
+    /// client. Called from `set_settings`.
+    fn apply_settings(&self, settings: &Settings) {
+        let cfg = uia_runtime_config(settings);
+        let changed = {
+            let mut guard = self.config.lock().expect("uia config lock");
+            if *guard == cfg {
+                false
+            } else {
+                *guard = cfg;
+                true
+            }
+        };
+        if changed {
+            // Clear a prior spawn-failure latch so the fresh config gets a real attempt.
+            self.spawn_failed
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.teardown("uia settings changed");
         }
     }
 }
@@ -1934,21 +2090,54 @@ impl UiaWithOcrFallback {
 #[async_trait]
 impl OcrProvider for UiaWithOcrFallback {
     async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
-        // Gate UIA off high-frequency interactive triggers (scroll/click) by default: each
-        // runs a fresh full-tree walk against the foreground app, and on a large
+        let cfg = *self.config.lock().expect("uia config lock");
+        // Gate UIA off when disabled, off high-frequency interactive triggers (scroll/click)
+        // by default, and while the user is actively typing (`07` #71) — each walk is
+        // synchronous cross-process COM against the foreground app, and on a large
         // Chromium/Electron a11y tree that freezes the target's UI thread ("Not responding").
-        // Those frames go straight to OCR (the captured bitmap), which never touches the
-        // target app (`07` #71 hang fix; `capture.uia_run_on_interactive` opts back in).
-        if self.uia_enabled.load(std::sync::atomic::Ordering::Relaxed)
-            && uia::classify::trigger_runs_uia(frame.trigger, self.trigger_policy)
-            && !self.input_gate_skips(frame.trigger)
-        {
-            match self.uia.recognize(frame).await {
-                Ok(result) => return Ok(result),
-                Err(e) => tracing::debug!(error = %e, "UIA recognize failed; falling back to OCR"),
+        let run_uia = cfg.enabled
+            && uia::classify::trigger_runs_uia(frame.trigger, cfg.trigger_policy)
+            && !self.input_gate_skips(frame.trigger, &cfg);
+        if run_uia {
+            // `now_ms` is an i64 epoch-ms; the breaker only does relative comparisons, so a
+            // non-negative `u64` is all it needs (clamp guards a pre-1970 clock).
+            let now = now_ms().max(0) as u64;
+            // Key the breaker on the frame's foreground app; `None` app can't be attributed,
+            // so it bypasses the breaker (it still runs UIA, just uncounted).
+            let app_key = frame.app_hint.as_deref().map(|s| s.to_ascii_lowercase());
+            let breaker_open = app_key
+                .as_deref()
+                .is_some_and(|k| self.breaker.lock().expect("breaker lock").is_open(k, now));
+            if !breaker_open {
+                if let Some(provider) = self.get_or_spawn_uia(&cfg).await {
+                    let outcome = provider.recognize_detailed(frame).await;
+                    if let Some(k) = app_key.as_deref() {
+                        let signal = uia::breaker::signal(outcome.end);
+                        let transition = self
+                            .breaker
+                            .lock()
+                            .expect("breaker lock")
+                            .record(k, signal, now);
+                        if let Some(t) = transition {
+                            log_breaker_transition(k, t);
+                        }
+                    }
+                    match outcome.result {
+                        Ok(result) => return Ok(result),
+                        Err(e) => {
+                            tracing::debug!(error = %e, "UIA recognize failed; falling back to OCR")
+                        }
+                    }
+                }
             }
         }
         self.ocr.recognize(frame).await
+    }
+
+    fn on_capture_stopped(&self) {
+        // Capture stopped: release the UI Automation client so Chromium/Electron apps leave
+        // accessibility mode instead of staying degraded. The next capture start respawns it.
+        self.teardown("capture stopped");
     }
 }
 
