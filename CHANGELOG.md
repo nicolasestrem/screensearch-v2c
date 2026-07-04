@@ -9,135 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — MCP server (0.3.0 PR8)
-ScreenSearch now ships **`screensearch-mcp.exe`**, a small [Model Context Protocol](https://modelcontextprotocol.io)
-server that lets Claude Desktop, Claude Code, or any MCP client search, ask about, and mark your screen
-history — locally. It is a thin **stdio** wrapper over the local API from PR7: it holds no data of its
-own, links no app code, and talks only to `127.0.0.1:<port>` with your bearer token (taken from
-`SCREENSEARCH_API_TOKEN` / `SCREENSEARCH_API_URL` or `--token`/`--url`). It exposes six tools —
-`search_screen_history`, `ask_screen_history`, `get_moment` (optionally returning the screenshot),
-`where_was_i`, `list_marks`, and `add_mark` — mapping onto the same endpoints the app uses. If the API
-is off, every tool returns a clear *"enable the API in ScreenSearch Settings"* message instead of failing
-silently. The same trust posture as the API applies: any local process holding the token can read your
-whole history, so enabling it is a deliberate choice; the copy-paste client config and threat model are
-in `docs/MCP.md`.
+## [0.3.0] — 2026-07-04
 
-The binary is packaged **inside the NSIS installer**, next to `ScreenSearch.exe` (a new
-`bundle.externalBin` sidecar). There is no schema change. *Live-verified on Windows: the MCP handshake +
-tool listing over stdio, all six tools round-tripping against the running local API (cross-process, real
-TCP + token auth), the API-off and wrong-token guided-error paths, and the installer carrying
-`screensearch-mcp.exe`.*
-
-Review-round hardening: `add_mark` now rejects a non-integer `frame_id` (e.g. a stringified id) as a
-tool-input error instead of silently marking the current screen; the server refuses a non-loopback API
-URL up front so a typo'd config can't ship your token to a remote host; and `get_moment`'s SSE line
-parsing was streamlined. All confined to `screensearch-mcp` — no behaviour change for existing tools.
-
-### Added — Local HTTP API + export (0.3.0 PR7)
-ScreenSearch can now serve your screen history to local scripts and agents through an opt-in **local
-HTTP API** — the open-source ask since Rewind shut down. It is **off by default**. When you enable it
-in Settings it binds `127.0.0.1` only (never your network — that is hard-coded, not a setting) and
-mints a **bearer token**: every request must carry it, and anything without it — or with the wrong
-one — gets a `401`. The token is shown in Settings to reveal, copy, and regenerate (regenerating takes
-effect immediately, no restart). The threat model is stated plainly next to the switch: any local
-process holding the token can read your entire screen history, so enabling it is an explicit trust
-decision. If the port (default `43210`) is already in use, enabling fails **loudly** — a warning, and
-an inline "pick another port" retry — never a silent no-op.
-
-The v1 API mirrors the app: `GET /v1/health`, `GET /v1/search`, `POST /v1/ask` (a streamed, grounded
-answer over Server-Sent Events — and disconnecting the client now actually stops the model generating,
-freeing the GPU), `GET /v1/frames/{id}` (with `?image=1` for the screenshot),
-`GET /v1/context/where-was-i`, and marks (`GET`/`POST` and resolve — the only write surface). Full
-docs, with copy-paste examples, are in `docs/API.md`.
-
-A new **Export…** button in Settings writes your frames, content text, and marks to a JSON file in your
-Downloads folder (screenshots are not included). It streams to disk, so exporting months of history
-stays memory-flat, and it shares the API's export code path — so it works even with the API disabled.
-There is no schema change in this release. *Live-verified on Windows: off by default (nothing listens),
-the 401 posture, the loud port-conflict retry, token regeneration without a restart, SSE cancellation
-on disconnect, and a valid export produced with the API off.*
-
-Review hardening (PR #76): malformed requests (a bad query string, body, or path segment) — and now
-unknown endpoint paths and an inverted `from > to` window — return the same `{ "error", "message" }`
-error as every other response instead of a framework plaintext body; the port can be changed while the
-API is running via a "Restart on {port}" button (previously the edited port was inert); the port field
-clamps to `1024–65535`; a failed export never leaves a `.partial` file behind (fixed for Windows, where
-the open file handle blocked cleanup); a screenshot missing on disk returns a clean `404` rather than a
-`500`; overlapping enable/disable calls are serialized so a race can't leave the API running against a
-disabled intent; and a client that disconnects mid-answer now stops the stream immediately instead of
-draining the model's backlog first. A further round: regenerating the token can no longer be clobbered
-by a concurrent config change; a failed settings write is now surfaced as an error rather than silently
-leaving the API enabled on disk after a disable; and export filenames carry a random suffix so two
-exports in the same second can't collide.
-
-### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
-Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing
-before this detour?" — open the Flow overlay with an empty query (or look at the Deck) and, when it can,
-it offers the last context you stayed in for a while before your current detour: the app, the window,
-and when you were last there, one click from reopening that Moment. It never nags — if there's nothing
-worth resuming, it says so honestly.
-
-**Mark this moment** captures the current screen the instant you press `Ctrl+Alt+M` — even on a static
-screen that hasn't changed — and flags it as an intention to come back to. A quiet toast confirms
-("Marked ✓") **without stealing focus**, so you keep typing; click it to add an optional one-line note.
-Your open intentions live in a new **Intentions** strip on the Deck (newest first, with a thumbnail or
-text reconstruction and its age) where you can open, resolve, or dismiss them. There are no badge
-counts anywhere — nothing to shame you into acting.
-
-Both hotkeys are configurable in Settings alongside the overlay hotkey, with the same loud
-registration-conflict warning. The where-was-i sensitivity ("how long a context must persist to count")
-is a setting too. If capture is off, the mark hotkey tells you plainly instead of silently doing
-nothing, and a mark taken in an excluded app is refused with a reason. Existing databases migrate
-forward (schema v9 → v10) by adding a `marks` table; nothing else is touched, and a marked frame keeps
-its text reconstruction reachable even after its screenshot expires under retention.
-
-### Added — Flow overlay (0.3.0 PR5)
-ScreenSearch now has a global-hotkey **Flow overlay** for quick recall without leaving the app you
-are working in. Press `Ctrl+Alt+Space` to open a second, pre-created Tauri window over the foreground
-monitor, type to search, press `Tab` or prefix the query with `?` to switch into Ask, and press
-`Enter` to open the selected Moment in the main Command Deck. `Esc` hides the overlay.
-
-The overlay is treated as a privacy boundary: it is hidden by default, capture-protected at the
-window level, skipped from the taskbar, and covered by the same own-process capture gate used for the
-main window so it does not appear in ScreenSearch's own history. Settings exposes the summon hotkey
-and top-N result count (`overlay.max_results`, clamped to `1..=50`). A hotkey registration conflict
-is loud: the app emits a warning toast and Settings shows the failed chord instead of silently doing
-nothing. Exclusive-fullscreen applications may still suppress global overlays; that limitation is
-documented in the manual acceptance checklist.
-
-### Removed — Image-embedding lane (0.3.0 PR4)
-ScreenSearch no longer has an optional **image-embedding** lane. It was dark-launched and off by
-default (the `enrich.image_embeddings` "Embed images" toggle), so almost nobody turned it on — and a
-flag-off feature is pure carrying cost: a second on-disk vector table, a second model download
-(nomic-embed-vision-v1.5), and code that quietly rots because nothing exercises it. Text embeddings
-plus vision tags already cover semantic reach, so the lane is **gone**. (Git remembers it if it is
-ever wanted back.)
-
-Your data is safe. On first launch after this update the database migrates itself forward (schema
-v8 → v9) and **drops only the derived image vectors** — your screenshots, recognised text, and text
-embeddings are never touched, and the image vectors were re-derivable from stored frames in any case.
-Any queued image-embedding jobs are cleared. If your settings still held the **Embed images** toggle,
-it is dropped cleanly on the next launch (logged once, no error), and the Settings → Enrichment panel
-now shows just **Embed OCR text**. Search behaviour is unchanged — the image lane was never fused into
-hybrid search, verified by identical result rankings across a 10,000-frame fixture before and after.
-Live-verified on a real desktop: a populated profile migrates 8 → 9 on boot (image tables and the
-`embed_image` jobs gone, frames and text embeddings intact), the retired key drops once, and text
-semantic search still returns hits after the migration.
-
-### Removed — Beta model tier retired; Default / Quality only (0.3.0 PR3)
-Each model lane (Vision and Answer) now offers **two** tiers instead of three: **Default** and
-**Quality**. The **Beta** tier is **gone** on both lanes, which removes the two models behind it —
-the vision `Qwen3.5-9B-VLM` and the answer `NVIDIA-Nemotron-3-Nano-4B`. Nemotron was the only
-non-Apache-licensed model (NVIDIA OML) and the only unproven hybrid Mamba-Transformer architecture
-in the set, so the remaining line-up is **uniformly Apache-2.0 and vanilla-arch** — a smaller,
-better-tested matrix and a cleaner licensing story.
-
-If you had **Beta** selected for a lane, it now loads as **Quality** automatically — mapped once on
-the next launch, logged, and saved (no error, no reset to Default). Any Beta model files already
-downloaded are **left on disk**; you can remove them from the existing model-management surface if
-you want the space back. Live-verified on a real desktop: a profile persisted with `beta` for both
-lanes boots straight to Quality (one log line per lane, none on relaunch), the change is persisted
-to the database, and the app runs on the remapped tiers with inference attached.
+**The surface-reduction + flow-recall + local-API release.** The removals lead, deliberately —
+each deletes a decision you no longer have to make: the **click / scroll-stop / clipboard /
+typing-pause capture triggers** are gone (the first two were the only users of a system-wide
+low-level mouse hook; the clipboard listener was a privacy-optics liability; typing-pause was
+redundant with idle), the **Beta model tier** is gone (the one non-Apache license and unproven
+architecture in the registry), and the flag-off **image-embedding lane** is gone (a second vector
+table and model download that nothing exercised). What's added reuses what already exists: the
+**Flow overlay** (`Ctrl+Alt+Space`), **where-was-i + mark-this-moment**, and an opt-in
+**localhost HTTP API** with JSON export and a bundled **MCP server**. Every acceptance line was
+verified end-to-end on a real Windows desktop in the PR9 integration audit (`specs/05`).
 
 ### Removed — Event-capture triggers trimmed to foreground + idle (0.3.0 PR2)
 Opt-in event-driven capture now offers **two** triggers instead of six: **foreground/app-switch**
@@ -160,6 +43,144 @@ new captures simply never use those tags again. If your settings still held the 
 are **dropped cleanly on the next launch** (logged once, no error). Live-verified: the retired keys
 drop on load (one log line, none on relaunch); the app boots clean; the foreground hook thread
 starts/stops cleanly 50× on a real desktop; the v8 schema still accepts a legacy `click` frame.
+
+### Removed — Beta model tier retired; Default / Quality only (0.3.0 PR3)
+Each model lane (Vision and Answer) now offers **two** tiers instead of three: **Default** and
+**Quality**. The **Beta** tier is **gone** on both lanes, which removes the two models behind it —
+the vision `Qwen3.5-9B-VLM` and the answer `NVIDIA-Nemotron-3-Nano-4B`. Nemotron was the only
+non-Apache-licensed model (NVIDIA OML) and the only unproven hybrid Mamba-Transformer architecture
+in the set, so the remaining line-up is **uniformly Apache-2.0 and vanilla-arch** — a smaller,
+better-tested matrix and a cleaner licensing story.
+
+If you had **Beta** selected for a lane, it now loads as **Quality** automatically — mapped once on
+the next launch, logged, and saved (no error, no reset to Default). Any Beta model files already
+downloaded are **left on disk**; you can remove them from the existing model-management surface if
+you want the space back. Live-verified on a real desktop: a profile persisted with `beta` for both
+lanes boots straight to Quality (one log line per lane, none on relaunch), the change is persisted
+to the database, and the app runs on the remapped tiers with inference attached.
+
+### Removed — Image-embedding lane (0.3.0 PR4)
+ScreenSearch no longer has an optional **image-embedding** lane. It was dark-launched and off by
+default (the `enrich.image_embeddings` "Embed images" toggle), so almost nobody turned it on — and a
+flag-off feature is pure carrying cost: a second on-disk vector table, a second model download
+(nomic-embed-vision-v1.5), and code that quietly rots because nothing exercises it. Text embeddings
+plus vision tags already cover semantic reach, so the lane is **gone**. (Git remembers it if it is
+ever wanted back.)
+
+Your data is safe. On first launch after this update the database migrates itself forward (schema
+v8 → v9) and **drops only the derived image vectors** — your screenshots, recognised text, and text
+embeddings are never touched, and the image vectors were re-derivable from stored frames in any case.
+Any queued image-embedding jobs are cleared. If your settings still held the **Embed images** toggle,
+it is dropped cleanly on the next launch (logged once, no error), and the Settings → Enrichment panel
+now shows just **Embed OCR text**. Search behaviour is unchanged — the image lane was never fused into
+hybrid search, verified by identical result rankings across a 10,000-frame fixture before and after.
+
+### Added — Flow overlay (0.3.0 PR5)
+ScreenSearch now has a global-hotkey **Flow overlay** for quick recall without leaving the app you
+are working in. Press `Ctrl+Alt+Space` to open a second, pre-created Tauri window over the foreground
+monitor, type to search, press `Tab` or prefix the query with `?` to switch into Ask, and press
+`Enter` to open the selected Moment in the main Command Deck. `Esc` hides the overlay.
+
+The overlay is treated as a privacy boundary: it is hidden by default, capture-protected at the
+window level, skipped from the taskbar, and covered by the same own-process capture gate used for the
+main window so it does not appear in ScreenSearch's own history. Settings exposes the summon hotkey
+and top-N result count (`overlay.max_results`, clamped to `1..=50`). A hotkey registration conflict
+is loud: the app emits a warning toast and Settings shows the failed chord instead of silently doing
+nothing. Exclusive-fullscreen applications may still suppress global overlays; that limitation is
+documented in the manual acceptance checklist. *PR9 audit measurements (warm, debug build): overlay
+visible 6–9 ms from the hotkey, input ready 17–23 ms — against a 150 ms budget; and the
+capture-protection is strong enough that the overlay is invisible even to external screen-capture
+tools, not just to ScreenSearch's own history.*
+
+### Added — "Where was I?" + Mark this moment (0.3.0 PR6)
+Two pull-based recall features for picking work back up. **Where was I?** answers "what was I doing
+before this detour?" — open the Flow overlay with an empty query (or look at the Deck) and, when it can,
+it offers the last context you stayed in for a while before your current detour: the app, the window,
+and when you were last there, one click from reopening that Moment. It never nags — if there's nothing
+worth resuming, it says so honestly.
+
+**Mark this moment** captures the current screen the instant you press `Ctrl+Alt+M` — even on a static
+screen that hasn't changed — and flags it as an intention to come back to. A quiet toast confirms
+("Marked ✓") **without stealing focus**, so you keep typing; click it to add an optional one-line note.
+Your open intentions live in a new **Intentions** strip on the Deck (newest first, with a thumbnail or
+text reconstruction and its age) where you can open, resolve, or dismiss them. There are no badge
+counts anywhere — nothing to shame you into acting.
+
+Both hotkeys are configurable in Settings alongside the overlay hotkey, with the same loud
+registration-conflict warning. The where-was-i sensitivity ("how long a context must persist to count")
+is a setting too. If capture is off, the mark hotkey tells you plainly instead of silently doing
+nothing, and a mark taken in an excluded app is refused with a reason. Existing databases migrate
+forward (schema v9 → v10) by adding a `marks` table; nothing else is touched, and a marked frame keeps
+its text reconstruction reachable even after its screenshot expires under retention. *PR9 audit: a
+mark on a screen that had been static for 30+ seconds landed its frame 135 ms after the keypress.*
+
+### Added — Local HTTP API + export (0.3.0 PR7)
+ScreenSearch can now serve your screen history to local scripts and agents through an opt-in **local
+HTTP API** — the open-source ask since Rewind shut down. It is **off by default**. When you enable it
+in Settings it binds `127.0.0.1` only (never your network — that is hard-coded, not a setting) and
+mints a **bearer token**: every request must carry it, and anything without it — or with the wrong
+one — gets a `401`. The token is shown in Settings to reveal, copy, and regenerate (regenerating takes
+effect immediately, no restart). The threat model is stated plainly next to the switch: any local
+process holding the token can read your entire screen history, so enabling it is an explicit trust
+decision. If the port (default `43210`) is already in use, enabling fails **loudly** — a warning, and
+an inline "pick another port" retry — never a silent no-op.
+
+The v1 API mirrors the app: `GET /v1/health`, `GET /v1/search`, `POST /v1/ask` (a streamed, grounded
+answer over Server-Sent Events — and disconnecting the client now actually stops the model generating,
+freeing the GPU), `GET /v1/frames/{id}` (with `?image=1` for the screenshot),
+`GET /v1/context/where-was-i`, and marks (`GET`/`POST` and resolve — the only write surface). Full
+docs, with copy-paste examples, are in `docs/API.md`.
+
+A new **Export…** button in Settings writes your frames, content text, and marks to a JSON file in your
+Downloads folder (screenshots are not included). It streams to disk, so exporting months of history
+stays memory-flat, and it shares the API's export code path — so it works even with the API disabled.
+
+Review hardening (PR #76): malformed requests (a bad query string, body, or path segment) — and now
+unknown endpoint paths and an inverted `from > to` window — return the same `{ "error", "message" }`
+error as every other response instead of a framework plaintext body; the port can be changed while the
+API is running via a "Restart on {port}" button (previously the edited port was inert); the port field
+clamps to `1024–65535`; a failed export never leaves a `.partial` file behind (fixed for Windows, where
+the open file handle blocked cleanup); a screenshot missing on disk returns a clean `404` rather than a
+`500`; overlapping enable/disable calls are serialized so a race can't leave the API running against a
+disabled intent; and a client that disconnects mid-answer now stops the stream immediately instead of
+draining the model's backlog first. A further round: regenerating the token can no longer be clobbered
+by a concurrent config change; a failed settings write is now surfaced as an error rather than silently
+leaving the API enabled on disk after a disable; and export filenames carry a random suffix so two
+exports in the same second can't collide.
+
+### Added — MCP server (0.3.0 PR8)
+ScreenSearch now ships **`screensearch-mcp.exe`**, a small [Model Context Protocol](https://modelcontextprotocol.io)
+server that lets Claude Desktop, Claude Code, or any MCP client search, ask about, and mark your screen
+history — locally. It is a thin **stdio** wrapper over the local API from PR7: it holds no data of its
+own, links no app code, and talks only to `127.0.0.1:<port>` with your bearer token (taken from
+`SCREENSEARCH_API_TOKEN` / `SCREENSEARCH_API_URL` or `--token`/`--url`). It exposes six tools —
+`search_screen_history`, `ask_screen_history`, `get_moment` (optionally returning the screenshot),
+`where_was_i`, `list_marks`, and `add_mark` — mapping onto the same endpoints the app uses. If the API
+is off, every tool returns a clear *"enable the API in ScreenSearch Settings"* message instead of failing
+silently. The same trust posture as the API applies: any local process holding the token can read your
+whole history, so enabling it is a deliberate choice; the copy-paste client config and threat model are
+in `docs/MCP.md`.
+
+The binary is packaged **inside the NSIS installer**, next to `ScreenSearch.exe` (a new
+`bundle.externalBin` sidecar). There is no schema change.
+
+Review-round hardening: `add_mark` now rejects a non-integer `frame_id` (e.g. a stringified id) as a
+tool-input error instead of silently marking the current screen; the server refuses a non-loopback API
+URL up front so a typo'd config can't ship your token to a remote host; and `get_moment`'s SSE line
+parsing was streamlined. All confined to `screensearch-mcp` — no behaviour change for existing tools.
+
+### Audited — PR9 integration audit + release
+Every 0.3.0 acceptance line (`specs/03 §13b`) was verified end-to-end on a real Windows desktop:
+grep gates for the removed subsystems, event-mode live-fire (app-switch, idle, timer fallback),
+all four model tiers downloaded/loaded/used, overlay latency (6–9 ms vs the 150 ms bar) and
+capture-self-exclusion, where-was-i + marks flows (including honest refusals with capture off, in
+excluded apps, and while ScreenSearch itself is focused), the full API curl matrix (401s, SSE ask +
+disconnect-cancel, loud port conflict with guided retry, live port change, token regeneration,
+export with the API off, exit frees the port), and the MCP server against both scripted stdio and a
+real Claude Code client. Warn-once semantics of the settings migrations were re-proven on seeded
+boots. One environmental finding was recorded as a known gap: hot-unplugging a monitor mid-session
+can stall capture until it is stopped and restarted (`specs/07` #91). Tracked evidence lives in
+`specs/05_BUILD_REVIEW.md`; the raw transcript is a local-only audit artifact.
 
 ### Docs — 0.3.0 arc specs contract (PR1, specs-only; no code / schema / UI)
 The 0.3.0 roadmap (`docs/0.3.0.md`) is normalized into the specs so every later PR (PR2–PR9) is
