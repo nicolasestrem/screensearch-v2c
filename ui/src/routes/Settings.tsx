@@ -590,7 +590,7 @@ export function Component() {
             value={draft.overlay_hotkey}
             onChange={(v) => set("overlay_hotkey", v)}
             error={overlayHotkeyWarning}
-            hint={`Default is Ctrl+Alt+Z. AltGr keyboards may report AltGr as Ctrl+Alt. ${APPLY_NOW}`}
+            hint={`Default is ${DEFAULT_OVERLAY_HOTKEY}. AltGr keyboards may report AltGr as Ctrl+Alt. ${APPLY_NOW}`}
           />
           <HotkeyField
             label="Mark this moment"

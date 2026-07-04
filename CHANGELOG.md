@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Flow overlay default hotkey is now `Ctrl+Alt+Z`** (was `Ctrl+Alt+Space`, which collided
   with Claude Desktop's global quick-entry shortcut). Existing installs still on the old
-  default are migrated once on load; a chord you deliberately chose is left untouched. If you
-  had intentionally set `Ctrl+Alt+Space`, you can set it back in Settings. A hotkey that fails
-  to register (e.g. another app already owns it) is surfaced in Settings, not swallowed.
+  default are migrated once on load; a chord you deliberately chose is left untouched. The
+  migration is a genuine one-shot (latched by a stored marker), so if you *want*
+  `Ctrl+Alt+Space` you can set it back in Settings and it now sticks across restarts instead of
+  being re-migrated. A hotkey that fails to register (e.g. another app already owns it) is
+  surfaced in Settings, not swallowed.
 
 ## Older versions
 

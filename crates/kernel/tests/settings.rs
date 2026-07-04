@@ -278,13 +278,14 @@ async fn overlay_hotkey_empty_string_resets_to_default() {
     let loaded = load_settings(dyn_store).await;
 
     assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
+    let expected_default = serde_json::to_string(&Settings::default().overlay_hotkey).unwrap();
     assert_eq!(
         store
             .get_setting("overlay.hotkey")
             .await
             .unwrap()
             .as_deref(),
-        Some("\"Ctrl+Alt+Z\"")
+        Some(expected_default.as_str())
     );
 }
 
@@ -303,18 +304,64 @@ async fn overlay_hotkey_legacy_default_remaps_once() {
     let loaded = load_settings(dyn_store).await;
     assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
     // The remap is persisted, so the stored row now holds the new default…
+    let expected_default = serde_json::to_string(&Settings::default().overlay_hotkey).unwrap();
     assert_eq!(
         store
             .get_setting("overlay.hotkey")
             .await
             .unwrap()
             .as_deref(),
-        Some("\"Ctrl+Alt+Z\"")
+        Some(expected_default.as_str())
     );
     // …and a second load returns it without the legacy value ever reappearing.
     assert_eq!(
         load_settings(dyn_store).await.overlay_hotkey,
         Settings::default().overlay_hotkey
+    );
+}
+
+#[tokio::test]
+async fn overlay_hotkey_deliberate_legacy_survives_after_migration() {
+    // The reversible escape hatch (`07` #94): after the one-shot remap has run, a user who
+    // *deliberately* sets the old chord back must keep it — the value-only remap used to clobber
+    // it again on the very next load (codex PR #80 P2). The persisted migration marker makes the
+    // remap fire at most once, so the deliberate choice is now durable across loads.
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+
+    // Upgraded install: the retired default is remapped once on first load.
+    store
+        .set_setting("overlay.hotkey", "\"Ctrl+Alt+Space\"")
+        .await
+        .unwrap();
+    assert_eq!(
+        load_settings(dyn_store).await.overlay_hotkey,
+        Settings::default().overlay_hotkey
+    );
+
+    // The user deliberately sets the old chord back…
+    store
+        .set_setting("overlay.hotkey", "\"Ctrl+Alt+Space\"")
+        .await
+        .unwrap();
+
+    // …and it now survives every subsequent load instead of being re-remapped.
+    assert_eq!(
+        load_settings(dyn_store).await.overlay_hotkey,
+        "Ctrl+Alt+Space"
+    );
+    assert_eq!(
+        load_settings(dyn_store).await.overlay_hotkey,
+        "Ctrl+Alt+Space"
+    );
+    assert_eq!(
+        store
+            .get_setting("overlay.hotkey")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("\"Ctrl+Alt+Space\""),
+        "the deliberately re-chosen legacy chord is left untouched in the DB"
     );
 }
 

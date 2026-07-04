@@ -42,3 +42,16 @@ For each build pass, append an entry:
 - **Still risky:** the AZERTY/AltGr caveat (AltGr reported as Ctrl+Alt) is unchanged; `Ctrl+Alt+Z`
   on AZERTY is produced by AltGr+Z where Z is a letter, but the overlay registers the chord, not
   a character, so no typing conflict — confirm on a live AZERTY session in the walkthrough.
+- **Review follow-up (PR #80, 2026-07-04):** addressed all three inline review comments (all
+  bot-authored; evaluated on merits, not replied to). (1) **codex P2 — the remap wasn't truly
+  one-shot.** It was value-only, so a user who deliberately set `Ctrl+Alt+Space` back had it
+  re-remapped to `Ctrl+Alt+Z` on the next `load_settings`, breaking the reversible escape hatch
+  the CHANGELOG / `07` #94 promised. Fixed by gating the remap behind a persisted marker
+  (`overlay.hotkey_migrated`), latched on the first load regardless of stored value, so it fires
+  at most once per install and the stored chord is honored verbatim afterward; new test
+  `overlay_hotkey_deliberate_legacy_survives_after_migration` proves it. (2) **gemini — hint
+  hardcoded the chord:** `Settings.tsx` now interpolates the imported `DEFAULT_OVERLAY_HOTKEY`.
+  (3) **gemini — test hardcoded the default JSON:** the two persisted-value assertions now derive
+  the expected string from `serde_json::to_string(&Settings::default().overlay_hotkey)`. CHANGELOG
+  + `07` #94 corrected (the reversibility claim now actually holds). No IPC shape change → bindings
+  clean.

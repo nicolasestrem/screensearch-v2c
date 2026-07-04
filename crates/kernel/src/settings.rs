@@ -761,24 +761,45 @@ async fn load_tier(store: &dyn Store, key: &str, default: ModelTier) -> ModelTie
 /// global quick-entry shortcut.
 const LEGACY_OVERLAY_HOTKEY: &str = "Ctrl+Alt+Space";
 
+/// Marker key latched once the one-shot overlay-hotkey remap has run. Its presence (any value)
+/// means "the new-default code has already seen this install — honor `overlay.hotkey` verbatim
+/// from here on." Without it the value-only remap re-fired on **every** load, so a user who
+/// deliberately set `Ctrl+Alt+Space` back had it silently clobbered again on the next load,
+/// breaking the reversible escape hatch (`07` #94 / CHANGELOG). Not part of [`Settings`], so
+/// `save_settings` never touches it.
+const OVERLAY_HOTKEY_MIGRATED_KEY: &str = "overlay.hotkey_migrated";
+
 /// Reads `overlay.hotkey`, one-shot remapping the retired default `Ctrl+Alt+Space` to the
-/// current default (`Ctrl+Alt+Z`). Only an **exact** match of the old default is migrated;
-/// any other chord — including one the user deliberately set — is returned untouched. A user
-/// who had intentionally chosen `Ctrl+Alt+Space` is indistinguishable from a stale default and
-/// is remapped once (accepted; they can set it back — `07`). Persisting the new value means the
-/// warn logs **once** and the next load returns it without re-entering this branch (same
-/// "log once" mechanism as [`load_tier`]). The write is best-effort (load must never error,
-/// `04 §4`); a failure is logged and the next load simply retries.
+/// current default (`Ctrl+Alt+Z`) **exactly once per install**. The remap fires only on the
+/// first load after upgrade — gated by [`OVERLAY_HOTKEY_MIGRATED_KEY`], which is latched on that
+/// first load regardless of the stored value — so a user who *later* chooses `Ctrl+Alt+Space` on
+/// purpose keeps it (the reversible behavior recorded in `07` #94). Only an **exact** match of
+/// the old default is migrated; any other chord is returned untouched. Writes are best-effort
+/// (load must never error, `04 §4`); if a write fails the next load retries the one-shot.
 ///
 /// Lives in the load path (not the startup-maintenance sweep) for the same reason as
 /// [`load_tier`]: the composition root registers the overlay hotkey straight from
 /// `load_settings`' output, so a sweep-side remap would race it and the first post-upgrade
 /// session would still try to register the colliding chord.
 async fn load_overlay_hotkey(store: &dyn Store, default: String) -> String {
+    // Has the one-shot remap already run? Its marker means "honor the stored chord as-is",
+    // which is what makes a deliberately re-chosen `Ctrl+Alt+Space` durable.
+    let migrated = matches!(
+        store.get_setting(OVERLAY_HOTKEY_MIGRATED_KEY).await,
+        Ok(Some(_))
+    );
     let raw = match store.get_setting("overlay.hotkey").await {
         Ok(Some(raw)) => raw,
-        Ok(None) => return default,
+        Ok(None) => {
+            // Nothing stored (fresh install): use the default, and latch the marker so a later
+            // deliberate `Ctrl+Alt+Space` is never auto-remapped.
+            if !migrated {
+                mark_overlay_hotkey_migrated(store).await;
+            }
+            return default;
+        }
         Err(e) => {
+            // Read error: fall back to default and retry the one-shot on a later load.
             tracing::warn!(key = "overlay.hotkey", error = %e, "settings: read failed; using default");
             return default;
         }
@@ -790,7 +811,13 @@ async fn load_overlay_hotkey(store: &dyn Store, default: String) -> String {
             return default;
         }
     };
-    if stored == LEGACY_OVERLAY_HOTKEY {
+    // Migration already ran: honor the stored chord verbatim (including a deliberate legacy value).
+    if migrated {
+        return stored;
+    }
+    // First load under the new default: remap the retired chord if present, then latch the marker
+    // so this can never fire again.
+    let result = if stored == LEGACY_OVERLAY_HOTKEY {
         tracing::warn!(
             old = LEGACY_OVERLAY_HOTKEY,
             new = %default,
@@ -800,9 +827,19 @@ async fn load_overlay_hotkey(store: &dyn Store, default: String) -> String {
         if let Err(e) = store.set_setting("overlay.hotkey", &encoded).await {
             tracing::warn!(error = %e, "settings: failed to persist overlay-hotkey remap");
         }
-        return default;
+        default
+    } else {
+        stored
+    };
+    mark_overlay_hotkey_migrated(store).await;
+    result
+}
+
+/// Best-effort latch of the one-shot overlay-hotkey migration marker (`04 §4`: load never errors).
+async fn mark_overlay_hotkey_migrated(store: &dyn Store) {
+    if let Err(e) = store.set_setting(OVERLAY_HOTKEY_MIGRATED_KEY, "1").await {
+        tracing::warn!(error = %e, "settings: failed to persist overlay-hotkey migration marker");
     }
-    stored
 }
 
 #[cfg(test)]
