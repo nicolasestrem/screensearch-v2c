@@ -42,12 +42,12 @@ const JPEG_QUALITY: u8 = 80;
 /// window *and* speeds up prefill. The stored capture (timeline/reconstruction) keeps full
 /// resolution — only the tag request is downscaled (`encode_data_url`).
 ///
-/// **1280, matching the pre-WebP stored width (#64, 0.3.1 PR2).** The 0.3.0 native-resolution
-/// storage switch silently grew the tag request from 1280×536 (the old stored size) to a
-/// 1568 px cap — release-build profiling attributed ~97 % of the ~2.5× vision-throughput
-/// regression to the sidecar processing that 1.5×-pixel request (`specs/05` Pass 3, `06` #22).
-/// Capping back to 1280 restores request parity with the v0.2.1 baseline; the user chose this
-/// over keeping the higher-fidelity 1568 request (throughput > marginal tag fidelity).
+/// **1280, matching the pre-WebP stored width.** The switch to native-resolution storage
+/// silently grew the tag request from 1280×536 (the old stored size) to a 1568 px cap —
+/// release-build profiling attributed ~97 % of the resulting ~2.5× vision-throughput
+/// regression to the sidecar processing that 1.5×-pixel request (`06` #22). Capping back
+/// to 1280 restores request parity with the v0.2.x baseline, trading marginal tag
+/// fidelity for throughput.
 const VISION_MAX_EDGE: u32 = 1280;
 // No literal value is shown for `confidence` — an earlier prompt pinned `0.0` and the
 // model dutifully echoed it, recording a fabricated score (`07` #20). The field is
@@ -365,15 +365,15 @@ mod tests {
             VISION_MAX_EDGE,
             "longest edge must be capped"
         );
-        // 1280×536 = the pre-WebP stored size; request parity is the #64 fix (0.3.1 PR2).
+        // 1280×536 = the pre-WebP stored size; the cap pins request parity with it.
         assert_eq!((decoded.width(), decoded.height()), (1280, 536));
     }
 
     #[test]
     fn vlm_request_dims_match_encoded_output() {
         // The timing log's request dimensions must agree with what `encode_data_url`
-        // actually sends (both capped and pass-through cases). 1280 matches the pre-WebP
-        // stored width — the #64 throughput fix (0.3.1 PR2).
+        // actually sends (both capped and pass-through cases). 1280 matches the
+        // pre-WebP stored width (see `VISION_MAX_EDGE`).
         assert_eq!(vlm_request_dims(3440, 1440), (1280, 536));
         assert_eq!(vlm_request_dims(800, 600), (800, 600));
         assert_eq!(vlm_request_dims(1440, 3440), (536, 1280), "portrait cap");

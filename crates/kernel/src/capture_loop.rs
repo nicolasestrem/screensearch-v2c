@@ -218,7 +218,10 @@ async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Re
             rgb.height(),
             ExtendedColorType::Rgb8,
         )?;
-        Ok(std::fs::metadata(&path)?.len())
+        // The byte count is observational (timing log only) — a post-write metadata
+        // failure (AV scan holding the file, transient ACL) must not fail the frame,
+        // which is already safely on disk. `0` in the log flags the anomaly.
+        Ok(std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0))
     })
     .await?
 }

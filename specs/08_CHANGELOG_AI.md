@@ -79,10 +79,17 @@
   (WebP/JPEG/PNG can't be 0-dim), so purely defensive — no behavior change for real frames.
 - **Why:** PR #85 review comments — the comment-hygiene rule (comments must not reference
   the current task; it rots) and a defensive-input finding on the new pure helper.
+- **Round 2 (same day):** (c) `capture_loop.rs::write_webp`: the post-write
+  `fs::metadata` byte-count read is now non-fatal (`unwrap_or(0)`) — the count is
+  observational (timing log only), and a transient AV/ACL failure after a successful write
+  must not propagate out of `process_frame` and silently drop an on-disk frame from the
+  DB. (d) Remaining task-ID references trimmed (`VISION_MAX_EDGE` const doc, `models.rs`
+  `default_ctx_for` doc, two test comments): GitHub-issue/arc labels dropped; the
+  regression rationale + the durable `06` #22 spec-row citation kept (codebase convention).
 - **Verification (verbatim):** `cargo fmt --all -- --check` → clean; `cargo clippy -p
   inference -p kernel --all-targets -- -D warnings` → `Finished dev profile [unoptimized +
-  debuginfo] target(s) in 1.53s` (no warnings); `cargo test -p inference -p kernel` → every
-  suite `test result: ok` (0 failed; `inference` `105 passed` incl. the extended
+  debuginfo] target(s)` (no warnings, both rounds); `cargo test -p inference -p kernel` →
+  every suite `test result: ok` (0 failed; `inference` `105 passed` incl. the extended
   `vlm_request_dims_match_encoded_output`).
 
 ---
