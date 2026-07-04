@@ -71,3 +71,32 @@
   tests; updated persisted-value assertions derive the expected from `Settings::default()`);
   `npm run lint`/`build` clean; full `fmt`/`clippy`/`build`/`test` + a live hotkey walkthrough
   recorded on the PR.
+
+---
+
+## 2026-07-04 — 0.3.1 PR1: specs contract (P7.1 triage patch; specs-only)
+
+- **Change:** Normalized the 0.3.1 roadmap (`docs/0.3.1.md`, decisions D1–D9) into the specs —
+  no code, no schema, no UI. (a) `specs/04`: `docs/0.3.1.md` added to the §1 mandatory reading
+  order (with the hard patch constraint: no new subsystems / schema migrations / settings
+  surface, D8); a 0.3.1 row in the §2 source-of-truth table; a §3 build-order bullet for
+  PR1→PR4 encoding PR2's profile-first mandate + stop condition (D9), the fix preference order
+  (D5), and zero-schema-changes (D8). (b) `specs/07`: rows #96 (#69 auto-update → 0.3.2,
+  **hard-sequenced before 0.4.0 ships**), #97 (#56 systray + #57 quick actions → the 0.3.2
+  lifecycle mini-arc, bound by D6 pull-based/non-shaming), #98 (#54 closed → folded into the
+  0.4.0 sessions arc, D7), and #99 (resolved spec silence: the "quick menu" of D4 = the
+  **NavRail footer**, user decision 2026-07-04). (c) `specs/UI_REFERENCE.md`: §3 NavRail
+  version-footer prose block + tree line (D4); §4 Moment row — recognized-text and raw-text
+  grow inline, no nested scrollbar, one scroll context (D1); §4 Recall-reports row + §5
+  `ReportView` — dated download filename `screensearch-report-YYYY-MM-DD-HHmm.md` local time
+  with `-2`/`-3` collision suffixes (D2) and the footer contract app version · model id · time
+  span · filters (D3); §5 `NavRail`/`MomentDetail` notes. (d) `CLAUDE.md`/`AGENTS.md`: the
+  "Current state" paragraph names the active 0.3.1 arc. (e) `CHANGELOG.md`: Docs entry under
+  `[Unreleased]`.
+- **Why:** `docs/0.3.1.md` §3 PR1 — every later PR must be implementable from the specs alone
+  without reopening the roadmap, per the arc's established operating model (`04 §1/§2`). The
+  quick-menu surface was a genuine spec silence (no spec/component uses issue #57's term), so it
+  was resolved with the user per `04 §5` and recorded in `07` #99.
+- **Verification:** `git diff --name-only main` → only `.md` files (verbatim list on the PR);
+  D1–D9 landing checklist grep output pasted on the PR. No build/test impact possible (docs
+  only); CI runs the full suite on the PR regardless.

@@ -115,3 +115,28 @@ For each build pass, append an entry:
   `Ctrl+Alt+Space` on purpose — 0.3.0 genuinely shipped that default and this is a post-0.3.0 fix.
   CHANGELOG + `07` #94 corrected (the reversibility claim now actually holds). No IPC shape change
   → bindings clean.
+
+---
+
+## Pass 2 — 2026-07-04 — 0.3.1 PR1 (specs contract; specs-only, no code)
+
+- **Implemented:** The 0.3.1 patch contract ("P7.1 — post-0.3.0 triage", `docs/0.3.1.md`)
+  normalized into the specs: `04` (reading order + source-of-truth row + PR1→PR4 build order
+  with D5/D8/D9 encoded), `07` (rows #96–#99: the #69/#56/#57/#54 deferrals + the resolved
+  quick-menu silence), `UI_REFERENCE` (D1 Moment inline text; D2/D3 report filename + footer;
+  D4 NavRail version footer), `CLAUDE.md`/`AGENTS.md` current-state, `CHANGELOG.md` +
+  `08` entries. Verification = the diff itself: `git diff --name-only main` shows only `.md`
+  files (verbatim output on the PR).
+- **Skipped / deferred:** Everything with a runtime surface — deliberately. PR2 (#64) and PR3
+  (#59/#65/#57-partial) implement this contract; the GitHub issue hygiene (close #54, label
+  #56/#69 `deferred-0.3.2`, comment on #57) runs right after the PR opens (user-approved).
+- **Hallucinated / corrected:** The roadmap's "quick menu" (D4) does not exist as a named
+  surface anywhere in the specs or the UI — assumed candidates (CommandPalette vs. Settings vs.
+  NavRail) were put to the user instead of guessed; resolution (NavRail footer) recorded in
+  `07` #99. Nothing else assumed.
+- **Broke / regressed:** Nothing — no code touched.
+- **Still risky:** The D2 filename contract assumes the report download keeps its `.md`
+  extension (true today, `ui/src/routes/Recall.tsx`); if PR3 finds the download path differs,
+  the spec wording ("extension unchanged") still holds by construction. `06` stays empty — no
+  spec contradiction surfaced while normalizing (verified: `03` carries no report-filename/
+  footer contract; `UI_REFERENCE` had no nested-scroll text to replace).
