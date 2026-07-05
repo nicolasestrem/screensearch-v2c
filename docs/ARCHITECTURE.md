@@ -1,8 +1,11 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together **as of 2026-07-04** — reflecting the complete 0.3.0
+How ScreenSearch V2c is actually put together **as of 2026-07-05** — reflecting the complete 0.3.0
 arc (PR1–PR8: surface reduction, Flow overlay, where-was-i + marks, local HTTP API + export, MCP
-server), on top of the shipped 0.2.x
+server) and the shipped **0.3.1 patch** (P7.1 triage: the #64 vision-throughput fix —
+`VISION_MAX_EDGE` capped back at 1280 px — plus polish: inline Moment text, dated report
+filenames + self-describing footers, the NavRail version link, the UIA client-lifecycle fix, and
+the `Ctrl+Alt+Z` overlay default), on top of the shipped 0.2.x
 attention-first / Recall work (capture -> OCR/UIA text -> content-text store -> text embeddings ->
 hybrid search -> **inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI
 and Flow overlay). This describes the
