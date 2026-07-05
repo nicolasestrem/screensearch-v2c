@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.1] — 2026-07-05
+
+**The post-0.3.0 triage patch.** One regression fix is the reason this release exists: vision
+tagging had slowed to roughly a third of its pre-0.3.0 rate after the switch to native-resolution
+WebP storage (#64). Release-build profiling traced ~97 % of the slowdown to the *larger image
+handed to the vision model* — not the WebP encode, which actually got cheaper — and capping the
+model request back at 1280 px restored throughput to 102 % of the pre-WebP baseline. The rest is
+small recall polish (#59, #65, the version-link half of #57) and two post-0.3.0 defect fixes that
+ride along (the UIA client-lifecycle hang fix and the Flow overlay's new `Ctrl+Alt+Z` default).
+**Auto-update (#69) is not in this release** — it is scheduled for 0.3.2 — so this is one more
+manual download. Zero schema changes: a v0.3.0 database opens as-is (`schema_version` 10), and
+the patch adds no new settings surface.
+
 ### Added
 - **Recall reports now save with a dated filename and carry a footer (#65).** Downloading a
   report writes `screensearch-report-YYYY-MM-DD-HHmm.md` to your Downloads folder (local time;
@@ -65,6 +80,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Recovery for an already-hung app:** disable UI Automation text (or stop capture) — which
     now truly disconnects — then restart the affected browser/Electron app to clear its sticky
     accessibility mode.
+
+### Audited (0.3.1 PR4)
+Every decision D1–D9 of `docs/0.3.1.md` was verified landed against the shipped tree — specs
+contract and code, evidence-first, each check independently re-verified by an adversarial second
+pass (none refuted). `specs/07_KNOWN_GAPS.md` carries every §2 deferral (#96–#99: auto-update →
+0.3.2 hard-sequenced before 0.4.0; systray + quick actions → 0.3.2 under the pull-based /
+non-shaming principle; #54 folded into the 0.4.0 sessions arc). Zero schema changes since v0.3.0
+(`crates/store` untouched; `schema_version` still 10). The opener-plugin capability flagged for
+this audit was reviewed and accepted (`http(s)://*` `open-url` only — no path/shell scope;
+user-initiated clicks land in the OS browser, never the WebView). Full verification suite green
+on the release tree (fmt · clippy `-D warnings` · build · test workspace · UI lint+build ·
+bindings guard) and the NSIS installer builds at `0.3.1`. Audit record: `specs/05_BUILD_REVIEW.md`
+Pass 5 (archived to `specs/archive/05_BUILD_REVIEW.v0.3.1.md`).
 
 ### Docs — 0.3.1 patch specs contract (PR1, specs-only; no code / schema / UI)
 The 0.3.1 roadmap (`docs/0.3.1.md` — "P7.1: post-0.3.0 triage", a regression-fix + polish patch)
