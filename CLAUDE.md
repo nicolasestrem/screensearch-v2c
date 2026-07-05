@@ -13,12 +13,16 @@ reports) is shipped; the 0.3.0 arc — "P7: surface reduction + flow recall + lo
 triage" (`docs/0.3.1.md`) — is complete (PR1 specs contract; PR2 fixed the #64 vision-throughput
 regression profile-first — `VISION_MAX_EDGE` back to 1280 px, 102 % of the pre-WebP baseline;
 PR3 polish — #59 inline Moment text, #65 report filename/footer, #57-partial version link;
-PR4 audited + released v0.3.1). There is no active arc until the next specs-contract PR lands;
-next up: the 0.3.2 lifecycle mini-arc — auto-update #69 (hard-sequenced **before** 0.4.0 ships)
-+ systray/quick actions under the pull-based, non-shaming principle (`07` #96/#97) — then the
-0.4.0 sessions arc.** The full app exists —
+PR4 audited + released v0.3.1). The active arc is **0.3.2 — "P7.2: product shell mini-arc"**
+(`docs/0.3.2.md`): lifecycle — auto-update #69 (hard-sequenced **before** 0.4.0 ships) + systray
+#56 / quick actions #57 under the pull-based, non-shaming principle (`07` #96/#97, D4) — and
+interface — shell-layout hardening (D9) + the Settings two-tier IA (D6); **zero DB schema
+migrations** (D10). PR1 (specs contract: `03 §7d`/`§11b`/`§8`, `UI_REFERENCE §3`/`§4`/`§8`, `04`,
+`07`) is in; next: PR2 auto-update (Rust lane) ∥ PR4 shell hardening (UI lane), then PR3 → PR5 →
+PR6 audit + tag — then the 0.4.0 sessions arc.** The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
-(`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up.
+(`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up
+(the 0.3.2 minisign updater signature is not Authenticode — `03 §11b`).
 
 ## ⛔ Read the spec before doing anything (mandatory order)
 1. `specs/01_PROJECT_CONTEXT.md` — what is true today (env, constraints, non-goals)
@@ -63,7 +67,7 @@ Re-read each session — the files are the source of truth, not your memory.
 - **Rust-only ML runtime.** The shipped app's ML is Rust-only — embeddings via fastembed,
   inference via the local llama.cpp sidecar; no Python *ML sidecar* in the runtime (the V1 approach
   that failed). Python is fine for build/dev tooling (model prep, the `hf` CLI, CI scripts).
-  No cloud calls (localhost + model downloads only).
+  No cloud calls (localhost + model downloads + the signed GitHub-Releases update check, `03 §11b`, only).
 - **No real-time vision** — vision runs on-demand / timer / idle only (`03 §5`).
 - **Sidecar must never orphan** — implement the Job-Object lifecycle exactly (`03 §6`); do not ship
   P4 until the no-orphan test passes.

@@ -26,6 +26,14 @@ roadmap is context (PR1 already normalized decisions D1–D15 into the specs).
 vision-throughput regression fix + polish). Hard patch constraint: **no new subsystems, no schema
 migrations, no new settings surface** (D8). The **specs are the contract** (the patch's PR1
 normalized its decisions D1–D9 into the specs); the roadmap is context.
+**For 0.3.2 work:** also read `docs/0.3.2.md` (P7.2 — the product-shell mini-arc: lifecycle
+(auto-update, systray) + interface (shell layout, Settings IA)) plus `03 §7d`/`§8`/`§11b` and
+`UI_REFERENCE §3`/`§4`/`§8` — the lifecycle + shell contract. Hard mini-arc constraints: **zero DB
+schema migrations** (D10 — if a piece appears to need one, that piece is wrong for a mini-arc: stop
+and report); **new settings only where a PR names them**; the Settings restructure is
+**presentation-first** (D7 — zero key renames, zero semantic changes); **structural only, no visual
+redesign** (D12). The **specs are the contract** (this arc's PR1 normalized decisions D1–D12 into
+the specs); the roadmap is context.
 
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
@@ -36,6 +44,7 @@ normalized its decisions D1–D9 into the specs); the roadmap is context.
 | 0.2.x arc scope / PR order / content-text rationale | `docs/0.2.0.md` (+ `02 §5b`) |
 | 0.3.0 arc scope / PR order (subtraction + flow recall + local API) | `docs/0.3.0.md` (+ `02 §5c`) |
 | 0.3.1 patch scope / PR order (post-0.3.0 triage: regression fix + polish) | `docs/0.3.1.md` |
+| 0.3.2 arc scope / PR order (product shell: lifecycle + interface) | `docs/0.3.2.md` |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
 | UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
@@ -78,6 +87,22 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   to require one, that fix is wrong for a patch — stop and report. Each PR is its own branch, runs
   the full verification suite, updates `05`–`08`, and **recycles this file (`04`) as its operating
   prompt**.
+- **0.3.2 mini-arc (P7.2, `docs/0.3.2.md`):** **PR1 Specs contract** → two lanes → **PR6 Audit +
+  tag (`v0.3.2`)**. **Rust lane (sequential — both touch `src-tauri` setup):** **PR2 #69
+  auto-update** → **PR3 #56 systray + #57 quick actions**. PR3's sister-app reuse is a **reviewed
+  import (D5)**: read `screensearch-v2@d865c3d` + its `docs/design/p2-shell.md` first; adopt
+  patterns (hotkey persistence ordering, scoped shortcut replacement, atomic pause toggle,
+  listener-leak guard), never wholesale code; its notifications are excluded by D4. **UI lane
+  (parallel to the Rust lane — disjoint code):** **PR4 Shell layout hardening**, **reproduce
+  first**: the NavRail ghost-rail repro + the per-route scroll/CLS inventory are recorded in
+  `05`/`06` **before any fix code**. **Stop condition:** if the ghost rail proves an upstream
+  WebView2 compositing bug not addressable in app code, STOP on that item, record it + the best CSS
+  mitigation in `07`, and continue the rest of the PR. **PR5 Settings IA overhaul** lands only after
+  **both** PR3 and PR4 (it places PR3's keys into PR4's hardened shell). **Zero DB schema migrations
+  (D10):** any piece appearing to need one is wrong for a mini-arc — stop and report. **Structural
+  only (D12):** PR4/PR5 touch layout + IA, never tokens/palette/type. Each PR is its own branch,
+  runs the full verification suite, updates `05`–`08`, and **recycles this file (`04`) as its
+  operating prompt**.
 
 ## 4. Guardrails (hard rules — violating any = stop)
 - **No destructive git.** Feature branches only; never force-push or reset shared history; never
@@ -86,7 +111,8 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   `schema_version` bump (`03 §4/§12`).
 - **No Python in the shipped runtime. No cloud calls.** Runtime ML is Rust-only (fastembed) + the
   local llama.cpp sidecar (`01 §5`); a Python *ML* sidecar is the V1 approach we don't repeat. Python
-  is allowed for build/dev tooling (e.g. the `hf` CLI). Network = localhost + model downloads only.
+  is allowed for build/dev tooling (e.g. the `hf` CLI). Network = localhost + model downloads + the
+  signed GitHub-Releases update check (`03 §11b`) only.
 - **No real-time vision.** Vision runs only on-demand/timer/idle (`03 §5`).
 - **Sidecar must never orphan.** Implement the Job-Object lifecycle exactly (`03 §6`); do not ship
   P4 until the no-orphan test passes.

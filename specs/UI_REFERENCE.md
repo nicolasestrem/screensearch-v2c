@@ -71,7 +71,7 @@ Spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48. Z-layers: base / rail / ove
 ```
 AppShell
  ├─ StatusRail (top): capture state · DB size · queue depth · sidecar/model · readiness · throttle   [telemetry]
- ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings · footer: version → repo link (0.3.1)
+ ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings · footer: version → repo link (0.3.1) · update indicator (0.3.2, presence-only)
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
      /            Deck      — at-a-glance: capture status, today's activity, jump back in (0.3.0: where-was-i "Jump back" card + Intentions strip)
@@ -79,12 +79,13 @@ AppShell
      /timeline    Timeline  — the Scanline Timeline browser
      /timeline/:id Moment   — one frame: image, OCR text, vision tags, context, actions
      /insights    Insights  — activity analytics (nice-to-have; ships as real or honest-empty)
-     /settings    Settings  — capture · models (tiers) · enrichment schedule · privacy · retention · performance throttle (0.2.1) · hotkeys + local API (0.3.0)
+     /settings    Settings  — two tiers (0.3.2, D6): Essentials (Capture · Hotkeys · Privacy · Models · Storage · App · Data) + Advanced (collapsed per-group expanders)
      *            NotFound
 
  ┄ FlowOverlay (0.3.0) — a SEPARATE always-on-top hotkey window, NOT a NavRail route: Ctrl+Alt+Z
                          summons instant search-as-you-type / Ask over content text; Esc dismisses,
                          Enter jumps to the Moment; an empty query shows the where-was-i strip.
+ ┄ Tray (0.3.2)       — an OS surface, not a window/route: passive capture-state icon + menu (03 §7d)
 ```
 Rules: one primary action per screen; every route is reachable from NavRail or a link; no orphan
 screens; deep-linkable (real routes, `/timeline/:id` shareable within the app).
@@ -121,6 +122,43 @@ keyboard-focusable with a visible focus ring (`§7`). Surface decided in `07` #9
 The rest of #57 — load/unload-model and start/stop-vision quick actions — does **not** land in
 0.3.1; it is deferred to the 0.3.2 lifecycle mini-arc (`07` #97).
 
+**Settings two-tier IA (0.3.2, D6/D7).** The flat settings wall becomes two tiers. **Essentials
+(always visible):** Capture (interval, monitors, event-driven master toggle) · Hotkeys (overlay
+chord, mark chord, overlay results, dwell — plus the inline **cross-chord conflict warning**, gap
+`07` #100: fires live when `overlay.hotkey` and `marks.hotkey` are set to the same chord and clears
+when they differ) · Privacy (excluded apps, pause on lock) · Models (vision/answer pickers, show
+thinking, load/unload) · Storage (retention days, max width) · **App** (below) · Data (local API
+toggle/port/token, export). **Advanced (collapsed, one expander per group):** Capture tuning · Text
+source / UIA · Enrichment & scheduling · Performance throttle (+ live readout) · Text filtering ·
+Reports & retrieval · Inference engine (sidecar). Tier membership is **settled**; within-tier
+ordering and visual grouping are the implementer's. Every section opens with **one plain-language
+sentence** stating what it is for and when a normal person would touch it (voice per `§9`).
+Presentation-first (D7): zero key renames, zero semantic changes; the two dead settings (JPEG
+quality, `uia_run_on_interactive`) leave the UI per `03 §8` (D8). Advanced's collapsed state may
+persist per-session; no new persistence machinery. A settings search box is deferred (`07` #103).
+
+**Settings · App section (0.3.2, D1/D3).** A new Essentials section — the app's own lifecycle home:
+**Run at startup** (`app.run_at_startup`, default off) · **Close to tray** (`app.close_to_tray`,
+default on; user-voice label, e.g. "Closing the window keeps ScreenSearch running in the tray") ·
+**update status + "Check for updates"** (the status line reads e.g. "v0.3.3 available — restart to
+update" only while an update exists; otherwise nothing) · **version + repo link** (the NavRail
+footer's information, restated where a user would look for it).
+
+**Tray (0.3.2, D3/D4).** An OS surface, not a route or webview — mechanics in `03 §7d`; this file
+owns its UX rules. The icon is **passive telemetry**: glyph/tint tracks capture state (capturing /
+paused / error) live. It is the entire "reminder" feature — **no notifications, no nudges, no badge
+counts** (the `§4` Deck rule, extended to the OS shell). Menu: Open ScreenSearch · Pause/Resume
+capture · Load/Unload answer model · Start/Stop vision tagging · Check for updates · Quit. The
+**one-time close-to-tray toast** uses the existing `Toast` primitive + `toast` z-layer, explains that
+the app keeps running and where to turn the behavior off, and never repeats. States per `§4`.
+
+**Updater surface (0.3.2, D1).** Pull-based (`03 §11b`). When — and only when — an update exists: a
+**quiet presence indicator** on the NavRail (a dot/glyph, **never a count** — the no-badge-counts
+rule holds) plus the App-section status line. Background download; install only on user-initiated
+restart; no modal, no nag, no auto-restart. No update → **zero UI presence** (the indicator does not
+exist, not "shown as zero"). Quiet styling (functional palette, not the bold accent) — it is
+telemetry, not a primary action, same discipline as the version footer.
+
 ## 4. Per-screen state matrix (the comprehensiveness guarantee)
 **Every view defines all of: `loading` · `empty` · `error` · `partial` · `populated`.** No screen
 ships with only the happy path; no mock data; no "Coming Soon."
@@ -138,13 +176,18 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Settings · Performance throttle (0.2.1) | toggle OFF → readout collapsed to "Throttle disabled" (empty-off) | status probe failed → "Pressure unavailable", keep toggle + fields | partial: GPU unmonitored → CPU% shown + honest "GPU not monitored" | master toggle + live CPU/GPU + level readout + 8 threshold fields; loading = skeleton readout; populated = live CPU/GPU% + level (Normal/High/Sustained) |
 | Flow overlay (0.3.0) | empty query → where-was-i strip ("Jump back: *repo* — VS Code, until 14:32") or honest "Nothing to resume yet" | search/ask cmd failed → inline retry, overlay stays open | results streaming / Ask tokens arriving | frameless always-on-top; loading = skeleton rows; populated = top-N results with thumbnails; `Esc`/blur dismiss; five states like every view |
 | Settings · Local API (0.3.0) | toggle OFF → "API disabled" (empty-off); nothing listens | port in use on enable → **loud warning + toast + inline "pick another port"**; save failed → keep form | enabling → binding | master toggle + port field + token reveal/copy/regenerate + threat-model copy; populated = "listening on 127.0.0.1:<port>" |
+| Tray (0.3.2) | — (icon present whenever the app runs) | capture error → error glyph/tint; menu still operates | paused → paused glyph/tint | passive state only — no notifications, no counts (`03 §7d`); menu actions round-trip through existing commands |
+| Updater indicator (0.3.2) | no update → **zero presence** (nothing rendered) | check/download failed → quiet App-section line ("couldn't check for updates" + retry), never a modal | downloading → indicator present, App line reflects it | presence, never a count; install only on user-initiated restart (`03 §11b`) |
+| Settings · App (0.3.2) | — | startup-registration or update-check failure → inline explain + retry, form kept | update downloading → status line reflects it | run-at-startup + close-to-tray apply optimistic + reconcile, like the rest of Settings |
 
 Loading uses skeletons that match final layout (no spinner-only screens). Empty states are
 **invitations to act**, not mood.
 
 ## 5. Component inventory (built once, reused)
 Shell: `AppShell`, `StatusRail`, `NavRail` (0.3.1: footer version link → opens the GitHub repo in
-the default browser — D4, `§3`), `CommandPalette`, `ReadinessBanner`.
+the default browser — D4, `§3`), `CommandPalette`, `ReadinessBanner`; 0.3.2: `UpdateIndicator`
+(NavRail presence indicator — `§3`/`§4`) + `TrayMenu` (the native Tauri tray — Rust-built, not a
+React component; listed here so its `§4` states are owned by this file; mechanics `03 §7d`).
 Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`, `Toast`,
 `EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`.
 Domain: `ScanlineTimeline`, `FrameTile`, `FrameImage` (lazy), `AnswerStream` (markdown + citations),
@@ -202,6 +245,19 @@ Initial JS ≤ 250 KB gzip; route-split per page; virtualized frame grids/timeli
 DOM); `FrameImage` lazy + decoded async; search results render < 100 ms after data; interaction
 latency < 100 ms; no layout shift on data arrival (skeletons reserve space).
 
+### Shell layout contract (0.3.2, D9 — acceptance-grade; binds all future UI work, not just this arc's)
+- **One scroll context per route:** NavRail and StatusRail are fixed; only the content pane scrolls.
+  **No nested scrollable regions** — the 0.3.1 #59 Moment principle, applied everywhere.
+- **No horizontal scrollbar** at any supported size: 1280×720 minimum through ultrawide, at
+  100 / 125 / 150 % DPI.
+- **No cumulative layout shift on load:** skeletons reserve final dimensions (the budget rule above,
+  now acceptance-grade); status chips have stable widths; toasts and banners **overlay** rather than
+  push — the readiness banner alone may reserve space.
+- Verified by PR4's screenshot matrix (all six content routes — Deck, Recall, Timeline, Moment
+  (`/timeline/:id`), Insights, Settings — × {1280×720, 1920×1080, 3440×1440} × {100 %, 150 %}); any
+  later view violating a line above is a regression against this section. Moment is not optional here:
+  it is the origin of the one-scroll-context principle (0.3.1 #59).
+
 ## 9. Voice & copy (interface speaks plainly, from the user's side)
 Name things by what the user controls ("Pause capture", not "halt pipeline"). Actions keep their
 name through the flow ("Tag with vision" → toast "Vision tagged"). Errors explain what happened and
@@ -220,6 +276,8 @@ no filler. Timestamps human-relative with absolute on hover.
 7. The Scanline Timeline scrubs smoothly and reflects real capture density.
 8. Verified by **running the app and capturing screenshots** of each screen in each state — not by
    "it compiles" (`04 §6`).
+9. The `§8` shell layout contract holds: one scroll context per route, fixed rails, no nested or
+   horizontal scrollbars at supported sizes/DPI, no layout shift on load (0.3.2, D9).
 
 ---
 
