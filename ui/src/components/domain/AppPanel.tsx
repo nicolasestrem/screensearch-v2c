@@ -75,6 +75,10 @@ export function AppPanel() {
 
   const s = status.data;
   const checking = check.isPending || s.state === "checking";
+  // A background download is in flight for available/downloading — the manual command has
+  // already returned, so disable the check control until it settles (ready/idle/error).
+  const busy =
+    checking || s.state === "available" || s.state === "downloading";
   const upVersion = pendingVersion(s);
 
   const runCheck = () => {
@@ -155,7 +159,7 @@ export function AppPanel() {
               <Button
                 variant="secondary"
                 onClick={runCheck}
-                disabled={checking}
+                disabled={busy}
               >
                 {checking
                   ? "Checking…"

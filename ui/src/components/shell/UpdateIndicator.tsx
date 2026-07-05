@@ -37,6 +37,8 @@ export function UpdateIndicator() {
   const checking = check.isPending || state === "checking";
   const hasUpdate = version != null;
   const ready = state === "ready";
+  // Disable the manual check while a check or a background download is in flight.
+  const busy = checking || state === "available" || state === "downloading";
 
   const runCheck = () => {
     check.mutate(undefined, {
@@ -81,7 +83,7 @@ export function UpdateIndicator() {
       <button
         type="button"
         onClick={runCheck}
-        disabled={checking}
+        disabled={busy}
         className={cn(
           "flex items-center justify-between w-full gap-2 px-3 min-h-hit-min rounded-chip",
           "text-caption text-ink-muted border border-line hover:text-ink hover:border-ink-faint",

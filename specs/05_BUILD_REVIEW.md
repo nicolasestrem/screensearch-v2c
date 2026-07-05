@@ -83,6 +83,18 @@ For each build pass, append an entry:
   published as a full release or the updater is inert (recorded in the runbook + PR). (2) Downloaded
   installer bytes are held in RAM until restart (~tens of MB) — commented; temp-file spill is the future
   escape hatch. (3) Key custody is a release blocker (D2): losing the private key strands every install.
+- **Review response (PR #91, second commit):** four automated-review findings addressed in `update.rs`
+  + the two check controls, all legitimate. (a) `pending` was a `TokioMutex` but never locked across an
+  `.await` → switched to `StdMutex` (removes async-lock overhead). (b) The single-flight `in_flight`
+  flag was reset manually (leaked on a panic) → replaced with an RAII `InFlightGuard` that clears it on
+  drop. (c) The **manual `check_for_updates` actually blocked through the whole ~13 MB download**
+  (contradicting its own doc + the "background download" contract): the check and download are now split,
+  the download runs in a spawned task that owns the guard, and the command returns the post-check
+  snapshot — matching D1. (d) `Available` was a phantom (set back-to-back with `Downloading`, no yield):
+  it is now set in `run_check` before the download task spawns, so it is genuinely observable before
+  `Downloading`. The two check buttons now disable while a background download is in flight. Re-verified:
+  full suite green; live log-based positive (detect → background download → signature-verified) + negative
+  (tampered → `Invalid encoding in minisign data`) re-run on the refactored build.
 
 ---
 
