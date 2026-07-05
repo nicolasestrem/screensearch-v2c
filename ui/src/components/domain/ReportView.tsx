@@ -17,7 +17,7 @@ import { saveReportMarkdown } from "../../lib/ipc/commands";
 import { useAppVersion } from "../../lib/useAppVersion";
 import { reportFileStem } from "../../lib/time";
 import { buildReportFooter } from "../../lib/reportFooter";
-import { openExternal } from "../../lib/openExternal";
+import { handleExternalLinkClick } from "../../lib/openExternal";
 import type { ReportResponse } from "../../bindings/ReportResponse";
 import type { ReportRequest } from "../../bindings/ReportRequest";
 
@@ -112,14 +112,14 @@ export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
           components={{
             // Report text is model output: open links in the OS browser, never the app's
             // own WebView (which would unmount the UI). Tauri v2 ignores plain
-            // `target="_blank"`, so route the click through the opener plugin (0.3.1 D4).
+            // `target="_blank"`, so http(s) links are routed through the opener plugin
+            // (0.3.1 D4); browser-dev and non-http(s) links fall back to `target="_blank"`.
             a: ({ href, children }) => (
               <a
                 href={href}
-                onClick={(e) => {
-                  e.preventDefault();
-                  openExternal(href);
-                }}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => handleExternalLinkClick(e, href)}
               >
                 {children}
               </a>

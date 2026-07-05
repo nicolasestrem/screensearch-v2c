@@ -55,6 +55,15 @@
     shared `openExternal()` helper. Per the roadmap, the two **pre-existing broken** markdown
     links (`ReportView.tsx`, `AnswerStream.tsx` — model-output links that also relied on
     `target="_blank"`) were switched to the same helper.
+  - **Review follow-up (link interception hardened).** The first cut of the two markdown
+    renderers called `e.preventDefault()` + `openExternal()` **unconditionally** — which
+    killed links in browser-dev (no Tauri runtime → silent no-op) and any non-http(s) link
+    (`mailto:`, in-page anchors) the `opener` scope would block. Added
+    `handleExternalLinkClick(e, href)` to `openExternal.ts`: it intercepts **only** http(s)
+    links **only** when `isTauri()`; every other case falls through to the restored native
+    `target="_blank" rel="noopener noreferrer"` so those links still work. NavRail is
+    untouched — its link is a fixed https URL rendered only when `version` is truthy (Tauri
+    only), so the guard is moot there.
 - **Why:** `docs/0.3.1.md` PR3 + D1–D4; `04 §5` (spec silence/contradiction → stop + log).
   - **Capability scope note (deviation, logged):** the roadmap suggested scoping
     `opener:allow-open-url` to the repo URL. Because the report/answer markdown links open

@@ -13,7 +13,7 @@ import remarkGfm from "remark-gfm";
 import type { AskPhase } from "../../lib/ipc/useAsk";
 import { CitationTile } from "./CitationTile";
 import { ErrorState } from "../primitives";
-import { openExternal } from "../../lib/openExternal";
+import { handleExternalLinkClick } from "../../lib/openExternal";
 
 export interface AnswerStreamProps {
   phase: AskPhase;
@@ -121,15 +121,15 @@ export function AnswerStream({
           components={{
             // Answer text is model output: open any link in the OS browser, never
             // navigate the app's own WebView (which would unmount the whole UI). Tauri v2
-            // ignores plain `target="_blank"`, so route the click through the opener plugin
-            // (0.3.1 D4). Used in the main Recall route and the Flow overlay alike.
+            // ignores plain `target="_blank"`, so http(s) links are routed through the
+            // opener plugin (0.3.1 D4); browser-dev and non-http(s) links fall back to the
+            // native `target="_blank"`. Used in the main Recall route and the Flow overlay.
             a: ({ href, children }) => (
               <a
                 href={href}
-                onClick={(e) => {
-                  e.preventDefault();
-                  openExternal(href);
-                }}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => handleExternalLinkClick(e, href)}
               >
                 {children}
               </a>
