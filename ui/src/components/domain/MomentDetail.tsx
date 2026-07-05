@@ -108,7 +108,7 @@ export function MomentDetail({
           }
         >
           {detail.content_text ? (
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
+            <pre className="whitespace-pre-wrap text-body text-ink-muted font-mono">
               {detail.content_text}
             </pre>
           ) : (
@@ -124,7 +124,7 @@ export function MomentDetail({
                   ? " (includes app chrome)"
                   : ""}
               </summary>
-              <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap text-body text-ink-muted font-mono">
+              <pre className="mt-2 whitespace-pre-wrap text-body text-ink-muted font-mono">
                 {detail.raw_text}
               </pre>
             </details>

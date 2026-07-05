@@ -18,6 +18,80 @@
 
 ---
 
+## 2026-07-04 — 0.3.1 PR3: polish bundle (#59 nested scroll · #65 report filename+footer · #57 version link)
+
+- **Change:** three user-visible polish items on `feat/0.3.1-pr3-polish-bundle`, no schema
+  change, no new settings surface (`docs/0.3.1.md` PR3; D1/D2/D3/D4).
+  - **#59 (D1) — Moment nested scrollbar removed.** Dropped `max-h-80 overflow-auto` from
+    both the recognized-text and raw-text `<pre>` blocks in
+    `ui/src/components/domain/MomentDetail.tsx`; the text now grows inline and the page's
+    single scroll context (`AppShell` `<main>`) owns scrolling.
+  - **#65 (D2) — date-stamped, collision-safe report filename.** New Tauri command
+    `save_report_markdown(stem, markdown) -> path` in `src-tauri/src/lib.rs`: resolves
+    `download_dir()` (same path as `export_data`), sanitizes the stem to a safe leaf, picks
+    the first free `<stem>.md` / `<stem>-2.md` / `<stem>-3.md` (`unique_markdown_path`), and
+    writes through a `.partial` rename. Two pure helpers (`sanitize_report_stem`,
+    `unique_markdown_path`) with unit tests (temp dir). Plain `String` args → **no ts-rs
+    binding churn**. UI (`ReportView.tsx`) builds the local-time stem
+    `screensearch-report-YYYY-MM-DD-HHmm` (`reportFileStem` in `lib/time.ts`), invokes the
+    command, toasts the returned path; keeps a Blob download as the browser-dev fallback
+    (guarded by `isTauri()`).
+  - **#65 (D3) — self-describing report footer.** `buildReportFooter(report, request,
+    appVersion)` (`ui/src/lib/reportFooter.ts`) emits one plain-text block: app version ·
+    model · covered date(s) · filters (kind + optional Custom focus) · counts (passes ·
+    periods · frames summarized) · truncated note. Single source: rendered on screen AND
+    appended (after a `---`) to the copied/saved markdown, so the exported file carries its
+    own provenance (previously it had none). `useReport` now retains the submitted
+    `ReportRequest` in state (the footer's time-span + filter source); `ReportResponse` is
+    unchanged (bindings stay clean).
+  - **#57 partial (D4) — NavRail version link.** `useAppVersion()` (`getVersion()` from
+    `@tauri-apps/api/app`, null + hidden UI outside Tauri) feeds a quiet `v{version}` footer
+    link in the NavRail. **Open-mechanism decision (per the roadmap's live-test procedure):**
+    a plain `<a target="_blank">` was live-tested in `npm run tauri dev` and **did not open
+    the OS browser** (confirmed by the maintainer, 2026-07-04) — Tauri v2 ignores such
+    anchors. So this PR adds **`tauri-plugin-opener`** (`+ @tauri-apps/plugin-opener`,
+    `.plugin(tauri_plugin_opener::init())`, and an `opener:allow-open-url` capability on both
+    the `main` and `overlay` windows) and routes external opens through `openUrl()` via a
+    shared `openExternal()` helper. Per the roadmap, the two **pre-existing broken** markdown
+    links (`ReportView.tsx`, `AnswerStream.tsx` — model-output links that also relied on
+    `target="_blank"`) were switched to the same helper.
+  - **Review follow-up (link interception hardened).** The first cut of the two markdown
+    renderers called `e.preventDefault()` + `openExternal()` **unconditionally** — which
+    killed links in browser-dev (no Tauri runtime → silent no-op) and any non-http(s) link
+    (`mailto:`, in-page anchors) the `opener` scope would block. Added
+    `handleExternalLinkClick(e, href)` to `openExternal.ts`: it intercepts **only** http(s)
+    links **only** when `isTauri()`; every other case falls through to the restored native
+    `target="_blank" rel="noopener noreferrer"` so those links still work. NavRail is
+    untouched — its link is a fixed https URL rendered only when `version` is truthy (Tauri
+    only), so the guard is moot there.
+- **Why:** `docs/0.3.1.md` PR3 + D1–D4; `04 §5` (spec silence/contradiction → stop + log).
+  - **Capability scope note (deviation, logged):** the roadmap suggested scoping
+    `opener:allow-open-url` to the repo URL. Because the report/answer markdown links open
+    **arbitrary model-cited URLs**, a repo-only scope would leave them broken (permission
+    denied) — defeating the roadmap's own "switch the two links too" instruction. Scope is
+    therefore `http://*` + `https://*` (the repo URL is a subset). External opens land in the
+    OS browser (sandboxed), never the app WebView; the URLs are user-initiated clicks on
+    rendered links. This is a mechanism detail, not a product decision.
+  - **Spec contradiction resolved (D3):** `UI_REFERENCE §4/§5` said the footer keeps "the
+    existing tokens count"; the footer has never had a token count. Corrected both
+    occurrences to "the existing counts (passes · periods covered · frames summarized)" and
+    logged as `06` #24.
+- **Verification (verbatim, worktree `ss-v031-pr3-polish`):**
+  - UI: `npm ci` clean; `npm run lint` → **no errors/warnings**; `npm run build` → `✓ built`.
+  - `node scripts/stage-mcp.mjs` → staged.
+  - `cargo fmt --all -- --check` → exit 0.
+  - `cargo clippy --workspace --all-targets -- -D warnings` → `Finished dev profile … in
+    31.07s` (no warnings).
+  - `cargo build --workspace` → `Finished` in 48.56s.
+  - `cargo test --workspace` → all green; `screensearch_lib` unit suite `14 passed` incl.
+    the new `sanitize_report_stem_produces_a_safe_leaf_name` +
+    `unique_markdown_path_appends_2_3_on_collision`.
+  - `git diff --exit-code -- ui/src/bindings` → clean (exit 0).
+  - Live (`npm run tauri dev`): version link live-tested (see D4 above — plain anchor failed,
+    driving the opener-plugin decision); post-fix live re-check recorded in `05`.
+
+---
+
 ## 2026-07-04 — 0.3.1 PR2 Phase A: #64 profiling instrumentation + stop-condition report
 
 - **Change:** (a) Instrumentation-only commit on `fix/0.3.1-pr2-vision-throughput-r2`

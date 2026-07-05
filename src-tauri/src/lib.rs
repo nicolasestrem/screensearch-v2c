@@ -651,6 +651,92 @@ async fn cancel_report(request_id: String, state: State<'_, AppState>) -> Result
     Ok(())
 }
 
+/// Save a recall-report markdown body to the user's Downloads folder under a
+/// collision-safe, date-stamped name (`save_report_markdown`, 0.3.1 D2, #65). The UI
+/// builds the local-time stem (`screensearch-report-YYYY-MM-DD-HHmm`) — the WebView owns
+/// the user's clock, so no timezone math happens here; this command only sanitizes the
+/// stem to a safe leaf name, resolves Downloads (same `download_dir()` path as
+/// `export_data`), never clobbers an existing file (`<stem>.md`, `<stem>-2.md`,
+/// `<stem>-3.md`, …), and writes atomically through a `.partial` rename so a failed write
+/// leaves no half-file. Returns the final path for the success toast.
+#[tauri::command]
+async fn save_report_markdown(
+    stem: String,
+    markdown: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|e| format!("cannot resolve the Downloads folder: {e}"))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let final_path =
+        unique_markdown_path(&dir, &sanitize_report_stem(&stem)).map_err(|e| e.to_string())?;
+
+    // Write through a sibling `.partial` name and rename on success, so an interrupted or
+    // failed write never leaves a plausible-looking report file (mirrors the export path,
+    // `api::export::export_to_file`).
+    let mut partial_os = final_path.clone().into_os_string();
+    partial_os.push(".partial");
+    let partial_path = PathBuf::from(partial_os);
+    if let Err(e) = tokio::fs::write(&partial_path, markdown.as_bytes()).await {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(e.to_string());
+    }
+    if let Err(e) = tokio::fs::rename(&partial_path, &final_path).await {
+        let _ = tokio::fs::remove_file(&partial_path).await;
+        return Err(e.to_string());
+    }
+    Ok(final_path.to_string_lossy().into_owned())
+}
+
+/// Sanitizes a UI-supplied report filename stem to a single safe leaf name: keeps ASCII
+/// alphanumerics, collapses every other run of characters to a single `-`, and trims
+/// leading/trailing `-`. No path separator, drive letter, or `..` can survive, so the
+/// result is always a direct child of the target dir; an empty result falls back to a
+/// fixed stem. Pure (no IO) — unit-tested.
+fn sanitize_report_stem(stem: &str) -> String {
+    let mut out = String::with_capacity(stem.len());
+    let mut prev_dash = false;
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "screensearch-report".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Resolves the first non-colliding path: `<dir>/<stem>.md`, then `<stem>-2.md`,
+/// `<stem>-3.md`, … (0.3.1 D2 same-minute collision rule). `try_exists` surfaces a real
+/// IO error rather than silently treating an unreadable entry as free. Unit-tested against
+/// a temp dir.
+fn unique_markdown_path(dir: &Path, stem: &str) -> std::io::Result<PathBuf> {
+    let mut n: u32 = 1;
+    loop {
+        let name = if n == 1 {
+            format!("{stem}.md")
+        } else {
+            format!("{stem}-{n}.md")
+        };
+        let candidate = dir.join(name);
+        if !candidate.try_exists()? {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
 /// Change the active model tier for a lane (`set_model_tier`, `03 §7`). Persists the
 /// choice to settings and applies it to the live provider; the sidecar switches to the
 /// new GGUF on the lane's next request (`03 §6`).
@@ -956,6 +1042,10 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Opens external URLs (the NavRail version link + report/answer markdown links) in
+        // the OS default browser; Tauri v2 does not open plain `target="_blank"` anchors
+        // (0.3.1 D4, #57). Scoped by the `opener:allow-open-url` capability.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Resolve the per-user app data dir from the bundle identifier and make
             // sure it (and the log dir) exist before we open anything in them.
@@ -1171,6 +1261,7 @@ pub fn run() {
             cancel_ask,
             generate_report,
             cancel_report,
+            save_report_markdown,
             set_model_tier,
             load_model,
             unload_model,
@@ -2398,6 +2489,51 @@ Available devices:
         assert_eq!(
             err,
             "failed to hydrate Ask OCR context for 1 frames: simulated ocr_texts failure"
+        );
+    }
+
+    #[test]
+    fn sanitize_report_stem_produces_a_safe_leaf_name() {
+        // The UI's own stem passes through unchanged.
+        assert_eq!(
+            sanitize_report_stem("screensearch-report-2026-07-04-1530"),
+            "screensearch-report-2026-07-04-1530"
+        );
+        // Path separators / traversal / drive letters collapse to dashes — nothing that
+        // could escape the target dir survives.
+        assert_eq!(sanitize_report_stem("../../etc/passwd"), "etc-passwd");
+        assert_eq!(
+            sanitize_report_stem(r"C:\Windows\system32"),
+            "C-Windows-system32"
+        );
+        // Leading/trailing junk is trimmed; an all-junk or empty stem falls back.
+        assert_eq!(sanitize_report_stem("  !!  "), "screensearch-report");
+        assert_eq!(sanitize_report_stem(""), "screensearch-report");
+    }
+
+    #[test]
+    fn unique_markdown_path_appends_2_3_on_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let stem = "screensearch-report-2026-07-04-1530";
+
+        let p1 = unique_markdown_path(dir.path(), stem).unwrap();
+        assert_eq!(
+            p1.file_name().unwrap().to_str().unwrap(),
+            format!("{stem}.md").as_str()
+        );
+        std::fs::write(&p1, b"one").unwrap();
+
+        let p2 = unique_markdown_path(dir.path(), stem).unwrap();
+        assert_eq!(
+            p2.file_name().unwrap().to_str().unwrap(),
+            format!("{stem}-2.md").as_str()
+        );
+        std::fs::write(&p2, b"two").unwrap();
+
+        let p3 = unique_markdown_path(dir.path(), stem).unwrap();
+        assert_eq!(
+            p3.file_name().unwrap().to_str().unwrap(),
+            format!("{stem}-3.md").as_str()
         );
     }
 

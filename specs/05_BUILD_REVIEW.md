@@ -238,3 +238,48 @@ bytes in `capture_loop`; same patch applied locally-uncommitted to the baseline 
     the baseline ran nearly embed-free.
 - **Verification:** full suite green post-fix (verbatim in `08`); `cargo test -p inference`
   105 passed with the updated pins; like-for-like numbers quoted in the PR description.
+
+---
+
+## Pass 4 — 2026-07-04 — 0.3.1 PR3: polish bundle (#59 + #65 + #57 version link)
+
+- **Implemented:** the three PR3 polish items (`docs/0.3.1.md` PR3; D1–D4), branch
+  `feat/0.3.1-pr3-polish-bundle` (worktree `ss-v031-pr3-polish`). No schema change, no new
+  settings surface, no ts-rs binding change.
+  - **#59 (D1):** removed `max-h-80 overflow-auto` from both `<pre>` blocks in
+    `MomentDetail.tsx` — recognized + raw text grow inline; one page scroll context.
+  - **#65 (D2):** `save_report_markdown` Tauri command (Downloads, `.partial`-rename write,
+    deterministic `-2`/`-3` collision suffix via `unique_markdown_path`; stem sanitized by
+    `sanitize_report_stem`) + UI stem `screensearch-report-YYYY-MM-DD-HHmm` (`reportFileStem`).
+    Two pure helpers unit-tested against a temp dir.
+  - **#65 (D3):** `buildReportFooter` (single source) — app version · model · covered dates ·
+    filters · counts — rendered on screen AND appended to the copied/saved markdown.
+    `useReport` retains the submitted `ReportRequest` for the footer's span/filters.
+  - **#57 partial (D4):** `useAppVersion()` + NavRail `v{version}` link.
+  - **Verbatim gates:** `npm run lint` no errors/warnings; `npm run build` `✓ built`;
+    `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets -- -D
+    warnings` `Finished … in 31.07s`; `cargo build --workspace` `Finished … in 48.56s`;
+    `cargo test --workspace` all green (`screensearch_lib` `14 passed`, incl. the 2 new
+    helper tests); `git diff --exit-code -- ui/src/bindings` clean.
+- **Hallucinated / corrected:**
+  - The roadmap's `06 §5` "0.3.1 PR3" text referenced `local_api.rs:432–435` as the
+    `download_dir()` precedent; the file is `src-tauri/src/local_api.rs` (not the `crates/api`
+    path some notes imply) and the precedent is `export_data`. Followed the actual code.
+  - D4 open-mechanism resolved by the roadmap's own **live-test-first** procedure: a plain
+    `<a target="_blank">` was live-tested in `npm run tauri dev` and **did not open the OS
+    browser** (maintainer-confirmed, 2026-07-04). Added `tauri-plugin-opener` and routed all
+    external opens (version link + the two pre-existing broken report/answer markdown links)
+    through `openUrl()`. Capability scope broadened from repo-only to `http://*` + `https://*`
+    because the markdown links open arbitrary model-cited URLs (logged in `08` + `06` #24 is
+    the separate tokens-count fix).
+  - Spec contradiction (D3): `UI_REFERENCE §4/§5` "tokens count" → "counts (passes · periods
+    covered · frames summarized)"; logged `06` #24.
+- **Skipped / deferred:** everything else in #57 (load/unload-model, start/stop-vision quick
+  actions) stays deferred to 0.3.2 (`07` #97), unchanged by this PR.
+- **Still risky:** the opener capability allows any `http(s)` URL from the main + overlay
+  windows. These are user-initiated clicks on rendered links that open in the **external OS
+  browser** (never the app WebView), which is the intended, sandboxed behavior — but worth a
+  glance at PR4 audit time.
+- **Live verification:** post-fix `npm run tauri dev` re-check of the version link (opener
+  plugin) + Moment scroll + report save/footer — see the PR description / manual acceptance in
+  `docs/TESTING.md` (0.3.1 PR3).

@@ -355,3 +355,36 @@ Windows desktop. First: `node scripts/stage-mcp.mjs` (once per clone — see "Be
   lists `screensearch-mcp.exe`. Install silently (`ScreenSearch_<ver>_x64-setup.exe /S`), confirm
   `screensearch-mcp.exe` sits next to `ScreenSearch.exe` in the install dir and runs
   `screensearch-mcp.exe --version`; uninstalling removes it.
+
+## Manual acceptance — polish bundle (0.3.1 PR3)
+
+**0.3.1 PR3** ships three small, user-visible polish items (`docs/0.3.1.md` PR3; decisions
+D1/D2/D3/D4). Run `npm run tauri dev` (or a release build); all three are pure UI/command work,
+no schema or settings change.
+
+- **#59 — Moment recognized-text has no nested scrollbar (D1).** Open a **terminal-heavy** or
+  otherwise long-text capture in the Timeline → Moment view. The **Recognized text** panel (and the
+  **Raw text** disclosure) grow to their full height with the rest of the page; there is **no inner
+  scrollbar** — the only scroll context is the main content area (`AppShell` `<main>`). Confirm the
+  page scrolls as one column and text is never trapped in a 320 px box.
+
+- **#65 — report filename + footer (D2/D3).** Recall → **Reports** → pick a range with captures →
+  **Generate**. On the finished report:
+  - The on-screen **footer** block states, in one line: `ScreenSearch v<version>` · the model id ·
+    the covered date(s) · the filter (kind, plus `(focus: …)` for a Custom report with a prompt) ·
+    `N passes` · `covered/total periods` · `summarized/sampled frames summarized` (and, if trimmed,
+    the "range trimmed to fit" note).
+  - **Download .md** saves to your **Downloads** folder as
+    `screensearch-report-YYYY-MM-DD-HHmm.md` (local time); a success toast shows the full path.
+    Click **Download .md** a second time **within the same minute** → the file is
+    `…-HHmm-2.md` (then `-3`, …) — the first file is never overwritten.
+  - Open the saved `.md`: the **same footer block** appears at the bottom (after a `---` rule), so
+    the exported file is self-describing. **Copy** also carries the footer.
+  - A **no-evidence** range (empty window) renders its honest message with **no footer** and no
+    save-time footer.
+
+- **#57 partial — NavRail version link (D4).** The bottom of the left NavRail shows a quiet
+  `v<version>` line (mono, faint). It is **keyboard-focusable** (Tab to it, visible focus ring) and
+  clicking or pressing Enter opens **https://github.com/nicolasestrem/screensearch-v2c** in your
+  **default browser** (a new browser window/tab — *not* inside the app WebView). Confirm the app UI
+  itself does not navigate away.
