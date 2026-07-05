@@ -30,14 +30,17 @@
   row for issue #84 — the quit-path bug filed after the §2 disposition table froze; **fixed in
   PR4 itself** (see (f)), and archived with #94/#99). `06` #21 status
   refreshed (PR #79 merged; ships in v0.3.1).
-- **(f) Code fix — #84 quit-path (PR4-review Codex P1):** the audit's completeness pass, then a
-  Codex P1 at review, flagged that the app-exit handler (`src-tauri/src/lib.rs`,
+- **(f) Code fix, #84 quit-path (PR4-review Codex P1 then P2):** the audit's completeness pass,
+  then a Codex P1 at review, flagged that the app-exit handler (`src-tauri/src/lib.rs`,
   `RunEvent::ExitRequested`) never called `stop_capture()`, so quit could keep persisting
-  screenshots behind an in-flight vision call/download. The maintainer chose to fix rather than
-  defer: the handler now calls `kernel.stop_capture().await` **first**, ahead of the
-  throttle/vision-scheduler/worker drain. One-line change (plus a comment), no schema, no
-  settings, no UI — D8 holds. Full verification suite re-run green with the fix in (below).
-  `CHANGELOG-ARCHIVE.md` [0.3.1] Fixed gains a #84 line; `07` #101 recut to "fixed (PR4)".
+  screenshots behind an in-flight vision call/download. A follow-up Codex P2 caught that the
+  first fix placed `stop_capture()` after the local-API graceful shutdown (up to 3 s draining an
+  open `/v1/ask` SSE), leaving capture live in that window. The maintainer chose to fix rather
+  than defer: the handler now calls `kernel.stop_capture().await` **first of all**, ahead of the
+  local-API shutdown and the throttle/vision-scheduler/worker drain. Small change (plus a
+  comment), no schema, no settings, no UI, so D8 holds. Full verification suite re-run green with
+  the fix in (below). `CHANGELOG-ARCHIVE.md` [0.3.1] Fixed gains a #84 line; `07` #101 recut to
+  "fixed (PR4)".
   Pass 5's evidence taxonomy was corrected by the audit's own completeness pass before
   shipping: the PR #79 `tauri dev` hang-recovery walkthrough and the PR #80 live hotkey
   register/summon check are **not recorded** on their PRs and are carried as accepted

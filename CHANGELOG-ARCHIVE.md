@@ -45,9 +45,10 @@ the patch adds no new settings surface.
 
 ### Fixed
 - **Quitting the app no longer keeps capturing while it shuts down (#84).** The exit handler now
-  stops the capture loop *first* — before draining the throttle, vision scheduler, and workers —
-  so no new screenshots are captured or persisted once you close the app, even with a vision
-  tag or model download in flight.
+  stops the capture loop *first of all*, before the local API finishes draining any open request
+  and before it winds down the throttle, vision scheduler, and workers, so no new screenshots
+  are captured or persisted once you close the app, even with a vision tag or model download in
+  flight.
 - **Links inside report and answer text now open in your browser.** External links cited by a
   report or a grounded answer previously did nothing when clicked (a Tauri limitation with
   plain new-tab links); they now open in your default browser, like the version link.
@@ -94,8 +95,9 @@ bindings guard) and the NSIS installer builds at `0.3.1`. The audit's completene
 surfaced **issue #84** ("Bug when quiting the app" — quit could keep persisting screenshots
 behind an in-flight vision call/download), filed after the 0.3.1 disposition table froze, and a
 PR4-review Codex P1 pinned the exact cause: the app-exit handler never called `stop_capture()`.
-**Fixed in PR4** — the exit handler now stops capture first, before the throttle/vision/worker
-drain, so no new frames land during quit; the full suite was re-run green with the fix in.
+**Fixed in PR4:** the exit handler now stops capture first of all, before the local-API graceful
+shutdown and the throttle/vision/worker drain, so no new frames land during quit; the full suite
+was re-run green with the fix in.
 Recorded and archived as `07` #101. Audit record: `specs/05_BUILD_REVIEW.md` Pass 5 (archived to
 `specs/archive/05_BUILD_REVIEW.v0.3.1.md`).
 
