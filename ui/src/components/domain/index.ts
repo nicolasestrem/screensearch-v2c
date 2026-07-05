@@ -42,3 +42,4 @@ export {
 export { WhereWasICard, type WhereWasICardProps } from "./WhereWasICard";
 export { IntentionsStrip, type IntentionsStripProps } from "./IntentionsStrip";
 export { ApiPanel } from "./ApiPanel";
+export { AppPanel } from "./AppPanel";

@@ -1,0 +1,135 @@
+name: Release
+
+# Tag-triggered signed release (0.3.2 PR2, #69; `03 §11b`). On a `v*` tag this builds the
+# NSIS installer on windows-latest, signs it with the updater (minisign) key from secrets,
+# generates `latest.json`, and attaches the installer + its `.sig` + `latest.json` to a
+# DRAFT GitHub Release. The maintainer writes the notes and publishes — this preserves the
+# repo's manual-publish culture and the "no auto-merge/auto-release" rule.
+#
+# IMPORTANT (endpoint reachability): the updater endpoint is
+# `releases/latest/download/latest.json`, which GitHub resolves ONLY for a PUBLISHED,
+# non-prerelease release. Every historical release (v0.1.0..v0.3.1) was a prerelease; from
+# v0.3.2 on, releases MUST be published as full releases or the updater never sees them.
+#
+# `workflow_dispatch` runs the same build+sign+manifest and uploads them as workflow
+# artifacts (no release) — a pre-tag validation of the whole pipeline.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build, sign & draft release (windows)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      # --- Frontend first: src-tauri's generate_context! embeds ui/dist (git-ignored),
+      #     so the UI must be built before any cargo step (tauri build does this via
+      #     beforeBuildCommand, but the deps must be installed first). ---
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - name: Install root tooling (@tauri-apps/cli)
+        run: npm ci
+      - name: Install UI deps
+        working-directory: ui
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Fail fast if the tag and the four hand-synced version fields disagree (only on a
+      # tag push; a manual dispatch has no tag to compare).
+      - name: Verify version consistency
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          rootpkg=$(node -p "require('./package.json').version")
+          uipkg=$(node -p "require('./ui/package.json').version")
+          cargo=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$tag conf=$conf cargo=$cargo root=$rootpkg ui=$uipkg"
+          for v in "$conf" "$cargo" "$rootpkg" "$uipkg"; do
+            if [ "$v" != "$tag" ]; then
+              echo "::error::version mismatch: tag $tag but found $v"
+              exit 1
+            fi
+          done
+
+      # tauri-build resolves bundle.externalBin (the MCP sidecar) on every compile, so stage
+      # it before the build (beforeBuildCommand also runs it, but keep parity with CI).
+      - name: Stage MCP sidecar (externalBin)
+        run: node scripts/stage-mcp.mjs
+
+      # Build + sign the NSIS installer. TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD) come from repo
+      # secrets (the updater minisign key, D2); with createUpdaterArtifacts enabled, tauri
+      # emits `<installer>.sig` beside the setup.exe. Missing key → no .sig → the manifest
+      # step below hard-fails, so an unsigned installer can never be published as an update.
+      - name: Build & sign installer
+        run: npm run build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Generate latest.json
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # No tag on a manual run — use the tauri.conf.json version so the script's
+            # tag-vs-version guard passes and the manifest URL is well-formed for inspection.
+            tag="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          fi
+          node scripts/make-latest-json.mjs --tag "$tag"
+
+      - name: Collect release assets
+        id: assets
+        shell: bash
+        run: |
+          dir="src-tauri/target/release/bundle/nsis"
+          # Fall back to the workspace target dir layout if src-tauri/target isn't used.
+          [ -d "$dir" ] || dir="target/release/bundle/nsis"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          ls -la "$dir"
+
+      # Tag push → DRAFT release with the installer, its .sig, and latest.json. Maintainer
+      # writes notes + publishes manually (must publish as a FULL release, not prerelease,
+      # for the updater endpoint to resolve).
+      - name: Draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.assets.outputs.dir }}/*-setup.exe
+            ${{ steps.assets.outputs.dir }}/*-setup.exe.sig
+            ${{ steps.assets.outputs.dir }}/latest.json
+
+      # Manual dispatch → upload the same artifacts for inspection (no release).
+      - name: Upload artifacts (dispatch dry-run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-bundle
+          path: |
+            ${{ steps.assets.outputs.dir }}/*-setup.exe
+            ${{ steps.assets.outputs.dir }}/*-setup.exe.sig
+            ${{ steps.assets.outputs.dir }}/latest.json
+          if-no-files-found: error

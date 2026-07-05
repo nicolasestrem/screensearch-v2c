@@ -126,6 +126,14 @@ export function useLiveEvents() {
       }),
     );
 
+    // Auto-update state transitions (0.3.2 PR2). Mirror straight into the cache — no
+    // toast, no nag: the updater is quiet and pull-based (`03 §11b`, D1).
+    track(
+      listenTo("update_status_changed", (status) => {
+        qc.setQueryData(queryKeys.updateStatus, status);
+      }),
+    );
+
     track(
       listenTo("toast", (t) => {
         toastStore[t.level](t.message);

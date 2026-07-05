@@ -1096,6 +1096,34 @@ pub struct ApiStatus {
     pub last_error: Option<String>,
 }
 
+/// Auto-update lifecycle (0.3.2 PR2, #69; `03 §11b`). Output of `get_update_status` /
+/// `check_for_updates` and the payload of the `update_status_changed` event. The updater
+/// is **pull-based and quiet** (D1): `Idle` means no update is known — the UI renders
+/// **zero** updater presence (not a "no update" badge). `Available` / `Downloading` /
+/// `Ready` are the only states with any UI surface (a quiet NavRail dot + an App-section
+/// line); `Ready` installs **only** on a user-initiated restart. `Error` shows a quiet
+/// App-section line + retry, never a modal. Deliberately carries no byte-progress — the
+/// contract asks for presence, not a meter, and keeps the event stream sparse.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub enum UpdateStatus {
+    /// No update known: never checked, the last check found nothing newer, or a dev build.
+    #[default]
+    Idle,
+    /// A check is in flight.
+    Checking,
+    /// A newer signed release was found; the background download is starting.
+    Available { version: String },
+    /// The verified release is downloading in the background.
+    Downloading { version: String },
+    /// Downloaded and signature-verified; installs on the next user-initiated restart.
+    Ready { version: String },
+    /// The check or download failed (includes signature rejection). Quiet App-section
+    /// line + retry — never a modal, never a toast.
+    Error { message: String },
+}
+
 /// Input to the `export_data` command (0.3.0 PR7; `03 §7c`, D12). Bounds the export
 /// to an optional half-open `[from, to)` window (unix epoch ms), matching the
 /// `GET /v1/export?from=&to=` query. Both `None` (the Settings "Export…" button) =

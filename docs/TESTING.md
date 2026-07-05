@@ -388,3 +388,74 @@ no schema or settings change.
   clicking or pressing Enter opens **https://github.com/nicolasestrem/screensearch-v2c** in your
   **default browser** (a new browser window/tab — *not* inside the app WebView). Confirm the app UI
   itself does not navigate away.
+
+## Manual acceptance — auto-update (0.3.2 PR2, #69)
+
+**0.3.2 PR2** wires `tauri-plugin-updater` against a **minisign-signed** `latest.json` manifest on
+GitHub Releases (`03 §11b`; `docs/0.3.2.md` §3 PR2, D1/D2). The runbook below reproduces the whole
+flow locally, including the load-bearing **signature-rejection** negative test. Nothing here is
+committed as production config — all test material lives in a scratch dir.
+
+**Version note.** The app's `--version` prints the compile-time crate version
+(`env!("CARGO_PKG_VERSION")` = the workspace `Cargo.toml` version), while the updater compares the
+`tauri.conf.json` `version`. In production these are hand-synced at release, so they always agree;
+for a *test* build both must be set to the test version — the runbook edits the workspace
+`Cargo.toml` version (reverted with `git checkout` afterward) **and** overrides the config version
+with a `--config` overlay. A release build is `windows_subsystem = "windows"` (no attached console),
+but **shell redirection still works**, so capture `--version` with
+`cmd /c "…\ScreenSearch.exe --version > out.txt"` — do not "fix" it with `AttachConsole`.
+
+**Prep (scratch dir; test key or the real key — the runbook below uses the real production key so
+the artifact verifies against the pubkey baked into `tauri.conf.json`).**
+1. Close any running ScreenSearch (dev *and* installed builds share the bundle identifier → the same
+   single-instance mutex and the same app-data dir `%APPDATA%\app.screensearchv2c.desktop`). Back up
+   `…\screensearch.db*` (zero schema changes this arc — D10 — but evidence runs deserve a net).
+2. Overlays in the scratch dir (deep-merged over `tauri.conf.json`):
+   - `e2e-new.json`: `{ "version": "0.3.2" }` — the update *target*.
+   - `e2e-old.json`: `{ "version": "0.3.2-pre", "plugins": { "updater": { "endpoints":
+     ["http://127.0.0.1:8765/latest.json"], "dangerousInsecureTransportProtocol": true } } }` — the
+     installed build that will *receive* the update, pointed at a localhost manifest over http.
+3. With `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD` if the key has one) set from the offline backup:
+   build the **new** target first (workspace `Cargo.toml` version → `0.3.2`):
+   `npm run build -- --config <scratch>\e2e-new.json` → copy
+   `ScreenSearch_0.3.2_x64-setup.exe` **and** its `.sig` into `<scratch>\serve\`.
+   Then build the **old** receiver (workspace `Cargo.toml` version → `0.3.2-pre`):
+   `npm run build -- --config <scratch>\e2e-old.json`. Revert the `Cargo.toml` edit afterward.
+4. Manifest + server: pass `--expected-version 0.3.2` so the tag matches the overlay-stamped
+   version (the committed `tauri.conf.json` is still `0.3.1`; the flag is the documented test-only
+   override — the release workflow never uses it, so its strict conf-drift guard is untouched):
+   `node scripts/make-latest-json.mjs --tag v0.3.2 --expected-version 0.3.2 --bundle-dir <scratch>\serve
+   --url-base http://127.0.0.1:8765/ --out <scratch>\serve\latest.json`, then serve it:
+   `npx http-server <scratch>\serve -p 8765`.
+
+**Negative test first (signature is load-bearing).**
+5. Install the receiver: `ScreenSearch_0.3.2-pre_x64-setup.exe /S`.
+   `cmd /c ""C:\Program Files\ScreenSearch\ScreenSearch.exe" --version > before.txt"` →
+   `ScreenSearch 0.3.2-pre`.
+6. **Corrupt** `serve\latest.json` — flip characters inside the `signature` string — and launch the
+   app. Expected: the launch check finds `0.3.2`, then the **download is rejected at signature
+   verification**. Evidence: the verbatim `WARN … update check/download failed` line in
+   `%APPDATA%\app.screensearchv2c.desktop\logs\`; Settings → App shows the quiet
+   **"Couldn't check for updates"** line + a retry, and there is **no modal and no toast**. The
+   NavRail shows a transient dot during `available`/`downloading`, then nothing on `error`.
+   (Variant: sign the artifact with a *different* key instead of corrupting — same rejection.)
+
+**Positive path.**
+7. Restore the good `latest.json`. Launch (or Settings → App → **Check for updates**). Expected log
+   lines: `update available; starting background download` → `update downloaded + signature-verified`
+   (with the byte count). The NavRail dot appears and Settings → App reads
+   **"v0.3.2 available — restart to update."**
+8. Click **Restart to update**. The app runs its graceful shutdown (capture stopped, sidecar torn
+   down via the Job Object — no orphaned `llama-server`) and hands off to the **passive** NSIS
+   installer, which upgrades in place and the app exits.
+   `cmd /c ""C:\Program Files\ScreenSearch\ScreenSearch.exe" --version > after.txt"` →
+   `ScreenSearch 0.3.2`. Relaunch → the check now returns nothing newer → **zero updater UI
+   presence** (the NavRail shows only Command + version; Settings → App shows "No update available").
+
+**Cleanup.** Uninstall the test build, reinstall a build of the current tree (so the machine isn't
+left claiming a version that isn't released), and restore the DB backup if desired.
+
+**Release-time reminder (endpoint reachability).** The updater endpoint is
+`releases/latest/download/latest.json`, which GitHub resolves **only for a published,
+non-prerelease release**. Every historical release (v0.1.0..v0.3.1) was a *prerelease*; from v0.3.2
+on, releases must be **published as full releases** or installed copies never see the update.

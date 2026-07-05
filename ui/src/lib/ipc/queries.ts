@@ -24,6 +24,7 @@ import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 import type { Mark } from "../../bindings/Mark";
 import type { ResumeContext } from "../../bindings/ResumeContext";
 import type { ApiStatus } from "../../bindings/ApiStatus";
+import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -292,4 +293,16 @@ export function useApiStatus() {
     queryFn: cmd.getApiStatus,
   });
   return useMaybeOverride(q, queryKeys.apiStatus);
+}
+
+/** Auto-update snapshot for the NavRail indicator + the Settings · App section
+ *  (0.3.2 PR2, #69; `03 §11b`). Fetched once, then kept live by the
+ *  `update_status_changed` event (see useLiveEvents); the manual-check mutation also
+ *  writes the cache directly. `idle` renders zero UI presence. */
+export function useUpdateStatus() {
+  const q = useQuery<UpdateStatus>({
+    queryKey: queryKeys.updateStatus,
+    queryFn: cmd.getUpdateStatus,
+  });
+  return useMaybeOverride(q, queryKeys.updateStatus);
 }

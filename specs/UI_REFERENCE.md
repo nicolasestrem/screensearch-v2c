@@ -71,7 +71,7 @@ Spacing scale: 4 · 8 · 12 · 16 · 24 · 32 · 48. Z-layers: base / rail / ove
 ```
 AppShell
  ├─ StatusRail (top): capture state · DB size · queue depth · sidecar/model · readiness · throttle   [telemetry]
- ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings · footer: version → repo link (0.3.1) · update indicator (0.3.2, presence-only)
+ ├─ NavRail (left): Deck · Recall · Timeline · Insights · Settings · footer: version → repo link (0.3.1) · update indicator (0.3.2, presence-only) + a quiet "Check for updates" control (0.3.2 PR2, the quick-menu manual check — gap #99)
  ├─ CommandPalette (⌘K): jump-to + actions (search, ask, tag, settings)
  └─ Routes:
      /            Deck      — at-a-glance: capture status, today's activity, jump back in (0.3.0: where-was-i "Jump back" card + Intentions strip)
@@ -186,7 +186,8 @@ Loading uses skeletons that match final layout (no spinner-only screens). Empty 
 ## 5. Component inventory (built once, reused)
 Shell: `AppShell`, `StatusRail`, `NavRail` (0.3.1: footer version link → opens the GitHub repo in
 the default browser — D4, `§3`), `CommandPalette`, `ReadinessBanner`; 0.3.2: `UpdateIndicator`
-(NavRail presence indicator — `§3`/`§4`) + `TrayMenu` (the native Tauri tray — Rust-built, not a
+(NavRail footer: the presence indicator + the quiet manual "Check for updates" control —
+`§3`/`§4`) + `TrayMenu` (the native Tauri tray — Rust-built, not a
 React component; listed here so its `§4` states are owned by this file; mechanics `03 §7d`).
 Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`, `Toast`,
 `EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`.

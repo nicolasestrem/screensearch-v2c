@@ -31,6 +31,11 @@ tauri-plugin-global-shortcut = "2"
 # `target="_blank"` anchors, so the NavRail version link + the report/answer markdown
 # links route through this (0.3.1 D4, #57). Scoped by the `opener:allow-open-url` capability.
 tauri-plugin-opener = "2"
+# Auto-update (0.3.2 PR2, #69; `03 §11b`). Checks a minisign-signed `latest.json` on
+# GitHub Releases; the public key + endpoint live in `tauri.conf.json` (`plugins.updater`).
+# Driven entirely from Rust (`src/update.rs`) via our own typed commands, so the UI needs
+# no `updater:*` capability and no `@tauri-apps/plugin-updater` package (typed IPC only, D1).
+tauri-plugin-updater = "2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

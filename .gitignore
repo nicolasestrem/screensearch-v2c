@@ -33,6 +33,12 @@ docs/audits/
 # Environment / secrets
 .env
 .env.*
+# Updater signing keys (minisign; 0.3.2 PR2). The private key lives outside the repo
+# (a CI secret + an offline backup, D2); this is a belt-and-braces guard so key material
+# can never be committed if generated inside the tree. The public half is baked into
+# tauri.conf.json instead.
+*.key
+*.key.pub
 
 # Verification artifacts (Playwright-MCP snapshots / screenshots — not source)
 .playwright-mcp/
