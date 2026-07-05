@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 0.3.2 PR3: system tray + quick actions (#56/#57)
+ScreenSearch now lives in the system tray. A tray icon shows live capture state at a glance
+(capturing / paused / capture error, as a colored status dot + tooltip) — the passive "app running
+reminder" of #56, with **no notifications, nudges, or counting badges** of any kind. Its menu is
+Open ScreenSearch · Pause/Resume capture · Load/Unload answer model · Start/Stop vision tagging ·
+Check for updates · Quit, each acting through the same commands the app already uses. **Closing the
+main window now keeps ScreenSearch running in the tray** (capture continues); a one-time,
+non-shaming toast explains this the first time you reopen the window, and a new **Settings → App**
+toggle turns it off (window close then quits cleanly). A second **Run at startup** toggle (default
+off) registers launch-at-login. The same **Load/Unload answer model** and **Start/Stop vision
+tagging** quick actions also join the left-rail quick menu and the command palette, completing #57 —
+"Start vision tagging" tags the untagged backlog, "Stop" cancels the pending vision jobs (a running
+one finishes). Left-click on the tray icon, a second launch, or the tray's **Open** all restore a
+tray-hidden window (the existing single-instance behavior). Quit from the tray shuts down cleanly
+via the existing Job-Object lifecycle (`03 §7d`). No DB schema change. The tray reuses the sister
+app's product-shell *patterns* (atomic pause toggle with rollback, register-before-persist for
+startup, teardown-safe state access) — patterns, not code; its pause/resume notifications are
+deliberately excluded (D4).
+
 ### Added — 0.3.2 PR2: auto-update (#69)
 ScreenSearch can now update itself. It checks for a new version on launch (and on demand from a
 quiet **Check for updates** control in the left rail and the **Settings → App** section), downloads

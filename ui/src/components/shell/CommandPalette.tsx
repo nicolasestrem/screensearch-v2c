@@ -13,14 +13,22 @@ import { useNavigate } from "react-router-dom";
 
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../state/uiStore";
-import { useCaptureControl } from "../../lib/ipc/mutations";
+import {
+  useCancelVision,
+  useCaptureControl,
+  useEnqueueVision,
+  useLoadModel,
+  useUnloadModel,
+} from "../../lib/ipc/mutations";
 import { toast } from "../../state/toastStore";
 import {
   IconCapture,
+  IconCpu,
   IconDeck,
   IconInsights,
   IconRecall,
   IconSettings,
+  IconTag,
   IconTimeline,
 } from "../icons";
 
@@ -36,6 +44,10 @@ export function CommandPalette() {
   const close = useUiStore((s) => s.closePalette);
   const navigate = useNavigate();
   const capture = useCaptureControl();
+  const loadModel = useLoadModel();
+  const unloadModel = useUnloadModel();
+  const enqueueVision = useEnqueueVision();
+  const cancelVision = useCancelVision();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -98,8 +110,59 @@ export function CommandPalette() {
         icon: IconCapture,
         run: () => toggleCapture("stop"),
       },
+      // Quick actions (0.3.2 PR3, #57) — the same lifecycle actions as the tray + the
+      // NavRail footer, reachable from the keyboard here too.
+      {
+        id: "load-answer-model",
+        label: "Load answer model",
+        icon: IconCpu,
+        run: () =>
+          loadModel.mutate("answer", {
+            onSuccess: () => toast.success("Answer model loaded"),
+            onError: (e) => toast.error(String(e)),
+          }),
+      },
+      {
+        id: "unload-answer-model",
+        label: "Unload answer model",
+        icon: IconCpu,
+        run: () =>
+          unloadModel.mutate(undefined, {
+            onSuccess: () => toast.success("Answer model unloaded"),
+            onError: (e) => toast.error(String(e)),
+          }),
+      },
+      {
+        id: "start-vision",
+        label: "Start vision tagging",
+        icon: IconTag,
+        run: () =>
+          enqueueVision.mutate(
+            { kind: "range", start: 0, end: Date.now() },
+            {
+              onSuccess: (n) =>
+                n > 0
+                  ? toast.success(`Vision tagging started — ${n} frames queued`)
+                  : toast.info("No untagged frames to tag"),
+              onError: (e) => toast.error(String(e)),
+            },
+          ),
+      },
+      {
+        id: "stop-vision",
+        label: "Stop vision tagging",
+        icon: IconTag,
+        run: () =>
+          cancelVision.mutate(undefined, {
+            onSuccess: (n) =>
+              n > 0
+                ? toast.info(`Stopped vision tagging — cleared ${n} queued`)
+                : toast.info("Stopped vision tagging"),
+            onError: (e) => toast.error(String(e)),
+          }),
+      },
     ];
-  }, [navigate, capture]);
+  }, [navigate, capture, loadModel, unloadModel, enqueueVision, cancelVision]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -624,6 +624,16 @@ pub struct Settings {
     /// Hot-applied by the governor each sample tick, like the other `throttle.*` knobs —
     /// no worker-pool restart.
     pub throttle_embed_text_floor: u32,
+    /// Closing the main window hides it to the tray and keeps capturing
+    /// (`app.close_to_tray`, 0.3.2 PR3; `03 §7d`, D3). Default **on**. A one-time toast
+    /// explains it on the first restore from the tray; with this off, window close quits
+    /// cleanly (the sidecar is torn down via the Job-Object lifecycle, `03 §6`).
+    pub app_close_to_tray: bool,
+    /// Register ScreenSearch to launch at login (`app.run_at_startup`, 0.3.2 PR3;
+    /// `03 §7d`, D3). Default **off** — an explicit user choice, never silently enabled.
+    /// Applied register-before-persist: the OS registration is attempted before the
+    /// setting is saved, so a save can't claim a launch-at-login that didn't take.
+    pub app_run_at_startup: bool,
 }
 
 impl Default for Settings {
@@ -749,6 +759,11 @@ impl Default for Settings {
             throttle_exit_after_ms: 8000,
             throttle_sample_interval_ms: 1000,
             throttle_embed_text_floor: 1,
+            // 0.3.2 app lifecycle (03 §7d, D3): close-to-tray ON by default (closing the
+            // window keeps ScreenSearch running with capture live); run-at-startup OFF by
+            // default (never silently enable launch-at-login).
+            app_close_to_tray: true,
+            app_run_at_startup: false,
         }
     }
 }

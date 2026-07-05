@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_autostart::ManagerExt;
 use traits::{
     AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
     CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
@@ -33,6 +34,7 @@ use tokio::task::JoinHandle;
 
 mod local_api;
 mod overlay;
+mod tray;
 mod update;
 
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
@@ -280,6 +282,18 @@ async fn enqueue_vision(target: VisionTarget, state: State<'_, AppState>) -> Res
         .enqueue_vision(target)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Cancels all pending `vision_tag` jobs (the tray + quick-menu "Stop vision tagging"
+/// action, 0.3.2 PR3; `03 §7d`). Returns how many were cancelled; a `running` job finishes
+/// (no lease to revoke). Refreshes queue counts via `job_progress`.
+#[tauri::command]
+async fn cancel_vision(state: State<'_, AppState>) -> Result<u64, String> {
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable (database not open)".to_string())?;
+    kernel.cancel_vision().await.map_err(|e| e.to_string())
 }
 
 // ── Flow recall: where-was-i + marks (0.3.0 PR6; `03 §7`/`§7b`) ────────────────────
@@ -951,9 +965,32 @@ async fn set_settings(
     // pass out-of-range values (e.g. a huge `sidecar_ctx_size`); without this, the DB would
     // store the clamped value while the next sidecar spawn ran the raw one until restart.
     let settings = kernel::settings::sanitize_settings(settings);
+
+    // Register-before-persist for launch-at-login (0.3.2 PR3, `03 §7d`; sister-app B1
+    // pattern): when `app.run_at_startup` changed, apply the OS registration BEFORE saving,
+    // and abort the save if it fails. So the persisted setting can never claim a
+    // launch-at-login that didn't take — the UI's optimistic mutation then rolls back and
+    // shows the failure inline (`UI_REFERENCE §4`, Settings·App row).
+    if settings.app_run_at_startup != prev_settings.app_run_at_startup {
+        set_autostart(&app, settings.app_run_at_startup).map_err(|e| {
+            format!(
+                "couldn't {} run-at-startup: {e}",
+                if settings.app_run_at_startup {
+                    "enable"
+                } else {
+                    "disable"
+                }
+            )
+        })?;
+    }
+
     kernel::settings::save_settings(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Refresh the tray's cached close-to-tray flag so the (synchronous) CloseRequested
+    // handler sees the new value immediately (0.3.2 PR3).
+    tray::set_close_to_tray(&app, settings.app_close_to_tray);
 
     // Re-run the shell registration check after every save. Each helper no-ops when the
     // persisted chord is already active, but retries a previously failed registration for
@@ -1034,13 +1071,11 @@ pub fn run() {
         // lock (the ~5 s `LockAcquisition` download failure + retry storm we diagnosed). Instead,
         // focus the existing window and let the second process exit.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                // Restore a hidden / tray-minimized window *before* unminimize + focus —
-                // unminimize alone won't re-show a window that was `hide()`d to the tray.
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            // A second launch behaves as tray "Open" (`03 §7d`): restore a hidden /
+            // tray-minimized window (show *before* unminimize + focus — unminimize alone
+            // won't re-show a `hide()`d window) and, if this is the first restore after a
+            // close-to-tray hide, fire the one-time explanatory toast.
+            tray::restore_main_window(app);
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Opens external URLs (the NavRail version link + report/answer markdown links) in
@@ -1052,6 +1087,14 @@ pub fn run() {
         // check/download/install flow is driven from `update.rs` via our own typed
         // commands (no `updater:*` capability needed — D1).
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Launch-at-login for the "Run at startup" setting (0.3.2 PR3, #56; `03 §7d`,
+        // default OFF). Registration is driven from Rust (`set_settings` + the boot
+        // reconcile below) so the UI needs no `autostart:*` capability. The macOS launcher
+        // arg is required by the plugin API but inert on Windows.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // Resolve the per-user app data dir from the bundle identifier and make
             // sure it (and the log dir) exist before we open anything in them.
@@ -1076,23 +1119,24 @@ pub fn run() {
             if !cfg!(debug_assertions) {
                 tauri::async_runtime::spawn(update::launch_check(app.handle().clone()));
             }
+            // Load the persisted settings once, up front: the hotkey chords seed the global
+            // shortcuts (below) and the whole struct seeds the tray (`app.close_to_tray`
+            // for the CloseRequested handler) + the boot autostart reconcile (`03 §7d`).
+            let startup_settings = match &store {
+                Some(store) => {
+                    tauri::async_runtime::block_on(kernel::settings::load_settings(store.as_ref()))
+                }
+                None => Settings::default(),
+            };
             // Register both global hotkeys (Flow overlay + mark-this-moment, 0.3.0 PR5/PR6)
             // from the persisted chords; a failed registration surfaces as a loud Settings
             // warning + toast (D6), never a silent no-op.
-            let (overlay_hotkey, marks_hotkey) = match &store {
-                Some(store) => {
-                    let s = tauri::async_runtime::block_on(kernel::settings::load_settings(
-                        store.as_ref(),
-                    ));
-                    (s.overlay_hotkey, s.marks_hotkey)
-                }
-                None => {
-                    let d = Settings::default();
-                    (d.overlay_hotkey, d.marks_hotkey)
-                }
-            };
-            overlay::init_overlay_hotkey(app.handle(), &overlay_hotkey);
-            overlay::init_marks_hotkey(app.handle(), &marks_hotkey);
+            overlay::init_overlay_hotkey(app.handle(), &startup_settings.overlay_hotkey);
+            overlay::init_marks_hotkey(app.handle(), &startup_settings.marks_hotkey);
+            // Sync launch-at-login to the persisted `app.run_at_startup` (0.3.2 PR3): if the
+            // OS registration drifted from the setting (manual change, failed prior save),
+            // reconcile it. Best-effort — a failure just logs; capture is unaffected.
+            reconcile_autostart(app.handle(), startup_settings.app_run_at_startup);
             // PR3 audit fix: backfill the attention filter_version once at startup. When the
             // version bumped since the last run, re-clean every sub-current frame's
             // content_text against the now-warm chrome catalog (`textfilter::reconcile`) so
@@ -1257,6 +1301,18 @@ pub fn run() {
                 api_host,
             });
 
+            // Build the system tray now that `AppState` is managed (its menu handlers reach
+            // the kernel/sidecar slots through it). Seed the icon from the live readiness
+            // snapshot; `forward_events` keeps it in sync from here on (no poller, `03 §7d`).
+            let tray_readiness = {
+                let state = app.state::<AppState>();
+                match &state.kernel {
+                    Some(kernel) => kernel.readiness(),
+                    None => state.fallback_readiness.clone(),
+                }
+            };
+            tray::init(app.handle(), &startup_settings, &tray_readiness);
+
             // Start the local API if it was left enabled (loud on a bind failure, D6).
             local_api::autostart(app.handle());
             Ok(())
@@ -1273,6 +1329,7 @@ pub fn run() {
             search,
             capture_control,
             enqueue_vision,
+            cancel_vision,
             ask,
             cancel_ask,
             generate_report,
@@ -1312,10 +1369,21 @@ pub fn run() {
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
-                    // The hidden overlay is a real WebView window, so closing the main window
-                    // would otherwise leave the process alive. Treat main-window close as quit.
+                    // Close-to-tray (0.3.2 PR3, `03 §7d`): with `app.close_to_tray` on (the
+                    // default), hide the window and keep capturing — the hidden overlay
+                    // window already keeps the process alive, so nothing extra is needed to
+                    // stay resident. A close-to-tray hide arms the one-time explanatory toast
+                    // (shown on the next restore). With the setting off — or if the tray
+                    // failed to build (`close_to_tray_enabled` then returns false) — window
+                    // close quits cleanly (→ `RunEvent::ExitRequested` → `graceful_shutdown`).
                     api.prevent_close();
-                    window.app_handle().exit(0);
+                    let app = window.app_handle();
+                    if tray::close_to_tray_enabled(app) {
+                        let _ = window.hide();
+                        tray::note_hidden_to_tray(app);
+                    } else {
+                        app.exit(0);
+                    }
                 }
                 tauri::WindowEvent::Focused(false)
                     if window.label() == "overlay"
@@ -1575,15 +1643,23 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
                 let _ = app.emit("capture_tick", tick);
             }
             Ok(KernelEvent::ReadinessChanged(readiness)) => {
+                // The tray icon/tooltip/pause-label track live capture state (`03 §7d`) —
+                // this is the "same state that drives the StatusRail, no separate poller".
+                tray::on_readiness(&app, &readiness);
                 let _ = app.emit("readiness_changed", readiness);
             }
             Ok(KernelEvent::JobProgress(stats)) => {
+                tray::on_job_stats(&app, &stats);
                 let _ = app.emit("job_progress", stats);
             }
             Ok(KernelEvent::JobCompleted(completed)) => {
+                // Carries fresh stats too, so the tray's vision label flips back when the
+                // backlog drains (JobProgress alone fires on enqueue/cancel).
+                tray::on_job_stats(&app, &completed.stats);
                 let _ = app.emit("job_completed", completed);
             }
             Ok(KernelEvent::SidecarStatus(status)) => {
+                tray::on_sidecar_status(&app, &status);
                 let _ = app.emit("sidecar_status", status);
             }
             Ok(KernelEvent::ModelDownload(status)) => {
@@ -1937,6 +2013,39 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Enables/disables launch-at-login via `tauri-plugin-autostart` (0.3.2 PR3, `03 §7d`).
+/// Returns the plugin error as a string so `set_settings`' register-before-persist path can
+/// abort the save on failure.
+fn set_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+/// Reconciles the OS launch-at-login registration to the persisted `app.run_at_startup` at
+/// boot (best-effort — a mismatch is corrected, any failure is logged, capture is
+/// unaffected). Covers drift from a manual change or a prior save whose registration failed.
+fn reconcile_autostart(app: &tauri::AppHandle, desired: bool) {
+    let manager = app.autolaunch();
+    match manager.is_enabled() {
+        Ok(current) if current == desired => {}
+        Ok(_) => {
+            let result = if desired {
+                manager.enable()
+            } else {
+                manager.disable()
+            };
+            if let Err(e) = result {
+                tracing::warn!(error = %e, desired, "autostart reconcile failed");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "autostart state probe failed"),
+    }
 }
 
 /// Spawns the text recognizer and records an unavailable reason if OCR cannot be

@@ -78,6 +78,11 @@ export const captureControl = (control: CaptureControl): Promise<void> =>
 export const enqueueVision = (target: VisionTarget): Promise<number> =>
   invoke<number>("enqueue_vision", { target });
 
+/** Cancel all pending `vision_tag` jobs (the "Stop vision tagging" quick action, 0.3.2
+ *  PR3); returns how many were cancelled. A running job finishes. */
+export const cancelVision = (): Promise<number> =>
+  invoke<number>("cancel_vision");
+
 /** Ask a grounded question; the answer streams back via `answer_delta` events. */
 export const ask = (request: AskRequest): Promise<void> =>
   invoke<void>("ask", { request });

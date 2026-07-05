@@ -217,6 +217,8 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.throttle_embed_text_floor,
         )
         .await,
+        app_close_to_tray: boolean(store, "app.close_to_tray", d.app_close_to_tray).await,
+        app_run_at_startup: boolean(store, "app.run_at_startup", d.app_run_at_startup).await,
     })
 }
 
@@ -504,6 +506,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         (
             "throttle.embed_text_floor".into(),
             s.throttle_embed_text_floor.to_string(),
+        ),
+        (
+            "app.close_to_tray".into(),
+            bool_str(s.app_close_to_tray).into(),
+        ),
+        (
+            "app.run_at_startup".into(),
+            bool_str(s.app_run_at_startup).into(),
         ),
     ];
     store.set_settings_batch(&kvs).await

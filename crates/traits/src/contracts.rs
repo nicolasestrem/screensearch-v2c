@@ -262,6 +262,14 @@ pub trait Store: Send + Sync {
     async fn pending_vision_job_count(&self) -> Result<u64> {
         Ok(0)
     }
+    /// Cancels all `pending` `vision_tag` jobs, returning how many were removed
+    /// (the tray/quick-menu "Stop vision tagging" action, 0.3.2 PR3; `03 §7d`). Only
+    /// `pending` rows are dropped — a `running` job is left to finish (no lease to
+    /// revoke), so vision work already in flight completes and is not lost. Default
+    /// returns 0 for stores that don't track jobs.
+    async fn cancel_pending_vision_jobs(&self) -> Result<u64> {
+        Ok(0)
+    }
     /// Requeues jobs stuck in `running` whose `updated_at` is older than
     /// `older_than_ms` before now (a worker died mid-job; there is no lease). Resets
     /// them to `pending` so they can be reclaimed; returns how many were requeued

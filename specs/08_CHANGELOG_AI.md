@@ -11,6 +11,74 @@
 
 ---
 
+## 2026-07-05 — 0.3.2 PR3: system tray + quick actions (#56/#57; Rust lane)
+
+- **Change:** Implemented issue #56 (systray) + the remainder of #57 (quick actions) per
+  `03 §7d` / `docs/0.3.2.md` §3 PR3 (D3/D4/D5).
+  - **Traits.** `JobStats` gains `vision_pending` + `vision_running` (subsets of the aggregate
+    counts, ts-rs → `ui/src/bindings/JobStats.ts`) so the "Start/Stop vision tagging" label tracks the
+    queue. `Settings` gains `app_close_to_tray` (default **true**) + `app_run_at_startup` (default
+    **false**) → `Settings.ts`. `Store` trait gains `cancel_pending_vision_jobs()` (default `Ok(0)`).
+  - **Store.** `job_stats()` now `GROUP BY state, kind` (one pass fills the vision split);
+    `cancel_pending_vision_jobs()` = `DELETE FROM jobs WHERE kind='vision_tag' AND state='pending'`
+    (a running job is left to finish — no schema change, D10).
+  - **Kernel.** `cancel_vision()` (store cancel → emit `JobProgress` → count) + `enqueue_vision` now
+    also emits `JobProgress` (via a new `emit_job_progress` helper) so the tray/quick-menu label flips
+    immediately instead of waiting for a worker tick. `settings.rs` loads/saves the two `app.*` keys.
+  - **src-tauri.** New `src/tray.rs`: a native Tauri `TrayIconBuilder` + `MenuBuilder` (feature
+    `tray-icon`) built in `.setup()` after `AppState` is managed. `TrayState` holds the `TrayIcon` +
+    three mutable `MenuItem` handles (updated with `set_text`, **never** a menu rebuild) + three
+    runtime-composed icon variants (a status dot — `--ok`/`--ink-muted`/`--danger` — overlaid on the
+    bundled `32x32.png`, via the `image` crate promoted from dev-dep to dep) + atomics. State is fed
+    (no poller) from `forward_events` — `ReadinessChanged` → icon/tooltip/pause label + authoritative
+    capture re-sync; `SidecarStatus` → Load/Unload answer-model label (loaded = resident answer lane);
+    `JobProgress`/`JobCompleted` → vision label. Menu actions reuse the existing command paths
+    (`start/stop_capture`, `load_model`/`unload_model`, `enqueue_vision`/`cancel_vision`,
+    `update::run_check` now `pub(crate)`; Quit = `app.exit(0)` → the shared `graceful_shutdown`).
+    Pause/Resume uses the sister-app **atomic toggle** (`fetch_xor` derives the target, rollback on
+    error). `lib.rs`: registers `tauri-plugin-autostart` (Rust-driven, no JS capability), the
+    single-instance callback + tray Open + left-click all call `tray::restore_main_window`; the
+    main-window `CloseRequested` branch now hides to tray when `app.close_to_tray` (else the existing
+    clean quit); `set_settings` applies run-at-startup **register-before-persist** (autostart enable/
+    disable before `save_settings`; failure aborts the save so a save never claims a launch-at-login
+    that didn't take) and refreshes the tray's cached close-to-tray flag; a boot autostart reconcile
+    syncs the OS registration to the persisted value. New `cancel_vision` command. The one-time
+    close-to-tray toast fires on the **first restore** after a hide (not at hide — a toast at hide is
+    never seen), via the existing `toast` event, guarded by an internal `app.tray_toast_done` settings
+    key (the `api.token` precedent, outside the `Settings` struct) so it never repeats.
+  - **UI (tokens-only, functional tones, a11y).** `commands.ts`/`mutations.ts` gain
+    `cancelVision`/`useCancelVision`. New `components/shell/QuickActions.tsx` (NavRail footer:
+    Load/Unload answer model from `useSidecarStatus`+`useLoadModel`/`useUnloadModel`; Start/Stop vision
+    tagging from `useJobStats`+`useEnqueueVision`/`useCancelVision`). `CommandPalette.tsx` gains the
+    same four actions. `AppPanel.tsx` gains the two lifecycle toggles (`Toggle`, self-contained
+    `useSettings`/`useSetSettings` round-trip; a run-at-startup failure rolls the optimistic toggle
+    back and explains inline — `UI_REFERENCE §4` Settings·App row).
+  - **Specs.** `03 §8` naming-proposal hedge removed (names are now contract, D7) + `app.tray_toast_done`
+    documented as an internal marker; `03 §7d` + `UI_REFERENCE §3` toast sentence corrected to
+    first-restore; `07` row #97 marked built; new gap row recording the two user decisions.
+- **Why:** `docs/0.3.2.md` §3 PR3 + `03 §7d` — the tray is the app's passive lifecycle surface (#56)
+  and the quick actions complete #57. Two user decisions (2026-07-05): vision Start/Stop = backlog
+  run + cancel (one new `cancel_vision` command, no scheduler stomping); the one-time toast shows on
+  first restore, not at hide.
+- **Verification:** `cd ui && npm run lint` (clean) `&& npm run build` (clean); `node scripts/stage-mcp.mjs`;
+  `cargo fmt --all -- --check` (clean) · `cargo clippy --workspace --all-targets -- -D warnings` (clean) ·
+  `cargo build --workspace` (ok) · `cargo test --workspace` (all green, 0 failed — incl. new tray
+  mapping/icon/label unit tests, store `job_stats_splits_out_vision_*` + `cancel_pending_vision_jobs_*`,
+  kernel settings round-trip) · `git diff --exit-code -- ui/src/bindings` (regenerated `JobStats.ts` +
+  `Settings.ts` committed). **Live run** (`npm run tauri dev`): app boots clean (schema_version=10, no
+  migration; no "tray init failed"; autostart reconcile clean); the new NavRail QuickActions render
+  with correct IPC-driven labels ("Load answer model", "Start vision tagging") — screenshot on file;
+  close-to-tray verified (WM_CLOSE kept the process alive + hid the window); single-instance restore
+  verified (second launch exited + restored the hidden window); one-time toast verified
+  (`app.tray_toast_done=true` persisted on first restore → never repeats); no orphaned processes after exit.
+- **Not automatable here (manual live-acceptance for the maintainer):** clicking the *native* tray
+  menu items (Pause/Resume, Load/Unload, Start/Stop vision, Check for updates, Quit) and the
+  run-at-startup registry write need real OS-tray/Settings interaction — but they call the exact same
+  command paths the verified UI quick actions use, and the reused capture/model/vision/update paths
+  carry unit + integration coverage.
+
+---
+
 ## 2026-07-05 — 0.3.2 PR2: auto-update (#69; Rust lane)
 
 - **Change:** Implemented issue #69 (auto-update) per `03 §11b` / `docs/0.3.2.md` §3 PR2 (D1/D2).

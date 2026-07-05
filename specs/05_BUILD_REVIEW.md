@@ -112,6 +112,55 @@ For each build pass, append an entry:
 
 ---
 
+## Pass 3 — 2026-07-05 — 0.3.2 PR3 (system tray + quick actions, #56/#57; Rust lane)
+
+- **Implemented:** The native Tauri tray (`src-tauri/src/tray.rs`, `tray-icon` feature) with a live
+  passive state icon + the exact `03 §7d` six-item menu, close-to-tray (default on) with a one-time
+  first-restore toast, run-at-startup (`tauri-plugin-autostart`, default off, register-before-persist),
+  and the Load/Unload-answer-model + Start/Stop-vision quick actions in both the tray and the in-app
+  quick menu + command palette (#57 complete). Backing changes: `JobStats` per-kind vision split +
+  `cancel_vision` command + `cancel_pending_vision_jobs` store method (DELETE on existing rows, no
+  schema change) + `JobProgress` emission on enqueue/cancel so labels track live. UI: `QuickActions`
+  (NavRail footer), four palette entries, two `AppPanel` toggles.
+  **Verification (verbatim on the PR):** UI lint clean; UI build clean; `node scripts/stage-mcp.mjs`;
+  `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean;
+  `cargo build --workspace` ok; `cargo test --workspace` all green (0 failed — incl. the new
+  `tray::tests` mapping/icon/label, store `job_stats_splits_out_vision_pending_and_running` +
+  `cancel_pending_vision_jobs_removes_only_pending_vision`, kernel settings round-trip);
+  `git diff --exit-code -- ui/src/bindings` reflects the regenerated `JobStats.ts` + `Settings.ts`
+  (committed). **Live run** (`npm run tauri dev`): clean boot (schema_version=10, no migration; no
+  "tray init failed"; no autostart-reconcile error); the new NavRail QuickActions render in the real
+  app with correct IPC-driven labels ("Load answer model" / "Start vision tagging") — PrintWindow
+  screenshot on file; close-to-tray verified (WM_CLOSE → process alive + window hidden);
+  single-instance restore verified (second launch exited + restored the window); one-time toast
+  verified (`app.tray_toast_done=true` persisted after first restore → never repeats); no orphaned
+  processes after exit.
+- **Skipped / deferred (in-scope-for-the-arc-but-not-this-PR):** the App section's final Essentials-tier
+  placement is **PR5** (its toggles land here with provisional placement, per D3/D6); the gap-#100
+  cross-chord conflict warning + the #83/JPEG dead-setting removals are **PR5**; the D9 shell-layout
+  hardening is **PR4**. No new global hotkeys (`03 §7d`).
+- **Hallucinated / corrected:** Two design assumptions were corrected against the tree during the plan
+  pass: (1) the jobs status column is `state`, not `status` (cancel SQL fixed); (2) `JobStats` is
+  aggregate-only, so it was **extended** with `vision_pending`/`vision_running` and the on-demand
+  enqueue/cancel paths were made to **emit `JobProgress`** — without that the vision label would stay
+  stale until a worker completed a job. The sister-app review (D5) found V2c already ships two of its
+  four hardening patterns (success-gated hotkey persistence, scoped shortcut replacement in
+  `overlay.rs`) and is single-process (so the sister app's 3 s health-poll + textual-only icon + OS
+  notifications were all rejected in favor of the event-bus feed + per-state glyphs + no push, D4).
+- **Broke / regressed:** nothing. The `CloseRequested` handler for `main` changed from unconditional
+  quit to a close-to-tray branch (quit preserved when the setting is off or the tray failed to build —
+  `close_to_tray_enabled` returns false without a tray, so a build failure can never trap the window);
+  `graceful_shutdown` and the single-instance show/unminimize/focus sequence are reused unchanged.
+- **Still risky:** (1) The *native* tray menu-item clicks + the run-at-startup registry write are not
+  automatable in this environment, so they were not click-tested here (recorded in `08`); they reuse the
+  exact command paths the verified UI quick actions call, and those paths carry unit/integration coverage.
+  (2) `cancel_vision` cannot stop an already-running vision job (no lease) — by design the label honestly
+  stays "Stop vision tagging" until `vision_running` drains; not a bug. (3) The tray icon is composed at
+  runtime from `32x32.png` + a status dot; at the ~16 px Windows tray render size the dot is legible in
+  the base capture but the tooltip carries the authoritative state.
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/05_BUILD_REVIEW.v0.2.x.md`.
 > Shipped 0.3.0 history (the whole arc: PR1–PR9 + post-0.2.2 bridge fixes) →

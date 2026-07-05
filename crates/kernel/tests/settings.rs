@@ -98,6 +98,10 @@ async fn round_trips_non_default_values() {
         throttle_exit_after_ms: 6000,
         throttle_sample_interval_ms: 2000,
         throttle_embed_text_floor: 2,
+        // 0.3.2 app lifecycle — both away from their defaults (close-to-tray defaults on,
+        // run-at-startup defaults off) so the round-trip exercises their load/save encodings.
+        app_close_to_tray: false,
+        app_run_at_startup: true,
     };
 
     save_settings(dyn_store, &original)
