@@ -7,16 +7,23 @@
 // runbook (docs/TESTING.md) — one tested code path.
 //
 // Usage:
-//   node scripts/make-latest-json.mjs --tag vX.Y.Z [--bundle-dir DIR] [--url-base URL] [--out FILE] [--notes URL]
+//   node scripts/make-latest-json.mjs --tag vX.Y.Z [--bundle-dir DIR] [--url-base URL] [--out FILE] [--notes URL] [--expected-version X.Y.Z]
 //
 // Defaults: --bundle-dir target/release/bundle/nsis
 //           --url-base   https://github.com/nicolasestrem/screensearch-v2c/releases/download/<tag>/
 //           --out        <bundle-dir>/latest.json
 //           --notes      https://github.com/nicolasestrem/screensearch-v2c/releases/tag/<tag>
 //
+// --expected-version is a TEST-ONLY override (the PR2 E2E runbook, docs/TESTING.md): the E2E
+// builds installers with a `tauri build --config` overlay that stamps a version WITHOUT editing
+// the committed tauri.conf.json, so the tag would otherwise mismatch the still-committed value.
+// Passing the overlay's version here checks the tag against the version actually shipped in that
+// build. The release workflow never passes it, so the strict conf-drift guard stands for releases.
+//
 // Hard-fails (never emits a manifest) when:
-//   • --tag is missing or does not match `v<version>` from tauri.conf.json (catches the
-//     four-file hand-synced version drifting from the release tag),
+//   • --tag is missing or does not match the shipped version — `--expected-version` when given,
+//     else `v<version>` from tauri.conf.json (catches the four-file hand-synced version drifting
+//     from the release tag),
 //   • the bundle dir does not contain exactly one `*-setup.exe`,
 //   • the matching `<setup>.sig` is absent (i.e. the build was not signed — no
 //     TAURI_SIGNING_PRIVATE_KEY), so an unsigned build can never yield a manifest.
@@ -65,15 +72,26 @@ function main() {
   }
   const tagVersion = tag.startsWith("v") ? tag.slice(1) : tag;
 
-  // Confirm the tag matches the version tauri stamps into the installer name.
-  const conf = JSON.parse(
-    readFileSync(join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"),
-  );
-  const confVersion = conf.version;
-  if (confVersion !== tagVersion) {
+  // Confirm the tag matches the version this build actually shipped. For a release that is the
+  // committed tauri.conf.json version (the four-file hand-synced value); the E2E runbook, whose
+  // overlay stamps a version without touching the committed conf, passes it via --expected-version.
+  let shippedVersion;
+  if (args["expected-version"] !== undefined) {
+    shippedVersion = args["expected-version"];
+    console.log(
+      `[make-latest-json] using --expected-version ${shippedVersion} (test override; skipping the committed-conf check)`,
+    );
+  } else {
+    const conf = JSON.parse(
+      readFileSync(join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"),
+    );
+    shippedVersion = conf.version;
+  }
+  if (shippedVersion !== tagVersion) {
     fail(
-      `tag ${tag} (version ${tagVersion}) != tauri.conf.json version ${confVersion}. ` +
-        "Bump every version file before tagging (tauri.conf.json, root Cargo.toml, root + ui package.json).",
+      `tag ${tag} (version ${tagVersion}) != shipped version ${shippedVersion}. ` +
+        "Bump every version file before tagging (tauri.conf.json, root Cargo.toml, root + ui package.json), " +
+        "or pass --expected-version <overlay version> for the E2E overlay flow.",
     );
   }
 

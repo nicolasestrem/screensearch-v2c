@@ -8,7 +8,9 @@
 //      presence: the element does not exist, it is not "shown as zero".
 //   2. A **manual "Check for updates"** control (the quick-menu affordance, #57 / gap #99),
 //      styled like the footer's Command button — a lifecycle control, not an availability
-//      badge, so it is always available.
+//      badge. It is hidden once an update is staged (`ready`): the action then is Restart,
+//      reached via the presence dot's link to Settings; re-checking a staged update could
+//      clobber it to `error` and strand the verified installer (matches AppPanel, §4).
 //
 // Pull-based + quiet (D1): the check runs in the background; a found update downloads on its
 // own and installs only from Settings on a user-initiated restart. No modal, no nag, no toast.
@@ -79,20 +81,24 @@ export function UpdateIndicator() {
         </NavLink>
       )}
 
-      {/* Manual check — the quick-menu affordance, styled like the Command button. */}
-      <button
-        type="button"
-        onClick={runCheck}
-        disabled={busy}
-        className={cn(
-          "flex items-center justify-between w-full gap-2 px-3 min-h-hit-min rounded-chip",
-          "text-caption text-ink-muted border border-line hover:text-ink hover:border-ink-faint",
-          "transition-colors duration-fast ease-ui",
-          "disabled:opacity-50 disabled:pointer-events-none",
-        )}
-      >
-        <span>{checking ? "Checking…" : "Check for updates"}</span>
-      </button>
+      {/* Manual check — the quick-menu affordance, styled like the Command button. Hidden
+          once an update is staged (`ready`): the action then is Restart (via the dot's link
+          to Settings), and re-checking could clobber the staged update to `error`. */}
+      {!ready && (
+        <button
+          type="button"
+          onClick={runCheck}
+          disabled={busy}
+          className={cn(
+            "flex items-center justify-between w-full gap-2 px-3 min-h-hit-min rounded-chip",
+            "text-caption text-ink-muted border border-line hover:text-ink hover:border-ink-faint",
+            "transition-colors duration-fast ease-ui",
+            "disabled:opacity-50 disabled:pointer-events-none",
+          )}
+        >
+          <span>{checking ? "Checking…" : "Check for updates"}</span>
+        </button>
+      )}
     </>
   );
 }

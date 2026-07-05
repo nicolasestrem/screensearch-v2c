@@ -95,6 +95,20 @@ For each build pass, append an entry:
   `Downloading`. The two check buttons now disable while a background download is in flight. Re-verified:
   full suite green; live log-based positive (detect → background download → signature-verified) + negative
   (tampered → `Invalid encoding in minisign data`) re-run on the refactored build.
+- **Review response (PR #91, third commit):** three follow-up findings on the refactored build,
+  all legitimate — two share one root (a recheck can strand a staged update). (a) `download_and_stage`
+  set `Error` on a failed download **without clearing `pending`** → status `Error` while a valid
+  installer stayed staged, an inconsistent state with no UI path to apply it (the restart button
+  renders only for `Ready`): the `Err` branch now clears `pending` first (consistency over reusing
+  the earlier bytes). (b) The **NavRail** "Check for updates" button was still enabled in `ready`, so
+  a click while offline could clobber the staged `Ready` → `Error` and strand the verified installer;
+  it is now hidden in `ready` (matching `AppPanel`, which already hides it) — the action then is
+  Restart, via the presence dot's link to Settings. (c) `scripts/make-latest-json.mjs`'s version guard
+  always read the committed `tauri.conf.json`, so the documented overlay-based E2E flow (which stamps
+  the version via `--config`, not the committed file) failed the guard; added a **test-only
+  `--expected-version`** override (the release workflow never passes it, so the strict conf-drift guard
+  is intact for releases) and updated the `docs/TESTING.md` runbook to use it instead of editing the
+  committed config. Re-verified: full suite green; log-based positive + negative re-run.
 
 ---
 

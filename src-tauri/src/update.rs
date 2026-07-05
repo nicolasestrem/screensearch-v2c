@@ -180,6 +180,14 @@ async fn download_and_stage(app: &AppHandle, update: Update) {
         Err(e) => {
             let message = e.to_string();
             tracing::warn!(error = %message, "update download failed");
+            // Drop any previously-staged update: a failed (re)download must not leave the
+            // machine in `Error` while `pending` still holds an installer, which would be an
+            // inconsistent state with no UI path to apply it (the restart button renders only
+            // for `Ready`). Consistency wins over reusing the earlier bytes.
+            *app.state::<UpdaterState>()
+                .pending
+                .lock()
+                .expect("pending lock") = None;
             set_status(app, UpdateStatus::Error { message });
         }
     }
