@@ -165,8 +165,11 @@ capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
 ## 8. Status
 - **License decided: MIT.** No open strategic questions.
 - **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24); the **0.2.x arc shipped** (attention-first text
-  signal + recall workflows; `§5b`, `docs/0.2.0.md`). Active arc: **0.3.0 (P7) — surface reduction
-  + flow recall + local API** (see `§5c` and `docs/0.3.0.md`).
+  signal + recall workflows; `§5b`, `docs/0.2.0.md`); the **0.3.0 arc (P7) shipped** (`v0.3.0`,
+  2026-07-04; `§5c`, `docs/0.3.0.md`) and its **0.3.1 triage patch shipped** (`v0.3.1`,
+  2026-07-05; `docs/0.3.1.md` — the #64 vision-throughput fix + polish). No active arc; next up:
+  the **0.3.2 lifecycle mini-arc** (auto-update — hard-sequenced before 0.4.0 — + systray/quick
+  actions) then the **0.4.0 sessions arc**.
 
 ---
 

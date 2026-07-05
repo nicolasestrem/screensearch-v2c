@@ -2,8 +2,118 @@
 
 > Released history split out of `CHANGELOG.md`. The `[0.1.0]` section moved 2026-06-27; the
 > `[0.2.0]`–`[0.2.2]` sections moved on the post-v0.2.2 archival sweep (2026-06-30); the
-> `[0.3.0]` section moved on the v0.3.0 release sweep (2026-07-04, PR9). Only
+> `[0.3.0]` section moved on the v0.3.0 release sweep (2026-07-04, PR9); the `[0.3.1]`
+> section moved on the v0.3.1 release sweep (2026-07-05, 0.3.1 PR4). Only
 > `[Unreleased]` remains in `CHANGELOG.md`.
+
+## [0.3.1] — 2026-07-05
+
+**The post-0.3.0 triage patch.** One regression fix is the reason this release exists: vision
+tagging had slowed to roughly a third of its pre-0.3.0 rate after the switch to native-resolution
+WebP storage (#64). Release-build profiling traced ~97 % of the slowdown to the *larger image
+handed to the vision model* — not the WebP encode, which actually got cheaper — and capping the
+model request back at 1280 px restored throughput to 102 % of the pre-WebP baseline. The rest is
+small recall polish (#59, #65, the version-link half of #57) and two post-0.3.0 defect fixes that
+ride along (the UIA client-lifecycle hang fix and the Flow overlay's new `Ctrl+Alt+Z` default).
+**Auto-update (#69) is not in this release** — it is scheduled for 0.3.2 — so this is one more
+manual download. Zero schema changes: a v0.3.0 database opens as-is (`schema_version` 10), and
+the patch adds no new settings surface.
+
+### Added
+- **Recall reports now save with a dated filename and carry a footer (#65).** Downloading a
+  report writes `screensearch-report-YYYY-MM-DD-HHmm.md` to your Downloads folder (local time;
+  a second save in the same minute becomes `…-2.md`, `…-3.md`, never overwriting the first),
+  and a toast shows the saved path. Every report — on screen and in the saved/copied file —
+  now ends with a footer line stating the app version, the model used, the dates covered, the
+  filters (report kind and any Custom focus prompt), and the coverage counts, so an exported
+  report is self-describing.
+- **The left nav rail shows the app version, linking to the project on GitHub (#57).** A quiet
+  `v<version>` line at the bottom of the rail opens
+  https://github.com/nicolasestrem/screensearch-v2c in your default browser.
+
+### Changed
+- **A Moment's recognized text no longer has its own scrollbar (#59).** Long OCR/UIA text (a
+  full terminal, say) now grows with the page instead of being trapped in a small scroll box —
+  one scroll for the whole Moment.
+- **Flow overlay default hotkey is now `Ctrl+Alt+Z`** (was `Ctrl+Alt+Space`, which collided
+  with Claude Desktop's global quick-entry shortcut). Existing installs still on the old
+  default are migrated once on load; a chord you deliberately chose is left untouched. The
+  migration is a genuine one-shot (latched by a stored marker), so if you *want*
+  `Ctrl+Alt+Space` you can set it back in Settings and it now sticks across restarts instead of
+  being re-migrated. A hotkey that fails to register (e.g. another app already owns it) is
+  surfaced in Settings, not swallowed.
+
+### Fixed
+- **Quitting the app no longer keeps capturing while it shuts down (#84).** The exit handler now
+  stops the capture loop *first of all*, before the local API finishes draining any open request
+  and before it winds down the throttle, vision scheduler, and workers, so no new screenshots
+  are captured or persisted once you close the app, even with a vision tag or model download in
+  flight.
+- **Links inside report and answer text now open in your browser.** External links cited by a
+  report or a grounded answer previously did nothing when clicked (a Tauri limitation with
+  plain new-tab links); they now open in your default browser, like the version link.
+- **Vision tagging is fast again — throughput restored to the pre-WebP baseline (#64).**
+  The 0.3.0 switch to native-resolution WebP storage silently grew the image sent to the
+  vision model from 1280×536 (the old stored size) to a 1568 px cap, and release-build
+  profiling showed the model doing ~2.4× the work per frame accounted for ~97 % of the
+  slowdown — the WebP encode/decode itself measured in the tens of milliseconds (the encode
+  is actually *cheaper* than the old resize-to-1280+JPEG). The tag request is now capped at
+  1280 px again (matching the pre-WebP request exactly), restoring ~90 tags/min on the
+  reference setup (from ~33/min). Stored captures are untouched — still native-resolution
+  lossless WebP; only the transient image handed to the vision model is smaller. Profiling
+  record: `specs/05_BUILD_REVIEW.md` Pass 3, `specs/06_PATCH_PLAN.md` #22.
+- **UI Automation no longer leaves Chromium/Electron apps hung.** The UIA text source keeps
+  an accessibility client connected, which flips apps like Chrome, Edge, Codex, and Claude
+  Desktop into accessibility mode; previously that client was never released, so those apps
+  could stay slow or unresponsive **even after you disabled capture**, and no restart of
+  ScreenSearch's capture cleared it. Now:
+  - Disabling **Use UI Automation text**, changing any UIA setting, or **stopping capture**
+    actually disconnects the client, so the affected apps leave accessibility mode.
+  - A **per-app circuit breaker** backs UIA off to OCR for 30 minutes after an app's tree
+    walk repeatedly runs over budget or times out, so a heavy app isn't re-walked every frame.
+  - A walk that blows its hard timeout is now **cancelled** instead of running to completion
+    against the struggling app.
+  - **Every UIA setting now takes effect immediately** on save (budget, node caps, control
+    view, input-suppression) — no app restart, matching the "Applies now" hints. (A settings
+    save that raced the very first client spawn could previously bake the pre-save budget into
+    the new client; the client now reads the live config at spawn time, closing that window.)
+  - **Recovery for an already-hung app:** disable UI Automation text (or stop capture) — which
+    now truly disconnects — then restart the affected browser/Electron app to clear its sticky
+    accessibility mode.
+
+### Audited (0.3.1 PR4)
+Every decision D1–D9 of `docs/0.3.1.md` was verified landed against the shipped tree — specs
+contract and code, evidence-first, each check independently re-verified by an adversarial second
+pass (none refuted). `specs/07_KNOWN_GAPS.md` carries every §2 deferral (#96–#99: auto-update →
+0.3.2 hard-sequenced before 0.4.0; systray + quick actions → 0.3.2 under the pull-based /
+non-shaming principle; #54 folded into the 0.4.0 sessions arc). Zero schema changes since v0.3.0
+(`crates/store` untouched; `schema_version` still 10). The opener-plugin capability flagged for
+this audit was reviewed and accepted (`http(s)://*` `open-url` only — no path/shell scope;
+user-initiated clicks land in the OS browser, never the WebView). Full verification suite green
+on the release tree (fmt · clippy `-D warnings` · build · test workspace · UI lint+build ·
+bindings guard) and the NSIS installer builds at `0.3.1`. The audit's completeness pass also
+surfaced **issue #84** ("Bug when quiting the app" — quit could keep persisting screenshots
+behind an in-flight vision call/download), filed after the 0.3.1 disposition table froze, and a
+PR4-review Codex P1 pinned the exact cause: the app-exit handler never called `stop_capture()`.
+**Fixed in PR4:** the exit handler now stops capture first of all, before the local-API graceful
+shutdown and the throttle/vision/worker drain, so no new frames land during quit; the full suite
+was re-run green with the fix in.
+Recorded and archived as `07` #101. Audit record: `specs/05_BUILD_REVIEW.md` Pass 5 (archived to
+`specs/archive/05_BUILD_REVIEW.v0.3.1.md`).
+
+### Docs — 0.3.1 patch specs contract (PR1, specs-only; no code / schema / UI)
+The 0.3.1 roadmap (`docs/0.3.1.md` — "P7.1: post-0.3.0 triage", a regression-fix + polish patch)
+is normalized into the specs so the later PRs are implementable from the specs alone. **This
+change touches only specs and docs.** The contract locks in: the PR order (PR1 specs → PR2 the
+#64 vision-throughput regression, profile-first with a stop condition and a fixed fix-preference
+order → PR3 polish: #59 Moment text grows inline with no nested scrollbar, #65 dated report
+filenames (`screensearch-report-YYYY-MM-DD-HHmm.md`, local time) + a report footer stating app
+version/model/time span/filters, and the #57-partial version link — which lands in the **NavRail
+footer** and opens the GitHub repo → PR4 audit + tag `v0.3.1`), and the hard patch constraint (no
+new subsystems, no schema migrations, no new settings surface). Deferrals are recorded in
+known-gaps: **#69 auto-update → 0.3.2, hard-sequenced before 0.4.0 ships**; #56 systray + the
+#57 quick actions → the 0.3.2 lifecycle mini-arc, bound by the pull-based / non-shaming reminders
+principle; #54 closed and folded into the 0.4.0 sessions arc.
 
 ## [0.3.0] — 2026-07-04
 

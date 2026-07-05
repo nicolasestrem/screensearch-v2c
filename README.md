@@ -4,14 +4,17 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status — v0.3.0 shipped.** Capture → OCR/UIA text → deferred enrichment →
+> **Status — v0.3.1 shipped.** Capture → OCR/UIA text → deferred enrichment →
 > **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
 > the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
 > The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
 > capture, and a smart enrichment throttle; the 0.3.0 arc trimmed invasive surfaces (event
 > triggers, Beta tier, image embeddings) and added flow recall — where-was-i + marks — plus an
-> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**. The unsigned **NSIS
-> installer** ships today; **code-signing** is the lone remaining packaging follow-up. Design lives
+> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**. The 0.3.1 patch
+> restored vision-tagging throughput to the pre-WebP baseline (#64) and added recall polish
+> (dated, self-describing report downloads; inline Moment text; a nav-rail version link). The
+> unsigned **NSIS installer** ships today; **code-signing** is the lone remaining packaging
+> follow-up. Design lives
 > in [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project — no shared
 > code or data with any prior version.
