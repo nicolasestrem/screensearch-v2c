@@ -96,6 +96,15 @@ export const generateReport = (
 export const cancelReport = (requestId: string): Promise<void> =>
   invoke<void>("cancel_report", { requestId });
 
+/** Save a report's markdown to a date-stamped `.md` file in Downloads and return the
+ *  written path (0.3.1 D2, #65). `stem` is the local-time filename stem the UI builds;
+ *  same-minute collisions get `-2`/`-3`. */
+export const saveReportMarkdown = (
+  stem: string,
+  markdown: string,
+): Promise<string> =>
+  invoke<string>("save_report_markdown", { stem, markdown });
+
 /** Change the active model tier for a lane (hot-applies on the next request). */
 export const setModelTier = (request: SetModelTier): Promise<void> =>
   invoke<void>("set_model_tier", { request });

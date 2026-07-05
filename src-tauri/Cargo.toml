@@ -27,6 +27,10 @@ tauri = { version = "2", features = ["protocol-asset"] }
 # never share the app-data dir (racing the SQLite DB + hf-hub model-cache locks). See specs/07 #26.
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
+# Opens external URLs in the OS default browser. Tauri v2 does not open plain
+# `target="_blank"` anchors, so the NavRail version link + the report/answer markdown
+# links route through this (0.3.1 D4, #57). Scoped by the `opener:allow-open-url` capability.
+tauri-plugin-opener = "2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

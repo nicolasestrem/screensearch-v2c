@@ -60,3 +60,19 @@ export function absoluteDate(ms: number): string {
 export function clockTime(ms: number): string {
   return clockFmt.format(new Date(ms));
 }
+
+/**
+ * Local-time filename stem for a saved recall report:
+ * `screensearch-report-YYYY-MM-DD-HHmm` (0.3.1 D2, #65). Uses the running clock (a report
+ * is saved "now", not at a captured instant) with zero-padded 24-hour local time. The
+ * backend appends the `.md` extension and de-collides same-minute names (`-2`, `-3`, …).
+ */
+export function reportFileStem(ms: number = Date.now()): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `screensearch-report-${y}-${mo}-${day}-${h}${mi}`;
+}

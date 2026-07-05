@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "overlay",
-  "description": "Capability for the Flow overlay window: core IPC only.",
+  "description": "Capability for the Flow overlay window: core IPC + opening external http(s) URLs in the OS browser (Ask answer markdown links, 0.3.1 D4).",
   "windows": ["overlay"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
+  ]
 }

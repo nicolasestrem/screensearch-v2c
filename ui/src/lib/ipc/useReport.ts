@@ -20,6 +20,9 @@ export interface ReportState {
   /** Latest progress tick while generating; `null` before the first one. */
   progress: { stage: string; done: number; total: number } | null;
   result: ReportResponse | null;
+  /** The request the current result was generated from — the single source for the
+   *  report footer's time span + filters (0.3.1 D3, #65). `null` before the first run. */
+  request: Omit<ReportRequest, "request_id"> | null;
   error: string | null;
 }
 
@@ -27,11 +30,12 @@ const initial: ReportState = {
   phase: "idle",
   progress: null,
   result: null,
+  request: null,
   error: null,
 };
 
 type Action =
-  | { type: "start" }
+  | { type: "start"; request: Omit<ReportRequest, "request_id"> }
   | { type: "reset" }
   | { type: "progress"; progress: ReportProgress }
   | { type: "done"; result: ReportResponse }
@@ -42,7 +46,7 @@ function reducer(state: ReportState, action: Action): ReportState {
     case "reset":
       return initial;
     case "start":
-      return { ...initial, phase: "generating" };
+      return { ...initial, phase: "generating", request: action.request };
     case "progress":
       // A late progress tick after a terminal phase must not reopen the run.
       if (state.phase !== "generating") return state;
@@ -105,7 +109,7 @@ export function useReport(): UseReport {
     async (request: Omit<ReportRequest, "request_id">) => {
       const requestId = `report-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       activeRequest.current = requestId;
-      dispatch({ type: "start" });
+      dispatch({ type: "start", request });
       try {
         const result = await cmd.generateReport({
           ...request,

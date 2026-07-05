@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Recall reports now save with a dated filename and carry a footer (#65).** Downloading a
+  report writes `screensearch-report-YYYY-MM-DD-HHmm.md` to your Downloads folder (local time;
+  a second save in the same minute becomes `…-2.md`, `…-3.md`, never overwriting the first),
+  and a toast shows the saved path. Every report — on screen and in the saved/copied file —
+  now ends with a footer line stating the app version, the model used, the dates covered, the
+  filters (report kind and any Custom focus prompt), and the coverage counts, so an exported
+  report is self-describing.
+- **The left nav rail shows the app version, linking to the project on GitHub (#57).** A quiet
+  `v<version>` line at the bottom of the rail opens
+  https://github.com/nicolasestrem/screensearch-v2c in your default browser.
+
 ### Changed
+- **A Moment's recognized text no longer has its own scrollbar (#59).** Long OCR/UIA text (a
+  full terminal, say) now grows with the page instead of being trapped in a small scroll box —
+  one scroll for the whole Moment.
 - **Flow overlay default hotkey is now `Ctrl+Alt+Z`** (was `Ctrl+Alt+Space`, which collided
   with Claude Desktop's global quick-entry shortcut). Existing installs still on the old
   default are migrated once on load; a chord you deliberately chose is left untouched. The
@@ -19,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaced in Settings, not swallowed.
 
 ### Fixed
+- **Links inside report and answer text now open in your browser.** External links cited by a
+  report or a grounded answer previously did nothing when clicked (a Tauri limitation with
+  plain new-tab links); they now open in your default browser, like the version link.
 - **Vision tagging is fast again — throughput restored to the pre-WebP baseline (#64).**
   The 0.3.0 switch to native-resolution WebP storage silently grew the image sent to the
   vision model from 1280×536 (the old stored size) to a 1568 px cap, and release-build

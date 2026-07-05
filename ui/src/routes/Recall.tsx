@@ -294,6 +294,7 @@ export function Component() {
             phase={report.phase}
             progress={report.progress}
             result={report.result}
+            request={report.request}
             error={report.error}
             onOpenFrame={openFrame}
           />
@@ -307,6 +308,7 @@ interface ReportBodyProps {
   phase: ReturnType<typeof useReport>["phase"];
   progress: ReturnType<typeof useReport>["progress"];
   result: ReturnType<typeof useReport>["result"];
+  request: ReturnType<typeof useReport>["request"];
   error: string | null;
   onOpenFrame: (frameId: number) => void;
 }
@@ -315,6 +317,7 @@ function ReportBody({
   phase,
   progress,
   result,
+  request,
   error,
   onOpenFrame,
 }: ReportBodyProps) {
@@ -360,7 +363,7 @@ function ReportBody({
   }
   // done
   return result ? (
-    <ReportView report={result} onOpenFrame={onOpenFrame} />
+    <ReportView report={result} request={request} onOpenFrame={onOpenFrame} />
   ) : null;
 }
 

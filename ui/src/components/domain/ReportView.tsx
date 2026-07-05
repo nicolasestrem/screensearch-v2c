@@ -1,39 +1,69 @@
 // ReportView — renders a finished recall report (UI_REFERENCE §4 Recall/reports,
 // `docs/0.2.0.md` PR6): the markdown body (react-markdown + GFM, prose-deck tokens),
-// clickable source-frame chips, Copy + `.md` download, and an honest footer stating
-// the model, pass count, and coverage (covered/total periods, summarized/sampled
-// frames). A no-evidence report renders its honest message with no chips/footer noise.
+// clickable source-frame chips, Copy + `.md` download, and an honest footer stating the
+// app version, model, time span, filters, and coverage counts. 0.3.1 (D2/D3, #65): the
+// download is a date-stamped file in Downloads via the `save_report_markdown` command
+// (collision-safe `-2`/`-3`), and the footer is a single plain-text block used in BOTH
+// places — on screen AND appended to the copied/saved markdown so the file is
+// self-describing. A no-evidence report renders its honest message with no chips/footer.
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { isTauri } from "@tauri-apps/api/core";
 
 import { CitationTile } from "./CitationTile";
 import { Button } from "../primitives";
 import { toast } from "../../state/toastStore";
+import { saveReportMarkdown } from "../../lib/ipc/commands";
+import { useAppVersion } from "../../lib/useAppVersion";
+import { reportFileStem } from "../../lib/time";
+import { buildReportFooter } from "../../lib/reportFooter";
+import { openExternal } from "../../lib/openExternal";
 import type { ReportResponse } from "../../bindings/ReportResponse";
+import type { ReportRequest } from "../../bindings/ReportRequest";
 
 export interface ReportViewProps {
   report: ReportResponse;
+  /** The request the report was generated from — the footer's time-span + filter source
+   *  (0.3.1 D3). `null` only in the unreachable "done with no request" state. */
+  request: Omit<ReportRequest, "request_id"> | null;
   onOpenFrame: (frameId: number) => void;
 }
 
 /** How many citation chips to render before collapsing the rest into a count. */
 const CITATION_CAP = 24;
 
-function downloadMarkdown(report: ReportResponse) {
-  const slug =
-    report.range_label.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") ||
-    "range";
-  const blob = new Blob([report.markdown], {
-    type: "text/markdown;charset=utf-8",
-  });
+/** The report body with the footer appended as a trailing block, so the copied/saved
+ *  file is self-describing. No footer (no-evidence report) → the bare body. */
+function withFooter(markdown: string, footer: string | null): string {
+  return footer ? `${markdown}\n\n---\n\n${footer}\n` : markdown;
+}
+
+/** Browser-dev fallback (no Tauri runtime): download via a Blob so a report is never
+ *  lost when running the UI outside the packaged app. */
+function blobDownload(filename: string, markdown: string) {
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `recall-report-${slug}.md`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function downloadReport(markdown: string) {
+  const stem = reportFileStem();
+  if (isTauri()) {
+    try {
+      const path = await saveReportMarkdown(stem, markdown);
+      toast.success(`Report saved → ${path}`);
+    } catch (e) {
+      toast.error(`Couldn't save the report — ${String(e)}`);
+    }
+    return;
+  }
+  blobDownload(`${stem}.md`, markdown);
 }
 
 async function copyMarkdown(markdown: string) {
@@ -45,11 +75,14 @@ async function copyMarkdown(markdown: string) {
   }
 }
 
-export function ReportView({ report, onOpenFrame }: ReportViewProps) {
+export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
+  const appVersion = useAppVersion();
   const cited = report.cited_frame_ids;
   const shown = cited.slice(0, CITATION_CAP);
   const overflow = cited.length - shown.length;
-  const hasEvidence = report.passes > 0;
+  const footer = buildReportFooter(report, request, appVersion);
+  // Copy + save carry the same self-describing footer the screen shows (0.3.1 D3).
+  const exportMarkdown = withFooter(report.markdown, footer);
 
   return (
     <div className="flex flex-col gap-4">
@@ -59,14 +92,14 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => copyMarkdown(report.markdown)}
+            onClick={() => copyMarkdown(exportMarkdown)}
           >
             Copy
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => downloadMarkdown(report)}
+            onClick={() => downloadReport(exportMarkdown)}
           >
             Download .md
           </Button>
@@ -77,10 +110,17 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
         <Markdown
           remarkPlugins={[remarkGfm]}
           components={{
-            // Report text is model output: open links in the OS browser, never the
-            // app's own WebView (which would unmount the UI).
+            // Report text is model output: open links in the OS browser, never the app's
+            // own WebView (which would unmount the UI). Tauri v2 ignores plain
+            // `target="_blank"`, so route the click through the opener plugin (0.3.1 D4).
             a: ({ href, children }) => (
-              <a href={href} target="_blank" rel="noopener noreferrer">
+              <a
+                href={href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openExternal(href);
+                }}
+              >
                 {children}
               </a>
             ),
@@ -106,23 +146,9 @@ export function ReportView({ report, onOpenFrame }: ReportViewProps) {
         </div>
       )}
 
-      {hasEvidence && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-2 text-caption text-ink-faint">
-          {report.model && <span className="font-mono">{report.model}</span>}
-          <span>
-            {report.passes} pass{report.passes === 1 ? "" : "es"}
-          </span>
-          <span>
-            {report.periods_covered}/{report.periods_total} periods
-          </span>
-          <span>
-            {report.frames_summarized}/{report.frames_sampled} frames summarized
-          </span>
-          {report.truncated && (
-            <span className="text-warn">
-              range trimmed to fit — more was captured than summarized
-            </span>
-          )}
+      {footer && (
+        <div className="whitespace-pre-wrap border-t border-line pt-2 text-caption text-ink-faint font-body">
+          {footer}
         </div>
       )}
     </div>
