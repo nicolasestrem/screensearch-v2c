@@ -577,10 +577,48 @@ args/env (`SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`). Tools: `search_scr
 tool returns a clear "enable the API in ScreenSearch Settings" error. Docs: `docs/MCP.md` (copy-paste
 client config for Claude Desktop / Claude Code + the same threat-model paragraph), authored by PR8.
 
+## 7d. App lifecycle (0.3.2): tray, close-to-tray, single instance
+
+The tray is the app's **passive lifecycle surface** (issues #56/#57; `docs/0.3.2.md` D3/D4).
+Pull-based by construction: the icon *displays* state; nothing notifies, nudges, counts, or pushes
+(`02 §7`, `07` #97). Anything push-shaped is out of contract for this arc.
+
+**Tray icon (D3).** Present while the app runs. Glyph/tint encodes live capture state —
+**capturing / paused / error** — fed by the same state that drives the StatusRail (no separate
+poller). This passive display is the *entire* "app running reminder" feature of #56.
+
+**Tray menu (D3).** Exactly: **Open ScreenSearch** · **Pause/Resume capture** · **Load/Unload
+answer model** · **Start/Stop vision tagging** · **Check for updates** (`§11b`) · **Quit**. The same
+load/unload + start/stop-vision quick actions also join the in-app quick menu (the NavRail footer
+surface, `07` #99), completing #57. Menu items act through the existing commands/IPC — no new
+side-channel into the kernel.
+
+**Close-to-tray (D3).** `app.close_to_tray` (default **true**, `§8`): closing the main window hides
+it to the tray; capture continues. A **one-time** toast (existing `Toast` primitive + `toast`
+z-layer, `UI_REFERENCE §2`/`§3`) explains this the first time it happens — informational, never
+repeated, never a nag. With the setting off, window close quits (clean shutdown, below). **Run at
+startup** = `app.run_at_startup` (default **false**, `§8`) — an explicit user choice, never a silent
+default.
+
+**Single instance (codifying shipped behavior).** `tauri-plugin-single-instance`
+(`src-tauri/src/lib.rs`): a second launch spawns no second app; the callback calls `window.show()` →
+`unminimize()` → `set_focus()`, so a tray-hidden window is **restored** — this is the contract
+interaction between close-to-tray and single instance (second launch behaves as "Open").
+
+**Quit is a clean shutdown** (from the tray menu, or window close with close-to-tray off): capture
+stopped, and the sidecar terminated via the **Job-Object lifecycle (`§6`)** — quit must never orphan
+`llama-server`.
+
+**No new chords.** 0.3.2 registers no new global hotkeys; the tray is pointer/menu-keyboard only.
+The `overlay.hotkey`/`marks.hotkey` cross-chord conflict check (gap `07` #100) is a **Settings-side
+inline warning** (PR5, `UI_REFERENCE §3`), not a registration-layer change.
+
 ## 8. Configuration / settings (keys in `settings`)
 
 `capture.interval_ms` (3000) · `capture.monitors` ([]=all) · `capture.diff_threshold` (0.006) ·
-`storage.jpeg_quality` (80) · `storage.max_width` (1280) · `storage.retention_days` (0=keep) ·
+*(0.3.2 PR5 retires `storage.jpeg_quality` — provably inert, its own UI hint said "has no effect
+today"; the persisted key is tolerated + ignored on load per the unknown-key rule below — D8, no
+migration)* · `storage.max_width` (1280) · `storage.retention_days` (0=keep) ·
 `enrich.embed_text` (true) · *(0.3.0 PR4 removed `enrich.image_embeddings`)* ·
 `enrich.vision_timer_enabled` (false) · `enrich.vision_timer_interval_ms` (3600000) ·
 `enrich.vision_idle_enabled` (false) · `enrich.vision_idle_secs` (300) ·
@@ -648,16 +686,18 @@ thresholds are settings, never hardcoded): `capture.uia_text_enabled` (true — 
 any failure/timeout/thin-yield; hot-applies per frame) · `capture.uia_latency_budget_ms` (150, clamp
 20..=2000 — soft per-walk budget; a 2× hard timeout guards a wedged worker) · `capture.uia_min_text_chars`
 (16, clamp 0..=10000 — below this the read is a thin yield → OCR). UIA-hang-fix keys (`07` #71, all
-baked into the provider at startup → applied on app restart): `capture.uia_run_on_interactive` (false —
-default OFF; click/scroll-stop frames fall back to OCR, since a UIA walk during scroll is what froze
-Chromium/Electron; on = legacy, every trigger walks) · `capture.uia_view_control_only` (true — default
+baked into the provider at startup → applied on app restart):
+*(0.3.2 PR5 retires `capture.uia_run_on_interactive` — inert-in-practice since the 0.3.0 PR2 trigger
+trim removed its only firing triggers, `07` #83; the persisted key is tolerated + ignored on load —
+D8, no migration)* · `capture.uia_view_control_only` (true — default
 ON; control view collapses a Chromium page's per-text-run node explosion; off = raw view, far heavier) ·
 `capture.uia_max_nodes` (4000, clamp 100..=20000 — hard cap on nodes visited per walk; replaces the
 former hardcoded constant) · `capture.uia_max_textpattern_calls` (64, clamp 1..=4096 — max live
 `TextPattern` visible-range reads per walk, the one uncacheable cross-process cost) ·
 `capture.uia_suppress_during_input_ms` (500, clamp 0..=10000 — `Timer` frames captured within this
 many ms of the last keyboard/mouse input skip UIA → OCR, closing the freeze gap the trigger gate
-leaves in default timer-only capture; `0` disables, bypassed when `uia_run_on_interactive` is on).
+leaves in default timer-only capture; `0` disables — the suppress window now always applies, since
+the former `uia_run_on_interactive` bypass retired with the knob).
 
 **0.3.0 flow-recall + API keys** (all hotkeys/thresholds/ports are settings, never hardcoded — same
 guardrail as above; `§7b`/`§7c`):
@@ -672,10 +712,23 @@ bind failure is **loud + guided-change**, `§7c`) ·
 `api.token` (generated on first enable; the bearer token, regenerable in Settings — never blank while
 enabled).
 
+**0.3.2 lifecycle keys** (`§7d`; the only new settings surface this arc — new keys exist only where a
+PR names them, `docs/0.3.2.md`. Key names are a **PR1 naming proposal** — PR3 owns the final call and
+updates this cluster in the same PR if it differs; once shipped, names are contract, D7):
+`app.close_to_tray` (true — closing the main window hides to tray, capture continues; one-time
+explanatory toast; off = window close quits cleanly, `§7d`) ·
+`app.run_at_startup` (false — registers/unregisters launch-at-login; an explicit user choice, never
+silently enabled — D3).
+
+**Dead-setting removal mechanics (0.3.2, D8):** a key may be retired in this arc only if **provably
+inert** (the two annotated above). Retirement = UI removal + load tolerance for the orphaned key (no
+error, no migration, no write-back requirement); if the config layer would error on an unknown key,
+keep the field deserialized-but-unused rather than build migration machinery.
+
 Capture honors `privacy.excluded_apps` (skip frame if foreground app matches) and
 `privacy.pause_on_lock`; the **self-exclude capture gate also covers the 0.3.0 overlay window** (D7 —
 the app's own overlay must never appear in its own capture history; asserted by the privacy-gate tests,
-`§7b`). OCR runs on the **full-res** frame before JPEG resize/storage.
+`§7b`). OCR runs on the **full-res** frame before resize/storage.
 
 ## 8b. Recall reports (0.2.x)
 
@@ -721,6 +774,34 @@ transitions, and model load/evict are logged at info. No screen content or OCR t
 GitHub Actions on `windows-latest`: `cargo fmt --check`, `cargo clippy --workspace -D warnings`,
 `cargo build`, `cargo test` (GPU/WinRT tests `#[ignore]`d), `ui` `npm ci && npm run build`, and a
 `tauri build` artifact job. Release workflow (later): **NSIS** installer (shipped v0.1.0; code-signing pending). Inno/MSI/portable ZIP dropped — `07` #26.
+
+## 11b. Auto-update (0.3.2): signed manifest, passive UX
+
+Issue #69 (`07` #96 — hard-sequenced **before** 0.4.0 ships). D1/D2 of `docs/0.3.2.md`, normalized as
+contract:
+
+- **Plugin + key (D2):** `tauri-plugin-updater` (Tauri 2) with a **minisign** keypair; the public key
+  baked into `tauri.conf.json`; endpoint = this repo's GitHub Releases `latest.json` URL. The release
+  pipeline signs the installer artifact with the updater key and publishes `latest.json` (version,
+  notes URL, signature, per-platform URLs) as a release asset.
+- **The signature is load-bearing:** a tampered, unsigned, or wrong-key manifest/artifact is
+  **rejected** — no download installs. Tested as a negative path (PR2 acceptance, `docs/0.3.2.md` §3).
+- **Passive UX (D1 — 0.3.1's D6 principle applied to the updater):** check on launch + a manual
+  "Check for updates" (tray menu `§7d` + the Settings App section, `UI_REFERENCE §3`). When an update
+  exists: a **quiet persistent indicator** (NavRail presence indicator — never a count — plus an
+  App-section line, e.g. "v0.3.3 available — restart to update"); download in the background;
+  **install only on user-initiated restart**. No modal, no nag, no auto-restart, ever. No update →
+  **zero UI presence**.
+- **Network posture:** the check is an outbound HTTPS GET against GitHub Releases — the same class as
+  model downloads (`01 §5`, `04 §4`); no local data leaves the machine.
+- **Key custody (D2 — RELEASE BLOCKER):** private key = CI secret + an offline
+  maintainer-controlled backup, recorded in `07` manual steps **before** the first signed release is
+  tagged. Key loss strands every installed copy on manual downloads again; a leak forces key rotation
+  via a manually-shipped release.
+- **Genesis + scope note:** `v0.3.2` itself is still a manual download and its release notes must say
+  so; auto-update delivers releases *to* 0.3.2+ installs from then on (0.4.0 is the first). The
+  minisign updater signature is **not Authenticode** — the Windows code-signing gap (`§11`, `07`
+  manual steps) stays open and is explicitly not this feature.
 
 ## 12. Failure modes & rollback
 - **Migrations** forward-only via `schema_version`; each ships an idempotent up-script.

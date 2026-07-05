@@ -11,6 +11,37 @@
 
 ---
 
+## 2026-07-05 — 0.3.2 PR1: specs contract (P7.2 product-shell mini-arc; specs-only)
+
+- **Change:** Normalized the 0.3.2 roadmap (`docs/0.3.2.md`, decisions D1–D12) into the specs —
+  no code, no schema, no UI. (a) `specs/04`: `docs/0.3.2.md` in the §1 mandatory reading order
+  (hard constraints: zero DB schema migrations D10, new settings only where a PR names them,
+  presentation-first D7, structural-only D12); a 0.3.2 row in §2; a §3 build-order bullet for
+  PR1→PR6 (Rust lane PR2→PR3 sequential ∥ UI lane PR4; PR5 after both; PR4 reproduce-first + the
+  WebView2 stop condition; D5 reviewed-import for PR3); the §4 network guardrail extended to admit
+  the signed GitHub-Releases update check. (b) `specs/03`: new **§7d** (tray icon + menu,
+  close-to-tray, single-instance codified, clean quit via §6 — D3/D4, no new chords) and **§11b**
+  (updater: plugin, minisign manifest, signature-rejection negative requirement, passive D1 UX,
+  key custody D2, genesis note minisign ≠ Authenticode); §8 **0.3.2 lifecycle keys**
+  (`app.close_to_tray` true / `app.run_at_startup` false — names flagged as a PR1 proposal) + the
+  two dead-setting retirements with load tolerance (D8) + the `uia_suppress_during_input_ms`
+  cross-ref fix. (c) `specs/UI_REFERENCE.md`: §3 two-tier Settings IA (D6/D7), App section, tray +
+  updater blocks (+ tree lines); §4 rows Tray / Updater indicator / Settings·App; §5
+  `UpdateIndicator` + `TrayMenu`; §8 **shell layout contract** (D9, acceptance-grade, binds all
+  future UI work); §10 item 9. (d) `specs/07`: rows #96/#97/#100/#83 pointed at PR2/PR3/PR5/PR5;
+  new #102 (#88 fold-forward, D11) / #103 (settings search deferred, D6) / #104 (visual-refresh
+  possibility, D12); the **updater-key custody manual step** (D2, release blocker).
+  (e) `CLAUDE.md`/`AGENTS.md`: current-state names the active 0.3.2 arc; the no-cloud hard rule
+  admits the signed update check. (f) `CHANGELOG.md`: Docs entry under `[Unreleased]`.
+- **Why:** `docs/0.3.2.md` §3 PR1 — every later PR must be implementable from the specs alone
+  without reopening the roadmap (`04 §1`/`§2`); the guardrail edits prevent a false
+  spec-contradiction stop when PR2 adds the updater's outbound HTTPS check.
+- **Verification:** `git diff --name-only main` → only `.md` files (verbatim list on the PR); the
+  D1–D12 → spec-location traceability table pasted on the PR. No build/test impact possible (docs
+  only); CI runs the full suite on the PR regardless.
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/08_CHANGELOG_AI.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/08_CHANGELOG_AI.v0.2.x.md`.
 > Shipped 0.3.0 history (PR1–PR9 + bridge fixes) → `specs/archive/08_CHANGELOG_AI.v0.3.0.md`.
