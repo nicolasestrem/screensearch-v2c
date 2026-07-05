@@ -14,6 +14,7 @@ import type { ModelLane } from "../../bindings/ModelLane";
 import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { ExportRequest } from "../../bindings/ExportRequest";
 import type { ExportResult } from "../../bindings/ExportResult";
+import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
 /** Start/stop capture; readiness refetches so the StatusRail flips immediately. */
 export function useCaptureControl() {
@@ -156,5 +157,29 @@ export function useRegenerateApiToken() {
 export function useExportData() {
   return useMutation<ExportResult, unknown, ExportRequest>({
     mutationFn: (request) => cmd.exportData(request),
+  });
+}
+
+/**
+ * Manual "Check for updates" (0.3.2 PR2, #69; `03 §11b`). Writes the returned snapshot
+ * into the `updateStatus` cache so the App panel + NavRail indicator update immediately;
+ * a background download that follows finishes via `update_status_changed`. No toast — the
+ * updater is quiet (D1); errors render inline in the App panel.
+ */
+export function useCheckForUpdates() {
+  const qc = useQueryClient();
+  return useMutation<UpdateStatus, unknown, void>({
+    mutationFn: () => cmd.checkForUpdates(),
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.updateStatus, status);
+    },
+  });
+}
+
+/** Install the downloaded update and restart — the only install trigger (D1). On success
+ *  the process hands off to the passive installer, so there is no cache to reconcile. */
+export function useRestartToApplyUpdate() {
+  return useMutation<void, unknown, void>({
+    mutationFn: () => cmd.restartToApplyUpdate(),
   });
 }

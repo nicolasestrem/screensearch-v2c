@@ -32,6 +32,7 @@ import type { ResumeContext } from "../../bindings/ResumeContext";
 import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { ExportRequest } from "../../bindings/ExportRequest";
 import type { ExportResult } from "../../bindings/ExportResult";
+import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -250,3 +251,17 @@ export const regenerateApiToken = (): Promise<ApiStatus> =>
  *  Works with the API disabled; returns the written path + counts. */
 export const exportData = (request: ExportRequest): Promise<ExportResult> =>
   invoke<ExportResult>("export_data", { request });
+
+/** Current auto-update snapshot (0.3.2 PR2, #69; `03 §11b`). `idle` = zero UI presence. */
+export const getUpdateStatus = (): Promise<UpdateStatus> =>
+  invoke<UpdateStatus>("get_update_status");
+
+/** Manually check for updates; returns the post-check status. A found update downloads
+ *  in the background and finishes via the `update_status_changed` event. */
+export const checkForUpdates = (): Promise<UpdateStatus> =>
+  invoke<UpdateStatus>("check_for_updates");
+
+/** Install the downloaded update and restart — the only install trigger (D1). Errs when
+ *  nothing is `ready`. On success the process hands off to the passive installer. */
+export const restartToApplyUpdate = (): Promise<void> =>
+  invoke<void>("restart_to_apply_update");

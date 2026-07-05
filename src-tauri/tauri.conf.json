@@ -45,8 +45,20 @@
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; script-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI3RTFDNzczQzBCREY4MUUKUldRZStMM0FjOGZoSi82dnhLWm1rYVlraUxqVUNObU9MYkhVT2M1Ukd4TmY0c0RDZDR1NE1reTEK",
+      "endpoints": [
+        "https://github.com/nicolasestrem/screensearch-v2c/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "externalBin": ["binaries/screensearch-mcp"],
     "icon": [

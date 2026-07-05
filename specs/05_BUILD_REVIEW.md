@@ -49,6 +49,43 @@ For each build pass, append an entry:
 
 ---
 
+## Pass 2 — 2026-07-05 — 0.3.2 PR2 (auto-update, #69; Rust lane)
+
+- **Implemented:** `tauri-plugin-updater` wired against a minisign-signed GitHub-Releases
+  `latest.json`, with the passive pull-based UX (D1) and the release pipeline that feeds it (`03 §11b`).
+  Rust: `UpdateStatus` (traits) + `src-tauri/src/update.rs` (manager: single-flight check → background
+  download → hold verified bytes → install on user restart) + `lib.rs` wiring (plugin, managed state,
+  release-only launch check, three commands, shared `graceful_shutdown`) + `main.rs` `--version`.
+  Config: `createUpdaterArtifacts` + `plugins.updater` (real pubkey `27E1C773C0BDF81E`, endpoint,
+  passive installMode); no CSP/capability change (Rust-driven). UI: full ipc layer (command/query/
+  mutation/event/live-event) + `UpdateIndicator` (NavRail footer presence dot + manual check) +
+  `AppPanel` (Settings · App). Pipeline: `scripts/make-latest-json.mjs` + `.github/workflows/release.yml`.
+  **Verification (verbatim on the PR):** UI lint clean; UI build clean; `cargo fmt --check` clean;
+  `cargo clippy --workspace --all-targets -D warnings` clean; `cargo build --workspace` ok;
+  `cargo test --workspace` all green (0 failed); `git diff --exit-code -- ui/src/bindings` clean.
+  Live E2E (real signed installer): detect → background download → signature-verify → install-on-restart
+  (before/after `--version`) + tampered-manifest rejection, per the `docs/TESTING.md` runbook.
+- **Skipped / deferred (in-scope-for-the-arc-but-not-this-PR):** the tray "Check for updates" menu
+  item is PR3 (it reuses `update::check_for_updates`); run-at-startup / close-to-tray settings in the
+  App section are PR3; the App section's final Essentials-tier placement is PR5. Windows code signing
+  (Authenticode/SignPath) is explicitly **not** this PR — the minisign updater signature is not an
+  installer certificate; the `07` code-signing row stays open.
+- **Hallucinated / corrected:** none load-bearing. Confirmed against the tree/plugin: the manual check
+  belongs in the NavRail **footer** now (roadmap/mission wording + gap #99) — `UI_REFERENCE §3`/`§5`
+  updated so the spec matches; the two version sources (`CARGO_PKG_VERSION` for `--version` vs. the
+  `tauri.conf.json` version the updater compares) agree in production but need both set for a test build
+  (documented in the runbook).
+- **Broke / regressed:** nothing. The `RunEvent::ExitRequested` block was refactored into a shared
+  `graceful_shutdown` helper with identical ordering/semantics (idempotent, so the double-invoke on
+  install-then-exit is harmless).
+- **Still risky:** (1) the endpoint `releases/latest/download/latest.json` resolves only for a
+  **published, non-prerelease** release — every historical release was a prerelease, so v0.3.2+ must be
+  published as a full release or the updater is inert (recorded in the runbook + PR). (2) Downloaded
+  installer bytes are held in RAM until restart (~tens of MB) — commented; temp-file spill is the future
+  escape hatch. (3) Key custody is a release blocker (D2): losing the private key strands every install.
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/05_BUILD_REVIEW.v0.2.x.md`.
 > Shipped 0.3.0 history (the whole arc: PR1–PR9 + post-0.2.2 bridge fixes) →

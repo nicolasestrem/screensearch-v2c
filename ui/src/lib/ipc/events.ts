@@ -16,6 +16,7 @@ import type { Toast } from "../../bindings/Toast";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { OpenMoment } from "../../bindings/OpenMoment";
 import type { MarkToast } from "../../bindings/MarkToast";
+import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
 /** Map of backend event name → payload type. */
 export interface AppEvents {
@@ -37,6 +38,10 @@ export interface AppEvents {
   // marks commands) so the Deck's Intentions strip refreshes across windows.
   mark_toast: MarkToast;
   marks_changed: null;
+  // 0.3.2 auto-update (PR2): every updater state transition (checking / available /
+  // downloading / ready / error / back to idle). The UI mirrors it into the
+  // `updateStatus` query cache — no toast, the updater is quiet (`03 §11b`, D1).
+  update_status_changed: UpdateStatus;
 }
 
 /**

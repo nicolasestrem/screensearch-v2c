@@ -33,6 +33,7 @@ use tokio::task::JoinHandle;
 
 mod local_api;
 mod overlay;
+mod update;
 
 /// How long to wait for `llama-server` `/health` after a spawn (model load can be slow
 /// on first run / large quants).
@@ -1046,6 +1047,11 @@ pub fn run() {
         // the OS default browser; Tauri v2 does not open plain `target="_blank"` anchors
         // (0.3.1 D4, #57). Scoped by the `opener:allow-open-url` capability.
         .plugin(tauri_plugin_opener::init())
+        // Auto-update (0.3.2 PR2, #69; `03 §11b`). The public key + GitHub-Releases
+        // `latest.json` endpoint come from `tauri.conf.json` (`plugins.updater`); the
+        // check/download/install flow is driven from `update.rs` via our own typed
+        // commands (no `updater:*` capability needed — D1).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Resolve the per-user app data dir from the bundle identifier and make
             // sure it (and the log dir) exist before we open anything in them.
@@ -1060,6 +1066,16 @@ pub fn run() {
 
             let (store, db_readiness) = open_store(&db_path);
             app.manage(overlay::OverlayState::default());
+            // Auto-update state (0.3.2 PR2, #69). Check on launch in **release builds
+            // only** — a debug build (`npm run tauri dev`) skips the check so development
+            // never hits the live GitHub-Releases endpoint on every start. The manual
+            // "Check for updates" command works in every build. Pull-based + quiet (D1):
+            // a found update downloads in the background and installs only on a
+            // user-initiated restart.
+            app.manage(update::UpdaterState::default());
+            if !cfg!(debug_assertions) {
+                tauri::async_runtime::spawn(update::launch_check(app.handle().clone()));
+            }
             // Register both global hotkeys (Flow overlay + mark-this-moment, 0.3.0 PR5/PR6)
             // from the persisted chords; a failed registration surfaces as a loud Settings
             // warning + toast (D6), never a silent no-op.
@@ -1288,7 +1304,10 @@ pub fn run() {
             local_api::set_api_config,
             local_api::get_api_status,
             local_api::regenerate_api_token,
-            local_api::export_data
+            local_api::export_data,
+            update::get_update_status,
+            update::check_for_updates,
+            update::restart_to_apply_update
         ])
         .on_window_event(|window, event| {
             match event {
@@ -1325,28 +1344,38 @@ pub fn run() {
             // requeued by the startup stale-job sweep, and the Job Object would terminate
             // the sidecar anyway (`03 §6`).
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app_handle.state::<AppState>();
-                let kernel = state.kernel.clone();
-                if let Some(kernel) = &kernel {
-                    tauri::async_runtime::block_on(kernel.stop_capture());
-                }
-                // Stop the local API server (bounded graceful shutdown), so an open
-                // `/v1/ask` SSE connection can't wedge exit (`03 §7c`).
-                let api_runtime = state.api_runtime.clone();
-                tauri::async_runtime::block_on(local_api::stop_server(&api_runtime));
-                if let Some(kernel) = kernel {
-                    tauri::async_runtime::block_on(async {
-                        kernel.stop_throttle().await;
-                        kernel.stop_vision_scheduler().await;
-                        kernel.stop_workers().await;
-                    });
-                }
-                let supervisor = state.supervisor.lock().expect("supervisor slot").clone();
-                if let Some(supervisor) = supervisor {
-                    tauri::async_runtime::block_on(supervisor.shutdown());
-                }
+                tauri::async_runtime::block_on(graceful_shutdown(app_handle));
             }
         });
+}
+
+/// Ordered, best-effort graceful shutdown of every runtime subsystem, shared by normal
+/// quit (`RunEvent::ExitRequested`) and install-on-restart (`update::restart_to_apply_update`)
+/// so the two can never drift. Stop capture first, so no new frames are captured or
+/// persisted once quit begins (#84) and the local API's bounded drain (below, up to ~3 s
+/// on an open `/v1/ask` SSE, `03 §7c`) can't race timer/event capture. Then stop the local
+/// API, drain the vision scheduler + worker pool so in-flight work finishes cleanly, and
+/// shut the sidecar down. Every step is idempotent, so a second invocation (e.g. the
+/// installer's own exit after `restart_to_apply_update` already ran this) is harmless: a
+/// job left `running` is requeued by the startup stale-job sweep, and the Job Object would
+/// terminate the sidecar anyway (`03 §6`).
+pub(crate) async fn graceful_shutdown(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let kernel = state.kernel.clone();
+    if let Some(kernel) = &kernel {
+        kernel.stop_capture().await;
+    }
+    let api_runtime = state.api_runtime.clone();
+    local_api::stop_server(&api_runtime).await;
+    if let Some(kernel) = kernel {
+        kernel.stop_throttle().await;
+        kernel.stop_vision_scheduler().await;
+        kernel.stop_workers().await;
+    }
+    let supervisor = state.supervisor.lock().expect("supervisor slot").clone();
+    if let Some(supervisor) = supervisor {
+        supervisor.shutdown().await;
+    }
 }
 
 /// Loads the fastembed model off the launch thread and attaches it to the kernel —

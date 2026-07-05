@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 0.3.2 PR2: auto-update (#69)
+ScreenSearch can now update itself. It checks for a new version on launch (and on demand from a
+quiet **Check for updates** control in the left rail and the **Settings → App** section), downloads
+a signed update in the background, and installs it **only when you choose to restart** — no modal,
+no nag, no auto-restart. When an update is waiting, a quiet dot appears in the left rail; when there
+is none, there is nothing to see. Built on `tauri-plugin-updater` with a **minisign-signed**
+`latest.json` manifest published on GitHub Releases: a tampered, unsigned, or wrong-key update is
+rejected before it can install (`03 §11b`). A new tag-triggered release workflow
+(`.github/workflows/release.yml`) builds, signs, and drafts each release with the installer, its
+signature, and the manifest; `scripts/make-latest-json.mjs` generates the manifest and refuses to
+emit one for an unsigned build. **This release itself is still a manual download** — auto-update
+delivers every release *after* it (0.4.0 will be the first to arrive automatically). Note: the
+minisign updater signature is **not** Windows code signing (Authenticode) — that remains a separate
+open item, so SmartScreen still warns on the manual installer.
+
 ### Docs — 0.3.2 PR1: specs contract (specs-only; no code / schema / UI)
 The 0.3.2 roadmap (`docs/0.3.2.md` — "P7.2: product shell mini-arc", lifecycle + interface) is
 normalized into the specs so PR2 through PR5 are implementable from the specs alone. The contract

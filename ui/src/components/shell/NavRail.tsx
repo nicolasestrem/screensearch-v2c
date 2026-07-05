@@ -16,6 +16,7 @@ import { cn } from "../../lib/cn";
 import { useUiStore } from "../../state/uiStore";
 import { useAppVersion } from "../../lib/useAppVersion";
 import { openExternal } from "../../lib/openExternal";
+import { UpdateIndicator } from "./UpdateIndicator";
 import {
   IconDeck,
   IconRecall,
@@ -148,6 +149,10 @@ export function NavRail() {
           <span>Command</span>
           <kbd className="font-mono text-data text-ink-faint">Ctrl+K</kbd>
         </button>
+        {/* Auto-update (0.3.2 PR2, #69): a quiet presence indicator (only while an update
+            exists — never a count) + the manual "Check for updates" quick-menu affordance.
+            Renders nothing outside the packaged app or when no update exists (`03 §11b`). */}
+        <UpdateIndicator />
         {/* Version footer link (0.3.1 D4, #57-partial): the running app version, opening
             the repo in the OS browser via the opener plugin (Tauri v2 does not open plain
             `target="_blank"` anchors). Hidden with no Tauri runtime (browser dev → null).

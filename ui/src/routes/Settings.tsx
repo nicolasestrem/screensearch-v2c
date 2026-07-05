@@ -24,6 +24,7 @@ import {
 } from "../components/primitives";
 import {
   ApiPanel,
+  AppPanel,
   DEFAULT_OVERLAY_HOTKEY,
   DEFAULT_MARKS_HOTKEY,
   HotkeyField,
@@ -1183,6 +1184,12 @@ export function Component() {
           </div>
         </div>
       </Panel>
+
+      {/* App (0.3.2 PR2): the app's lifecycle home — auto-update status/check + version.
+          Its own command surface (not the bulk Save). PR3 adds run-at-startup +
+          close-to-tray here; PR5 (Settings two-tier IA, D6) owns its final placement in
+          the Essentials tier — this panel is self-contained, so placement is presentational. */}
+      <AppPanel />
     </div>
   );
 }
