@@ -87,10 +87,11 @@ this audit was reviewed and accepted (`http(s)://*` `open-url` only — no path/
 user-initiated clicks land in the OS browser, never the WebView). Full verification suite green
 on the release tree (fmt · clippy `-D warnings` · build · test workspace · UI lint+build ·
 bindings guard) and the NSIS installer builds at `0.3.1`. The audit's completeness pass also
-surfaced **issue #84** ("Bug when quiting the app" — quit can keep persisting screenshots behind
-an in-flight vision call/download), filed after the 0.3.1 disposition table froze: it ships
-**open** as a known issue, recorded as `specs/07_KNOWN_GAPS.md` #101. Audit record:
-`specs/05_BUILD_REVIEW.md` Pass 5 (archived to `specs/archive/05_BUILD_REVIEW.v0.3.1.md`).
+surfaced **issue #84** ("Bug when quiting the app" — quit could keep persisting screenshots
+behind an in-flight vision call/download), filed after the 0.3.1 disposition table froze; the
+maintainer resolved it at PR4 review time (2026-07-05) — recorded and archived as
+`07` #101. Audit record: `specs/05_BUILD_REVIEW.md` Pass 5 (archived to
+`specs/archive/05_BUILD_REVIEW.v0.3.1.md`).
 
 ### Docs — 0.3.1 patch specs contract (PR1, specs-only; no code / schema / UI)
 The 0.3.1 roadmap (`docs/0.3.1.md` — "P7.1: post-0.3.0 triage", a regression-fix + polish patch)

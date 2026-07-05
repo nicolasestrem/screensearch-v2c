@@ -333,9 +333,11 @@ version bump, CHANGELOG cut + archive fold, release notes. Branch
   it), but the **full `tauri dev` hang-recovery walkthrough that Pass 1 declared merge-gating
   is not recorded anywhere** — carried below as an accepted residual, not asserted. PR #80's
   PR body records the full verification suite only; the "live hotkey walkthrough" its `08`
-  entry claims is **not evidenced on the PR** — the live register/summon check and the
-  AZERTY/AltGr confirmation (Pass 2a) remain outstanding (low risk: the chord registers a
-  key, not a character, and the D6 failure path is loud).
+  entry claims is **not evidenced on the PR** — the live register/summon check remains
+  unrecorded (low risk: the chord registers a key, not a character, and the D6 failure path
+  is loud). The AZERTY/AltGr confirmation (Pass 2a) is **removed from the checklists by user
+  decision (2026-07-05, PR4 review): it cannot be tested on this setup**; the low-risk
+  rationale above stands as the record.
 - **Verification suite (verbatim, release tree, run this session):** UI `npm ci` → `found 0
   vulnerabilities`; `npm run lint` → clean (no output); `npm run build` → `✓ built in 1.76s`;
   `node scripts/stage-mcp.mjs` → `up to date`; `cargo fmt --all -- --check` → exit 0;
@@ -362,12 +364,15 @@ version bump, CHANGELOG cut + archive fold, release notes. Branch
   app"** (maintainer-filed 2026-07-04, *after* the `docs/0.3.1.md §2` disposition table
   froze): quit doesn't stop capture before the worker/sidecar drain, so an in-flight VLM
   call/download can keep persisting screenshots during shutdown. By the patch's own contract
-  ("if it isn't in PR2/PR3, it isn't in 0.3.1") it is not in this release; recorded as `07`
-  #101 (disposition owner: user) and named in the release notes as a known issue.
+  ("if it isn't in PR2/PR3, it isn't in 0.3.1") its fix is not part of the 0.3.1 patch PRs;
+  recorded as `07` #101. **Update (2026-07-05, PR4 review): the maintainer reports #84
+  solved** — dropped from the release notes' known issues, `07` #101 archived as resolved
+  (no fix PR/commit was on `main` at that moment; closing the GitHub issue is the
+  maintainer's follow-up).
 - **Still risky:** (a) the PR #79 `tauri dev` hang-recovery walkthrough (Pass 1's merge gate)
-  and the PR #80 live hotkey/AZERTY check are **not recorded** — accepted residuals, above;
-  (b) issue #84 (quit-path persistence, `07` #101) ships open and undispositioned;
-  (c) standing rows stay honest: `06` #15/#23 (upstream leak; PDH blind to Vulkan), `07` #91
+  and the PR #80 live hotkey register/summon check are **not recorded** — accepted residuals,
+  above (the AZERTY confirmation is waived by user decision, not carried);
+  (b) standing rows stay honest: `06` #15/#23 (upstream leak; PDH blind to Vulkan), `07` #91
   (monitor hot-unplug), #58 (multi-DPI live check), and the `07` manual code-signing step
   (unsigned installer; SmartScreen warns). Release-asset provenance: the audited installer was
   built from this branch's tree — after merge + tag approval, rebuild at the tagged commit (or

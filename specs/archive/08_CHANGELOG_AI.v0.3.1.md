@@ -26,13 +26,16 @@
   `specs/archive/*.v0.3.1.md` (ids preserved); `CHANGELOG.md` `[0.3.1]` → `CHANGELOG-ARCHIVE.md`;
   live logs keep only open rows (`06` #15/#23; `07` unchanged-open rows + a new #100 standing
   row for the TODO-3 cross-chord check that #94's archival would otherwise bury, + a new #101
-  row for issue #84 — the quit-path bug filed after the §2 disposition table froze;
-  undispositioned, owner: user). `06` #21 status refreshed (PR #79 merged; ships in v0.3.1).
+  row for issue #84 — the quit-path bug filed after the §2 disposition table froze; **resolved
+  by the maintainer at PR4 review, 2026-07-05**, and archived with #94/#99). `06` #21 status
+  refreshed (PR #79 merged; ships in v0.3.1).
   Pass 5's evidence taxonomy was corrected by the audit's own completeness pass before
-  shipping: the PR #79 `tauri dev` hang-recovery walkthrough and the PR #80 live
-  hotkey/AZERTY check are **not recorded** on their PRs and are carried as accepted residuals
-  instead of asserted; the duplicate "Pass 2" headings were renamed Pass 2a/2b at archive
-  time so "05 Pass N" citations resolve uniquely.
+  shipping: the PR #79 `tauri dev` hang-recovery walkthrough and the PR #80 live hotkey
+  register/summon check are **not recorded** on their PRs and are carried as accepted
+  residuals instead of asserted; the AZERTY/AltGr confirmation was **removed from the
+  checklists by user decision** (2026-07-05 — not testable on this setup); the duplicate
+  "Pass 2" headings were renamed Pass 2a/2b at archive time so "05 Pass N" citations resolve
+  uniquely.
 - **Why:** `docs/0.3.1.md` §3 PR4 — same shape as 0.3.0's PR9 (`04 §7` archive-on-release). The
   tag `v0.3.1` + GitHub release are prepared but await maintainer merge + explicit approval.
 - **Verification (verbatim, this session, on the release tree):**
