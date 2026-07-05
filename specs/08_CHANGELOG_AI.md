@@ -18,6 +18,43 @@
 
 ---
 
+## 2026-07-05 — 0.3.1 PR4: audit + release sweep (v0.3.1)
+
+- **Change:** the 0.3.1 closing PR on `chore/0.3.1-pr4-audit-release` (docs + version bump only;
+  no code, no schema, no settings). (a) **Audit:** D1–D9 verified landed against `main`
+  (evidence-first, each check adversarially re-verified; all PASS — full record in `05` Pass 5);
+  `07` §2-deferral coverage confirmed (#96–#99); the Pass 4 opener-capability "still risky" item
+  reviewed + accepted; GitHub hygiene confirmed via `gh` (#54 closed w/ fold-forward, #56/#69
+  `deferred-0.3.2`, #57 split comment). (b) **Doc sweep:** README status → v0.3.1;
+  `docs/ARCHITECTURE.md` header → 0.3.1; `CLAUDE.md`/`AGENTS.md` current-state → patch complete,
+  0.3.2/0.4.0 next-up; `02 §8` status → 0.3.0 + 0.3.1 shipped; `docs/API.md` `/v1/health`
+  example → 0.3.1 (the endpoint returns `CARGO_PKG_VERSION`). (c) **Version bump:** 0.3.0 →
+  0.3.1 in `Cargo.toml` (workspace), `package.json`, `ui/package.json`,
+  `src-tauri/tauri.conf.json` + both npm locks + `Cargo.lock`. (d) **CHANGELOG:** `[Unreleased]`
+  → `[0.3.1] — 2026-07-05` (lead: the #64 fix is the reason the patch exists; the auto-update
+  manual-download caveat; zero schema changes) + an Audited section; then archived per `04 §7`.
+  (e) **Archive fold:** shipped 0.3.1 entries of `05`/`06`/`07`/`08` →
+  `specs/archive/*.v0.3.1.md` (ids preserved); `CHANGELOG.md` `[0.3.1]` → `CHANGELOG-ARCHIVE.md`;
+  live logs keep only open rows (`06` #15/#23; `07` unchanged-open rows + a new #100 standing
+  row for the TODO-3 cross-chord check that #94's archival would otherwise bury). `06` #21
+  status refreshed (PR #79 merged; ships in v0.3.1).
+- **Why:** `docs/0.3.1.md` §3 PR4 — same shape as 0.3.0's PR9 (`04 §7` archive-on-release). The
+  tag `v0.3.1` + GitHub release are prepared but await maintainer merge + explicit approval.
+- **Verification (verbatim, this session, on the release tree):**
+  - UI: `npm ci` → `found 0 vulnerabilities` · `npm run lint` → clean · `npm run build` →
+    `✓ built in 1.76s`.
+  - `node scripts/stage-mcp.mjs` → `up to date`.
+  - `cargo fmt --all -- --check` → exit 0 · `cargo clippy --workspace --all-targets -- -D
+    warnings` → `Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.94s` (no
+    warnings) · `cargo build --workspace` → `Finished … in 42.07s` · `cargo test --workspace` →
+    every suite `test result: ok`, 0 failed (8 ignored: live-session/GPU-gated) ·
+    `git diff --exit-code -- ui/src/bindings` → clean (exit 0).
+  - Installer: `npm run build` (tauri build) → exit 0, `Finished 1 bundle at:
+    …\target\release\bundle\nsis\ScreenSearch_0.3.1_x64-setup.exe`; `7z l` on the installer
+    lists `screensearch.exe` **and** `screensearch-mcp.exe` (both rebuilt at 0.3.1).
+
+---
+
 ## 2026-07-04 — 0.3.1 PR3: polish bundle (#59 nested scroll · #65 report filename+footer · #57 version link)
 
 - **Change:** three user-visible polish items on `feat/0.3.1-pr3-polish-bundle`, no schema

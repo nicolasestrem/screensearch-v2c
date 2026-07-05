@@ -283,3 +283,81 @@ bytes in `capture_loop`; same patch applied locally-uncommitted to the baseline 
 - **Live verification:** post-fix `npm run tauri dev` re-check of the version link (opener
   plugin) + Moment scroll + report save/footer — see the PR description / manual acceptance in
   `docs/TESTING.md` (0.3.1 PR3).
+
+---
+
+## Pass 5 — 2026-07-05 — 0.3.1 PR4 (audit + tag `v0.3.1`)
+
+The 0.3.1 closing audit per `docs/0.3.1.md` PR4, same shape as 0.3.0's PR9: full mandatory
+re-read (`04 §1`), D1–D9 landing verification, `07` deferral coverage, release doc sweep,
+version bump, CHANGELOG cut + archive fold, release notes. Branch
+`chore/0.3.1-pr4-audit-release`.
+
+- **Implemented — D1–D9 audit, all PASS.** Each decision verified evidence-first against `main`
+  (66e0b45 = merged PR #86), then independently re-checked by an adversarial second pass
+  explicitly prompted to refute it; **no refutation stood**.
+  - **D1 (#59):** neither Moment text region nor any ancestor (`MomentDetail.tsx`, the `details`
+    disclosure, `Panel`, the `Moment.tsx` route wrapper) carries `max-h-*`/`overflow-*` classes
+    or equivalent inline styles; the page is one scroll context. Contract present in
+    `UI_REFERENCE §4/§5`.
+  - **D2 (#65):** `reportFileStem` (`ui/src/lib/time.ts`) builds
+    `screensearch-report-YYYY-MM-DD-HHmm` from **local-time** accessors (`getFullYear`/…, no UTC
+    methods); `sanitize_report_stem` + `unique_markdown_path` (`src-tauri/src/lib.rs`) append
+    `-2`/`-3` on same-minute collision and write via `.partial` rename; `ReportView` routes the
+    Download button through the command (Blob fallback outside Tauri); both pure helpers
+    unit-tested.
+  - **D3 (#65):** `buildReportFooter` (`ui/src/lib/reportFooter.ts`) emits app version · model
+    id · time span (exclusive-end corrected) · filters (kind + optional Custom focus) · the
+    coverage counts; rendered on screen **and** appended to Copy + saved markdown; no footer on
+    no-evidence reports; no new settings key.
+  - **D4 (#57-partial):** NavRail `v{version}` → exact repo URL (matches `git remote`), a native
+    anchor (default tab stop; Enter fires click; the roving `tabIndex` applies only to the five
+    nav items); hidden outside Tauri (`useAppVersion` → null); opens via
+    `tauri-plugin-opener::openUrl` — external OS browser, never the WebView. No quick-action UI
+    landed anywhere in the arc's additions.
+  - **D5/D9 (#64):** `05` Pass 3's numbers table + explicit STOP record precede the Phase B/C
+    fix addendum structurally; `06` #22 records the roadmap contradiction + the user decision
+    (option a) and #23 the PDH-blind-to-Vulkan finding; PR #85's description quotes the
+    before/after (89.4 → 91.4 done/min, 102 % of baseline); `VISION_MAX_EDGE = 1280` with the
+    rationale doc-comment and pinned 1280×536 dimension tests.
+  - **D6/D7 (§2 disposition coverage):** `07` #96–#99 all present with owner + date — #96
+    carries the hard "auto-update MUST land before 0.4.0 ships" sequencing note; #97 cites D6
+    (pull-based, non-shaming) as binding on 0.3.2 design; #98 records the #54 fold-forward
+    (D7); #99 the resolved quick-menu silence. GitHub hygiene verified via `gh`: #54 CLOSED
+    with the fold-forward comment; #56/#69 OPEN + `deferred-0.3.2`; #57 OPEN with the split
+    comment. No §2 deferral is missing from `07`.
+  - **D8 (hard constraint):** `git diff v0.3.0..HEAD -- crates/store` is empty;
+    `LATEST_SCHEMA_VERSION = 10` on both sides; no migration/`schema_version` change anywhere
+    in the release diff; the three patch PRs (#82 specs-only / #85 / #86) added **no** settings
+    key, **no** crate, **no** UI settings surface. (Of the two post-0.3.0 defect fixes riding
+    this release: #79 added none; #80 added `overlay.hotkey_migrated` — an internal one-shot
+    load-path migration latch, not user-facing settings surface.)
+- **Opener capability glance (Pass 4's "still risky" item) — reviewed, accepted.**
+  `src-tauri/capabilities/{default,overlay}.json` grant exactly `opener:allow-open-url` scoped
+  `http://*` + `https://*` (plus `core:default`); there is **no** `open-path` and no shell
+  scope, so the surface is user-initiated link clicks opening in the sandboxed OS browser. The
+  breadth (any http(s) host, not repo-only) is deliberate and recorded (`08` PR3 entry): report/
+  answer markdown links open arbitrary model-cited URLs.
+- **Riding-fix risk closure:** PR #79's live-desktop `#[ignore]`d UIA tests were run pre-merge
+  and recorded on the PR (`cargo test -p uia -- --ignored` → 3 passed, incl.
+  `uia_worker_exits_on_shutdown`); PR #80 recorded the full suite + live hotkey walkthrough.
+  The AZERTY/AltGr caveat (Pass 2) stays a live-session nicety — the chord registers a key, not
+  a character.
+- **Verification suite (verbatim, release tree, run this session):** UI `npm ci` → `found 0
+  vulnerabilities`; `npm run lint` → clean (no output); `npm run build` → `✓ built in 1.76s`;
+  `node scripts/stage-mcp.mjs` → `up to date`; `cargo fmt --all -- --check` → exit 0;
+  `cargo clippy --workspace --all-targets -- -D warnings` → `Finished `dev` profile … in 31.94s`
+  (no warnings); `cargo build --workspace` → `Finished … in 42.07s`; `cargo test --workspace` →
+  every suite `test result: ok`, **0 failed** (8 ignored = the live-session/GPU-gated ones);
+  `git diff --exit-code -- ui/src/bindings` → clean (exit 0).
+- **Installer:** `npm run build` (tauri build, release) → NSIS bundle
+  `ScreenSearch_0.3.1_x64-setup.exe` built from the bumped tree (verbatim tail in `08`).
+- **Skipped / deferred:** the `v0.3.1` tag + GitHub release are **prepared but not executed** —
+  they follow the maintainer's merge + explicit approval (no-merge/no-tag-without-approval).
+  Release notes (PR body) state plainly that auto-update (#69) is not in this release — one
+  more manual download; #59/#65 close with this PR.
+- **Hallucinated / corrected:** none — every audit claim above carries observed evidence
+  (file:line, `gh` output, or command output).
+- **Still risky:** nothing new. Standing rows stay honest: `06` #15/#23 (upstream leak; PDH
+  blind to Vulkan), `07` #91 (monitor hot-unplug), #58 (multi-DPI live check), and the `07`
+  manual code-signing step (unsigned installer; SmartScreen warns).
