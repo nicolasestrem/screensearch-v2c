@@ -39,6 +39,14 @@
 - **Verification:** `git diff --name-only main` → only `.md` files (verbatim list on the PR); the
   D1–D12 → spec-location traceability table pasted on the PR. No build/test impact possible (docs
   only); CI runs the full suite on the PR regardless.
+- **Review-response addendum (second commit on the PR):** five automated-review findings applied,
+  all specs-only. `07` #97's legacy "D6" (0.3.1's pull-based numbering) relabelled to **D4** to match
+  0.3.2's namespace (D6 is now two-tier IA), removing a real "spec contradictory → STOP" trap. `02`
+  brought into scope (**10 files now, not 9**): §8 Status said "No active arc" and named only the
+  lifecycle half — fixed to name the active arc with lifecycle **and** interface + zero-schema, and
+  annotated the §5 "Later" auto-update mention (no new `§5d`). `UI_REFERENCE §8` shell matrix widened
+  from "five routes" to all six content routes (naming **Moment**). Two `03` formatting nits (§7d
+  run-at-startup gets its own `(D3).` clause; §8 lifecycle-keys parenthetical split into sentences).
 
 ---
 

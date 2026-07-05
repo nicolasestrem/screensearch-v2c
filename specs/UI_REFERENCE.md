@@ -253,8 +253,10 @@ latency < 100 ms; no layout shift on data arrival (skeletons reserve space).
 - **No cumulative layout shift on load:** skeletons reserve final dimensions (the budget rule above,
   now acceptance-grade); status chips have stable widths; toasts and banners **overlay** rather than
   push — the readiness banner alone may reserve space.
-- Verified by PR4's screenshot matrix (five routes × {1280×720, 1920×1080, 3440×1440} ×
-  {100 %, 150 %}); any later view violating a line above is a regression against this section.
+- Verified by PR4's screenshot matrix (all six content routes — Deck, Recall, Timeline, Moment
+  (`/timeline/:id`), Insights, Settings — × {1280×720, 1920×1080, 3440×1440} × {100 %, 150 %}); any
+  later view violating a line above is a regression against this section. Moment is not optional here:
+  it is the origin of the one-scroll-context principle (0.3.1 #59).
 
 ## 9. Voice & copy (interface speaks plainly, from the user's side)
 Name things by what the user controls ("Pause capture", not "halt pipeline"). Actions keep their

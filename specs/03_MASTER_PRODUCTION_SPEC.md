@@ -596,9 +596,10 @@ side-channel into the kernel.
 **Close-to-tray (D3).** `app.close_to_tray` (default **true**, `§8`): closing the main window hides
 it to the tray; capture continues. A **one-time** toast (existing `Toast` primitive + `toast`
 z-layer, `UI_REFERENCE §2`/`§3`) explains this the first time it happens — informational, never
-repeated, never a nag. With the setting off, window close quits (clean shutdown, below). **Run at
-startup** = `app.run_at_startup` (default **false**, `§8`) — an explicit user choice, never a silent
-default.
+repeated, never a nag. With the setting off, window close quits (clean shutdown, below).
+
+**Run at startup (D3).** `app.run_at_startup` (default **false**, `§8`) registers/unregisters
+launch-at-login — an explicit user choice, never a silent default.
 
 **Single instance (codifying shipped behavior).** `tauri-plugin-single-instance`
 (`src-tauri/src/lib.rs`): a second launch spawns no second app; the callback calls `window.show()` →
@@ -713,8 +714,9 @@ bind failure is **loud + guided-change**, `§7c`) ·
 enabled).
 
 **0.3.2 lifecycle keys** (`§7d`; the only new settings surface this arc — new keys exist only where a
-PR names them, `docs/0.3.2.md`. Key names are a **PR1 naming proposal** — PR3 owns the final call and
-updates this cluster in the same PR if it differs; once shipped, names are contract, D7):
+PR names them, `docs/0.3.2.md`). The two key names below are a **PR1 naming proposal**: PR3 owns the
+final call and updates this cluster in the same PR if it differs; once shipped, the names are
+contract (D7).
 `app.close_to_tray` (true — closing the main window hides to tray, capture continues; one-time
 explanatory toast; off = window close quits cleanly, `§7d`) ·
 `app.run_at_startup` (false — registers/unregisters launch-at-login; an explicit user choice, never

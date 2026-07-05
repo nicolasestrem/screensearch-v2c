@@ -80,7 +80,7 @@ Detailed schema, traits, command/event contracts, and sidecar protocol live in `
 - **P5 — Product:** Command-Deck UI polish; settings (model tiers, schedules, retention);
   packaging (**NSIS** installer; signing pending); first release.
 - **Later (nice-to-haves):** multi-model routing UI, timeline analytics, export, sharing,
-  auto-update, OS automation.
+  auto-update (promoted into the 0.3.2 arc — `§8`, `docs/0.3.2.md`), OS automation.
 
 ## 5b. Post-1.0 arc — 0.2.x (attention-first text signal + recall workflows)
 
@@ -167,9 +167,11 @@ capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
 - **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24); the **0.2.x arc shipped** (attention-first text
   signal + recall workflows; `§5b`, `docs/0.2.0.md`); the **0.3.0 arc (P7) shipped** (`v0.3.0`,
   2026-07-04; `§5c`, `docs/0.3.0.md`) and its **0.3.1 triage patch shipped** (`v0.3.1`,
-  2026-07-05; `docs/0.3.1.md` — the #64 vision-throughput fix + polish). No active arc; next up:
-  the **0.3.2 lifecycle mini-arc** (auto-update — hard-sequenced before 0.4.0 — + systray/quick
-  actions) then the **0.4.0 sessions arc**.
+  2026-07-05; `docs/0.3.1.md` — the #64 vision-throughput fix + polish). The **0.3.2 arc is now
+  active** — "P7.2 product shell mini-arc" (`docs/0.3.2.md`): **lifecycle** (auto-update,
+  hard-sequenced before 0.4.0; systray + quick actions) **and interface** (shell-layout hardening;
+  Settings two-tier IA), under a **zero-DB-schema-migration** constraint. Then the **0.4.0 sessions
+  arc**.
 
 ---
 
