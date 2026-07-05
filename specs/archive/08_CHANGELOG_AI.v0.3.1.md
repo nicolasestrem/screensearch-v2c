@@ -9,8 +9,9 @@
 
 ## 2026-07-05 — 0.3.1 PR4: audit + release sweep (v0.3.1)
 
-- **Change:** the 0.3.1 closing PR on `chore/0.3.1-pr4-audit-release` (docs + version bump only;
-  no code, no schema, no settings). (a) **Audit:** D1–D9 verified landed against `main`
+- **Change:** the 0.3.1 closing PR on `chore/0.3.1-pr4-audit-release` (docs + version bump, plus
+  one PR4-review code fix — the #84 quit-path one-liner in (f) below; no schema, no settings, no
+  new surface). (a) **Audit:** D1–D9 verified landed against `main`
   (evidence-first, each check adversarially re-verified; all PASS — full record in `05` Pass 5);
   `07` §2-deferral coverage confirmed (#96–#99); the Pass 4 opener-capability "still risky" item
   reviewed + accepted; GitHub hygiene confirmed via `gh` (#54 closed w/ fold-forward, #56/#69
@@ -26,9 +27,17 @@
   `specs/archive/*.v0.3.1.md` (ids preserved); `CHANGELOG.md` `[0.3.1]` → `CHANGELOG-ARCHIVE.md`;
   live logs keep only open rows (`06` #15/#23; `07` unchanged-open rows + a new #100 standing
   row for the TODO-3 cross-chord check that #94's archival would otherwise bury, + a new #101
-  row for issue #84 — the quit-path bug filed after the §2 disposition table froze; **resolved
-  by the maintainer at PR4 review, 2026-07-05**, and archived with #94/#99). `06` #21 status
+  row for issue #84 — the quit-path bug filed after the §2 disposition table froze; **fixed in
+  PR4 itself** (see (f)), and archived with #94/#99). `06` #21 status
   refreshed (PR #79 merged; ships in v0.3.1).
+- **(f) Code fix — #84 quit-path (PR4-review Codex P1):** the audit's completeness pass, then a
+  Codex P1 at review, flagged that the app-exit handler (`src-tauri/src/lib.rs`,
+  `RunEvent::ExitRequested`) never called `stop_capture()`, so quit could keep persisting
+  screenshots behind an in-flight vision call/download. The maintainer chose to fix rather than
+  defer: the handler now calls `kernel.stop_capture().await` **first**, ahead of the
+  throttle/vision-scheduler/worker drain. One-line change (plus a comment), no schema, no
+  settings, no UI — D8 holds. Full verification suite re-run green with the fix in (below).
+  `CHANGELOG-ARCHIVE.md` [0.3.1] Fixed gains a #84 line; `07` #101 recut to "fixed (PR4)".
   Pass 5's evidence taxonomy was corrected by the audit's own completeness pass before
   shipping: the PR #79 `tauri dev` hang-recovery walkthrough and the PR #80 live hotkey
   register/summon check are **not recorded** on their PRs and are carried as accepted
@@ -43,7 +52,7 @@
     `✓ built in 1.76s`.
   - `node scripts/stage-mcp.mjs` → `up to date`.
   - `cargo fmt --all -- --check` → exit 0 · `cargo clippy --workspace --all-targets -- -D
-    warnings` → `Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.94s` (no
+    warnings` → ``Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.94s`` (no
     warnings) · `cargo build --workspace` → `Finished … in 42.07s` · `cargo test --workspace` →
     every suite `test result: ok`, 0 failed (8 ignored: live-session/GPU-gated) ·
     `git diff --exit-code -- ui/src/bindings` → clean (exit 0).

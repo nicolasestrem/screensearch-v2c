@@ -1316,8 +1316,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // On exit, stop the vision scheduler + worker pool so in-flight work
-            // finishes cleanly, then shut the sidecar down. Best-effort: a job left
+            // On exit, stop capture first so no new frames are persisted while quit is
+            // in progress (#84), then stop the vision scheduler + worker pool so in-flight
+            // work finishes cleanly, then shut the sidecar down. Best-effort: a job left
             // `running` is requeued by the startup stale-job sweep, and the Job Object
             // would terminate the sidecar anyway (`03 §6`).
             if let tauri::RunEvent::ExitRequested { .. } = event {
@@ -1328,6 +1329,7 @@ pub fn run() {
                 tauri::async_runtime::block_on(local_api::stop_server(&api_runtime));
                 if let Some(kernel) = state.kernel.clone() {
                     tauri::async_runtime::block_on(async {
+                        kernel.stop_capture().await;
                         kernel.stop_throttle().await;
                         kernel.stop_vision_scheduler().await;
                         kernel.stop_workers().await;

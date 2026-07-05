@@ -341,7 +341,7 @@ version bump, CHANGELOG cut + archive fold, release notes. Branch
 - **Verification suite (verbatim, release tree, run this session):** UI `npm ci` → `found 0
   vulnerabilities`; `npm run lint` → clean (no output); `npm run build` → `✓ built in 1.76s`;
   `node scripts/stage-mcp.mjs` → `up to date`; `cargo fmt --all -- --check` → exit 0;
-  `cargo clippy --workspace --all-targets -- -D warnings` → `Finished `dev` profile … in 31.94s`
+  `cargo clippy --workspace --all-targets -- -D warnings` → ``Finished `dev` profile … in 31.94s``
   (no warnings); `cargo build --workspace` → `Finished … in 42.07s`; `cargo test --workspace` →
   every suite `test result: ok`, **0 failed** (8 ignored = the live-session/GPU-gated ones);
   `git diff --exit-code -- ui/src/bindings` → clean (exit 0).
@@ -360,15 +360,20 @@ version bump, CHANGELOG cut + archive fold, release notes. Branch
   Copy carries the footer, a no-evidence range renders no footer, keyboard Enter-activation of
   the version link — are **code-verified only** (static analysis of `ReportView.tsx` /
   `NavRail.tsx`), not observed live in this audit.
-- **New issue surfaced during the audit (not a 0.3.1 item):** **#84 "Bug when quiting the
+- **New issue surfaced during the audit, then fixed in this PR:** **#84 "Bug when quiting the
   app"** (maintainer-filed 2026-07-04, *after* the `docs/0.3.1.md §2` disposition table
   froze): quit doesn't stop capture before the worker/sidecar drain, so an in-flight VLM
-  call/download can keep persisting screenshots during shutdown. By the patch's own contract
-  ("if it isn't in PR2/PR3, it isn't in 0.3.1") its fix is not part of the 0.3.1 patch PRs;
-  recorded as `07` #101. **Update (2026-07-05, PR4 review): the maintainer reports #84
-  solved** — dropped from the release notes' known issues, `07` #101 archived as resolved
-  (no fix PR/commit was on `main` at that moment; closing the GitHub issue is the
-  maintainer's follow-up).
+  call/download can keep persisting screenshots during shutdown. A PR4-review Codex P1 pinned
+  the exact cause — the `RunEvent::ExitRequested` handler in `src-tauri/src/lib.rs` never
+  called `stop_capture()`. **Fixed in PR4 (2026-07-05, maintainer decision to fix rather than
+  defer):** the handler now calls `kernel.stop_capture().await` first, before the
+  throttle/vision-scheduler/worker drain, so no new frames are captured or persisted once quit
+  begins. The one-line change is the sole code edit in this otherwise docs-only closing PR; it
+  touches no schema, no settings key, no crate, no UI surface, so **D8 still holds**. Full
+  verification suite re-run green with the fix in (below). Recorded as `07` #101. The separate
+  "unbounded worker-shutdown wait" facet is unchanged (bounded by the Job-Object sidecar kill +
+  startup stale-job requeue, `03 §6`) — tracked for the 0.3.2 lifecycle arc. Closing the GitHub
+  issue is the maintainer's follow-up.
 - **Still risky:** (a) the PR #79 `tauri dev` hang-recovery walkthrough (Pass 1's merge gate)
   and the PR #80 live hotkey register/summon check are **not recorded** — accepted residuals,
   above (the AZERTY confirmation is waived by user decision, not carried);
