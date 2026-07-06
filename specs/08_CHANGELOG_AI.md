@@ -11,6 +11,43 @@
 
 ---
 
+## 2026-07-06 — 0.3.2 PR3 review follow-up: four correctness fixes (PR #92)
+
+- **Change:** Addressed the four valid findings from PR #92's automated review (all bot reviewers;
+  no human review comments). No API/schema/binding change.
+  - **`ui/src/components/shell/CommandPalette.tsx`.** The palette listed both halves of each new
+    lifecycle toggle unconditionally (Load *and* Unload, Start *and* Stop vision). Now it reads
+    `useSidecarStatus` + `useJobStats` (exactly as `QuickActions` does) and renders only the
+    contextually valid entry, so it can never re-`preload()` an already-loaded model or fire an
+    Unload/Stop that errors or no-ops.
+  - **`ui/src/routes/Settings.tsx`.** The route seeds its editable `draft` once and bulk-saves the
+    whole draft, but the two `app_*` toggles are owned by `AppPanel`'s self-contained round-trip and
+    never re-entered the draft — so a later bulk Save of any other field reverted them. The reconcile
+    effect now mirrors `app_run_at_startup` / `app_close_to_tray` from the live query into the draft
+    (only those two fields; in-progress edits preserved; unchanged draft keeps its reference so no
+    re-render loop), so the diff never flags them and Save never reverts them.
+  - **`src-tauri/src/tray.rs` + `src/lib.rs`.** The tray seeded `vision_active` to `false` at init;
+    a restart with pending/running `vision_tag` jobs left over from a prior session therefore showed
+    "Start vision tagging" (and no `JobProgress` is emitted until a worker settles), so the backlog
+    couldn't be stopped from the tray. `tray::init`/`build` now take a `vision_active` seed; setup
+    computes it from `store.job_stats()` (`vision_pending + vision_running > 0`) alongside the
+    readiness snapshot and seeds both the atomic and the menu label.
+  - **`src-tauri/src/lib.rs` (`set_settings`).** Register-before-persist changes the OS autostart
+    registration before saving; if the save then failed, the OS state stayed flipped while the UI
+    rolled back. On a `save_settings` error, the autostart registration is now restored to the prior
+    value (the boot `reconcile_autostart` remains the backstop).
+- **Why:** PR review correctness; keeps the two lifecycle surfaces (tray, palette, quick menu)
+  consistent and the persisted settings honest (`03 §7d`, `docs/0.3.2.md` D3/D4).
+- **Verification:** `npm run lint` (clean) · `npm run build` (built in 2.17s) · `node
+  scripts/stage-mcp.mjs` (up to date) · `cargo fmt --all -- --check` (clean) · `cargo clippy
+  --workspace --all-targets -- -D warnings` (clean) · `cargo build --workspace` (Finished in 25.87s)
+  · `cargo test --workspace` (**524 passed, 0 failed**) · `git diff --exit-code -- ui/src/bindings`
+  (clean) · live `npm run tauri dev`: clean boot (`schema_version=10`, no migration; **no "tray init
+  failed"**, no panic, no autostart warning; subsystems up through embeddings/vision scheduler),
+  clean shutdown, no orphaned `screensearch.exe`/`llama-server.exe`.
+
+---
+
 ## 2026-07-05 — 0.3.2 PR3: system tray + quick actions (#56/#57; Rust lane)
 
 - **Change:** Implemented issue #56 (systray) + the remainder of #57 (quick actions) per

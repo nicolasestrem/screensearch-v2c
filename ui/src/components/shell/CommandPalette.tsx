@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 
 import { cn } from "../../lib/cn";
 import { useUiStore } from "../../state/uiStore";
+import { useJobStats, useSidecarStatus } from "../../lib/ipc/queries";
 import {
   useCancelVision,
   useCaptureControl,
@@ -44,10 +45,20 @@ export function CommandPalette() {
   const close = useUiStore((s) => s.closePalette);
   const navigate = useNavigate();
   const capture = useCaptureControl();
+  const sidecar = useSidecarStatus();
+  const jobs = useJobStats();
   const loadModel = useLoadModel();
   const unloadModel = useUnloadModel();
   const enqueueVision = useEnqueueVision();
   const cancelVision = useCancelVision();
+  // Mirror QuickActions (NavRail footer): the palette offers only the contextually valid
+  // half of each toggle, so it never lists "Load" while loaded (a re-`preload()` that isn't
+  // guaranteed idempotent) or "Unload"/"Stop" with nothing to act on (a noisy error/no-op
+  // toast). The answer model is "loaded" only when it is the resident sidecar model.
+  const answerLoaded =
+    sidecar.data?.state === "ready" && sidecar.data?.lane === "answer";
+  const visionActive =
+    (jobs.data?.vision_pending ?? 0) + (jobs.data?.vision_running ?? 0) > 0;
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,58 +122,72 @@ export function CommandPalette() {
         run: () => toggleCapture("stop"),
       },
       // Quick actions (0.3.2 PR3, #57) — the same lifecycle actions as the tray + the
-      // NavRail footer, reachable from the keyboard here too.
-      {
-        id: "load-answer-model",
-        label: "Load answer model",
-        icon: IconCpu,
-        run: () =>
-          loadModel.mutate("answer", {
-            onSuccess: () => toast.success("Answer model loaded"),
-            onError: (e) => toast.error(String(e)),
-          }),
-      },
-      {
-        id: "unload-answer-model",
-        label: "Unload answer model",
-        icon: IconCpu,
-        run: () =>
-          unloadModel.mutate(undefined, {
-            onSuccess: () => toast.success("Answer model unloaded"),
-            onError: (e) => toast.error(String(e)),
-          }),
-      },
-      {
-        id: "start-vision",
-        label: "Start vision tagging",
-        icon: IconTag,
-        run: () =>
-          enqueueVision.mutate(
-            { kind: "range", start: 0, end: Date.now() },
-            {
-              onSuccess: (n) =>
-                n > 0
-                  ? toast.success(`Vision tagging started — ${n} frames queued`)
-                  : toast.info("No untagged frames to tag"),
-              onError: (e) => toast.error(String(e)),
-            },
-          ),
-      },
-      {
-        id: "stop-vision",
-        label: "Stop vision tagging",
-        icon: IconTag,
-        run: () =>
-          cancelVision.mutate(undefined, {
-            onSuccess: (n) =>
-              n > 0
-                ? toast.info(`Stopped vision tagging — cleared ${n} queued`)
-                : toast.info("Stopped vision tagging"),
-            onError: (e) => toast.error(String(e)),
-          }),
-      },
+      // NavRail footer, reachable from the keyboard here too. Only the applicable half of
+      // each toggle is listed, so the palette never offers a contradictory action.
+      answerLoaded
+        ? {
+            id: "unload-answer-model",
+            label: "Unload answer model",
+            icon: IconCpu,
+            run: () =>
+              unloadModel.mutate(undefined, {
+                onSuccess: () => toast.success("Answer model unloaded"),
+                onError: (e) => toast.error(String(e)),
+              }),
+          }
+        : {
+            id: "load-answer-model",
+            label: "Load answer model",
+            icon: IconCpu,
+            run: () =>
+              loadModel.mutate("answer", {
+                onSuccess: () => toast.success("Answer model loaded"),
+                onError: (e) => toast.error(String(e)),
+              }),
+          },
+      visionActive
+        ? {
+            id: "stop-vision",
+            label: "Stop vision tagging",
+            icon: IconTag,
+            run: () =>
+              cancelVision.mutate(undefined, {
+                onSuccess: (n) =>
+                  n > 0
+                    ? toast.info(`Stopped vision tagging — cleared ${n} queued`)
+                    : toast.info("Stopped vision tagging"),
+                onError: (e) => toast.error(String(e)),
+              }),
+          }
+        : {
+            id: "start-vision",
+            label: "Start vision tagging",
+            icon: IconTag,
+            run: () =>
+              enqueueVision.mutate(
+                { kind: "range", start: 0, end: Date.now() },
+                {
+                  onSuccess: (n) =>
+                    n > 0
+                      ? toast.success(
+                          `Vision tagging started — ${n} frames queued`,
+                        )
+                      : toast.info("No untagged frames to tag"),
+                  onError: (e) => toast.error(String(e)),
+                },
+              ),
+          },
     ];
-  }, [navigate, capture, loadModel, unloadModel, enqueueVision, cancelVision]);
+  }, [
+    navigate,
+    capture,
+    answerLoaded,
+    visionActive,
+    loadModel,
+    unloadModel,
+    enqueueVision,
+    cancelVision,
+  ]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -984,9 +984,16 @@ async fn set_settings(
         })?;
     }
 
-    kernel::settings::save_settings(store.as_ref(), &settings)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Persist. If the save fails *after* the autostart registration was changed above, undo
+    // that registration so the OS launch-at-login state can't outlive a setting that never
+    // landed (otherwise run-at-startup stays flipped while the UI mutation rolls back). The
+    // boot-time `reconcile_autostart` is the backstop; this keeps the live session honest.
+    if let Err(e) = kernel::settings::save_settings(store.as_ref(), &settings).await {
+        if settings.app_run_at_startup != prev_settings.app_run_at_startup {
+            let _ = set_autostart(&app, prev_settings.app_run_at_startup);
+        }
+        return Err(e.to_string());
+    }
 
     // Refresh the tray's cached close-to-tray flag so the (synchronous) CloseRequested
     // handler sees the new value immediately (0.3.2 PR3).
@@ -1303,15 +1310,30 @@ pub fn run() {
 
             // Build the system tray now that `AppState` is managed (its menu handlers reach
             // the kernel/sidecar slots through it). Seed the icon from the live readiness
-            // snapshot; `forward_events` keeps it in sync from here on (no poller, `03 §7d`).
-            let tray_readiness = {
+            // snapshot and the vision label from the durable queue (a restart with pending
+            // `vision_tag` jobs must open on "Stop vision tagging", not "Start" — no
+            // `JobProgress` is emitted until a worker settles). `forward_events` keeps both
+            // in sync from here on (no poller, `03 §7d`).
+            let (tray_readiness, tray_vision_active) = {
                 let state = app.state::<AppState>();
-                match &state.kernel {
+                let readiness = match &state.kernel {
                     Some(kernel) => kernel.readiness(),
                     None => state.fallback_readiness.clone(),
-                }
+                };
+                let vision_active = match &state.store {
+                    Some(store) => tauri::async_runtime::block_on(store.job_stats())
+                        .map(|s| s.vision_pending + s.vision_running > 0)
+                        .unwrap_or(false),
+                    None => false,
+                };
+                (readiness, vision_active)
             };
-            tray::init(app.handle(), &startup_settings, &tray_readiness);
+            tray::init(
+                app.handle(),
+                &startup_settings,
+                &tray_readiness,
+                tray_vision_active,
+            );
 
             // Start the local API if it was left enabled (loud on a bind failure, D6).
             local_api::autostart(app.handle());

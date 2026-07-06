@@ -367,11 +367,31 @@ export function Component() {
   // clobber in-progress edits.
   useEffect(() => {
     if (!settings.data) return;
-    setBaseline(settings.data);
+    const data = settings.data;
+    setBaseline(data);
     if (draft === null) {
-      setDraft(settings.data);
-      setMonitorsText(settings.data.capture_monitors.join(", "));
-      setAppsText(settings.data.privacy_excluded_apps.join(", "));
+      setDraft(data);
+      setMonitorsText(data.capture_monitors.join(", "));
+      setAppsText(data.privacy_excluded_apps.join(", "));
+    } else {
+      // The App-section toggles (run-at-startup / close-to-tray) are edited through
+      // AppPanel's own self-contained round-trip, not this form's draft. Mirror their
+      // latest persisted values into the draft so they never register as unsaved here and
+      // a bulk Save of other fields never reverts a toggle changed via AppPanel (PR5 folds
+      // them into the form proper). Only these two fields are touched — in-progress edits to
+      // the form's own fields are preserved, and an unchanged draft keeps its reference (no
+      // re-render loop).
+      setDraft((cur) =>
+        cur &&
+        (cur.app_run_at_startup !== data.app_run_at_startup ||
+          cur.app_close_to_tray !== data.app_close_to_tray)
+          ? {
+              ...cur,
+              app_run_at_startup: data.app_run_at_startup,
+              app_close_to_tray: data.app_close_to_tray,
+            }
+          : cur,
+      );
     }
   }, [settings.data, draft]);
 

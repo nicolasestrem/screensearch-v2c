@@ -159,6 +159,26 @@ For each build pass, append an entry:
   runtime from `32x32.png` + a status dot; at the ~16 px Windows tray render size the dot is legible in
   the base capture but the tooltip carries the authoritative state.
 
+### PR3 review follow-up (PR #92, 2026-07-06)
+- **Reviewers:** all automated (Claude review action, ChatGPT/Codex connector, Gemini). No human review
+  comments. Four findings were valid; all fixed (Gemini reported none; bot acknowledgement comments were
+  not replied to, per the maintainer's "no need to answer bots").
+- **Fixed:** (1) **CommandPalette dual actions** — the palette listed Load *and* Unload / Start *and*
+  Stop vision unconditionally while `QuickActions` showed only the valid half; the palette now reads the
+  same `useSidecarStatus`/`useJobStats` state and renders one contextual entry per pair (no re-`preload()`
+  of a loaded model, no Unload/Stop that errors or no-ops). (2) **Settings-draft revert** — `Settings.tsx`
+  seeds its `draft` once and bulk-saves it, but the `app_*` toggles live in `AppPanel`'s own round-trip;
+  a later bulk Save reverted them. The reconcile effect now mirrors the two `app_*` fields from the live
+  query into the draft (those fields only), so they never flag dirty and Save never reverts them.
+  (3) **Tray vision seed** — `tray::init` seeded `vision_active=false`; a restart with a leftover
+  `vision_tag` backlog then showed "Start" and couldn't stop it. Setup now computes the seed from
+  `store.job_stats()` and passes it into `init`/`build`. (4) **Autostart rollback** — `set_settings`
+  now restores the prior OS autostart registration if `save_settings` fails after register-before-persist
+  changed it (boot `reconcile_autostart` remains the backstop).
+- **Verification:** UI lint + build clean; `cargo fmt`/`clippy`/`build` clean; `cargo test --workspace`
+  **524 passed, 0 failed**; bindings diff clean; live boot clean (no tray-init failure / panic / autostart
+  warning), clean shutdown, no orphaned processes. Full verbatim record in `08` (2026-07-06 entry).
+
 ---
 
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.

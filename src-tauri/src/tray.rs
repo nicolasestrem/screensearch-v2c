@@ -136,8 +136,13 @@ pub struct TrayState {
 /// Builds the tray and manages it. Logs and continues on failure — a missing tray must
 /// never take the app down (and `close_to_tray_enabled` then returns false, so window
 /// close still quits cleanly rather than hiding into nothing).
-pub fn init(app: &AppHandle, settings: &traits::Settings, readiness: &Readiness) {
-    match build(app, settings, readiness) {
+pub fn init(
+    app: &AppHandle,
+    settings: &traits::Settings,
+    readiness: &Readiness,
+    vision_active: bool,
+) {
+    match build(app, settings, readiness, vision_active) {
         Ok(state) => {
             app.manage(state);
         }
@@ -149,6 +154,7 @@ fn build(
     app: &AppHandle,
     settings: &traits::Settings,
     readiness: &Readiness,
+    vision_active: bool,
 ) -> tauri::Result<TrayState> {
     let base = decode_base();
     let icon_capturing = Image::new_owned(
@@ -168,7 +174,13 @@ fn build(
     let open_item = MenuItem::with_id(app, ID_OPEN, "Open ScreenSearch", true, None::<&str>)?;
     let pause_item = MenuItem::with_id(app, ID_PAUSE, pause_label(capturing), true, None::<&str>)?;
     let model_item = MenuItem::with_id(app, ID_MODEL, model_label(false), true, None::<&str>)?;
-    let vision_item = MenuItem::with_id(app, ID_VISION, vision_label(false), true, None::<&str>)?;
+    let vision_item = MenuItem::with_id(
+        app,
+        ID_VISION,
+        vision_label(vision_active),
+        true,
+        None::<&str>,
+    )?;
     let updates_item = MenuItem::with_id(app, ID_UPDATES, "Check for updates", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, ID_QUIT, "Quit ScreenSearch", true, None::<&str>)?;
 
@@ -211,7 +223,9 @@ fn build(
         icon_error,
         capture_running: AtomicBool::new(capturing),
         answer_loaded: AtomicBool::new(false),
-        vision_active: AtomicBool::new(false),
+        // Seeded from the durable queue so a restart with a leftover backlog opens on
+        // "Stop vision tagging" (not "Start"); kept in sync by `on_job_stats` thereafter.
+        vision_active: AtomicBool::new(vision_active),
         close_to_tray: AtomicBool::new(settings.app_close_to_tray),
         hidden_to_tray: AtomicBool::new(false),
         restore_toast_pending: AtomicBool::new(!toast_done),
