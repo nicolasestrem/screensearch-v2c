@@ -33,19 +33,6 @@ const PRESETS = [
   { label: "30 days", days: 30 },
 ] as const;
 
-function InsightsSkeleton() {
-  return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-      <Skeleton className="h-12 w-full" />
-      <Skeleton className="h-44 w-full" />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Skeleton className="h-56 w-full" />
-        <Skeleton className="h-56 w-full" />
-      </div>
-    </div>
-  );
-}
-
 export function Component() {
   const navigate = useNavigate();
   const [days, setDays] = useState(7);
@@ -87,7 +74,25 @@ export function Component() {
     </div>
   );
 
-  if (insights.isLoading) return <InsightsSkeleton />;
+  // Render the real (synchronously-known) header plus body skeletons that match the
+  // populated layout, so loading -> populated never shifts the header or body (D9 no-CLS).
+  if (insights.isLoading) {
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
+        {header}
+        <div className="flex flex-wrap gap-2">
+          <Skeleton className="h-6 w-24" />
+          <Skeleton className="h-6 w-20" />
+          <Skeleton className="h-6 w-20" />
+        </div>
+        <Skeleton className="h-44 w-full" />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Skeleton className="h-56 w-full" />
+          <Skeleton className="h-56 w-full" />
+        </div>
+      </div>
+    );
+  }
 
   if (insights.isError || !insights.data) {
     return (

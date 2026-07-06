@@ -11,6 +11,40 @@
 
 ---
 
+## 2026-07-06 — 0.3.2 PR4: shell layout hardening (D9; UI lane)
+
+- **Change:** Enforced the D9 shell layout contract app-wide (structural CSS only, tokens only). Phase A
+  (reproduce-first, recorded in `05` Pass 4 + `07` #106): the NavRail ghost/duplication glitch is a WebView2
+  GPU-compositor stale-surface artifact — the DOM and CDP renderer screenshots stay clean under
+  route/scroll/reload stress; the only rail-moving mechanism is a banner mount/unmount shifting the nav row
+  (measured +40 px), so the artifact is upstream-class and not observable in-app. Phase B:
+  - **Shell:** `AppShell` `<main>` → `relative [scrollbar-gutter:stable] [contain:paint]` + a new
+    `ScrollContainerContext`; NavRail → `relative z-rail isolate` (ghost-rail compositor mitigation);
+    StatusRail chips get stable floor widths + 5-skeleton loading parity + `overflow-x-clip` / eyebrow hidden
+    below `lg`; `Panel` header `min-h-12`.
+  - **Recall:** the virtualized search list now scrolls the shell `<main>` (window-scroller pattern with a
+    measured `scrollMargin`), the mode/query header is `sticky`, and degraded chips sit in a reserved
+    `min-h-8` status slot — removing the nested virtualizer scroller and the push-on-resolve CLS.
+  - **Nested scrollers removed:** AnswerStream thinking `<pre>` grows inline (autoscroll retargets the
+    nearest scrollable ancestor); AnswerStream/ReportView citation rows and the Moment filmstrip wrap
+    instead of scrolling horizontally.
+  - **Skeletons:** Deck/Insights/Settings loading skeletons now mirror their populated layouts (Insights
+    renders its real header during load); the Deck Today panel reserves the minimap band.
+- **Why:** `docs/0.3.2.md` PR4 + `UI_REFERENCE §8` (D9 acceptance-grade shell layout contract): one scroll
+  context per route, no nested/horizontal scrollbars 1280×720→ultrawide at 100–150 % DPI, no CLS on load,
+  fixed rails. D10 (no schema changes) and D12 (structural only) honored; overlay surfaces exempt (recorded
+  in `UI_REFERENCE §8`); ghost rail dispositioned per the stop condition (`07` #106).
+- **Verification:** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.64s` · `cargo fmt --all -- --check`
+  EXIT 0 · `cargo clippy --workspace --all-targets -- -D warnings` EXIT 0 · `cargo build --workspace`
+  Finished · `cargo test --workspace` **524 passed, 0 failed** · `git diff --exit-code -- ui/src/bindings`
+  clean. Live WebView2 (CDP) 36-cell size/DPI matrix: every cell `docHScroll = 0`, sole scroller is the
+  shell `<main>`, rail stable (local evidence under `docs/audits/shots-0.3.2-pr4/`, gitignored per
+  policy). Not automatable here (manual
+  live-acceptance): the AnswerStream thinking-trace inline growth needs a reasoning answer model that emits
+  `<think>` output — unavailable this session; the change matches the shipped MomentDetail #59 fix.
+
+---
+
 ## 2026-07-06 — 0.3.2 PR3 review follow-up: four correctness fixes (PR #92)
 
 - **Change:** Addressed the four valid findings from PR #92's automated review (all bot reviewers;

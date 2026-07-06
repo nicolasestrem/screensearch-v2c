@@ -250,7 +250,11 @@ latency < 100 ms; no layout shift on data arrival (skeletons reserve space).
 
 ### Shell layout contract (0.3.2, D9 — acceptance-grade; binds all future UI work, not just this arc's)
 - **One scroll context per route:** NavRail and StatusRail are fixed; only the content pane scrolls.
-  **No nested scrollable regions** — the 0.3.1 #59 Moment principle, applied everywhere.
+  **No nested scrollable regions** — the 0.3.1 #59 Moment principle, applied everywhere. The contract's
+  unit is the **route**: modal/overlay surfaces are not route scroll contexts and keep their own bounded
+  scroll (the command-palette listbox, the toast stack, and the separate Flow-overlay window). Deliberate
+  horizontal strips are not exempt — they wrap rather than scroll sideways (Windows draws a permanent
+  scrollbar for `overflow-x`), so no route shows a horizontal scrollbar in the matrix.
 - **No horizontal scrollbar** at any supported size: 1280×720 minimum through ultrawide, at
   100 / 125 / 150 % DPI.
 - **No cumulative layout shift on load:** skeletons reserve final dimensions (the budget rule above,

@@ -181,6 +181,150 @@ For each build pass, append an entry:
 
 ---
 
+## Pass 4 — 2026-07-06 — 0.3.2 PR4 (shell layout hardening, D9; UI lane)
+
+Reproduce-first per `docs/0.3.2.md` PR4 / `04 §3`: Phase A (repro + inventory) recorded here **before any
+fix code**. Method: the real app (`npm run tauri dev`) driven over the WebView2 DevTools protocol —
+launched with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`, a dependency-free
+Node CDP client (`Runtime.evaluate` audits + `Emulation.setDeviceMetricsOverride` for the size/DPI matrix
++ `Page.captureScreenshot`). This attaches to the **live WebView2** (Edge 149), lifting the historical
+"Playwright can't attach to the Tauri WebView" limitation for populated states.
+
+### Phase A.1 — NavRail ghost/duplication: root cause = WebView2 compositor stale-surface (upstream class)
+
+- **Reproduce protocol run:** (a) route-cycle stress — Deck→Recall→Timeline→Insights→Settings→Deck, DOM
+  rail snapshot + screenshot each transition; (b) Moment scroll stress; (c) startup probe — `Page.reload`
+  then sample rail geometry every 200 ms for 8 s; (d) banner-shift measurement.
+- **Findings (evidence):**
+  - **DOM is invariably clean.** Rail anchor count is constant at **6** (5 nav links + the version-footer
+    link) across every route transition, scroll, and reload — **0 count-mismatch anomalies**; item `top`
+    positions are deterministic. The rail is not virtualized, not remounted per route, and has no
+    transform/sticky/portal. This rules out a React/DOM/virtualized-re-render cause.
+  - **Renderer screenshots are clean.** Every `Page.captureScreenshot` (route-cycle + all 36 matrix cells)
+    shows a single correct rail — no duplicated/offset items in the renderer paint tree.
+  - **The only app-level mechanism that moves the rail is a banner mount/unmount.** AppShell stacks
+    `StatusRail / ReadinessBanner (conditional) / [NavRail + main]` vertically; the banner is a flex sibling
+    **above** the nav row, so mounting it pushes the entire rail down. Measured empirically: injecting a
+    40 px banner-sized sibling above the nav row shifts the NavRail top **48 px → 88 px (exactly +40 px)**
+    and it snaps back on removal. On a warm reload the readiness banner did not appear (kernel stayed ready),
+    so no shift occurred — consistent with the glitch being **intermittent** and tied to slow-subsystem-init
+    (or any future banner) transitions.
+- **Root cause / disposition:** the observed "ghost / duplicated nav items at wrong vertical offsets" is a
+  **GPU-compositor stale-surface artifact in WebView2** — the rail's pre-shift painted surface persisting on
+  the physical display after the row shifts vertically — **not** a DOM/React/renderer defect (both are
+  provably clean above) and, by construction, **not observable through CDP screenshots** (which read the
+  renderer, not the composited display surface). This matches known WebView2/Chromium reports of ghost
+  renders with a clean DOM (e.g. WebView2Feedback #2421 graphics corruption; VS Code #113188 "ghost renders
+  … no duplicate HTML"). Per the PR4 **stop condition** + maintainer decision (2026-07-06), this is the
+  upstream class: STOP on directly "fixing" it, apply the cleanest CSS-level mitigation, and record a `07`
+  gap row that stays open pending field recurrence. See `07` #106.
+- **Mitigation applied in Phase B (preventive hardening):** give the NavRail its own stacking context /
+  compositing boundary so it owns an isolated surface that repaints atomically on the shift
+  (`relative` + `z-rail` [finally consuming the previously-unused `--z-rail` token] + `isolation: isolate`),
+  and give `main` a paint-containment boundary (`contain: paint`) so the scrolling content layer cannot
+  share/bleed a surface with the rail. `contain: paint` only (never `layout`) — layout containment would
+  perturb the Recall `scrollMargin` `offsetTop` measurement (A.2). Risk-checked: the fixed overlays
+  (`CommandPalette`, `ToastViewport`, `DevStateBadge`) are siblings of `main`, and there are zero
+  `position: fixed` elements inside route content, so paint-containing `main` reparents nothing.
+
+### Phase A.2 — Per-route scroll-context + CLS inventory (empirical, this app's live DB)
+
+- **Single scroll spine:** `AppShell` `<main class="flex-1 min-w-0 overflow-y-auto">` (`AppShell.tsx:59`)
+  is the only intended scroller; `html/body/#root` are locked to 100% (no page scroll); no `100vh` anywhere.
+- **Confirmed nested-scroll violations (live audit):**
+  - **Recall (`Recall.tsx:255`)** — the `@tanstack/react-virtual` pane `div.min-h-0.flex-1.overflow-auto`
+    becomes a **nested vertical scroller inside `main`** as soon as results populate (the route container is
+    `h-full`, so `main` doesn't scroll and the inner pane owns the scrollbar mid-pane). Idle Recall shows no
+    scroller; driving a real search ("the" → 14 hits) surfaced it at both default and 853×480 CSS.
+  - **Moment (`Moment.tsx:171`)** — the "Around this moment" filmstrip `div.flex.gap-3.overflow-x-auto`
+    is a **nested horizontal scroller in all six matrix cells** (Windows draws a permanent 10 px h-scrollbar;
+    no overlay scrollbars).
+  - **AnswerStream (`AnswerStream.tsx:105`)** — the thinking-trace `<pre class="max-h-64 overflow-auto">`
+    nests inside `main` (route) and inside the FlowOverlay window; citation rows `overflow-x-auto`
+    (`AnswerStream.tsx:152`, `ReportView.tsx:136`) are horizontal nested scrollers.
+- **Exempt (recorded interpretation, ratified with maintainer 2026-07-06):** the contract's unit is the
+  **route**. Modal/overlay surfaces are not route scroll contexts — the CommandPalette listbox
+  (`CommandPalette.tsx:298`, `max-h-80 overflow-y-auto`, a `fixed` combobox popup) and the separate
+  FlowOverlay window (`FlowOverlay.tsx:263`, a fixed-size always-on-top window) keep their bounded scroll.
+  This interpretation is added to `UI_REFERENCE §8` as a clarifying line.
+- **Horizontal-scrollbar baseline (good, must preserve):** the size/DPI matrix audit shows **`docHScroll = 0`
+  in every cell** (5 routes idle + Moment) down to 853×480 CSS (1280×720 @150 %). StatusRail at 853×480
+  renders brand + 5 chips with headroom (visual check); the only horizontal-overflow risk is the rare
+  worst case where the two **conditional** chips (throttling + downloading) appear simultaneously — covered
+  defensively in Phase B (`overflow-x-clip` + hide the "Command Deck" sub-eyebrow below `lg`), not a
+  steady-state break.
+- **CLS sources on load:** no `scrollbar-gutter` anywhere (`globals.css:48-60`) → the `main` scrollbar
+  appearing/disappearing reflows all `mx-auto`-centered content by ±10 px, and drives a
+  `useAdaptiveBucketCount` width-oscillation class on Timeline/Insights; StatusRail loading renders **3**
+  skeletons vs **5** populated content-width chips; `Panel` headers grow 41→48 px when late `action` chips
+  arrive (Deck/Timeline/Insights); Deck/Settings/Insights skeletons under-reserve below the fold. Fonts are
+  the Windows system stack (no `@font-face` → no font-swap CLS); toasts overlay (`fixed z-toast`); images in
+  MomentDetail carry intrinsic dims. Fixes in Phase B Steps 1 & 4.
+- **Before-fix evidence:** the 36-cell before/after matrix (`audit.json` + screenshots) is saved under
+  `docs/audits/shots-0.3.2-pr4/` as **local audit evidence** (that path is gitignored by policy, like
+  `.playwright-mcp/`); the machine-readable results are tabulated in this Pass and in the PR description.
+
+### Phase B — D9 enforced app-wide (structural CSS only, tokens only, D12)
+
+- **Implemented (Step 1 — shell hardening):** `AppShell` `<main>` is now `relative
+  [scrollbar-gutter:stable] [contain:paint]` and provides a `ScrollContainerContext` (new
+  `ui/src/components/shell/ScrollContainerContext.ts`, the arc's only new file) exposing its ref; the
+  reserved gutter kills the ±10 px reflow (and the bucket-oscillation class), `contain: paint` is the
+  ghost-rail compositor boundary. NavRail is `relative z-rail isolate` (own stacking/compositing surface;
+  consumes the `--z-rail` token). StatusRail: five persistent chips get floor widths
+  (`min-w-24/20/16/28/20 justify-center`; `font-mono` already `tabular-nums`), loading renders **5**
+  matching skeletons (was 3), the "Command Deck" eyebrow is `hidden lg:inline`, the header is
+  `overflow-x-clip` + chip group `min-w-0` (clips the leftmost transient chip first, never a scrollbar).
+  `Panel` header is `min-h-12` (kills the 41→48 px late-action-chip growth app-wide). Verified live: computed
+  `main` = `contain:paint` + `scrollbar-gutter:stable` + `position:relative`, `nav` = `z-index:10` +
+  `isolation:isolate`; 853×480 screenshot shows brand + 5 even chips, no eyebrow, no overflow.
+- **Implemented (Step 2 — Recall one scroll context):** dropped the route `h-full`; the mode toggle +
+  query input are a `sticky top-0 z-rail bg-base pb-4` header (opaque, butts flush against content — no
+  peek-through); the degraded-mode chips moved into a permanently-reserved `min-h-8` `role="status"` slot
+  (appears in place, never pushes — the maintainer-ratified reading of "only the readiness banner may
+  reserve"); the `@tanstack/react-virtual` virtualizer now scrolls the shell `<main>`
+  (`getScrollElement: () => mainRef.current`, `scrollMargin = listWrap.offsetTop` re-measured by
+  ResizeObserver on mode/width change, row transform `translateY(row.start - scrollMargin)`). The nested
+  `overflow-auto` pane is gone. Verified live: post-search the only scroller is `main` (default + 853×480);
+  row 0 aligns exactly to the list top (no blank band); sticky header pins at `top:48` while scrolled;
+  Ask/Reports modes clean.
+- **Implemented (Step 3 — nested-scroller removals):** AnswerStream thinking `<pre>` grows inline (dropped
+  `max-h-64 overflow-auto`, the #59 pattern) and its stream-follow retargets the nearest scrollable
+  ancestor (`main` in the route, the overlay pane in the Flow overlay) with the 48 px near-bottom guard
+  kept; AnswerStream + ReportView citation rows and the Moment "Around this moment" filmstrip switch
+  `overflow-x-auto` → `flex-wrap`. Verified live: Moment audit shows only `main` (was `main` +
+  `overflow-x-auto`), filmstrip wraps into a grid; a real Ask streamed with the citations wrapped into a
+  grid (7 tiles), `docHScroll = 0` and no nested scrollers throughout streaming.
+- **Implemented (Step 4 — skeleton parity):** DeckSkeleton mirrors the populated stack (hero `h-28` /
+  Today+Queue grid `h-48` / WhereWasI+Intentions grid `h-40` / recents `h-64`) and the Today panel reserves
+  the minimap band (`h-7`) while the density query resolves + `min-h-7` on the top-apps chip row; Insights
+  loading renders the **real** header (synchronously known — the interactive range control is live during
+  load) + matching chips/trend/grid skeletons (removed the blind `InsightsSkeleton`); SettingsSkeleton fills
+  the fold (header + 5 panels). Verified live via `?__devState=loading`.
+- **Skipped / deferred:** the ghost-rail glitch itself is **not** fixed in app code — dispositioned upstream
+  with the mitigation above (`07` #106, Phase A stop condition). Settings skeleton is a pragmatic fold-fill
+  only (PR5 restructures the whole route). No token/palette/type changes (D12); no schema changes (D10);
+  no new settings; overlay surfaces (command palette, toast stack, FlowOverlay window) left as bounded
+  scrollers (recorded exemption).
+- **Hallucinated / corrected:** the `SearchBody` `virtualizer` prop was typed `Virtualizer<HTMLDivElement>`;
+  moving the scroll element to the shell `<main>` (`HTMLElement`) broke `tsc` — retyped to
+  `Virtualizer<HTMLElement, Element>`. Caught by `npm run build` before commit.
+- **Still risky:** the ghost-rail mitigation is not CI-observable (compositor artifact invisible to CDP);
+  re-check on the physical display and WebView2 runtime updates (`07` #106). The AnswerStream **thinking
+  trace** inline-growth could not be exercised live — the answer model available in this session emits no
+  `<think>` reasoning output (thinking was already on; trace stayed empty), so the `<pre>` never rendered;
+  the CSS change is byte-identical to the shipped-and-verified MomentDetail #59 fix and the autoscroll
+  retarget is lint-clean + guarded, but a reasoning-model Ask is a manual-acceptance follow-up.
+- **Verification (verbatim, on the PR):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.64s`
+  (tsc clean) · `node scripts/stage-mcp.mjs` up to date · `cargo fmt --all -- --check` EXIT 0 ·
+  `cargo clippy --workspace --all-targets -- -D warnings` `Finished` EXIT 0 · `cargo build --workspace`
+  `Finished` EXIT 0 · `cargo test --workspace` **524 passed, 0 failed** · `git diff --exit-code --
+  ui/src/bindings` clean. **Live run** (`npm run tauri dev`, WebView2 CDP): 36-cell size/DPI matrix — every
+  cell `docHScroll = 0`, the only scroller is the shell `<main>`, rail stable at 6 anchors (local
+  evidence under `docs/audits/shots-0.3.2-pr4/`, gitignored).
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/05_BUILD_REVIEW.v0.2.x.md`.
 > Shipped 0.3.0 history (the whole arc: PR1–PR9 + post-0.2.2 bridge fixes) →

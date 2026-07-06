@@ -15,6 +15,19 @@ import { CitationTile } from "./CitationTile";
 import { ErrorState } from "../primitives";
 import { handleExternalLinkClick } from "../../lib/openExternal";
 
+/** Nearest scrollable ancestor of `el` (the shell `<main>` in the Recall route, the
+ *  overlay's own pane in the Flow overlay) — the element to follow while the reasoning
+ *  trace streams, now that the trace grows inline instead of scrolling itself (D9, #59). */
+function nearestScrollable(el: HTMLElement): HTMLElement | null {
+  for (let n = el.parentElement; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) {
+      return n;
+    }
+  }
+  return null;
+}
+
 export interface AnswerStreamProps {
   phase: AskPhase;
   thinking: string;
@@ -51,15 +64,20 @@ export function AnswerStream({
     wasStreaming.current = streaming;
   }, [streaming]);
 
-  // Auto-follow the reasoning trace: while it streams, keep the thinking box pinned to
-  // the latest line so it doesn't get cut off — but only when the user is already near the
-  // bottom, so scrolling up to re-read isn't yanked back down.
+  // Auto-follow the reasoning trace: while it streams, keep the latest line in view so it
+  // doesn't scroll out of reach — but only when the user is already near the bottom, so
+  // scrolling up to re-read isn't yanked back down. The trace now grows inline (no inner
+  // scroll, #59), so follow the nearest scrollable ancestor (the shell <main> in the route,
+  // the overlay's own pane in the Flow overlay) rather than the <pre> itself.
   const thinkingRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
     const el = thinkingRef.current;
     if (!el || !streaming || !thinkingOpen) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    const scroller = nearestScrollable(el);
+    if (!scroller) return;
+    const nearBottom =
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+    if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
   }, [thinking, streaming, thinkingOpen]);
 
   // When the answer finishes streaming, move focus to the answer region so keyboard
@@ -102,7 +120,7 @@ export function AnswerStream({
           </summary>
           <pre
             ref={thinkingRef}
-            className="max-h-64 overflow-auto whitespace-pre-wrap px-3 pb-3 text-caption text-ink-faint font-mono"
+            className="whitespace-pre-wrap px-3 pb-3 text-caption text-ink-faint font-mono"
           >
             {thinking}
           </pre>
@@ -149,7 +167,9 @@ export function AnswerStream({
       {citations.length > 0 && (
         <div className="flex flex-col gap-2">
           <span className="eyebrow">Frames checked</span>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          {/* Wrap onto rows instead of a nested horizontal scroller (D9 — one scroll
+              context; Windows draws a permanent scrollbar for overflow-x-auto). */}
+          <div className="flex flex-wrap gap-2">
             {citations.map((id) => (
               <CitationTile key={id} frameId={id} onOpenFrame={onOpenFrame} />
             ))}

@@ -168,7 +168,10 @@ export function Component() {
 
       {context.length > 0 && (
         <Panel title="Around this moment">
-          <div className="flex gap-3 overflow-x-auto pb-1">
+          {/* Wrap onto rows instead of a nested horizontal scroller (D9 — one scroll
+              context; Windows draws a permanent scrollbar for overflow-x-auto). The page
+              scrolls as one column. */}
+          <div className="flex flex-wrap gap-3">
             {context.map((f) => (
               <FrameTile key={f.frame_id} frame={f} className="w-40 shrink-0" />
             ))}

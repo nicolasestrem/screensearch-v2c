@@ -21,8 +21,12 @@ migrations** (D10). PR1 (specs contract), PR2 (auto-update #69, `tauri-plugin-up
 `latest.json`), and **PR3 (systray #56 + quick actions #57 — native Tauri tray in
 `src-tauri/src/tray.rs`, close-to-tray default-on, run-at-startup via `tauri-plugin-autostart`,
 Load/Unload-model + Start/Stop-vision quick actions incl. a new `cancel_vision` command)** are done
-(Rust lane complete); next: PR4 shell hardening (UI lane) → PR5 Settings two-tier IA → PR6 audit +
-tag `v0.3.2` — then the 0.4.0 sessions arc.** The full app exists —
+(Rust lane complete), and **PR4 (shell-layout hardening, D9 — UI lane: one scroll context per route
+[Recall virtualizer now scrolls the shell `<main>`; AnswerStream/ReportView/Moment strips wrap;
+sticky Recall header], `scrollbar-gutter`/`contain:paint` shell + reserved-width StatusRail chips +
+skeleton parity for no-CLS, NavRail layer-isolated as the WebView2 ghost-rail mitigation, `07` #106)**
+is done; next: PR5 Settings two-tier IA → PR6 audit + tag `v0.3.2` — then the 0.4.0 sessions arc.**
+The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up
 (the 0.3.2 minisign updater signature is not Authenticode — `03 §11b`).

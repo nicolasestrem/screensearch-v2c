@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 0.3.2 PR4: shell layout hardening
+The app shell now holds one scroll context per route. Recall's search results, the Ask answer's
+"Frames checked" strip, the report source frames, and a moment's "Around this moment" filmstrip no
+longer have their own inner scrollbars: each grows or wraps inline and the page scrolls as a single
+column, with the scrollbar at the content-pane edge. No screen shows a horizontal scrollbar at any
+supported size (1280x720 through ultrawide, 100 to 150 percent scaling). Loading no longer jumps the
+layout: the status-rail chips have stable widths, panel headers reserve their height, and the Deck,
+Insights, and Settings loading skeletons match the shape of the real content (Insights even shows its
+live header while data loads). The intermittent left-rail "ghost" glitch (nav items faintly
+duplicated at the wrong height) is a known display-driver compositing quirk in the WebView2 runtime,
+not an app bug; the rail is now painted on its own isolated layer to avoid it, and the issue is
+tracked for a runtime fix. Structural only, no visual redesign; no settings or database changes.
+
 ### Added — 0.3.2 PR3: system tray + quick actions (#56/#57)
 ScreenSearch now lives in the system tray. A tray icon shows live capture state at a glance
 (capturing / paused / capture error, as a colored status dot + tooltip) — the passive "app running

@@ -47,7 +47,7 @@ export function Panel({
       {...rest}
     >
       {(title || action) && (
-        <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line">
+        <header className="flex items-center justify-between gap-3 px-4 py-3 min-h-12 border-b border-line">
           {title ? (
             <span id={titleId} className="eyebrow">
               {title}

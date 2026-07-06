@@ -133,7 +133,9 @@ export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
       {cited.length > 0 && (
         <div className="flex flex-col gap-2">
           <span className="eyebrow">Source frames</span>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          {/* Wrap onto rows instead of a nested horizontal scroller (D9 — one scroll
+              context; Windows draws a permanent scrollbar for overflow-x-auto). */}
+          <div className="flex flex-wrap gap-2">
             {shown.map((id) => (
               <CitationTile key={id} frameId={id} onOpenFrame={onOpenFrame} />
             ))}
