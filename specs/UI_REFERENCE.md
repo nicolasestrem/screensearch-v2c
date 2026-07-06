@@ -192,7 +192,10 @@ the default browser — D4, `§3`), `CommandPalette`, `ReadinessBanner`; 0.3.2: 
 `§3`/`§4`) + `TrayMenu` (the native Tauri tray — Rust-built, not a
 React component; listed here so its `§4` states are owned by this file; mechanics `03 §7d`).
 Primitives: `Panel`, `Button`, `IconButton`, `Field`, `Select`, `Toggle`, `Chip`, `Toast`,
-`EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`.
+`EmptyState`, `ErrorState`, `Skeleton`, `Tooltip`, `Expander` (0.3.2 PR5: a Panel-shaped
+disclosure for a collapsed-by-default settings group — header row = the disclosure button
+with `aria-expanded`/`aria-controls`, labelled-region body, intro sentence visible while
+collapsed; open state is per-session via the ui store, per `§3` D6).
 Domain: `ScanlineTimeline`, `FrameTile`, `FrameImage` (lazy), `AnswerStream` (markdown + citations),
 `SearchResult`, `MomentDetail` (0.3.1: recognized-text + raw-text regions grow inline — no internal
 max-height, no nested scrollbar; one scroll context — D1, `§4`), `JobQueueMeter`, `ModelTierPicker`

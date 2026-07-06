@@ -441,9 +441,6 @@ pub struct Settings {
     /// Empty = all monitors.
     pub capture_monitors: Vec<u32>,
     pub capture_diff_threshold: f32,
-    /// JPEG quality (1–100). Inert for the lossless WebP encoder used by the storage path
-    /// today; retained for the setting's stability and any future lossy codec.
-    pub storage_jpeg_quality: u8,
     /// Max stored-image width in px; the capture is downscaled (aspect kept) above it.
     /// `0` = native (no downscale) — keeps ultra-wide captures legible.
     pub storage_max_width: u32,
@@ -549,13 +546,6 @@ pub struct Settings {
     /// strictly better. Baked into the provider at startup — applied on app restart (a
     /// capture stop/start reuses the existing provider).
     pub capture_uia_min_text_chars: u32,
-    /// Run UIA on high-frequency interactive triggers — click and scroll-stop
-    /// (`capture.uia_run_on_interactive`, `07` #71). Default **OFF**: those frames fall back
-    /// to OCR (the captured bitmap, which never touches the target app), because a UIA walk
-    /// during scroll is what froze Chromium/Electron apps. When on, every trigger runs UIA
-    /// (the in-flight guard + bounded queue + control-view walk still bound the load). Baked
-    /// into the provider at startup — applied on app restart (a capture stop/start reuses it).
-    pub capture_uia_run_on_interactive: bool,
     /// Walk the UIA **control view** rather than the raw view
     /// (`capture.uia_view_control_only`, `07` #71). Default **ON**: control view collapses a
     /// Chromium page's per-text-run node explosion to the elements that carry text, slashing
@@ -574,9 +564,10 @@ pub struct Settings {
     /// last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
     /// `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
     /// default timer-only capture path, where every frame is a `Timer` and a tick can land
-    /// mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
-    /// when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
-    /// the provider at startup — applied on app restart.
+    /// mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate — it always
+    /// applies otherwise (0.3.2 PR5 retired the former `capture.uia_run_on_interactive`
+    /// bypass with the knob, `07` #83). A threshold, never hardcoded. Baked into the
+    /// provider at startup — applied on app restart.
     pub capture_uia_suppress_during_input_ms: u32,
     /// Global Flow overlay summon hotkey (`overlay.hotkey`, 0.3.0 PR5). The shell
     /// validates and registers the chord so a bad/colliding value becomes the D6
@@ -642,7 +633,6 @@ impl Default for Settings {
             capture_interval_ms: 3000,
             capture_monitors: Vec::new(),
             capture_diff_threshold: 0.006,
-            storage_jpeg_quality: 80,
             // 0 = capture at the monitor's native width (no downscale) — keeps ultra-wide
             // captures legible; any positive value caps the stored image width.
             storage_max_width: 0,
@@ -719,11 +709,10 @@ impl Default for Settings {
             capture_uia_text_enabled: true,
             capture_uia_latency_budget_ms: 150,
             capture_uia_min_text_chars: 16,
-            // 0.2.1 UIA hang fix (`07` #71): don't walk on scroll/click (the freeze repro),
-            // use the lighter control view, and bound nodes + live TextPattern reads. These
-            // are settings, never hardcoded (PR3 stance); max_nodes/textpattern replace the
-            // former worker.rs consts.
-            capture_uia_run_on_interactive: false,
+            // 0.2.1 UIA hang fix (`07` #71): use the lighter control view and bound nodes +
+            // live TextPattern reads. These are settings, never hardcoded (PR3 stance);
+            // max_nodes/textpattern replace the former worker.rs consts. (0.3.2 PR5 retired
+            // the `run_on_interactive` knob — inert since the 0.3.0 trigger trim, `07` #83.)
             capture_uia_view_control_only: true,
             capture_uia_max_nodes: 4000,
             capture_uia_max_textpattern_calls: 64,

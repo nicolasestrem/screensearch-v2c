@@ -25,7 +25,12 @@ Load/Unload-model + Start/Stop-vision quick actions incl. a new `cancel_vision` 
 [Recall virtualizer now scrolls the shell `<main>`; AnswerStream/ReportView/Moment strips wrap;
 sticky Recall header], `scrollbar-gutter`/`contain:paint` shell + reserved-width StatusRail chips +
 skeleton parity for no-CLS, NavRail layer-isolated as the WebView2 ghost-rail mitigation, `07` #106)**
-is done; next: PR5 Settings two-tier IA → PR6 audit + tag `v0.3.2` — then the 0.4.0 sessions arc.**
+is done, and **PR5 (Settings two-tier IA, D6 — Essentials [Capture · Hotkeys · Privacy · Models ·
+Storage · App · Data] + seven collapsed-per-group Advanced expanders with per-session state and
+one-sentence section intros; the gap-#100 inline cross-chord conflict warning; the two dead
+settings — `storage.jpeg_quality`, `capture.uia_run_on_interactive` — retired via
+`RETIRED_SETTINGS_KEYS` tolerate-and-drop, D8, `07` #83 ✅)** is done; next: PR6 audit + tag
+`v0.3.2` — then the 0.4.0 sessions arc.**
 The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up

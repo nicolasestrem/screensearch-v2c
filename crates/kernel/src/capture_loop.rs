@@ -45,9 +45,6 @@ pub struct LoopCtx {
     pub events: broadcast::Sender<KernelEvent>,
     /// `enrich.embed_text` — whether each stored frame enqueues an `embed_text` job.
     pub enrich_embed_text: bool,
-    /// `storage.jpeg_quality` (1–100). Inert for the lossless WebP encoder; kept so the
-    /// setting round-trips and a future lossy codec can use it without a wiring change.
-    pub jpeg_quality: u8,
     /// `storage.max_width` — captures wider than this are downscaled (aspect kept);
     /// `0` = native (no downscale), keeping ultra-wide captures legible.
     pub max_width: u32,
@@ -202,8 +199,8 @@ fn image_paths(frames_dir: &std::path::Path, captured_at: i64, monitor: u32) -> 
 /// Downscale to `max_width` (aspect-preserved; `0` = native, no downscale) and encode as
 /// **lossless WebP**, creating parent dirs. Lossless keeps text crisp (no JPEG ringing on
 /// an ultra-wide capture) and compresses flat UI well; the constant alpha of an opaque
-/// screen is dropped to RGB. Runs on the blocking pool (CPU + file IO). `storage_jpeg_quality`
-/// does not apply to the lossless encoder. Returns the encoded file size in bytes.
+/// screen is dropped to RGB. Runs on the blocking pool (CPU + file IO). Returns the
+/// encoded file size in bytes.
 async fn write_webp(pixels: Arc<RgbaImage>, path: PathBuf, max_width: u32) -> Result<u64> {
     tokio::task::spawn_blocking(move || -> Result<u64> {
         if let Some(parent) = path.parent() {

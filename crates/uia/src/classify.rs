@@ -57,23 +57,17 @@ pub(crate) fn control_type_wants_textpattern(control_type: i32) -> bool {
     matches!(control_type, DOCUMENT | EDIT | TEXT)
 }
 
-/// Policy controlling which capture triggers run UIA, seeded from settings (`03 §3b`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UiaTriggerPolicy {
-    /// When `true`, even high-frequency interactive triggers (scroll/click) run UIA; when
-    /// `false` (the default), they fall back to OCR (`capture.uia_run_on_interactive`, `07`
-    /// #71). Default-off because a UIA walk during scroll is what froze Chromium/Electron.
-    pub run_on_interactive: bool,
-}
-
 /// Whether a capture trigger should run the (expensive) UIA tree walk. High-frequency
-/// interactive triggers — `ScrollStop` and `Click` — are gated off by default: each fires a
-/// fresh full-subtree walk against the foreground app, and on a large Chromium/Electron a11y
+/// interactive triggers — `ScrollStop` and `Click` — never do: each fires a fresh
+/// full-subtree walk against the foreground app, and on a large Chromium/Electron a11y
 /// tree that storm of synchronous cross-process calls freezes the target's UI thread ("Not
 /// responding"; scrolling is the exact reproducer). Gated frames fall back to OCR (the
-/// captured bitmap), which never touches the target app. `policy.run_on_interactive` opts
-/// back into the legacy behavior. Every other trigger is low-frequency enough that one
-/// bounded walk is safe. The match is exhaustive so a new `CaptureTrigger` forces a decision.
+/// captured bitmap), which never touches the target app. Every other trigger is
+/// low-frequency enough that one bounded walk is safe. The match is exhaustive so a new
+/// `CaptureTrigger` forces a decision. (The former `capture.uia_run_on_interactive` opt-in
+/// was retired in 0.3.2 PR5 — inert since the 0.3.0 trigger trim removed the only triggers
+/// it gated on new frames, `07` #83; legacy `ScrollStop`/`Click` frames stay readable, they
+/// just never re-walk.)
 ///
 /// Residual at the `Timer` arm: the default timer-only capture path (event-driven capture
 /// off) tags *every* frame `Timer`, so this gate alone would still walk the tree on a timer
@@ -82,12 +76,12 @@ pub struct UiaTriggerPolicy {
 /// residual is handled separately by [`input_gate_skips_uia`], which routes `Timer` frames
 /// captured during active input to OCR; the per-node `BuildUpdatedCache` cache-batching that
 /// cut the walk's per-node cross-process cost shipped under `07` #71.
-pub fn trigger_runs_uia(trigger: traits::CaptureTrigger, policy: UiaTriggerPolicy) -> bool {
+pub fn trigger_runs_uia(trigger: traits::CaptureTrigger) -> bool {
     use traits::CaptureTrigger::{
         Click, ClipboardChange, ForegroundChange, Idle, Manual, ScrollStop, Timer, TypingPause,
     };
     match trigger {
-        ScrollStop | Click => policy.run_on_interactive,
+        ScrollStop | Click => false,
         // `Timer` is additionally input-gated by `input_gate_skips_uia` (`07` #71) — see above.
         Timer | Idle | TypingPause | ForegroundChange | ClipboardChange | Manual => true,
     }
@@ -104,16 +98,15 @@ pub fn trigger_runs_uia(trigger: traits::CaptureTrigger, policy: UiaTriggerPolic
 /// trigger that fires blind to user activity. Every other trigger is exempt — `ScrollStop`/
 /// `Click` are already handled by [`trigger_runs_uia`]; `ForegroundChange`/`ClipboardChange`/
 /// `Manual` must run UIA *because* the user just acted (capture the new state); `Idle`/
-/// `TypingPause` fire only after input has quiesced. When the user has opted into UIA during
-/// interaction (`policy.run_on_interactive`), the gate is bypassed, so that one knob coherently
-/// governs all "run UIA while interacting" behavior.
+/// `TypingPause` fire only after input has quiesced. The window always applies when non-zero
+/// (0.3.2 PR5 retired the former `capture.uia_run_on_interactive` bypass with the knob,
+/// `07` #83 / `03 §8`).
 pub fn input_gate_skips_uia(
     trigger: traits::CaptureTrigger,
     ms_since_last_input: u32,
     suppress_window_ms: u32,
-    policy: UiaTriggerPolicy,
 ) -> bool {
-    if policy.run_on_interactive || suppress_window_ms == 0 {
+    if suppress_window_ms == 0 {
         return false;
     }
     matches!(trigger, traits::CaptureTrigger::Timer) && ms_since_last_input < suppress_window_ms
@@ -144,42 +137,25 @@ mod tests {
     use super::*;
     use traits::CaptureTrigger;
 
-    const GATED: UiaTriggerPolicy = UiaTriggerPolicy {
-        run_on_interactive: false,
-    };
-    const PERMISSIVE: UiaTriggerPolicy = UiaTriggerPolicy {
-        run_on_interactive: true,
-    };
-
     #[test]
-    fn high_frequency_interactive_triggers_skip_uia_by_default() {
+    fn high_frequency_interactive_triggers_never_run_uia() {
         // Scroll and click are the exact triggers that reproduce the Chromium hang: each
-        // fires a fresh full-tree walk against the target app. Under the default policy they
-        // must NOT run UIA; OCR (the captured bitmap) carries those frames instead.
-        assert!(!trigger_runs_uia(CaptureTrigger::ScrollStop, GATED));
-        assert!(!trigger_runs_uia(CaptureTrigger::Click, GATED));
+        // fires a fresh full-tree walk against the target app. They must NOT run UIA; OCR
+        // (the captured bitmap) carries those (legacy-only, post-0.3.0) frames instead.
+        assert!(!trigger_runs_uia(CaptureTrigger::ScrollStop));
+        assert!(!trigger_runs_uia(CaptureTrigger::Click));
     }
 
     #[test]
-    fn interactive_triggers_run_uia_when_policy_opts_in() {
-        // The opt-in restores the legacy behavior (the guard + bounded queue + control view
-        // still bound the load).
-        assert!(trigger_runs_uia(CaptureTrigger::ScrollStop, PERMISSIVE));
-        assert!(trigger_runs_uia(CaptureTrigger::Click, PERMISSIVE));
-    }
-
-    #[test]
-    fn low_frequency_triggers_run_uia_under_either_policy() {
-        // Everything else is low-frequency enough that one bounded walk is safe regardless of
-        // the interactive policy, and these frames benefit most from UIA's higher fidelity.
-        for policy in [GATED, PERMISSIVE] {
-            assert!(trigger_runs_uia(CaptureTrigger::Timer, policy));
-            assert!(trigger_runs_uia(CaptureTrigger::Idle, policy));
-            assert!(trigger_runs_uia(CaptureTrigger::TypingPause, policy));
-            assert!(trigger_runs_uia(CaptureTrigger::ForegroundChange, policy));
-            assert!(trigger_runs_uia(CaptureTrigger::ClipboardChange, policy));
-            assert!(trigger_runs_uia(CaptureTrigger::Manual, policy));
-        }
+    fn low_frequency_triggers_run_uia() {
+        // Everything else is low-frequency enough that one bounded walk is safe, and these
+        // frames benefit most from UIA's higher fidelity.
+        assert!(trigger_runs_uia(CaptureTrigger::Timer));
+        assert!(trigger_runs_uia(CaptureTrigger::Idle));
+        assert!(trigger_runs_uia(CaptureTrigger::TypingPause));
+        assert!(trigger_runs_uia(CaptureTrigger::ForegroundChange));
+        assert!(trigger_runs_uia(CaptureTrigger::ClipboardChange));
+        assert!(trigger_runs_uia(CaptureTrigger::Manual));
     }
 
     #[test]
@@ -189,35 +165,17 @@ mod tests {
         // Chromium/Electron tree — the exact freeze the hang fix avoids. With a 500 ms window,
         // a `Timer` frame whose last input was 100 ms ago (the user is actively interacting)
         // must skip UIA and fall back to OCR.
-        assert!(input_gate_skips_uia(CaptureTrigger::Timer, 100, 500, GATED));
+        assert!(input_gate_skips_uia(CaptureTrigger::Timer, 100, 500));
         // Once input has settled past the window, the periodic walk runs again.
-        assert!(!input_gate_skips_uia(
-            CaptureTrigger::Timer,
-            800,
-            500,
-            GATED
-        ));
+        assert!(!input_gate_skips_uia(CaptureTrigger::Timer, 800, 500));
         // Exactly at the window boundary counts as settled (strictly-less-than).
-        assert!(!input_gate_skips_uia(
-            CaptureTrigger::Timer,
-            500,
-            500,
-            GATED
-        ));
+        assert!(!input_gate_skips_uia(CaptureTrigger::Timer, 500, 500));
     }
 
     #[test]
-    fn input_gate_is_disabled_by_zero_window_or_opt_in() {
+    fn input_gate_is_disabled_by_zero_window() {
         // A zero window turns the gate off entirely (the documented disable value).
-        assert!(!input_gate_skips_uia(CaptureTrigger::Timer, 0, 0, GATED));
-        // Opting into UIA-during-interaction (`run_on_interactive`) bypasses the gate too, so
-        // the one knob coherently governs all "UIA while interacting" behavior.
-        assert!(!input_gate_skips_uia(
-            CaptureTrigger::Timer,
-            50,
-            500,
-            PERMISSIVE
-        ));
+        assert!(!input_gate_skips_uia(CaptureTrigger::Timer, 0, 0));
     }
 
     #[test]
@@ -236,7 +194,7 @@ mod tests {
             CaptureTrigger::TypingPause,
         ] {
             assert!(
-                !input_gate_skips_uia(trigger, 0, 500, GATED),
+                !input_gate_skips_uia(trigger, 0, 500),
                 "{trigger:?} must not be input-gated"
             );
         }

@@ -1,11 +1,10 @@
 // AppPanel — the Settings · App section (0.3.2 PR2; UI_REFERENCE §3/§4, `03 §11b`).
 //
-// PR2 scope: the auto-update surface (status line + manual "Check for updates" +
-// "Restart to update") and the version + repo link restated where a user looks for it.
-// The run-at-startup and close-to-tray settings (D1/D3) join this section in PR3, and PR5
-// owns its final placement in the Essentials tier — this panel is self-contained (its own
-// query + mutations, no coupling to the route's draft/Save machinery), so those land here
-// without touching the rest of Settings.
+// The auto-update surface (PR2: status line + manual "Check for updates" + "Restart to
+// update", plus the version + repo link restated where a user looks for it) and the
+// run-at-startup / close-to-tray lifecycle toggles (PR3, D1/D3). PR5 placed it in the
+// Settings Essentials tier (D6) — the panel is self-contained (its own query + mutations,
+// no coupling to the route's draft/Save machinery), so placement is purely positional.
 //
 // The updater is pull-based and quiet (D1): `idle` shows no update line at all (zero
 // presence — not a "you're up to date" badge beyond the plain reassurance), and no state
@@ -106,14 +105,14 @@ export function AppPanel() {
       <div className="flex flex-col gap-4">
         {/* Section intro — plain language, from the user's side (UI_REFERENCE §9). */}
         <p className="text-caption text-ink-muted font-body">
-          ScreenSearch checks for a new version on launch. Updates never install on their
-          own — you choose when to restart.
+          How ScreenSearch starts, stays running, and updates. Updates never
+          install on their own — you choose when to restart.
         </p>
 
-        {/* Lifecycle toggles (0.3.2 PR3, #56; `03 §7d`). Provisional placement — PR5 owns
-            the final Settings IA. Self-contained round-trip (optimistic + reconcile, §4);
-            a run-at-startup registration failure rolls the toggle back and explains inline
-            below (register-before-persist means a failed save never claims launch-at-login). */}
+        {/* Lifecycle toggles (0.3.2 PR3, #56; `03 §7d`). Self-contained round-trip
+            (optimistic + reconcile, §4); a run-at-startup registration failure rolls the
+            toggle back and explains inline below (register-before-persist means a failed
+            save never claims launch-at-login). */}
         {settings.data ? (
           <LifecycleToggles
             settings={settings.data}

@@ -279,7 +279,6 @@ impl Kernel {
             frames_dir: self.frames_dir.clone(),
             events: self.events.clone(),
             enrich_embed_text: settings.enrich_embed_text,
-            jpeg_quality: settings.storage_jpeg_quality,
             max_width: settings.storage_max_width,
             chrome_suppress_min_seen: settings.text_chrome_suppress_min_seen,
             chrome_protect_min_chars: settings.text_chrome_protect_min_chars,

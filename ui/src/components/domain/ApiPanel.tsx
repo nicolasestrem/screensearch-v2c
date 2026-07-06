@@ -148,6 +148,11 @@ export function ApiPanel() {
   return (
     <Panel group title="Local API" action={statusChip}>
       <div className="flex flex-col gap-4">
+        {/* Section intro — plain language, from the user's side (UI_REFERENCE §9). */}
+        <p className="text-caption text-ink-muted font-body">
+          Lets other tools on this computer read your history over a local,
+          token-protected API. Leave it off unless you use one.
+        </p>
         <Toggle
           label="Enable local HTTP API"
           checked={s.enabled}

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - 0.3.2 PR5: Settings two-tier IA
+The Settings wall (15 flat sections, ~60 fields) is now two tiers. **Essentials** stay always
+visible: Capture (interval, monitors, event-driven master toggle), Hotkeys, Privacy, Models (tier
+pickers, thinking, and the engine's load/unload controls, now in one place), Storage, App, and Data
+(local API + export). **Advanced** collapses into seven expander groups (Capture tuning, Text
+source / UIA, Enrichment & scheduling, Performance throttle, Text filtering, Reports & retrieval,
+Inference engine) that are closed by default and remember their open state for the session. Every
+section now opens with one plain-language sentence saying what it is for. The Hotkeys section gains
+a live **conflict warning**: setting the Flow overlay and Mark-this-moment shortcuts to the same
+combination shows an inline warning the moment the chords match and clears it when they differ.
+Two provably dead settings are gone: **JPEG quality** (inert since captures moved to lossless WebP;
+its own hint said "has no effect today") and **Run UIA on click and scroll** (its triggers were
+removed in 0.3.0, so it could never fire) - an existing config that still contains either key loads
+cleanly; the stale entries are dropped once with a log line. No setting was renamed and none
+changed meaning; no database change. Keyboard and screen-reader support: each Advanced group is a
+real disclosure button (Enter/Space toggles, state announced), and the page keeps the one-scroll-
+context shell contract.
+
 ### Fixed - 0.3.2 PR4: shell layout hardening
 The app shell now holds one scroll context per route. Recall's search results, the Ask answer's
 "Frames checked" strip, the report source frames, and a moment's "Around this moment" filmstrip no
