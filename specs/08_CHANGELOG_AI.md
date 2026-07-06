@@ -11,6 +11,24 @@
 
 ---
 
+## 2026-07-06 — 0.3.2 PR5 review follow-up (PR #94, second commit; docs only)
+
+- **Change:** Corrected the human-facing record after the PR #94 automated review. Codex's one P2
+  (on `crates/uia/src/classify.rs`) is factually right that `capture.uia_run_on_interactive = true`
+  was not fully inert: it also bypassed the `input_gate_skips_uia` Timer suppress gate, so an
+  opted-in install now gets OCR for mid-input timer frames. **No code change** — `03 §8` pre-decided
+  the retirement including that bypass ("the suppress window now always applies"; tolerated +
+  ignored on load, no migration — D8), and `capture.uia_suppress_during_input_ms = 0` is the
+  documented opt-out for such installs. What needed fixing was overclaimed deadness in the record:
+  `CHANGELOG.md` no longer says the setting "could never fire" (it now names the retired side
+  effect and the remedy), `07` #83 carries a review note, and `05` Pass 5 records the disposition.
+- **Why:** accuracy of the shipped record (`04 §7`); the behavior change itself is contract-settled
+  (`03 §8`, D8), so honoring the review means documenting it truthfully, not migrating it.
+- **Verification:** docs-only diff (`git diff --stat` on the follow-up commit: `CHANGELOG.md`,
+  `specs/05`, `specs/07`, `specs/08`); no code touched, so the Pass 5 build/test evidence stands.
+
+---
+
 ## 2026-07-06 — 0.3.2 PR5: Settings two-tier IA (D6; UI lane, after PR3 + PR4)
 
 - **Change:** The flat Settings wall (16 panels, ~60 fields) became the settled two-tier IA.

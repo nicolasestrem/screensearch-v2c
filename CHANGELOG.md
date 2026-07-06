@@ -19,9 +19,12 @@ Inference engine) that are closed by default and remember their open state for t
 section now opens with one plain-language sentence saying what it is for. The Hotkeys section gains
 a live **conflict warning**: setting the Flow overlay and Mark-this-moment shortcuts to the same
 combination shows an inline warning the moment the chords match and clears it when they differ.
-Two provably dead settings are gone: **JPEG quality** (inert since captures moved to lossless WebP;
-its own hint said "has no effect today") and **Run UIA on click and scroll** (its triggers were
-removed in 0.3.0, so it could never fire) - an existing config that still contains either key loads
+Two dead settings are gone: **JPEG quality** (inert since captures moved to lossless WebP;
+its own hint said "has no effect today") and **Run UIA on click and scroll** (the click/scroll
+triggers it opted into were removed in 0.3.0; for the rare install that had switched it on, it also
+used to skip the short "don't read the screen mid-typing" pause on timer captures - that side effect
+retires with it, and setting **Suppress during input** to 0 under Advanced restores read-during-input) -
+an existing config that still contains either key loads
 cleanly; the stale entries are dropped once with a log line. No setting was renamed and none
 changed meaning; no database change. Keyboard and screen-reader support: each Advanced group is a
 real disclosure button (Enter/Space toggles, state announced), and the page keeps the one-scroll-

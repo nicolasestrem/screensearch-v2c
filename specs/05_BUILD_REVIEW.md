@@ -463,6 +463,19 @@ table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the r
   normalizes chords lexically (modifier-set + key) and would not flag two *semantically* equal but
   differently-tokenized chords beyond case/order (none are producible by `HotkeyField`, which
   emits canonical chords).
+- **Review response (PR #94, second commit — docs only):** Codex raised one P2 on
+  `crates/uia/src/classify.rs`: for an install that had opted into `capture.uia_run_on_interactive
+  = true`, the key was not fully inert — the old `policy.run_on_interactive || suppress_window_ms
+  == 0` head of `input_gate_skips_uia` also bypassed the Timer input-suppress gate, so removal
+  changes those installs to OCR for mid-input timer frames. **Factually confirmed against main;
+  disposition: as designed, no code change.** `03 §8` pre-decided exactly this in PR1 ("the
+  suppress window now always applies, since the former `uia_run_on_interactive` bypass retired
+  with the knob"; tolerated + ignored on load, **no migration** — D8), and the traits doc on
+  `capture_uia_suppress_during_input_ms` already documents the `0` opt-out, which is the remedy
+  for such installs. What the finding *did* expose is overclaimed deadness in the human-facing
+  record — `CHANGELOG.md` said the setting "could never fire" — so the CHANGELOG wording now
+  names the retired side effect + the `Suppress during input = 0` remedy, and `07` #83 carries a
+  review note. The claude-code review found no issues; gemini errored (no content to address).
 
 ---
 
