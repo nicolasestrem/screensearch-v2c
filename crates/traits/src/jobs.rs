@@ -71,4 +71,14 @@ pub struct JobStats {
     pub failed: u64,
     #[ts(type = "number")]
     pub dead: u64,
+    /// Pending `vision_tag` jobs specifically (subset of `pending`). Backs the tray +
+    /// quick-menu "Start/Stop vision tagging" label so it tracks the queue (0.3.2 PR3,
+    /// `03 §7d`) — aggregate `pending` alone can't distinguish a vision backlog.
+    #[ts(type = "number")]
+    pub vision_pending: u64,
+    /// Running `vision_tag` jobs specifically (subset of `running`). While > 0 the
+    /// tray shows "Stop vision tagging" even after the pending backlog drains, because a
+    /// cancel leaves the in-flight job to finish (0.3.2 PR3).
+    #[ts(type = "number")]
+    pub vision_running: u64,
 }

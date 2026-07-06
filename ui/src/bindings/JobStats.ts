@@ -3,4 +3,16 @@
 /**
  * Aggregate queue counts surfaced to the UI (`get_job_stats`, `03 §7`).
  */
-export type JobStats = { pending: number, running: number, done: number, failed: number, dead: number, };
+export type JobStats = { pending: number, running: number, done: number, failed: number, dead: number, 
+/**
+ * Pending `vision_tag` jobs specifically (subset of `pending`). Backs the tray +
+ * quick-menu "Start/Stop vision tagging" label so it tracks the queue (0.3.2 PR3,
+ * `03 §7d`) — aggregate `pending` alone can't distinguish a vision backlog.
+ */
+vision_pending: number, 
+/**
+ * Running `vision_tag` jobs specifically (subset of `running`). While > 0 the
+ * tray shows "Stop vision tagging" even after the pending backlog drains, because a
+ * cancel leaves the in-flight job to finish (0.3.2 PR3).
+ */
+vision_running: number, };

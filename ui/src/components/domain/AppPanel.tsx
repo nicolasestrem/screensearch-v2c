@@ -13,15 +13,17 @@
 // "Restart to update". Five states (UI_REFERENCE §4 · Updater / Settings·App rows):
 // loading → skeleton; error (load) → retry; idle/checking/available/downloading/ready →
 // the status line below; the updater's own `error` state → a quiet inline line + retry.
-import { Button, Panel, Skeleton } from "../primitives";
-import { useUpdateStatus } from "../../lib/ipc/queries";
+import { Button, Panel, Skeleton, Toggle } from "../primitives";
+import { useSettings, useUpdateStatus } from "../../lib/ipc/queries";
 import {
   useCheckForUpdates,
   useRestartToApplyUpdate,
+  useSetSettings,
 } from "../../lib/ipc/mutations";
 import { useAppVersion } from "../../lib/useAppVersion";
 import { openExternal } from "../../lib/openExternal";
 import { toast } from "../../state/toastStore";
+import type { Settings } from "../../bindings/Settings";
 import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
 /** The project's public repo — restated here from the NavRail footer (0.3.1 D4, #57). */
@@ -44,6 +46,8 @@ export function AppPanel() {
   const check = useCheckForUpdates();
   const restart = useRestartToApplyUpdate();
   const version = useAppVersion();
+  const settings = useSettings();
+  const saveSettings = useSetSettings();
 
   // Loading → skeleton matching the final layout (no spinner-only screens, §4).
   if (status.isLoading || !status.data) {
@@ -105,6 +109,26 @@ export function AppPanel() {
           ScreenSearch checks for a new version on launch. Updates never install on their
           own — you choose when to restart.
         </p>
+
+        {/* Lifecycle toggles (0.3.2 PR3, #56; `03 §7d`). Provisional placement — PR5 owns
+            the final Settings IA. Self-contained round-trip (optimistic + reconcile, §4);
+            a run-at-startup registration failure rolls the toggle back and explains inline
+            below (register-before-persist means a failed save never claims launch-at-login). */}
+        {settings.data ? (
+          <LifecycleToggles
+            settings={settings.data}
+            saving={saveSettings.isPending}
+            error={saveSettings.isError ? String(saveSettings.error) : null}
+            onChange={(patch) =>
+              saveSettings.mutate({ ...settings.data, ...patch } as Settings)
+            }
+          />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <Skeleton className="h-hit-min w-full" />
+            <Skeleton className="h-hit-min w-full" />
+          </div>
+        )}
 
         {/* Update status line — its shape follows the updater state (§4). */}
         <div className="flex flex-col gap-2">
@@ -192,5 +216,46 @@ export function AppPanel() {
         )}
       </div>
     </Panel>
+  );
+}
+
+/** The two App-lifecycle toggles (run-at-startup, close-to-tray). Split out so hooks stay
+ *  above the parent's early loading return (Rules of Hooks) and the render is compact. */
+function LifecycleToggles({
+  settings,
+  saving,
+  error,
+  onChange,
+}: {
+  settings: Settings;
+  saving: boolean;
+  error: string | null;
+  onChange: (patch: Partial<Settings>) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Toggle
+        label="Run at startup"
+        hint="Launch ScreenSearch automatically when you sign in to Windows."
+        checked={settings.app_run_at_startup}
+        disabled={saving}
+        onChange={(v) => onChange({ app_run_at_startup: v })}
+      />
+      <Toggle
+        label="Keep running in the tray"
+        hint="Closing the window keeps ScreenSearch capturing in the background — reopen it from the tray icon."
+        checked={settings.app_close_to_tray}
+        disabled={saving}
+        onChange={(v) => onChange({ app_close_to_tray: v })}
+      />
+      {error && (
+        <div className="flex flex-col gap-1">
+          <span className="text-body text-warn font-body">
+            Couldn’t apply that change.
+          </span>
+          <span className="text-caption text-ink-faint font-body">{error}</span>
+        </div>
+      )}
+    </div>
   );
 }

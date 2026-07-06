@@ -95,8 +95,9 @@ pub async fn launch_check(app: AppHandle) {
 /// synchronously; if a newer release is found, the **download runs in a background task**
 /// (holding the single-flight guard until it completes) so neither path blocks on the
 /// transfer. A second check while one is in progress — including during a background
-/// download — is a no-op (the guard is still held).
-async fn run_check(app: &AppHandle) {
+/// download — is a no-op (the guard is still held). `pub(crate)` so the tray's "Check for
+/// updates" menu item can drive the same single-flight check (0.3.2 PR3).
+pub(crate) async fn run_check(app: &AppHandle) {
     // Claim the single-flight slot; if a check/download is already running, do nothing
     // (the UI already reflects Checking / Downloading).
     let claimed = app

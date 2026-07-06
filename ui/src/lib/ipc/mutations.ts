@@ -38,6 +38,18 @@ export function useEnqueueVision() {
   });
 }
 
+/** Cancel pending vision tagging — the "Stop vision tagging" quick action (0.3.2 PR3).
+ *  The backend emits `job_progress`, but invalidate so the label flips promptly too. */
+export function useCancelVision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => cmd.cancelVision(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.jobStats });
+    },
+  });
+}
+
 /**
  * Persist settings. Optimistic: the cache is set to the submitted value up front
  * and reconciled with a refetch afterwards (UI_REFERENCE §4 Settings row).

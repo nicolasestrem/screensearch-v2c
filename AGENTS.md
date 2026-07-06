@@ -17,9 +17,12 @@ PR4 audited + released v0.3.1). The active arc is **0.3.2 — "P7.2: product she
 (`docs/0.3.2.md`): lifecycle — auto-update #69 (hard-sequenced **before** 0.4.0 ships) + systray
 #56 / quick actions #57 under the pull-based, non-shaming principle (`07` #96/#97, D4) — and
 interface — shell-layout hardening (D9) + the Settings two-tier IA (D6); **zero DB schema
-migrations** (D10). PR1 (specs contract: `03 §7d`/`§11b`/`§8`, `UI_REFERENCE §3`/`§4`/`§8`, `04`,
-`07`) is in; next: PR2 auto-update (Rust lane) ∥ PR4 shell hardening (UI lane), then PR3 → PR5 →
-PR6 audit + tag — then the 0.4.0 sessions arc.** The full app exists —
+migrations** (D10). PR1 (specs contract), PR2 (auto-update #69, `tauri-plugin-updater` + signed
+`latest.json`), and **PR3 (systray #56 + quick actions #57 — native Tauri tray in
+`src-tauri/src/tray.rs`, close-to-tray default-on, run-at-startup via `tauri-plugin-autostart`,
+Load/Unload-model + Start/Stop-vision quick actions incl. a new `cancel_vision` command)** are done
+(Rust lane complete); next: PR4 shell hardening (UI lane) → PR5 Settings two-tier IA → PR6 audit +
+tag `v0.3.2` — then the 0.4.0 sessions arc.** The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up
 (the 0.3.2 minisign updater signature is not Authenticode — `03 §11b`).

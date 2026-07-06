@@ -597,7 +597,34 @@ impl Kernel {
             }
         }
         tracing::info!(count, "enqueue_vision enqueued vision_tag jobs");
+        // Push fresh queue counts so the tray/quick-menu "Start/Stop vision tagging" label
+        // flips immediately (0.3.2 PR3) instead of waiting for a worker to complete a job —
+        // the only other JobProgress source is `worker_pool::emit_progress`.
+        self.emit_job_progress().await;
         Ok(count)
+    }
+
+    /// Cancels all `pending` `vision_tag` jobs — the tray/quick-menu "Stop vision tagging"
+    /// action (0.3.2 PR3; `03 §7d`). A `running` job is left to finish (no lease to
+    /// revoke), so the label honestly stays "Stop" until it drains. Returns how many were
+    /// cancelled and broadcasts refreshed queue counts.
+    pub async fn cancel_vision(&self) -> anyhow::Result<u64> {
+        let count = self.store.cancel_pending_vision_jobs().await?;
+        tracing::info!(count, "cancel_vision removed pending vision_tag jobs");
+        self.emit_job_progress().await;
+        Ok(count)
+    }
+
+    /// Broadcasts current queue counts as [`KernelEvent::JobProgress`] (best-effort: a
+    /// failed stats read logs and skips the emit). Shared by the on-demand vision
+    /// enqueue/cancel paths so their label state stays live without a worker tick.
+    async fn emit_job_progress(&self) {
+        match self.store.job_stats().await {
+            Ok(stats) => {
+                let _ = self.events.send(KernelEvent::JobProgress(stats));
+            }
+            Err(e) => tracing::warn!(error = %e, "emit_job_progress: job_stats read failed"),
+        }
     }
 
     /// Records a sidecar lifecycle transition: maps it onto `sidecar` readiness and

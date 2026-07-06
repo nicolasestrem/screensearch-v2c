@@ -207,22 +207,39 @@ impl SqliteStore {
         .await
     }
 
-    /// Aggregate queue counts by state for the diagnostics surface (`03 §7`).
+    /// Aggregate queue counts by state for the diagnostics surface (`03 §7`), plus the
+    /// per-kind `vision_tag` pending/running split that drives the tray + quick-menu
+    /// "Start/Stop vision tagging" label (0.3.2 PR3, `03 §7d`). One `GROUP BY state, kind`
+    /// pass fills both — the vision fields are subsets of the aggregate `pending`/`running`.
     pub async fn job_stats(&self) -> Result<JobStats> {
         self.with_conn(move |conn| {
             let mut stats = JobStats::default();
-            let mut stmt = conn.prepare("SELECT state, COUNT(*) FROM jobs GROUP BY state")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            let mut stmt =
+                conn.prepare("SELECT state, kind, COUNT(*) FROM jobs GROUP BY state, kind")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?;
             for row in rows {
-                let (state, count) = row?;
+                let (state, kind, count) = row?;
                 let count = count as u64;
                 match state.as_str() {
-                    "pending" => stats.pending = count,
-                    "running" => stats.running = count,
-                    "done" => stats.done = count,
-                    "failed" => stats.failed = count,
-                    "dead" => stats.dead = count,
+                    "pending" => stats.pending += count,
+                    "running" => stats.running += count,
+                    "done" => stats.done += count,
+                    "failed" => stats.failed += count,
+                    "dead" => stats.dead += count,
                     _ => {}
+                }
+                if kind == "vision_tag" {
+                    match state.as_str() {
+                        "pending" => stats.vision_pending += count,
+                        "running" => stats.vision_running += count,
+                        _ => {}
+                    }
                 }
             }
             Ok(stats)
@@ -242,6 +259,22 @@ impl SqliteStore {
                 |r| r.get(0),
             )?;
             Ok(count as u64)
+        })
+        .await
+    }
+
+    /// Deletes all `pending` `vision_tag` jobs (the tray/quick-menu "Stop vision tagging"
+    /// action, 0.3.2 PR3; `03 §7d`), returning how many were removed. Only `pending` rows
+    /// are dropped: a `running` job has no lease to revoke, so vision work already in
+    /// flight completes and is never lost. No schema change — a plain `DELETE` on the
+    /// existing `jobs` table (D10).
+    pub async fn cancel_pending_vision_jobs(&self) -> Result<u64> {
+        self.with_conn(move |conn| {
+            let changed = conn.execute(
+                "DELETE FROM jobs WHERE kind = 'vision_tag' AND state = 'pending'",
+                [],
+            )?;
+            Ok(changed as u64)
         })
         .await
     }

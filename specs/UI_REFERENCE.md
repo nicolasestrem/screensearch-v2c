@@ -150,7 +150,9 @@ paused / error) live. It is the entire "reminder" feature — **no notifications
 counts** (the `§4` Deck rule, extended to the OS shell). Menu: Open ScreenSearch · Pause/Resume
 capture · Load/Unload answer model · Start/Stop vision tagging · Check for updates · Quit. The
 **one-time close-to-tray toast** uses the existing `Toast` primitive + `toast` z-layer, explains that
-the app keeps running and where to turn the behavior off, and never repeats. States per `§4`.
+the app keeps running and where to turn the behavior off, and never repeats — it fires on the **first
+time the window is reopened from the tray** (not at hide, when it would never be seen; persisted via
+the `app.tray_toast_done` marker, `03 §8`). States per `§4`.
 
 **Updater surface (0.3.2, D1).** Pull-based (`03 §11b`). When — and only when — an update exists: a
 **quiet presence indicator** on the NavRail (a dot/glyph, **never a count** — the no-badge-counts

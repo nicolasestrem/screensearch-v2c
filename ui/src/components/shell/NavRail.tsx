@@ -17,6 +17,7 @@ import { useUiStore } from "../../state/uiStore";
 import { useAppVersion } from "../../lib/useAppVersion";
 import { openExternal } from "../../lib/openExternal";
 import { UpdateIndicator } from "./UpdateIndicator";
+import { QuickActions } from "./QuickActions";
 import {
   IconDeck,
   IconRecall,
@@ -149,6 +150,10 @@ export function NavRail() {
           <span>Command</span>
           <kbd className="font-mono text-data text-ink-faint">Ctrl+K</kbd>
         </button>
+        {/* Quick actions (0.3.2 PR3, #57): Load/Unload answer model + Start/Stop vision
+            tagging — the in-app half of the tray's quick menu, through the same commands.
+            Quiet (functional tones, no accent); hidden with no Tauri runtime (browser dev). */}
+        <QuickActions />
         {/* Auto-update (0.3.2 PR2, #69): a quiet presence indicator (only while an update
             exists — never a count) + the manual "Check for updates" quick-menu affordance.
             Renders nothing outside the packaged app or when no update exists (`03 §11b`). */}

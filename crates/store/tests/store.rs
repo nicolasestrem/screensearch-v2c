@@ -1042,6 +1042,74 @@ async fn complete_job_requires_running_state() {
 }
 
 #[tokio::test]
+async fn job_stats_splits_out_vision_pending_and_running() {
+    // The tray "Start/Stop vision tagging" label reads `vision_pending`/`vision_running`
+    // (subsets of the aggregate counts). Mix kinds + states and assert the split (0.3.2 PR3).
+    let store = SqliteStore::open_in_memory().unwrap();
+    for _ in 0..3 {
+        store
+            .enqueue_job(job(JobKind::VisionTag, 0, 3, 0))
+            .await
+            .unwrap();
+    }
+    store
+        .enqueue_job(job(JobKind::EmbedText, 0, 3, 0))
+        .await
+        .unwrap();
+    // Claim one vision job → it moves to running (index-backed by kind/state).
+    let claimed = store
+        .claim_jobs(&[JobKind::VisionTag], 1, 100)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    let stats = store.job_stats().await.unwrap();
+    // Aggregate: 2 vision + 1 embed pending, 1 vision running.
+    assert_eq!(stats.pending, 3);
+    assert_eq!(stats.running, 1);
+    // Per-kind vision split.
+    assert_eq!(stats.vision_pending, 2);
+    assert_eq!(stats.vision_running, 1);
+}
+
+#[tokio::test]
+async fn cancel_pending_vision_jobs_removes_only_pending_vision() {
+    // "Stop vision tagging" drops pending vision jobs; a running vision job and other kinds
+    // are untouched (no lease to revoke — the in-flight job finishes) (0.3.2 PR3).
+    let store = SqliteStore::open_in_memory().unwrap();
+    for _ in 0..3 {
+        store
+            .enqueue_job(job(JobKind::VisionTag, 0, 3, 0))
+            .await
+            .unwrap();
+    }
+    store
+        .enqueue_job(job(JobKind::EmbedText, 0, 3, 0))
+        .await
+        .unwrap();
+    // One vision job goes running before the cancel.
+    let claimed = store
+        .claim_jobs(&[JobKind::VisionTag], 1, 100)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    let cancelled = store.cancel_pending_vision_jobs().await.unwrap();
+    assert_eq!(cancelled, 2, "both pending vision jobs are cancelled");
+
+    let stats = store.job_stats().await.unwrap();
+    assert_eq!(stats.vision_pending, 0, "no pending vision jobs remain");
+    assert_eq!(
+        stats.vision_running, 1,
+        "the running vision job is left to finish"
+    );
+    assert_eq!(stats.pending, 1, "the pending embed_text job is untouched");
+
+    // Idempotent: a second cancel with nothing pending removes zero.
+    assert_eq!(store.cancel_pending_vision_jobs().await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn fail_retries_with_backoff_then_dead_letters_at_max_attempts() {
     let store = SqliteStore::open_in_memory().unwrap();
     let id = store

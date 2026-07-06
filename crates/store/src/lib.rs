@@ -322,6 +322,9 @@ impl Store for SqliteStore {
     async fn pending_vision_job_count(&self) -> Result<u64> {
         SqliteStore::pending_vision_job_count(self).await
     }
+    async fn cancel_pending_vision_jobs(&self) -> Result<u64> {
+        SqliteStore::cancel_pending_vision_jobs(self).await
+    }
     async fn reset_stale_running_jobs(&self, older_than_ms: i64) -> Result<u64> {
         SqliteStore::reset_stale_running_jobs(self, older_than_ms).await
     }
