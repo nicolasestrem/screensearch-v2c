@@ -149,7 +149,7 @@ export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
       )}
 
       {footer && (
-        <div className="whitespace-pre-wrap border-t border-line pt-2 text-caption text-ink-faint font-body">
+        <div className="whitespace-pre-wrap break-words border-t border-line pt-2 text-caption text-ink-faint font-body">
           {footer}
         </div>
       )}

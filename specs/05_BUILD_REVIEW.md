@@ -323,6 +323,31 @@ Node CDP client (`Runtime.evaluate` audits + `Emulation.setDeviceMetricsOverride
   cell `docHScroll = 0`, the only scroller is the shell `<main>`, rail stable at 6 anchors (local
   evidence under `docs/audits/shots-0.3.2-pr4/`, gitignored).
 
+### Phase B — PR #93 automated-review follow-up (2026-07-06)
+
+Bot review only (gemini-code-assist, chatgpt-codex, claude). Triaged on merit; no bot replies (maintainer directive). Two applied, one class declined:
+
+- **Applied (gemini — `nearestScrollable` layout thrashing):** the stream-follow ancestor walk read
+  `n.scrollHeight > n.clientHeight` per token, forcing a synchronous layout on every ancestor on each
+  streamed token. Dropped the overflow check — the walk now returns the first `overflow-y: auto/scroll`
+  ancestor structurally (`AnswerStream.tsx:21`). Post-PR there is a single overflow candidate per host
+  (`main` in the route, the overlay pane in Flow), so the returned element is unchanged; the caller already
+  guards with `nearBottom` (a no-op when the container isn't overflowing), so behaviour is identical minus
+  the reflow.
+- **Applied (chatgpt-codex — long tokens re-introduce h-scroll):** the inline-grown thinking `<pre>` had
+  `whitespace-pre-wrap` only, which wraps at whitespace but does not break an unbroken token wider than the
+  pane — a horizontal-scroll path straight back into the contract this PR closes. Added `break-words` to the
+  thinking `<pre>` (`AnswerStream.tsx:123`) and, for the same contract, to the two Moment recognized-text
+  `<pre>` blocks (`MomentDetail.tsx:111,127`, both on an audited route) and the ReportView footer
+  (`ReportView.tsx:152`). Gap in the original audit: "Moment pre blocks already #59-clean" covered nested
+  scroll, not long-token horizontal overflow.
+- **Declined (claude — 7× "multi-line comment block violates CLAUDE.md"):** the quoted rule ("one short
+  line max") exists nowhere in this repo's `CLAUDE.md`/`AGENTS.md`/`specs/04`; the codebase convention is
+  multi-line block comments (e.g. AnswerStream's own pre-existing module header). Acting on a fabricated
+  rule would make the new comments inconsistent with the surrounding code. Not applied.
+- **Verification (verbatim):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.53s` (tsc clean). No
+  Rust/binding surface touched (UI className + one JS guard only).
+
 ---
 
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.

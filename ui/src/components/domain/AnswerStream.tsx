@@ -21,7 +21,7 @@ import { handleExternalLinkClick } from "../../lib/openExternal";
 function nearestScrollable(el: HTMLElement): HTMLElement | null {
   for (let n = el.parentElement; n; n = n.parentElement) {
     const oy = getComputedStyle(n).overflowY;
-    if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) {
+    if (oy === "auto" || oy === "scroll") {
       return n;
     }
   }
@@ -120,7 +120,7 @@ export function AnswerStream({
           </summary>
           <pre
             ref={thinkingRef}
-            className="whitespace-pre-wrap px-3 pb-3 text-caption text-ink-faint font-mono"
+            className="whitespace-pre-wrap break-words px-3 pb-3 text-caption text-ink-faint font-mono"
           >
             {thinking}
           </pre>
