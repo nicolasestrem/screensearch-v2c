@@ -11,6 +11,67 @@
 
 ---
 
+## 2026-07-06 — 0.3.2 PR5 review follow-up (PR #94, second commit; docs only)
+
+- **Change:** Corrected the human-facing record after the PR #94 automated review. Codex's one P2
+  (on `crates/uia/src/classify.rs`) is factually right that `capture.uia_run_on_interactive = true`
+  was not fully inert: it also bypassed the `input_gate_skips_uia` Timer suppress gate, so an
+  opted-in install now gets OCR for mid-input timer frames. **No code change** — `03 §8` pre-decided
+  the retirement including that bypass ("the suppress window now always applies"; tolerated +
+  ignored on load, no migration — D8), and `capture.uia_suppress_during_input_ms = 0` is the
+  documented opt-out for such installs. What needed fixing was overclaimed deadness in the record:
+  `CHANGELOG.md` no longer says the setting "could never fire" (it now names the retired side
+  effect and the remedy), `07` #83 carries a review note, and `05` Pass 5 records the disposition.
+- **Why:** accuracy of the shipped record (`04 §7`); the behavior change itself is contract-settled
+  (`03 §8`, D8), so honoring the review means documenting it truthfully, not migrating it.
+- **Verification:** docs-only diff (`git diff --stat` on the follow-up commit: `CHANGELOG.md`,
+  `specs/05`, `specs/07`, `specs/08`); no code touched, so the Pass 5 build/test evidence stands.
+
+---
+
+## 2026-07-06 — 0.3.2 PR5: Settings two-tier IA (D6; UI lane, after PR3 + PR4)
+
+- **Change:** The flat Settings wall (16 panels, ~60 fields) became the settled two-tier IA.
+  - **UI.** `ui/src/routes/Settings.tsx` reordered into **Essentials** (Capture — interval,
+    monitors, event-driven master toggle · Hotkeys · Privacy · Models — tier pickers, thinking,
+    plus `ModelPanel` folded in for the D6 load/unload · Storage · App (`AppPanel`) · Data
+    (`ApiPanel` + export)) and **Advanced** — seven collapsed groups behind a new `Expander`
+    primitive (`primitives/Expander.tsx`: header = disclosure button with
+    `aria-expanded`/`aria-controls`, labelled-region body, intro visible while collapsed) with
+    per-session open state in `useUiStore.settingsExpanded` (`state/uiStore.ts`). One
+    plain-language intro sentence per section (§9 voice), incl. `ApiPanel`/`AppPanel`.
+    The Hotkeys section gained the **gap-#100 inline cross-chord conflict warning**
+    (`chordsConflict`: case/modifier-order-insensitive, computed on the live draft; `role="status"`
+    warn line — UI-side only per `03 §7d`).
+  - **Rust (D8 removals).** `storage_jpeg_quality` + `capture_uia_run_on_interactive` left the
+    `Settings` struct (`crates/traits/src/ipc.rs`), the per-key load/save/clamp paths
+    (`crates/kernel/src/settings.rs` — both keys appended to `RETIRED_SETTINGS_KEYS`, the shipped
+    tolerate-and-drop mechanism), the capture-loop config (`capture_loop.rs`, `kernel/src/lib.rs`),
+    and the UIA policy layer (`crates/uia/src/classify.rs`: `UiaTriggerPolicy` deleted;
+    `ScrollStop|Click` never walk; the input-suppress gate always applies when non-zero) +
+    `src-tauri/src/lib.rs` wiring. Tests updated; the generic retired-keys tests now cover the two
+    new keys (the "config with removed keys loads without error" acceptance). `Settings.ts`
+    regenerated (exactly the two fields) and committed.
+  - **Docs.** `UI_REFERENCE §5` (+`Expander`); `07` #83 → ✅ / #100 → ✅ (built);
+    `docs/ARCHITECTURE.md`; `CLAUDE.md`/`AGENTS.md` current-state; `CHANGELOG.md`; `05` Pass 5.
+- **Why:** `docs/0.3.2.md` §3 PR5 + D6/D7/D8 — the interface half's closing PR: the wall becomes
+  two honest tiers on PR4's hardened shell, PR3's keys keep their D6 home (App), and the two
+  provably-inert knobs stop lying to users (`07` #83; JPEG quality's own hint said "has no effect
+  today"). Presentation-first (D7): zero key renames, zero semantic changes; zero DB migrations
+  (D10); tokens only (D12).
+- **Verification:** `cd ui && npm run lint` (clean) `&& npm run build` (`✓ built in 1.61s`, tsc
+  clean); `node scripts/stage-mcp.mjs`; `cargo fmt --all -- --check` (clean) · `cargo clippy
+  --workspace --all-targets -- -D warnings` (clean) · `cargo build --workspace` (ok) ·
+  `cargo test --workspace` (**47 suites, 523 passed, 0 failed**) · bindings diff = the two removed
+  fields only, committed. **Live** (WebView2 CDP method, `05` Pass 4/5): real-DB startup logged
+  `settings: dropped retired keys keys=["storage.jpeg_quality", "capture.uia_run_on_interactive"]`;
+  D6 tier order verified in the DOM; expanders collapsed by default, Enter/Space keyboard toggling,
+  state surviving route round-trips; the #100 warning fired live on a recorded collision and
+  cleared on revert; 0 nested scrollers / no horizontal scrollbar collapsed **and** expanded (D9
+  holds); screenshot evidence captured.
+
+---
+
 ## 2026-07-06 — 0.3.2 PR4: shell layout hardening (D9; UI lane)
 
 - **Change:** Enforced the D9 shell layout contract app-wide (structural CSS only, tokens only). Phase A

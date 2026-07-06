@@ -197,7 +197,6 @@ async fn capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs() {
         frames_dir,
         events,
         enrich_embed_text: true,
-        jpeg_quality: 80,
         max_width: 1280,
         chrome_suppress_min_seen: 12,
         chrome_protect_min_chars: 48,
@@ -283,7 +282,6 @@ async fn capture_loop_skips_embed_jobs_when_disabled() {
         frames_dir: tmp.path().join("frames"),
         events,
         enrich_embed_text: false, // enrich.embed_text = false
-        jpeg_quality: 80,
         max_width: 1280,
         chrome_suppress_min_seen: 12,
         chrome_protect_min_chars: 48,

@@ -21,11 +21,6 @@ export type Settings = { capture_interval_ms: number,
  */
 capture_monitors: Array<number>, capture_diff_threshold: number, 
 /**
- * JPEG quality (1–100). Inert for the lossless WebP encoder used by the storage path
- * today; retained for the setting's stability and any future lossy codec.
- */
-storage_jpeg_quality: number, 
-/**
  * Max stored-image width in px; the capture is downscaled (aspect kept) above it.
  * `0` = native (no downscale) — keeps ultra-wide captures legible.
  */
@@ -175,15 +170,6 @@ capture_uia_latency_budget_ms: number,
  */
 capture_uia_min_text_chars: number, 
 /**
- * Run UIA on high-frequency interactive triggers — click and scroll-stop
- * (`capture.uia_run_on_interactive`, `07` #71). Default **OFF**: those frames fall back
- * to OCR (the captured bitmap, which never touches the target app), because a UIA walk
- * during scroll is what froze Chromium/Electron apps. When on, every trigger runs UIA
- * (the in-flight guard + bounded queue + control-view walk still bound the load). Baked
- * into the provider at startup — applied on app restart (a capture stop/start reuses it).
- */
-capture_uia_run_on_interactive: boolean, 
-/**
  * Walk the UIA **control view** rather than the raw view
  * (`capture.uia_view_control_only`, `07` #71). Default **ON**: control view collapses a
  * Chromium page's per-text-run node explosion to the elements that carry text, slashing
@@ -208,9 +194,10 @@ capture_uia_max_textpattern_calls: number,
  * last keyboard/mouse input, falling back to OCR (`capture.uia_suppress_during_input_ms`,
  * `07` #71). Closes the residual freeze gap the scroll/click trigger gate leaves in the
  * default timer-only capture path, where every frame is a `Timer` and a tick can land
- * mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate; bypassed entirely
- * when `capture_uia_run_on_interactive` is on. A threshold, never hardcoded. Baked into
- * the provider at startup — applied on app restart.
+ * mid-scroll on a heavy Chromium/Electron tree. `0` disables the gate — it always
+ * applies otherwise (0.3.2 PR5 retired the former `capture.uia_run_on_interactive`
+ * bypass with the knob, `07` #83). A threshold, never hardcoded. Baked into the
+ * provider at startup — applied on app restart.
  */
 capture_uia_suppress_during_input_ms: number, 
 /**

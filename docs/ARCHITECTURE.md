@@ -370,7 +370,8 @@ needs a sidecar; enrichment worker lanes are reconfigured by restarting the pool
 settings after save. Capture's enqueue decisions for new `embed_text` jobs are still captured when a
 capture session starts, so changing that toggle affects capture enqueueing on the next capture start.
 Captures are stored as **lossless WebP** at `storage.max_width` (default `0` = native, no
-downscale — keeps ultra-wide text legible); `storage.jpeg_quality` is inert for the lossless encoder.
+downscale — keeps ultra-wide text legible). *(The inert `storage.jpeg_quality` knob was retired in
+0.3.2 PR5; a persisted key is tolerated + dropped on load — `03 §8`, D8.)*
 `storage.retention_days` (default `30`) is a **degrade-to-text** window, not a hard delete: a startup
 and hourly sweeper removes the **screenshot file** of frames past the window and marks
 `frames.image_purged = 1`, but keeps the row + raw/content text + spans + embeddings as durable,

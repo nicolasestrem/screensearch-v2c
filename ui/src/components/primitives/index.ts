@@ -8,6 +8,7 @@ export {
 } from "./Button";
 export { IconButton, type IconButtonProps } from "./IconButton";
 export { Panel, type PanelProps } from "./Panel";
+export { Expander, type ExpanderProps } from "./Expander";
 export { Chip, type ChipProps, type ChipTone } from "./Chip";
 export { Field, type FieldProps } from "./Field";
 export { Select, type SelectProps, type SelectOption } from "./Select";

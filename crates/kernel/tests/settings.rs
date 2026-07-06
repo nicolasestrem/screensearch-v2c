@@ -31,7 +31,6 @@ async fn round_trips_non_default_values() {
         capture_interval_ms: 5000,
         capture_monitors: vec![0, 2],
         capture_diff_threshold: 0.02,
-        storage_jpeg_quality: 90,
         storage_max_width: 1600,
         storage_retention_days: 30,
         enrich_embed_text: false,
@@ -76,7 +75,6 @@ async fn round_trips_non_default_values() {
         capture_uia_latency_budget_ms: 300,
         capture_uia_min_text_chars: 32,
         // UIA hang-fix knobs (`07` #71) — each away from its default, within the clamps.
-        capture_uia_run_on_interactive: true,
         capture_uia_view_control_only: false,
         capture_uia_max_nodes: 2000,
         capture_uia_max_textpattern_calls: 128,
@@ -120,10 +118,6 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
     store.set_setting("capture.interval_ms", "1").await.unwrap();
     store
         .set_setting("capture.diff_threshold", "NaN")
-        .await
-        .unwrap();
-    store
-        .set_setting("storage.jpeg_quality", "0")
         .await
         .unwrap();
     store
@@ -185,7 +179,6 @@ async fn load_settings_sanitizes_persisted_numeric_values() {
     assert_eq!(loaded.overlay_hotkey, Settings::default().overlay_hotkey);
     assert_eq!(loaded.overlay_max_results, 50);
     assert_eq!(loaded.capture_diff_threshold, 0.0);
-    assert_eq!(loaded.storage_jpeg_quality, 1);
     assert_eq!(loaded.storage_max_width, 7680);
     assert_eq!(loaded.enrich_worker_concurrency, 1);
     assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
@@ -218,7 +211,6 @@ async fn save_settings_persists_sanitized_numeric_values() {
     let original = Settings {
         capture_interval_ms: 1,
         capture_diff_threshold: f32::NAN,
-        storage_jpeg_quality: 0,
         storage_max_width: 100_000,
         enrich_worker_concurrency: 0,
         enrich_vision_timer_interval_ms: 1,
@@ -242,7 +234,6 @@ async fn save_settings_persists_sanitized_numeric_values() {
 
     assert_eq!(loaded.capture_interval_ms, 250);
     assert_eq!(loaded.capture_diff_threshold, 0.0);
-    assert_eq!(loaded.storage_jpeg_quality, 1);
     assert_eq!(loaded.storage_max_width, 7680);
     assert_eq!(loaded.enrich_worker_concurrency, 1);
     assert_eq!(loaded.enrich_vision_timer_interval_ms, 60_000);
@@ -565,6 +556,10 @@ async fn load_drops_retired_event_keys_without_error() {
     // 0.3.0 PR2: a config persisted by an older version still carries the four extra
     // event-trigger keys + the typing-pause threshold. `drop_retired_settings` purges
     // them (so the row doesn't linger) and load must not error or be perturbed by them.
+    // 0.3.2 PR5 (D8): `storage.jpeg_quality` + `capture.uia_run_on_interactive` joined the
+    // retired list — this same test is the acceptance proof that a config persisted with
+    // the two removed keys loads without error (the seed loop covers every retired key,
+    // and the value-shape seeds below match what an upgraded install actually holds).
     use kernel::settings::{drop_retired_settings, RETIRED_SETTINGS_KEYS};
 
     let store = SqliteStore::open_in_memory().expect("open in-memory store");
@@ -577,6 +572,12 @@ async fn load_drops_retired_event_keys_without_error() {
     for key in RETIRED_SETTINGS_KEYS {
         store.set_setting(key, "true").await.unwrap();
     }
+    // Overwrite the numeric retiree with the value shape a pre-0.3.2 install persisted
+    // (`80`, not `true`) so the tolerance is proven against realistic data too.
+    store
+        .set_setting("storage.jpeg_quality", "80")
+        .await
+        .unwrap();
 
     drop_retired_settings(dyn_store).await;
 

@@ -396,6 +396,89 @@ table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the r
 
 ---
 
+## Pass 5 — 2026-07-06 — 0.3.2 PR5 (Settings two-tier IA, D6; UI lane, after PR3 + PR4)
+
+- **Implemented:**
+  - **Two-tier IA (D6, tier membership exactly as settled).** `ui/src/routes/Settings.tsx`
+    restructured: **Essentials** always visible in the D6 order — Capture (interval, monitors,
+    event-driven master toggle moved in), Hotkeys (overlay/marks chords, overlay results, dwell),
+    Privacy, Models (tier pickers + thinking + `ModelPanel` folded in: the D6 "load/unload"),
+    Storage (max width + retention), App (`AppPanel`, unchanged self-contained surface), Data
+    (`ApiPanel` + the export panel, adjacent — export stays its own panel per `UI_REFERENCE §5`).
+    **Advanced** = seven collapsed-by-default groups, one expander each: Capture tuning (change
+    threshold + the event-driven sub-knobs), Text source / UIA, Enrichment & scheduling,
+    Performance throttle (+ live readout), Text filtering (+ suppression readout), Reports &
+    retrieval, Inference engine (the former "Sidecar (advanced)" fields). Every section opens with
+    one plain-language sentence (§9 voice); `ApiPanel`/`AppPanel` got intros too.
+  - **New `Expander` primitive** (`ui/src/components/primitives/Expander.tsx`, in the §5
+    inventory): Panel-shaped disclosure — the header row is the button (`aria-expanded` +
+    `aria-controls`, ~61 px hit), the body a labelled `role="region"`; the intro stays visible
+    while collapsed. Open state per-session in `useUiStore.settingsExpanded` (Zustand ephemeral
+    state per `UI_REFERENCE §6`; no new persistence machinery).
+  - **Gap #100 conflict warning:** `chordsConflict` (case-insensitive, modifier-order-insensitive)
+    compared live against the **draft** chords; a `role="status"` warn-tone line under the two
+    `HotkeyField`s fires while they match and clears when they differ. UI-side only (`03 §7d`);
+    the D6 registration-failure warning stays the save-time safety net.
+  - **Dead-setting removals (D8):** `storage_jpeg_quality` + `capture_uia_run_on_interactive`
+    removed from `Settings` (`crates/traits/src/ipc.rs`), the load/save/clamp paths
+    (`crates/kernel/src/settings.rs`), the capture-loop config (`capture_loop.rs`/`lib.rs`), and
+    the UI; both keys joined `RETIRED_SETTINGS_KEYS` (tolerate **+ drop** on startup — the shipped
+    0.3.0 unknown-key mechanism `03 §8` points at). `crates/uia/src/classify.rs`: the
+    `UiaTriggerPolicy` struct is gone — `trigger_runs_uia(ScrollStop|Click)` is now
+    unconditionally `false` (those triggers can't fire on new frames since the 0.3.0 trim; legacy
+    frames stay readable) and the `input_gate_skips_uia` bypass fell away (the suppress window
+    always applies when non-zero, exactly as `03 §8` documents). ts-rs `Settings.ts` regenerated
+    (exactly the two fields) and committed. `07` #83 → ✅, #100 → ✅ (built).
+  - **Docs:** `UI_REFERENCE §5` (+`Expander`), `docs/ARCHITECTURE.md` jpeg line, `CLAUDE.md` /
+    `AGENTS.md` current-state, `CHANGELOG.md` entry, this file + `08`.
+  - **Verification (verbatim):** `npm run lint` (clean, exit 0) · `npm run build` `✓ built in
+    1.61s` (tsc clean) · `node scripts/stage-mcp.mjs` ok · `cargo fmt --all -- --check` clean ·
+    `cargo clippy --workspace --all-targets -- -D warnings` `Finished dev profile ... in 7.38s`
+    (clean) · `cargo build --workspace` ok · `cargo test --workspace` → **47 suites, 523 passed,
+    0 failed** · bindings diff = exactly the two removed `Settings.ts` fields (committed).
+    **Live acceptance** (`npm run tauri dev` + WebView2 CDP, the PR4 method): startup on the real
+    dev DB (which carried both retired keys) logged `WARN kernel::settings: settings: dropped
+    retired keys keys=["storage.jpeg_quality", "capture.uia_run_on_interactive"]` and loaded
+    clean; Essentials render in D6 order; all 7 expanders `aria-expanded=false` by default,
+    Enter collapses / Space expands on the focused header, open state survives a Deck→Settings
+    round-trip (per-session store); recording the overlay chord into the marks field raised the
+    #100 warning live ("Both shortcuts are set to Ctrl+Alt+Z …") and the form Reset cleared it
+    (draft left clean, nothing persisted); nested-scroller audit = **0** nested scrollers and no
+    horizontal scrollbar with all groups collapsed **and** fully expanded (D9 holds); screenshot
+    set captured (Essentials top, Advanced collapsed, expanded, conflict state — local evidence,
+    `docs/audits` stays untracked).
+- **Skipped / deferred:** settings search box (deferred by D6 — `07` #103); any visual/token
+  change (D12 fence); tray/quick-menu/palette surfaces untouched (PR3's, already final).
+- **Hallucinated / corrected:** none load-bearing. One planning-stage correction: the roadmap's
+  "tolerated-and-ignored" wording vs. the shipped tolerate-and-**drop** mechanism — `03 §8`'s
+  annotation points at the existing unknown-key rule, whose implementation (`RETIRED_SETTINGS_KEYS`
+  + startup sweep, "grows per arc") both tolerates and purges; reusing it inherits the generic
+  regression tests (`load_drops_retired_event_keys_without_error`,
+  `save_settings_never_writes_retired_keys`) and satisfies the "loads without error" acceptance.
+- **Broke / regressed:** nothing observed. The event-driven sub-knobs moved to Advanced while
+  their master toggle stays in Essentials·Capture — the collapsed group shows an honest pointer
+  line when the master is off (same conditional semantics as before, D7).
+- **Still risky:** the Advanced groups' per-session state lives in a module store, so a very long
+  session accumulates open groups (by design — "persists sensibly"); the conflict warning
+  normalizes chords lexically (modifier-set + key) and would not flag two *semantically* equal but
+  differently-tokenized chords beyond case/order (none are producible by `HotkeyField`, which
+  emits canonical chords).
+- **Review response (PR #94, second commit — docs only):** Codex raised one P2 on
+  `crates/uia/src/classify.rs`: for an install that had opted into `capture.uia_run_on_interactive
+  = true`, the key was not fully inert — the old `policy.run_on_interactive || suppress_window_ms
+  == 0` head of `input_gate_skips_uia` also bypassed the Timer input-suppress gate, so removal
+  changes those installs to OCR for mid-input timer frames. **Factually confirmed against main;
+  disposition: as designed, no code change.** `03 §8` pre-decided exactly this in PR1 ("the
+  suppress window now always applies, since the former `uia_run_on_interactive` bypass retired
+  with the knob"; tolerated + ignored on load, **no migration** — D8), and the traits doc on
+  `capture_uia_suppress_during_input_ms` already documents the `0` opt-out, which is the remedy
+  for such installs. What the finding *did* expose is overclaimed deadness in the human-facing
+  record — `CHANGELOG.md` said the setting "could never fire" — so the CHANGELOG wording now
+  names the retired side effect + the `Suppress during input = 0` remedy, and `07` #83 carries a
+  review note. The claude-code review found no issues; gemini errored (no content to address).
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/05_BUILD_REVIEW.v0.2.x.md`.
 > Shipped 0.3.0 history (the whole arc: PR1–PR9 + post-0.2.2 bridge fixes) →

@@ -2119,7 +2119,6 @@ fn spawn_ocr(
     let config = uia_runtime_config(&settings);
     tracing::info!(
         enabled = config.enabled,
-        run_on_interactive = config.trigger_policy.run_on_interactive,
         control_view = config.budget.control_view,
         suppress_during_input_ms = config.suppress_during_input_ms,
         "UI Automation text composite ready (lazy client; OCR fallback)"
@@ -2136,7 +2135,6 @@ fn spawn_ocr(
 struct UiaRuntimeConfig {
     enabled: bool,
     budget: uia::UiaBudget,
-    trigger_policy: uia::classify::UiaTriggerPolicy,
     suppress_during_input_ms: u32,
 }
 
@@ -2149,9 +2147,6 @@ fn uia_runtime_config(s: &Settings) -> UiaRuntimeConfig {
             max_nodes: s.capture_uia_max_nodes,
             max_textpattern_calls: s.capture_uia_max_textpattern_calls,
             control_view: s.capture_uia_view_control_only,
-        },
-        trigger_policy: uia::classify::UiaTriggerPolicy {
-            run_on_interactive: s.capture_uia_run_on_interactive,
         },
         suppress_during_input_ms: s.capture_uia_suppress_during_input_ms,
     }
@@ -2231,12 +2226,9 @@ impl UiaWithOcrFallback {
             return false;
         }
         match uia::input::ms_since_last_input() {
-            Some(ms) => uia::classify::input_gate_skips_uia(
-                trigger,
-                ms,
-                cfg.suppress_during_input_ms,
-                cfg.trigger_policy,
-            ),
+            Some(ms) => {
+                uia::classify::input_gate_skips_uia(trigger, ms, cfg.suppress_during_input_ms)
+            }
             None => false,
         }
     }
@@ -2356,12 +2348,12 @@ impl UiaWithOcrFallback {
 impl OcrProvider for UiaWithOcrFallback {
     async fn recognize(&self, frame: &CapturedFrame) -> traits::Result<OcrResult> {
         let cfg = *self.config.lock().expect("uia config lock");
-        // Gate UIA off when disabled, off high-frequency interactive triggers (scroll/click)
-        // by default, and while the user is actively typing (`07` #71) — each walk is
-        // synchronous cross-process COM against the foreground app, and on a large
-        // Chromium/Electron a11y tree that freezes the target's UI thread ("Not responding").
+        // Gate UIA off when disabled, off high-frequency interactive triggers (scroll/click),
+        // and while the user is actively typing (`07` #71) — each walk is synchronous
+        // cross-process COM against the foreground app, and on a large Chromium/Electron
+        // a11y tree that freezes the target's UI thread ("Not responding").
         let run_uia = cfg.enabled
-            && uia::classify::trigger_runs_uia(frame.trigger, cfg.trigger_policy)
+            && uia::classify::trigger_runs_uia(frame.trigger)
             && !self.input_gate_skips(frame.trigger, &cfg);
         if run_uia {
             // `now_ms` is an i64 epoch-ms; the breaker only does relative comparisons, so a

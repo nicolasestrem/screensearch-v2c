@@ -18,7 +18,6 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         capture_monitors: json(store, "capture.monitors", d.capture_monitors).await,
         capture_diff_threshold: num(store, "capture.diff_threshold", d.capture_diff_threshold)
             .await,
-        storage_jpeg_quality: num(store, "storage.jpeg_quality", d.storage_jpeg_quality).await,
         storage_max_width: num(store, "storage.max_width", d.storage_max_width).await,
         storage_retention_days: num(store, "storage.retention_days", d.storage_retention_days)
             .await,
@@ -165,12 +164,6 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
             d.capture_uia_min_text_chars,
         )
         .await,
-        capture_uia_run_on_interactive: boolean(
-            store,
-            "capture.uia_run_on_interactive",
-            d.capture_uia_run_on_interactive,
-        )
-        .await,
         capture_uia_view_control_only: boolean(
             store,
             "capture.uia_view_control_only",
@@ -226,7 +219,10 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
 /// persisted with any of them still loads and the stale rows don't linger (`03 §8`,
 /// `docs/0.3.0.md` PR2/PR4). Grows per arc: 0.3.0 PR2 removed the four extra event triggers
 /// (clipboard / typing-pause / click / scroll-stop) and the typing-pause threshold; PR4
-/// removed the image-embedding lane toggle (`enrich.image_embeddings`).
+/// removed the image-embedding lane toggle (`enrich.image_embeddings`); 0.3.2 PR5 retired
+/// the two provably-inert knobs — `storage.jpeg_quality` (inert since the lossless-WebP
+/// storage path) and `capture.uia_run_on_interactive` (its only firing triggers were
+/// removed by the 0.3.0 trigger trim, `07` #83) — per the D8 removal mechanics.
 pub const RETIRED_SETTINGS_KEYS: &[&str] = &[
     "capture.event_on_clipboard",
     "capture.event_on_typing_pause",
@@ -234,6 +230,8 @@ pub const RETIRED_SETTINGS_KEYS: &[&str] = &[
     "capture.event_on_scroll_stop",
     "capture.event_typing_pause_ms",
     "enrich.image_embeddings",
+    "storage.jpeg_quality",
+    "capture.uia_run_on_interactive",
 ];
 
 /// Deletes any [`RETIRED_SETTINGS_KEYS`] left in the `settings` table by an older
@@ -282,10 +280,6 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
         (
             "capture.diff_threshold".into(),
             s.capture_diff_threshold.to_string(),
-        ),
-        (
-            "storage.jpeg_quality".into(),
-            s.storage_jpeg_quality.to_string(),
         ),
         ("storage.max_width".into(), s.storage_max_width.to_string()),
         (
@@ -436,10 +430,6 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.capture_uia_min_text_chars.to_string(),
         ),
         (
-            "capture.uia_run_on_interactive".into(),
-            bool_str(s.capture_uia_run_on_interactive).into(),
-        ),
-        (
             "capture.uia_view_control_only".into(),
             bool_str(s.capture_uia_view_control_only).into(),
         ),
@@ -525,7 +515,6 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
 pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.capture_interval_ms = clamp_u32(s.capture_interval_ms, 250, 3_600_000);
     s.capture_diff_threshold = clamp_f32(s.capture_diff_threshold, 0.0, 1.0);
-    s.storage_jpeg_quality = clamp_u8(s.storage_jpeg_quality, 1, 100);
     // 0 = native (no downscale) — the capture path keeps the frame at the monitor's full
     // width so ultra-wide captures stay legible. Any positive value is a real width ceiling
     // clamped to a sane band (mirrors the `0 = auto` sentinels for sidecar ctx/recycle).
@@ -589,8 +578,8 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     s.capture_uia_min_text_chars = clamp_u32(s.capture_uia_min_text_chars, 0, 10_000);
     // 0.2.1 UIA hang fix (`07` #71). Node cap floored well above a trivial walk and ceilinged
     // so a hand-edited extreme can't reopen the freeze; live TextPattern reads floored at 1
-    // (a doc page still gets some body text) and ceilinged. `run_on_interactive` /
-    // `view_control_only` are bools (no clamp). Thresholds, not hardcoded (`03 §3b`).
+    // (a doc page still gets some body text) and ceilinged. `view_control_only` is a bool
+    // (no clamp). Thresholds, not hardcoded (`03 §3b`).
     s.capture_uia_max_nodes = clamp_u32(s.capture_uia_max_nodes, 100, 20_000);
     s.capture_uia_max_textpattern_calls = clamp_u32(s.capture_uia_max_textpattern_calls, 1, 4_096);
     // Input-suppression window: 0 (off) up to 10 s (a hand-edited extreme can't keep UIA off
@@ -632,10 +621,6 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
 }
 
 fn clamp_u32(value: u32, min: u32, max: u32) -> u32 {
-    value.clamp(min, max)
-}
-
-fn clamp_u8(value: u8, min: u8, max: u8) -> u8 {
     value.clamp(min, max)
 }
 
