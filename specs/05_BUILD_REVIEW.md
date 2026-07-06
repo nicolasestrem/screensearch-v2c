@@ -388,6 +388,11 @@ table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the r
 - **Verification (verbatim):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.54s` (tsc clean).
   UI-only. Stream-follow across the thinking→answer transition is a manual-acceptance follow-up — the
   session's answer model still emits no `<think>` output (see the manual-acceptance note above).
+- **Follow-up (gemini PR #93, HIGH — valid):** the sentinel effect fires per streamed token and
+  `nearestScrollable` walks ancestors with `getComputedStyle`, so resolving it every token thrashes during
+  a stream. Cached the resolved scroller in `scrollerRef` (resolved once when a stream starts, cleared when
+  `!streaming`) — the scrollable ancestor is stable for a stream's duration, so behaviour is unchanged.
+  `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.58s`.
 
 ---
 

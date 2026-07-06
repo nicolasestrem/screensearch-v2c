@@ -72,10 +72,18 @@ export function AnswerStream({
   // at its end while the answer streams past the fold). The nearest scrollable ancestor is
   // the shell <main> in the route, the overlay's own pane in the Flow overlay.
   const streamEndRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const el = streamEndRef.current;
-    if (!el || !streaming) return;
-    const scroller = nearestScrollable(el);
+    if (!el || !streaming) {
+      scrollerRef.current = null;
+      return;
+    }
+    // Resolve the scroller once per stream, not per token: this effect fires on every
+    // streamed token and nearestScrollable walks ancestors with getComputedStyle. The
+    // scrollable ancestor is stable while a stream runs, so cache it (reset when streaming ends).
+    if (!scrollerRef.current) scrollerRef.current = nearestScrollable(el);
+    const scroller = scrollerRef.current;
     if (!scroller) return;
     const nearBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
