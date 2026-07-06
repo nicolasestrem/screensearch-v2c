@@ -11,6 +11,35 @@
 
 ---
 
+## 2026-07-06 — 0.3.2 PR6: audit + release sweep (v0.3.2)
+
+- **Change:** The arc-closing audit + release sweep (`docs/0.3.2.md` PR6, the 0.3.1-PR4 shape).
+  - **Audit.** 10-agent adversarial audit against `main` `d8bc5d2` (7 evidence agents + 3
+    refuters): **D1–D12 all PASS, no refutation stood** — full walkthrough with file:line
+    evidence in `05` Pass 6. One record-accuracy correction accepted (the arc's user-click
+    feedback toasts are now enumerated under D4; none is push-shaped, D4 holds).
+  - **#89 fixed in-PR** (the #84 precedent — filed after the roadmap froze, surfaced by the
+    audit, maintainer chose fix-over-defer): `reportFileStem` gains the report kind for
+    daily/weekly downloads (`screensearch-report-daily-YYYY-MM-DD-HHmm.md`), custom unchanged;
+    `UI_REFERENCE` naming contract amended. Live-verified (real daily report → Downloads).
+  - **Key custody (D2) closed as the release gate:** CI secrets `TAURI_SIGNING_PRIVATE_KEY`
+    (+ empty `_PASSWORD`) set (delegated by the maintainer, verified via `gh secret list`);
+    offline private-key backup **user-attested 2026-07-06**; `07` manual step ⏳ → ✅ and row
+    #96/#97 flipped to close-at-tag wording.
+  - **Release-pipeline dry-run:** `release.yml` `workflow_dispatch` off the PR branch with the
+    live secrets — build + sign + `latest.json` exercised end-to-end before any tag exists.
+  - **Version bump** 0.3.1 → 0.3.2 across the four hand-synced fields + regenerated locks +
+    the `docs/API.md` health example.
+- **Why:** `docs/0.3.2.md` §3 PR6 + `04 §7` (audit, disposition coverage, CHANGELOG, tag prep);
+  D2 makes key custody the tag precondition; `03 §11b` genesis mechanics.
+- **Verification:** full suite on the bumped tree, verbatim in `05` Pass 6 — `npm run lint`
+  exit 0 · `npm run build` `✓ built in 1.71s` · `cargo fmt --check` clean · `clippy -D warnings`
+  clean · `cargo build` ok · `cargo test --workspace` **523 passed, 0 failed** · bindings diff
+  clean. Live smoke: clean boot `schema_version=10`, quiet update-check failure (expected 404,
+  zero dialogs), `screensearch-report-daily-2026-07-06-1901.md` saved, 0 orphaned processes.
+
+---
+
 ## 2026-07-06 — 0.3.2 PR5 review follow-up (PR #94, second commit; docs only)
 
 - **Change:** Corrected the human-facing record after the PR #94 automated review. Codex's one P2

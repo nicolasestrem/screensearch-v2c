@@ -479,6 +479,130 @@ table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the r
 
 ---
 
+## Pass 6 — 2026-07-06 — 0.3.2 PR6 (audit + tag `v0.3.2`; release sweep)
+
+- **Method (the `docs/0.3.2.md` PR6 shape, same as 0.3.1's PR4):** full mandatory re-read
+  (`04 §1`: `01`/`02`/`03 §7d`/`§11b`/`§13b`, `docs/0.3.2.md`, `UI_REFERENCE §3`/`§8`, live
+  `05`–`08` + CHANGELOG); a **10-agent adversarial audit** against `main` `d8bc5d2` — 7 parallel
+  evidence agents (D1+D2 · D3–D5 · D6–D8 · D9+D12 · D10+release-infra · D11+§2-coverage+hygiene ·
+  stale-reference sweep), then 3 independent refuters re-attacking every PASS claim with
+  file:line counterevidence; a live smoke on the bumped tree; and a release-pipeline dry-run.
+- **Implemented — D1–D12 audit, all PASS (no refutation stood):**
+  - **D1 (pull-based update UX):** `update.rs` single-flight check → background download →
+    install only via `restart_to_apply_update` (the sole `update.install` call site, after
+    `graceful_shutdown`); launch check release-builds-only (`lib.rs:1126`); manual check in tray +
+    App section + NavRail footer; the presence dot renders only when an update exists; refuters
+    confirmed no other install/relaunch path, no updater dialog wiring, no check timer. Live: the
+    manual check quiet-failed exactly per contract (endpoint 404 until the first full release) —
+    inline App-section line "Couldn't check for updates … Try again", **zero dialogs**, plugin
+    `ERROR` + wrapper `WARN` in the log only.
+  - **D2 (updater infra):** `createUpdaterArtifacts: true`, pubkey fingerprint `27E1C773C0BDF81E`
+    **cryptographically verified** by decoding the baked key (embedded key ID matches, not just
+    the comment), endpoint `releases/latest/download/latest.json`, `installMode: passive`;
+    `release.yml` signs from CI secrets and drafts a non-prerelease release;
+    `make-latest-json.mjs` refuses to emit without a `.sig` or on tag/version drift. **Key
+    custody satisfied 2026-07-06** (manual-steps entry in `07`): CI secrets set (delegated,
+    verified via `gh secret list`) + offline backup user-attested.
+  - **D3 (tray scope):** exactly the six `03 §7d` menu items (`tray.rs:174-196`, no seventh);
+    three state icons fed by the kernel event bus (no poller); close-to-tray default **true** /
+    run-at-startup default **false** (`ipc.rs:754-755`); one-shot first-restore toast persisted
+    as `app.tray_toast_done`; autostart register-before-persist with rollback; single-instance
+    restores; both quit paths route through `graceful_shutdown`.
+  - **D4 (no push):** no notification plugin/API anywhere in `src-tauri`; tray toggles are silent
+    (`tracing::warn` on failure only); no badge counts (`UpdateIndicator` is presence-only).
+    **Refuter correction accepted (record accuracy, not a violation):** the arc did add toast
+    call sites beyond the one-shot restore toast — `QuickActions.tsx` (load/unload + vision
+    feedback), `UpdateIndicator.tsx:47` / `AppPanel.tsx:91,99` (check/install failure) — every
+    one fires only as synchronous feedback to an explicit user click; nothing is push-shaped,
+    scheduled, or counting. D4 holds.
+  - **D5 (reviewed import):** Pass 3 records the sister-app review verbatim (2 patterns already
+    present, 2 adopted; the 3 s health-poll, textual icon, and OS notifications rejected per D4);
+    `tray.rs` is built on this repo's `traits::`/`AppState`/event-bus types, not ported code.
+  - **D6 (two-tier Settings IA):** Essentials membership exactly as settled (every D6-named field
+    in its named tier, none extra, none missing — refuter-checked field-by-field); seven Advanced
+    expanders, collapsed by default, per-session store; intros everywhere; the #100 conflict
+    warning normalizes case + modifier order, no false positive on empty chords, `role="status"`.
+    Live: all 7 expanders `aria-expanded=false` on the bumped tree.
+  - **D7 (presentation-first):** the arc's whole `Settings`-struct delta =
+    `storage_jpeg_quality` + `capture_uia_run_on_interactive` removed, `app_close_to_tray` +
+    `app_run_at_startup` added — zero renames, zero retained-key semantic changes (the
+    `capture_uia_suppress_during_input_ms` shift is D8's pre-decided consequence, `03 §8`/#83).
+  - **D8 (dead-setting mechanics):** both keys in `RETIRED_SETTINGS_KEYS`; the load path is
+    tolerant by construction (named-key reads — an orphaned key is simply never read, so even a
+    failed drop cannot error); save never re-emits; `UiaTriggerPolicy` gone; regression tests
+    pinned; zero references to `jpeg_quality` in `crates/store`.
+  - **D9 (shell layout contract):** `UI_REFERENCE §8` acceptance-grade contract present;
+    `AppShell` main = the single route scroll context (`scrollbar-gutter:stable` +
+    `contain:paint`); NavRail `relative z-rail isolate`; Recall window-scroller; the refuters'
+    independent overflow sweep found only the authorized scrollers (palette listbox, Flow
+    overlay window, the two Moment `<pre>` exemptions) — 0 nested-scroll violations, StatusRail
+    skeleton/chip width parity 1:1.
+  - **D10 (zero DB schema migrations):** `schema.rs` byte-identical to `v0.3.1`
+    (`LATEST_SCHEMA_VERSION = 10` both sides, `MIGRATIONS` ends at 10); the arc's only added SQL
+    is a `GROUP BY` change + a `DELETE` on the existing `jobs` table; zero DDL in the 79-file arc
+    diff. Live boot on the real dev DB: `store opened … schema_version=10`, no migration.
+  - **D11 (#88 fold-forward):** `07` #102 sits next to #98; issue #88 OPEN + `deferred-0.4.0` +
+    the rationale comment (role separation = a sessions-schema requirement).
+  - **D12 (no visual redesign):** `git diff v0.3.1..HEAD -- ui/src/styles/` **empty**
+    (tokens/globals byte-identical); tailwind/postcss configs unchanged; no hardcoded style
+    values added anywhere in the arc diff (`z-rail` consumption is usage of a pre-existing
+    token); `07` #104 present.
+  - **§2 disposition coverage:** every `docs/0.3.2.md` §2 row verified carried — #96/#97
+    (built, close at tag), #100 ✅, #83 ✅, JPEG quality (dispositioned via CHANGELOG + `03 §8`
+    per the roadmap's own routing), #102/#98, #91, #75 — plus #103 (D6 search deferral), #104
+    (D12), #105 (PR3 decisions), #106 (ghost rail: open, upstream class, mitigation shipped),
+    the updater-key manual step (now ✅), and the Authenticode step (open **by design**).
+  - **GitHub hygiene:** open issues reconciled — #69 (closes at publish, runbook), #88
+    (dispositioned), **#89 surfaced undispositioned** (filed 2026-07-05, after the roadmap froze
+    — the exact #84-precedent shape) → **maintainer decision: fix in PR6.** Fixed in this PR's
+    first commit: `reportFileStem` (`ui/src/lib/time.ts`) gains the report kind for
+    daily/weekly (`screensearch-report-daily-YYYY-MM-DD-HHmm`), custom keeps the bare 0.3.1 D2
+    shape; `ReportView` passes `request.kind`; the backend `sanitize_report_stem` passes the new
+    stem through untouched; `UI_REFERENCE` naming contract amended. No open PRs; no 0.3.2
+    milestone exists (conditional in PR1 — none created, no action).
+- **Verification (verbatim, release tree at the bump commit):** `npm ci` ok · `npm run lint`
+  (eslint, exit 0) · `npm run build` `✓ built in 1.71s` · `node scripts/stage-mcp.mjs` "up to
+  date" · `cargo fmt --all -- --check` clean · `cargo clippy --workspace --all-targets --
+  -D warnings` `Finished dev profile … in 8.76s` (clean) · `cargo build --workspace` `Finished
+  dev profile … in 27.11s` · `cargo test --workspace` → **47 suites, 523 passed, 0 failed** ·
+  `git diff --exit-code -- ui/src/bindings` clean.
+- **Release-pipeline dry-run (`release.yml` `workflow_dispatch` off this branch, secrets live):**
+  run `28808288616` → **success** (every step green; the version gate + Draft-Release steps
+  correctly skipped on a non-tag ref). The `updater-bundle` artifact contains exactly the release
+  triple: `ScreenSearch_0.3.2_x64-setup.exe` (13,430,977 B) + `.exe.sig` (424 B, "signature from
+  tauri secret key") + `latest.json` (`version: "0.3.2"`, URL
+  `releases/download/v0.3.2/ScreenSearch_0.3.2_x64-setup.exe`, non-empty signature). 7z listing
+  of the CI installer shows `screensearch.exe` **and** `screensearch-mcp.exe` bundled (the 0.3.1
+  provenance-residual check). This is the pre-tag proof of "release with a signed updater
+  manifest" — the tag build repeats the identical pipeline with the Draft-Release step live.
+- **Live smoke (bumped tree, `npm run tauri dev` + WebView2 CDP):** clean boot
+  (`schema_version=10`, OCR/UIA/sysmon/throttle/workers up, sidecar lazy); Settings two tiers +
+  7 collapsed expanders live; quick actions present in the NavRail footer; manual update check →
+  quiet inline failure, zero dialogs (expected 404 — the endpoint resolves only after the first
+  published full release); answer model loaded via the Settings control; a real daily report
+  generated and downloaded → toast `Report saved → …\Downloads\`
+  **`screensearch-report-daily-2026-07-06-1901.md`** (the #89 fix observed working); app + sidecar
+  exited to 0 processes (no orphan).
+- **Skipped / deferred:** the weekly filename variant was not separately live-run (same one-line
+  kind segment as the live-verified daily); the full PR4 screenshot matrix was not re-run (PR4's
+  gate, static contract re-verified instead); close-to-tray/single-instance native interactions
+  rest on Pass 3's live record (not re-executed; statically re-verified by two agents).
+- **Hallucinated / corrected:** the evidence pass initially claimed the one-shot restore toast
+  was the arc's only added toast — refuted (see D4 above) and corrected here. Two cosmetic claim
+  fixes: no `rust-toolchain.toml` exists (toolchain parity comes from `@stable` in both
+  workflows); the D6 conflict-warning message shows one chord form when the colliding chords are
+  typed in different orders (message clarity only; detection is order-insensitive).
+- **Broke / regressed:** nothing observed; the bump + #89 fix are the arc's only code deltas in
+  this PR.
+- **Still risky:** the v0.3.2 installs are the first updater-capable population — a first-release
+  updater bug is unfixable *by* the updater (mitigated by the PR2 E2E + this dry-run; worst case
+  is another manual download, today's status quo). The release **must be published as a full
+  (non-prerelease) release** or `releases/latest/download/latest.json` never resolves (every
+  historical release was a prerelease — this is the one new failure mode at publish time).
+  Ghost-rail (#106) mitigation remains not CI-verifiable; re-check on WebView2 updates.
+
+---
+
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
 > Shipped 0.2.x history (0.2.0–0.2.2) → `specs/archive/05_BUILD_REVIEW.v0.2.x.md`.
 > Shipped 0.3.0 history (the whole arc: PR1–PR9 + post-0.2.2 bridge fixes) →
