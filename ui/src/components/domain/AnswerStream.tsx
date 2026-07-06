@@ -64,21 +64,23 @@ export function AnswerStream({
     wasStreaming.current = streaming;
   }, [streaming]);
 
-  // Auto-follow the reasoning trace: while it streams, keep the latest line in view so it
-  // doesn't scroll out of reach — but only when the user is already near the bottom, so
-  // scrolling up to re-read isn't yanked back down. The trace now grows inline (no inner
-  // scroll, #59), so follow the nearest scrollable ancestor (the shell <main> in the route,
-  // the overlay's own pane in the Flow overlay) rather than the <pre> itself.
-  const thinkingRef = useRef<HTMLPreElement>(null);
+  // Auto-follow the stream: while it arrives, keep the newest content in view so it doesn't
+  // scroll off the bottom — but only when the user is already near the bottom, so scrolling
+  // up to re-read isn't yanked back down. Anchored to a sentinel at the very end of the
+  // stream, so it follows BOTH the reasoning trace and the answer prose below it (the trace
+  // now grows inline with no inner scroll, #59, so a long trace would otherwise pin the user
+  // at its end while the answer streams past the fold). The nearest scrollable ancestor is
+  // the shell <main> in the route, the overlay's own pane in the Flow overlay.
+  const streamEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = thinkingRef.current;
-    if (!el || !streaming || !thinkingOpen) return;
+    const el = streamEndRef.current;
+    if (!el || !streaming) return;
     const scroller = nearestScrollable(el);
     if (!scroller) return;
     const nearBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
     if (nearBottom) scroller.scrollTop = scroller.scrollHeight;
-  }, [thinking, streaming, thinkingOpen]);
+  }, [thinking, answer, streaming]);
 
   // When the answer finishes streaming, move focus to the answer region so keyboard
   // users land on the result instead of being stranded at the query input, and screen
@@ -118,10 +120,7 @@ export function AnswerStream({
           <summary className="cursor-pointer select-none px-3 py-2 text-caption text-ink-muted font-body">
             Thinking
           </summary>
-          <pre
-            ref={thinkingRef}
-            className="whitespace-pre-wrap break-words px-3 pb-3 text-caption text-ink-faint font-mono"
-          >
+          <pre className="whitespace-pre-wrap break-words px-3 pb-3 text-caption text-ink-faint font-mono">
             {thinking}
           </pre>
         </details>
@@ -176,6 +175,9 @@ export function AnswerStream({
           </div>
         </div>
       )}
+
+      {/* Follow anchor for the auto-scroll effect above — tracks the true bottom of the stream. */}
+      <div ref={streamEndRef} aria-hidden="true" />
     </div>
   );
 }

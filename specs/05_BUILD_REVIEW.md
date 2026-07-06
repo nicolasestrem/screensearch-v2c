@@ -370,6 +370,25 @@ table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the r
   clean `ui/src/bindings` diff still hold. Live visual confirm on the maintainer's running session (the
   wide-table Moment that surfaced the blowout).
 
+### Phase B — AnswerStream stream-follow regression (2026-07-06, chatgpt-codex PR #93 finding)
+
+- **Finding (valid):** the auto-follow effect only depended on `thinking`, so once a reasoning model
+  finished the trace and switched to answer `token` deltas, the effect stopped firing and the shell
+  `<main>` no longer followed the growing answer — it streamed below the fold until the final
+  focus-on-done. A **regression this PR introduced**: removing the thinking `<pre>`'s capped inner scroller
+  (`max-h-64`, #59) lets a long trace pin the user at its end while the answer scrolls past the viewport.
+- **Fix:** replaced the `thinking`-only, `thinkingRef`-anchored follow with a single effect anchored to a
+  bottom **sentinel** (`streamEndRef`, an `aria-hidden` div after the citations), keyed on `[thinking,
+  answer, streaming]`, so it follows **both** phases; kept the 48 px near-bottom guard (scrolling up to
+  re-read is not yanked) and `nearestScrollable` (shell `<main>` in the route, overlay pane in Flow).
+  Dropped the now-irrelevant `thinkingOpen` gate (the sentinel sits below a collapsed trace too).
+- **Declined (claude bot, 3 more "multi-line comment block violates CLAUDE.md" on the follow-up commits):**
+  same fabricated rule (absent from this repo); this file's established style is multi-line explanatory
+  comments (module header, the Markdown-link and focus-on-done blocks are all 5–8 lines). Not applied.
+- **Verification (verbatim):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.54s` (tsc clean).
+  UI-only. Stream-follow across the thinking→answer transition is a manual-acceptance follow-up — the
+  session's answer model still emits no `<think>` output (see the manual-acceptance note above).
+
 ---
 
 > Pre-0.2.x (v0.1.0) history → `specs/archive/05_BUILD_REVIEW.v0.1.0.md`.
