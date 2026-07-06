@@ -106,7 +106,11 @@ export function NavRail() {
   return (
     <nav
       aria-label="Primary"
-      className="flex flex-col justify-between w-44 shrink-0 bg-surface border-r border-line py-4"
+      // `relative z-rail isolate` gives the rail its own stacking context / compositing
+      // boundary so it owns an isolated surface that repaints atomically when a banner
+      // mount/unmount shifts the row vertically — the app-side mitigation for the WebView2
+      // ghost-rail stale-surface artifact (07 #106; finally consumes the `--z-rail` token).
+      className="relative z-rail isolate flex flex-col justify-between w-44 shrink-0 bg-surface border-r border-line py-4"
     >
       <ul className="flex flex-col gap-1 px-2">
         {ITEMS.map(({ to, label, icon: Icon, end }, index) => (

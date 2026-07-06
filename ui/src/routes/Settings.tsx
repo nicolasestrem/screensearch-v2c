@@ -220,13 +220,18 @@ function sanitizeSettings(s: Settings): Settings {
   };
 }
 
+// Reserves roughly the settings form's above-the-fold height (header + several panels)
+// so the loading -> populated transition doesn't jump the visible region (D9 no-CLS).
+// PR5 restructures Settings into a two-tier IA, so this stays a pragmatic approximation.
 function SettingsSkeleton() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
       <Skeleton className="h-12 w-full" />
       <Skeleton className="h-48 w-full" />
       <Skeleton className="h-48 w-full" />
-      <Skeleton className="h-40 w-full" />
+      <Skeleton className="h-48 w-full" />
+      <Skeleton className="h-48 w-full" />
+      <Skeleton className="h-48 w-full" />
     </div>
   );
 }

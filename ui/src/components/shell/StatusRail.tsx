@@ -60,15 +60,17 @@ export function StatusRail() {
     throttle.data?.enabled && throttle.data.level >= 1 ? throttle.data : null;
 
   return (
-    <header className="flex items-center justify-between gap-4 h-12 px-4 bg-surface border-b border-line">
+    <header className="flex items-center justify-between gap-4 h-12 px-4 bg-surface border-b border-line overflow-x-clip">
       <div className="flex items-baseline gap-3">
         <span className="font-display uppercase tracking-eyebrow text-subtitle text-ink">
           ScreenSearch
         </span>
-        <span className="eyebrow text-ink-faint">Command Deck</span>
+        {/* Sub-brand eyebrow is the first thing to yield at narrow widths so the live
+            chips never overflow the fixed-height rail (D9). */}
+        <span className="hidden lg:inline eyebrow text-ink-faint">Command Deck</span>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 min-w-0">
         {throttling && (
           <Tooltip
             label={`Throttling enrichment (${throttling.level >= 2 ? "Sustained" : "High"})${
@@ -107,10 +109,14 @@ export function StatusRail() {
         )}
 
         {readiness.isLoading && (
+          // Five skeletons at the same floor widths as the five populated chips below,
+          // so loading -> populated swaps in place with zero layout shift (D9).
           <>
             <Skeleton className="w-24 h-6" />
             <Skeleton className="w-20 h-6" />
-            <Skeleton className="w-24 h-6" />
+            <Skeleton className="w-16 h-6" />
+            <Skeleton className="w-28 h-6" />
+            <Skeleton className="w-20 h-6" />
           </>
         )}
 
@@ -128,7 +134,10 @@ export function StatusRail() {
               label={readiness.data.capture.detail ?? "Capture loop"}
               side="bottom"
             >
-              <Chip tone={statusTone(readiness.data.capture.status)}>
+              <Chip
+                tone={statusTone(readiness.data.capture.status)}
+                className="min-w-24 justify-center"
+              >
                 <IconCapture size={14} />
                 {statusLabel(readiness.data.capture.status)}
               </Chip>
@@ -142,7 +151,10 @@ export function StatusRail() {
               }
               side="bottom"
             >
-              <Chip tone={statusTone(readiness.data.db.status)}>
+              <Chip
+                tone={statusTone(readiness.data.db.status)}
+                className="min-w-20 justify-center"
+              >
                 <IconDatabase size={14} />
                 {storage.data ? formatBytes(storage.data.total_bytes) : "DB"}
               </Chip>
@@ -160,6 +172,7 @@ export function StatusRail() {
                 tone={
                   jobStats.data && jobStats.data.failed > 0 ? "warn" : "neutral"
                 }
+                className="min-w-16 justify-center"
               >
                 <IconQueue size={14} />
                 {jobStats.data
@@ -185,6 +198,7 @@ export function StatusRail() {
                     ? sidecarStateTone(sidecar.data.state)
                     : statusTone(readiness.data.sidecar.status)
                 }
+                className="min-w-28 justify-center"
               >
                 <IconCpu size={14} />
                 {sidecar.data
@@ -193,7 +207,11 @@ export function StatusRail() {
               </Chip>
             </Tooltip>
 
-            <Chip tone={statusTone(worstStatus(readiness.data))} dot>
+            <Chip
+              tone={statusTone(worstStatus(readiness.data))}
+              dot
+              className="min-w-20 justify-center"
+            >
               {statusLabel(worstStatus(readiness.data))}
             </Chip>
           </>

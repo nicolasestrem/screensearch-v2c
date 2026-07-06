@@ -9,6 +9,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +18,8 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+
+import { useShellScrollContainer } from "../components/shell/ScrollContainerContext";
 
 import {
   Button,
@@ -103,12 +106,32 @@ export function Component() {
   const search = useSearch(query, mode === "search");
 
   const hits = mode === "search" ? (search.data ?? []) : [];
-  const parentRef = useRef<HTMLDivElement>(null);
+  // Virtualize against the shell <main> scroll container, not a nested pane, so Recall
+  // keeps one scroll context per route (UI_REFERENCE §8, D9). `scrollMargin` is the
+  // offset of the list's start within <main> (its `offsetTop`, since <main> is the
+  // positioned offsetParent); re-measured whenever the height above the list changes
+  // (mode switch, header wrap at narrow widths) so the rows never drift.
+  const mainRef = useShellScrollContainer();
+  const listWrapRef = useRef<HTMLDivElement>(null);
+  const [listOffset, setListOffset] = useState(0);
+  useLayoutEffect(() => {
+    const el = listWrapRef.current;
+    const scroller = mainRef?.current;
+    if (!el || !scroller) return;
+    const measure = () => setListOffset(el.offsetTop);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(scroller);
+    if (el.parentElement) ro.observe(el.parentElement);
+    return () => ro.disconnect();
+  }, [mode, mainRef]);
+
   const virtualizer = useVirtualizer({
     count: hits.length,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => mainRef?.current ?? null,
     estimateSize: () => ROW_ESTIMATE,
     overscan: 8,
+    scrollMargin: listOffset,
   });
 
   // Fill + submit an Ask question (shared by the form and the premade cards). The
@@ -144,161 +167,174 @@ export function Component() {
     sidecarStatus === "unavailable" || sidecarStatus === "error";
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-4xl flex-col gap-4 p-6">
-      {/* Mode toggle. */}
-      <div className="flex gap-1" role="tablist" aria-label="Recall mode">
-        {MODES.map((m) => (
-          <button
-            key={m.value}
-            type="button"
-            role="tab"
-            aria-selected={mode === m.value}
-            onClick={() => switchMode(m.value)}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
-              "transition-colors duration-fast ease-ui",
-              mode === m.value
-                ? "bg-accent-wash text-accent"
-                : "text-ink-muted hover:text-ink hover:bg-overlay",
-            )}
-          >
-            {m.icon}
-            {m.label}
-          </button>
-        ))}
+    <div className="mx-auto flex w-full max-w-4xl flex-col p-6">
+      {/* Sticky header — the mode toggle + query input stay put while results scroll,
+          so the page keeps a single scroll context (the shell <main>, UI_REFERENCE §8).
+          `pb-4` makes its opaque background butt flush against the content below, so
+          scrolling rows are fully hidden behind it (no peek-through seam). */}
+      <div className="sticky top-0 z-rail flex flex-col gap-4 bg-base pb-4">
+        {/* Mode toggle. */}
+        <div className="flex gap-1" role="tablist" aria-label="Recall mode">
+          {MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.value}
+              onClick={() => switchMode(m.value)}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-chip px-3 min-h-hit-min font-display uppercase tracking-eyebrow text-caption font-semibold",
+                "transition-colors duration-fast ease-ui",
+                mode === m.value
+                  ? "bg-accent-wash text-accent"
+                  : "text-ink-muted hover:text-ink hover:bg-overlay",
+              )}
+            >
+              {m.icon}
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Query input (search + ask). Reports has its own range builder instead. */}
+        {mode !== "reports" && (
+          <form onSubmit={submit} className="flex gap-2">
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              autoFocus
+              placeholder={
+                mode === "search"
+                  ? "Search your screen history…"
+                  : "Ask a question about what you've seen…"
+              }
+              aria-label={mode === "search" ? "Search query" : "Question"}
+              className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={mode === "ask" && ask.phase === "streaming"}
+            >
+              {mode === "search"
+                ? "Search"
+                : ask.phase === "streaming"
+                  ? "Asking…"
+                  : "Ask"}
+            </Button>
+          </form>
+        )}
       </div>
 
-      {/* Query input (search + ask). Reports has its own range builder instead. */}
-      {mode !== "reports" && (
-        <form onSubmit={submit} className="flex gap-2">
-          <input
-            type="text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            autoFocus
-            placeholder={
-              mode === "search"
-                ? "Search your screen history…"
-                : "Ask a question about what you've seen…"
-            }
-            aria-label={mode === "search" ? "Search query" : "Question"}
-            className="min-w-0 flex-1 rounded-chip border border-line bg-base px-3 min-h-hit-min text-body text-ink placeholder:text-ink-faint font-body transition-colors duration-fast ease-ui focus:border-accent"
-          />
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={mode === "ask" && ask.phase === "streaming"}
-          >
-            {mode === "search"
-              ? "Search"
-              : ask.phase === "streaming"
-                ? "Asking…"
-                : "Ask"}
-          </Button>
-        </form>
-      )}
-
-      {/* Reports range builder. */}
-      {mode === "reports" && (
-        <ReportBuilder
-          busy={report.phase === "generating"}
-          onCancel={report.cancel}
-          onGenerate={report.generate}
-        />
-      )}
-
-      {/* Content vs raw/app-chrome retrieval (search mode only, 03 §3b). */}
-      {mode === "search" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={includeChrome}
-            onClick={() => setChromeOverride(!includeChrome)}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-chip border px-3 min-h-hit-min text-caption font-display uppercase tracking-eyebrow",
-              "transition-colors duration-fast ease-ui",
-              includeChrome
-                ? "border-accent text-accent bg-accent-wash"
-                : "border-line text-ink-muted hover:text-ink",
-            )}
-          >
-            {includeChrome
-              ? "Including app chrome + raw text"
-              : "Content text only"}
-          </button>
-          <span className="text-caption text-ink-faint">
-            {includeChrome
-              ? "Searching everything on screen, including toolbars and labels."
-              : "Ignoring static toolbars, taskbars, and repeated labels."}
-          </span>
-        </div>
-      )}
-
-      {/* Degraded-mode banners (truthful, not blocking). */}
-      {mode === "search" && readiness.data && !embedReady && (
-        <Chip tone="warn">
-          Searching text only — semantic search lights up once the embedding
-          model loads
-        </Chip>
-      )}
-      {mode !== "search" && sidecarDown && (
-        <Chip tone="warn">
-          Answer model not loaded
-          {readiness.data?.sidecar.detail
-            ? ` — ${readiness.data.sidecar.detail}`
-            : ""}
-        </Chip>
-      )}
-
-      {/* Body (single stable scroll container so the virtualizer ref is steady). */}
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
-        {mode === "search" ? (
-          <SearchBody
-            query={query}
-            isFetching={search.isFetching}
-            isError={search.isError}
-            error={search.error}
-            onRetry={() => search.refetch()}
-            hits={hits}
-            virtualizer={virtualizer}
-          />
-        ) : mode === "ask" ? (
-          ask.phase === "idle" ? (
-            <div className="flex flex-col gap-6">
-              <EmptyState
-                icon={<IconSparkle size={28} />}
-                title="Ask about what you've seen"
-                description="Questions are answered from your captured screens, with the source frames cited. Try a card below, or ask your own."
-              />
-              <PromptCardGrid
-                onPick={(p) => {
-                  setText(p);
-                  askQuery(p);
-                }}
-              />
-            </div>
-          ) : (
-            <AnswerStream
-              phase={ask.phase}
-              thinking={ask.thinking}
-              answer={ask.answer}
-              citations={ask.citations}
-              error={ask.error}
-              onRetry={() => askQuery(text)}
-              onOpenFrame={openFrame}
-            />
-          )
-        ) : (
-          <ReportBody
-            phase={report.phase}
-            progress={report.progress}
-            result={report.result}
-            request={report.request}
-            error={report.error}
-            onOpenFrame={openFrame}
+      {/* Non-sticky sections scroll under the sticky header as one column. */}
+      <div className="flex flex-col gap-4">
+        {/* Reports range builder. */}
+        {mode === "reports" && (
+          <ReportBuilder
+            busy={report.phase === "generating"}
+            onCancel={report.cancel}
+            onGenerate={report.generate}
           />
         )}
+
+        {/* Content vs raw/app-chrome retrieval (search mode only, 03 §3b). */}
+        {mode === "search" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={includeChrome}
+              onClick={() => setChromeOverride(!includeChrome)}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-chip border px-3 min-h-hit-min text-caption font-display uppercase tracking-eyebrow",
+                "transition-colors duration-fast ease-ui",
+                includeChrome
+                  ? "border-accent text-accent bg-accent-wash"
+                  : "border-line text-ink-muted hover:text-ink",
+              )}
+            >
+              {includeChrome
+                ? "Including app chrome + raw text"
+                : "Content text only"}
+            </button>
+            <span className="text-caption text-ink-faint">
+              {includeChrome
+                ? "Searching everything on screen, including toolbars and labels."
+                : "Ignoring static toolbars, taskbars, and repeated labels."}
+            </span>
+          </div>
+        )}
+
+        {/* Degraded-mode status (truthful, not blocking). A permanently-reserved row so
+            the chip appears in place and never pushes the body down (D9 no-CLS; only the
+            readiness banner may reserve, UI_REFERENCE §8). */}
+        <div role="status" aria-live="polite" className="flex min-h-8 items-center">
+          {mode === "search" && readiness.data && !embedReady && (
+            <Chip tone="warn">
+              Searching text only — semantic search lights up once the embedding
+              model loads
+            </Chip>
+          )}
+          {mode !== "search" && sidecarDown && (
+            <Chip tone="warn">
+              Answer model not loaded
+              {readiness.data?.sidecar.detail
+                ? ` — ${readiness.data.sidecar.detail}`
+                : ""}
+            </Chip>
+          )}
+        </div>
+
+        {/* Body grows inline; the shell <main> is the one scroll context (D9). */}
+        <div ref={listWrapRef}>
+          {mode === "search" ? (
+            <SearchBody
+              query={query}
+              isFetching={search.isFetching}
+              isError={search.isError}
+              error={search.error}
+              onRetry={() => search.refetch()}
+              hits={hits}
+              virtualizer={virtualizer}
+            />
+          ) : mode === "ask" ? (
+            ask.phase === "idle" ? (
+              <div className="flex flex-col gap-6">
+                <EmptyState
+                  icon={<IconSparkle size={28} />}
+                  title="Ask about what you've seen"
+                  description="Questions are answered from your captured screens, with the source frames cited. Try a card below, or ask your own."
+                />
+                <PromptCardGrid
+                  onPick={(p) => {
+                    setText(p);
+                    askQuery(p);
+                  }}
+                />
+              </div>
+            ) : (
+              <AnswerStream
+                phase={ask.phase}
+                thinking={ask.thinking}
+                answer={ask.answer}
+                citations={ask.citations}
+                error={ask.error}
+                onRetry={() => askQuery(text)}
+                onOpenFrame={openFrame}
+              />
+            )
+          ) : (
+            <ReportBody
+              phase={report.phase}
+              progress={report.progress}
+              result={report.result}
+              request={report.request}
+              error={report.error}
+              onOpenFrame={openFrame}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -374,7 +410,7 @@ interface SearchBodyProps {
   error: unknown;
   onRetry: () => void;
   hits: SearchHit[];
-  virtualizer: Virtualizer<HTMLDivElement, Element>;
+  virtualizer: Virtualizer<HTMLElement, Element>;
 }
 
 function SearchBody({
@@ -424,6 +460,10 @@ function SearchBody({
     );
   }
 
+  // Rows are positioned inside this relative box, whose top sits `scrollMargin` below the
+  // scroll container origin; `row.start` is measured from that origin, so subtract the
+  // margin to place each row within the box (TanStack Virtual window-scroller pattern).
+  const scrollMargin = virtualizer.options.scrollMargin;
   return (
     <div
       className="relative w-full"
@@ -437,7 +477,7 @@ function SearchBody({
             data-index={row.index}
             ref={virtualizer.measureElement}
             className="absolute left-0 top-0 w-full pb-3"
-            style={{ transform: `translateY(${row.start}px)` }}
+            style={{ transform: `translateY(${row.start - scrollMargin}px)` }}
           >
             <SearchResult hit={hit} />
           </div>

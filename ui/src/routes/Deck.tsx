@@ -40,15 +40,21 @@ import type { ComponentStatus } from "../bindings/ComponentStatus";
 const RECENT_LIMIT = 8;
 const TODAY_BUCKETS = 96; // 15-minute slices across the day
 
+// Mirrors the populated Deck layout (hero · Today/Queue · WhereWasI/Intentions · recents)
+// so loading -> populated reserves the final dimensions and doesn't shift (D9 no-CLS).
 function DeckSkeleton() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-6">
-      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-28 w-full" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
       </div>
-      <Skeleton className="h-48 w-full" />
+      <Skeleton className="h-64 w-full" />
     </div>
   );
 }
@@ -213,6 +219,10 @@ export function Component() {
                   message={String(todayDensity.error)}
                   onRetry={() => todayDensity.refetch()}
                 />
+              ) : todayDensity.isLoading ? (
+                // Reserve the minimap band so it doesn't push the chips down when the
+                // density query resolves after insights (D9 no-CLS).
+                <Skeleton className="h-7 w-full" />
               ) : todayDensity.data && todayDensity.data.length > 0 ? (
                 <TimelineMinimap
                   buckets={todayDensity.data}
@@ -224,7 +234,7 @@ export function Component() {
                 />
               ) : null}
               {insights.data && insights.data.top_apps.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex min-h-7 flex-wrap gap-2">
                   {insights.data.top_apps.slice(0, 5).map((a, i) => (
                     <Chip key={a.app ?? `unknown-${i}`} tone="neutral">
                       {a.app ?? "Unknown"} · {a.count}
