@@ -14,8 +14,10 @@ The app shell now holds one scroll context per route. Recall's search results, t
 "Frames checked" strip, the report source frames, and a moment's "Around this moment" filmstrip no
 longer have their own inner scrollbars: each grows or wraps inline and the page scrolls as a single
 column, with the scrollbar at the content-pane edge. No screen shows a horizontal scrollbar at any
-supported size (1280x720 through ultrawide, 100 to 150 percent scaling); long unbroken text such as a
-URL or file path in a recognized-text or reasoning block now wraps instead of forcing a sideways scroll. Loading no longer jumps the
+supported size (1280x720 through ultrawide, 100 to 150 percent scaling): reasoning and answer text
+wraps, and a moment with very wide recognized text (a captured table or terminal) no longer pushes the
+context panel off-screen. Wide recognized text keeps its columns and scrolls sideways within its own
+block (like a code block) instead of wrapping into an unreadable stack. Loading no longer jumps the
 layout: the status-rail chips have stable widths, panel headers reserve their height, and the Deck,
 Insights, and Settings loading skeletons match the shape of the real content (Insights even shows its
 live header while data loads). The intermittent left-rail "ghost" glitch (nav items faintly

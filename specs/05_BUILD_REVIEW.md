@@ -336,17 +336,39 @@ Bot review only (gemini-code-assist, chatgpt-codex, claude). Triaged on merit; n
   the reflow.
 - **Applied (chatgpt-codex — long tokens re-introduce h-scroll):** the inline-grown thinking `<pre>` had
   `whitespace-pre-wrap` only, which wraps at whitespace but does not break an unbroken token wider than the
-  pane — a horizontal-scroll path straight back into the contract this PR closes. Added `break-words` to the
-  thinking `<pre>` (`AnswerStream.tsx:123`) and, for the same contract, to the two Moment recognized-text
-  `<pre>` blocks (`MomentDetail.tsx:111,127`, both on an audited route) and the ReportView footer
+  pane — a horizontal-scroll path back into the contract this PR closes. Added `break-words` to the thinking
+  `<pre>` (`AnswerStream.tsx:123`, reasoning prose — wrapping reads fine) and the ReportView footer
   (`ReportView.tsx:152`). Gap in the original audit: "Moment pre blocks already #59-clean" covered nested
   scroll, not long-token horizontal overflow.
 - **Declined (claude — 7× "multi-line comment block violates CLAUDE.md"):** the quoted rule ("one short
   line max") exists nowhere in this repo's `CLAUDE.md`/`AGENTS.md`/`specs/04`; the codebase convention is
   multi-line block comments (e.g. AnswerStream's own pre-existing module header). Acting on a fabricated
   rule would make the new comments inconsistent with the surrounding code. Not applied.
-- **Verification (verbatim):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.53s` (tsc clean). No
-  Rust/binding surface touched (UI className + one JS guard only).
+
+### Phase B — Moment grid-blowout + recognized-text regression (2026-07-06, maintainer-reported)
+
+Maintainer screenshot (default window, a Moment whose recognized text is a very wide UIA-captured markdown
+table): the `CONTEXT`/`VISION` right rail is shoved off the right edge and the route overflows horizontally.
+
+- **Root cause:** `MomentDetail`'s two-column grid (`lg:grid-cols-[1.6fr_1fr]`) blows out. Grid items
+  default to `min-width:auto`, so the `1.6fr` track expanded to the recognized-text `<pre>`'s large
+  min-content width and pushed the `1fr` context column past the viewport (a route-level horizontal
+  overflow — the exact D9 violation this PR targets). **Pre-existing, latent** until a frame with very wide
+  text appeared; PR4's Moment audit cells had no wide preformatted capture. `break-words` from the earlier
+  follow-up neither caused nor fixed it — `overflow-wrap:break-word` by spec does **not** reduce a box's
+  min-content size, so the track stayed wide.
+- **Fix (structural, D9):** `min-w-0` on both `MomentDetail` grid columns (`MomentDetail.tsx:78,136`) so the
+  tracks honour their `fr` share and the block wraps/scrolls inside instead of forcing the route wider.
+- **Recognized-text treatment (maintainer decision 2026-07-06):** wrapping a wide table mangles its columns
+  into an unreadable stack. Chosen behaviour = **horizontal-scroll code block**: the `content_text`/`raw_text`
+  `<pre>` are now `overflow-x-auto whitespace-pre` (`MomentDetail.tsx:111,127`) — columns preserved, the
+  block scrolls sideways on its own, vertical page scroll stays single. Recorded as a **scoped content
+  exemption** in `UI_REFERENCE §8` (distinct from tile/thumbnail strips, which still wrap). Reverts the
+  earlier `break-words`/wrap on these two blocks.
+- **Verification (verbatim):** `npm run lint` EXIT 0 · `npm run build` `✓ built in 1.54s` (tsc clean). No
+  Rust/binding surface touched (UI className + comments only) — the PR's `cargo` suite (524 passed) and
+  clean `ui/src/bindings` diff still hold. Live visual confirm on the maintainer's running session (the
+  wide-table Moment that surfaced the blowout).
 
 ---
 

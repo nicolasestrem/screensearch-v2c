@@ -74,8 +74,11 @@ export function MomentDetail({
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
-      {/* Image (or, once the screenshot has expired, a text+layout reconstruction). */}
-      <div className="flex flex-col gap-4">
+      {/* Image (or, once the screenshot has expired, a text+layout reconstruction).
+          min-w-0: a grid item defaults to min-width:auto, so wide recognized text
+          would force this track past its 1.6fr share and shove the context rail
+          off-screen; min-w-0 lets it honour the track and wrap/scroll inside (D9). */}
+      <div className="flex min-w-0 flex-col gap-4">
         {detail.image_purged ? (
           <div className="flex flex-col gap-2">
             <FrameReconstruction
@@ -108,7 +111,10 @@ export function MomentDetail({
           }
         >
           {detail.content_text ? (
-            <pre className="whitespace-pre-wrap break-words text-body text-ink-muted font-mono">
+            // Preformatted capture (tables / code / terminal): preserve columns and
+            // scroll this block horizontally rather than wrap them into an unreadable
+            // stack — a scoped D9 exemption for recognized text (UI_REFERENCE §8).
+            <pre className="overflow-x-auto whitespace-pre text-body text-ink-muted font-mono">
               {detail.content_text}
             </pre>
           ) : (
@@ -124,7 +130,7 @@ export function MomentDetail({
                   ? " (includes app chrome)"
                   : ""}
               </summary>
-              <pre className="mt-2 whitespace-pre-wrap break-words text-body text-ink-muted font-mono">
+              <pre className="mt-2 overflow-x-auto whitespace-pre text-body text-ink-muted font-mono">
                 {detail.raw_text}
               </pre>
             </details>
@@ -133,7 +139,7 @@ export function MomentDetail({
       </div>
 
       {/* Context, vision, tags. */}
-      <div className="flex flex-col gap-4">
+      <div className="flex min-w-0 flex-col gap-4">
         <Panel title="Context">
           <div className="flex flex-col gap-3">
             <Meta label="Captured" value={absoluteTime(detail.captured_at)} />

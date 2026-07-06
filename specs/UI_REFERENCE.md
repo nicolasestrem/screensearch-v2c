@@ -254,7 +254,14 @@ latency < 100 ms; no layout shift on data arrival (skeletons reserve space).
   unit is the **route**: modal/overlay surfaces are not route scroll contexts and keep their own bounded
   scroll (the command-palette listbox, the toast stack, and the separate Flow-overlay window). Deliberate
   horizontal strips are not exempt — they wrap rather than scroll sideways (Windows draws a permanent
-  scrollbar for `overflow-x`), so no route shows a horizontal scrollbar in the matrix.
+  scrollbar for `overflow-x`), so no route shows a horizontal scrollbar in the matrix. **One scoped
+  content exemption:** a **preformatted recognized-text block** (the Moment `content_text`/`raw_text`
+  `<pre>`, which faithfully mirrors captured tables / code / terminal output) may scroll **horizontally
+  within its own block** (`overflow-x-auto whitespace-pre`) rather than wrap — wrapping a wide table
+  destroys the columns that make it readable. It stays a code-block-style local scroller: the vertical
+  page scroll is still single, and its grid column carries `min-w-0` so the block never forces the route
+  wider than the viewport (grid items default to `min-width:auto` — a wide `<pre>` would otherwise shove
+  the context rail off-screen). Wrapped tile/thumbnail strips are **not** this case — they still wrap.
 - **No horizontal scrollbar** at any supported size: 1280×720 minimum through ultrawide, at
   100 / 125 / 150 % DPI.
 - **No cumulative layout shift on load:** skeletons reserve final dimensions (the budget rule above,
