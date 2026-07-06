@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 0.3.2 PR6: daily/weekly report filenames say which they are (#89)
+A downloaded daily or weekly report is now named `screensearch-report-daily-YYYY-MM-DD-HHmm.md` /
+`screensearch-report-weekly-...` instead of the undifferentiated date-only stem, so a Downloads
+folder full of reports stays tellable-apart. Custom-range reports keep the existing
+`screensearch-report-YYYY-MM-DD-HHmm.md` name; the local-time stamp and the same-minute `-2`/`-3`
+collision rule are unchanged.
+
 ### Changed - 0.3.2 PR5: Settings two-tier IA
 The Settings wall (15 flat sections, ~60 fields) is now two tiers. **Essentials** stay always
 visible: Capture (interval, monitors, event-driven master toggle), Hotkeys, Privacy, Models (tier

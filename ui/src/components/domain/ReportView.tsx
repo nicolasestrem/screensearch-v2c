@@ -3,7 +3,8 @@
 // clickable source-frame chips, Copy + `.md` download, and an honest footer stating the
 // app version, model, time span, filters, and coverage counts. 0.3.1 (D2/D3, #65): the
 // download is a date-stamped file in Downloads via the `save_report_markdown` command
-// (collision-safe `-2`/`-3`), and the footer is a single plain-text block used in BOTH
+// (collision-safe `-2`/`-3`); 0.3.2 (#89): daily/weekly downloads carry the report kind
+// in the stem. The footer is a single plain-text block used in BOTH
 // places — on screen AND appended to the copied/saved markdown so the file is
 // self-describing. A no-evidence report renders its honest message with no chips/footer.
 import Markdown from "react-markdown";
@@ -18,6 +19,7 @@ import { useAppVersion } from "../../lib/useAppVersion";
 import { reportFileStem } from "../../lib/time";
 import { buildReportFooter } from "../../lib/reportFooter";
 import { handleExternalLinkClick } from "../../lib/openExternal";
+import type { ReportKind } from "../../bindings/ReportKind";
 import type { ReportResponse } from "../../bindings/ReportResponse";
 import type { ReportRequest } from "../../bindings/ReportRequest";
 
@@ -52,8 +54,8 @@ function blobDownload(filename: string, markdown: string) {
   URL.revokeObjectURL(url);
 }
 
-async function downloadReport(markdown: string) {
-  const stem = reportFileStem();
+async function downloadReport(markdown: string, kind?: ReportKind) {
+  const stem = reportFileStem(kind);
   if (isTauri()) {
     try {
       const path = await saveReportMarkdown(stem, markdown);
@@ -99,7 +101,7 @@ export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => downloadReport(exportMarkdown)}
+            onClick={() => downloadReport(exportMarkdown, request?.kind)}
           >
             Download .md
           </Button>
