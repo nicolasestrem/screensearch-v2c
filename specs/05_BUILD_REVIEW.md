@@ -83,3 +83,15 @@ For each build pass, append an entry:
   invent a hidden constant; defined it as a named parameter (proposed default 24 h, PR2-confirmed
   against the harness, recorded in `05`/`06`), deliberately **not** a user setting so the `§8` two-key
   surface holds. Still `.md`-only.
+- **Review response, round 3 (2026-07-07):** two more notes, both valid and applied. (1) **Claude bot
+  caught a real bug in the round-2 CHECK** — SQLite three-valued logic means
+  `(kind='exchange' AND role IN ('user','agent'))` evaluates to **NULL** (not FALSE) when `role IS
+  NULL`, and SQLite *passes* a CHECK that is NULL, so exchange+NULL-role still slipped through; added
+  the load-bearing `role IS NOT NULL` guard to the exchange branch so it short-circuits to FALSE. (2)
+  **Codex flagged the `browser-ai` seed keyed on a dormant field** — production capture hard-codes
+  `browser_url: None` (`capture_loop.rs:130`, dormant per `resume.rs`/`§7b`), so domain matching can
+  never fire on real frames; re-keyed browser-AI recognition in `§7e` onto stored metadata (`app_hint`
+  + window-title patterns) with the domain match as a refinement that activates only if `browser_url`
+  capture lands, and recorded that capture enhancement as `07` **#109** (not sessions work). The `§7e`
+  context-key browser-domain term is likewise flagged dormant (matching the shipped `§7b` posture).
+  Still `.md`-only.

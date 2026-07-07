@@ -56,3 +56,9 @@
   and never triggers generation (D12; generation lives on the in-app IPC path); and the freeze
   lookback window is now a **named** parameter in §7e (proposed default 24 h, PR2-confirmed) instead
   of an unspecified constant. Still `.md`-only.
+- **Review follow-up, round 3 (2026-07-07):** two notes applied. Fixed a SQLite three-valued-logic
+  bug in the round-2 `role` CHECK (added `role IS NOT NULL` to the exchange branch — `NULL IN (…)` is
+  NULL and SQLite passes a NULL CHECK, so exchange+NULL-role was still admitted). Re-keyed the
+  `browser-ai` taxonomy seed off the dormant `browser_url` field (production capture sets it `None`)
+  onto stored `app_hint` + window-title metadata, domain match a later refinement; recorded the
+  `browser_url`-capture enhancement as `07` #109. Still `.md`-only.

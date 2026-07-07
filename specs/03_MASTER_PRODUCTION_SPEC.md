@@ -355,7 +355,7 @@ CREATE TABLE session_artifacts (
   id         INTEGER PRIMARY KEY,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL CHECK (kind IN ('exchange','transcript','note')),
-  role       TEXT CHECK ((kind = 'exchange' AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS NULL)),  -- exchanges REQUIRE a role, reserved kinds forbid one (D8; §7e "roles never invented")
+  role       TEXT CHECK ((kind = 'exchange' AND role IS NOT NULL AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS NULL)),  -- exchanges REQUIRE a non-null role, reserved kinds forbid one (D8; §7e "roles never invented"). The IS NOT NULL guard is load-bearing: NULL IN (…) is NULL, and SQLite passes a CHECK that evaluates to NULL.
   frame_id   INTEGER REFERENCES frames(id) ON DELETE SET NULL,
   content    TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
@@ -730,7 +730,9 @@ historical pass** over pre-0.4.0 frames that runs as a normal **resumable, low-p
 job — it never competes with capture/OCR** (throttle-aware like every enrichment job).
 - **Context key.** The `§7b` where-was-i key (`app_hint`, refined by browser domain from
   `browser_url`), **generalized** with taxonomy tool identity: `app_hint` ⊕ browser domain ⊕ tool id.
-  It is stored on the row (`sessions.context_key`).
+  It is stored on the row (`sessions.context_key`). The **browser-domain term is dormant** exactly as
+  in `§7b` (production capture sets `browser_url: None`, `07` #109) — the key is built from `app_hint`
+  + tool id today, with the domain sharpening it only once `browser_url` capture lands.
 - **Close / dwell rules.** A session **closes** when the gap since its last frame, or a sustained
   context switch, exceeds `sessions.gap_close_secs` (default **300**, `§8`). Session length is floored
   at `sessions.min_len_secs` (default **120**, mirroring `resume.min_dwell_secs`). **Transient
@@ -756,8 +758,14 @@ settings. Adding a tool = editing the file; a user-editable override file is **d
 Each entry carries: tool id, `kind`, `host`, `app_hint` patterns, window-title patterns, and browser
 domains. **Two recognition dimensions:** tool identity × host (`terminal` / `desktop` / `browser` /
 `ide`). **Seed set (D7):** tools `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`,
-`browser-ai` (claude.ai, chatgpt.com, gemini.google.com domains, via `browser_url`); meetings Zoom,
-Teams, Meet, Webex, Discord (app hints + window-title patterns). **The seed patterns are tuned in PR2
+`browser-ai` (Claude / ChatGPT / Gemini in a browser); meetings Zoom,
+Teams, Meet, Webex, Discord (app hints + window-title patterns). **`browser_url` is dormant in
+production capture today** — `capture_loop.rs` persists `browser_url: None` (needs UIA; the same
+dormancy `§7b`/`resume.rs` already document and implement-per-contract). So **browser-AI recognition
+keys on the metadata that IS stored — `app_hint` + window-title patterns** (browsers put the page
+title, e.g. "Claude", "ChatGPT", "Gemini …", in the window title); the claude.ai / chatgpt.com /
+gemini.google.com **domain match is a refinement that activates if/when `browser_url` capture lands**
+(deferred — `07` #109), never the sole signal. **The seed patterns are tuned in PR2
 against real captures, not guessed** — this section fixes the file *format* and seed *set*; PR4 ships
 the tuned file. Recognition emits `kind` / `tool` / `host` onto the session (`tool` NULL unless
 `kind='ai'`, per the `§4` CHECKs). **No model calls anywhere in segmentation or recognition (D3).**
