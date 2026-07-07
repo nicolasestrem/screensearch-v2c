@@ -460,3 +460,43 @@ left claiming a version that isn't released), and restore the DB backup if desir
 `releases/latest/download/latest.json`, which GitHub resolves **only for a published,
 non-prerelease release**. Every historical release (v0.1.0..v0.3.1) was a *prerelease*; from v0.3.2
 on, releases must be **published as full releases** or installed copies never see the update.
+
+## Dev-only harness — segmentation ground truth + validation (0.4.0 PR2)
+
+The `crates/harness` binary is a **dev-only, read-only** referee for the sessions arc. It is a
+workspace crate, so it is built and tested by the normal `cargo` gates above, but it is **never
+bundled** by the NSIS installer (only `src-tauri` + the `screensearch-mcp.exe` externalBin ship).
+Run it with `cargo run -p harness -- <subcommand>`.
+
+**Read-only guarantee.** Every query path opens the DB with `SQLITE_OPEN_READ_ONLY` + `PRAGMA
+query_only`; the harness's unit tests assert a write is rejected on that connection. The only file
+it writes to the DB side is the `backup` target (a `VACUUM INTO` snapshot to a fresh file). Exports
+and hand labels are personal screen history and live under the **git-ignored** `harness-data/`.
+
+**Automated tests (CI-safe, no real data).** `cargo test -p harness` runs the pure segmenter,
+taxonomy, label-parsing, scoring (typed DP-optimal boundary matching), digest, and read-only export
+tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDATA%` or a real path.
+
+**Manual end-to-end (Phase A/B/C, maintainer-in-the-loop).**
+1. **D5 backup FIRST** (release-blocker-class; before any other live-DB command):
+   `cargo run -p harness -- backup --to <a dir OUTSIDE the repo and OUTSIDE %APPDATA%\app.screensearchv2c.desktop\>`.
+   It writes `screensearch-YYYY-MM-DD.db`, refuses to overwrite, refuses a destination inside the
+   repo tree or the app data dir, and prints `PRAGMA integrity_check` + source/copy row counts as
+   the attestation. WAL note: if the app was force-killed and left an unrecovered `-wal`, a
+   read-only open fails with an actionable message; start the app once (or point `--db` at the
+   backup) and retry.
+2. `cargo run -p harness -- suggest-days` prints a per-day survey (frames, distinct apps, coarse
+   AI/meeting window-title signals, marks). Pick 5-10 representative days (a meeting-heavy day, a
+   Claude Code day, a Codex day, a browser-AI day, a mixed/fragmented day, plus one contiguous
+   2-3-day stretch for the stability check). June-July days avoid the DST-transition guard.
+3. `cargo run -p harness -- export --days 2026-06-15,2026-06-16,...` writes each day to
+   `harness-data/<day>/` (`day.json`, `frames.jsonl`, `marks.jsonl`, `digest.md`, `labels.toml`).
+4. Hand-label each day's `labels.toml` from its `digest.md` (the readable context-run timeline;
+   marks appear as anchors). Under an evening for the whole sample.
+5. `cargo run -p harness -- score` (optionally `replay`, `sweep`, `stability`) scores boundary
+   precision/recall/F1 (+/- tolerance, default 120s) and tool-recognition accuracy against the
+   labels; `sweep` grids the `(gap_close, min_len)` parameters; `stability` confirms the
+   freeze-lookback window. `sweep`/`stability` write markdown to `harness-data/reports/`.
+
+The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding
+merge gate). The exported sample and labels are never committed.
