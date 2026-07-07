@@ -4,8 +4,18 @@
 > `[0.2.0]`–`[0.2.2]` sections moved on the post-v0.2.2 archival sweep (2026-06-30); the
 > `[0.3.0]` section moved on the v0.3.0 release sweep (2026-07-04, PR9); the `[0.3.1]`
 > section moved on the v0.3.1 release sweep (2026-07-05, 0.3.1 PR4); the `[0.3.2]` section
-> moved on the v0.3.2 release sweep (2026-07-06, 0.3.2 PR6). Only
+> moved on the v0.3.2 release sweep (2026-07-06, 0.3.2 PR6); the `[0.3.3]` section moved on
+> the v0.3.3 release sweep (2026-07-07, folded into 0.4.0 PR1). Only
 > `[Unreleased]` remains in `CHANGELOG.md`.
+
+## [0.3.3] — 2026-07-07
+
+### Fixed
+- Browsers no longer freeze during capture. The text reader (UI Automation) could hang Chromium
+  and Electron windows (Chrome, Edge, Slack, Discord, VS Code, Claude Desktop, and similar) by
+  walking their accessibility tree, occasionally leaving a window "Not Responding". These windows
+  are now read via OCR instead, which never freezes them; their on-screen content stays fully
+  captured and searchable. Native apps are unaffected and keep the higher-fidelity reader.
 
 ## [0.3.2] — 2026-07-06
 
