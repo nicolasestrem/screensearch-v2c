@@ -22,6 +22,28 @@
 
 ---
 
+## 2026-07-07 — 0.4.0 PR2: segmentation validation harness (dev-only; Phase A paused for data)
+
+- **Change:** added `crates/harness` — a dev-only, read-only segmentation validation harness (the
+  candidate segmenter = `resume.rs` generalized per `03 §7e`, the D7 seed `taxonomy.toml` + matcher,
+  read-only export + digest + labels template, the D5 `VACUUM INTO` backup, and typed DP-optimal
+  boundary/tool scoring + parameter sweep + freeze-lookback stability). Standalone workspace crate
+  (no internal-crate deps, never bundled, no `ts-rs`); `harness-data/` git-ignored for the personal
+  exports + labels. Added `toml` to `[workspace.dependencies]`. `docs/TESTING.md` gains a harness
+  section. Ran the D5 pre-migration backup of the live DB.
+- **Why:** `docs/0.4.0.md` §3 PR2 — no segmenter ships untested against the maintainer's real data;
+  the harness is the referee that produces the binding D9 thresholds (recorded in `05`/`06`) before
+  PR3 freezes the schema. Read-only + dev-only + git-ignored personal data per the PR2 constraints.
+- **Verification:** 57 harness lib tests; `cargo test --workspace` 581 passed / 0 failed; clippy
+  `--workspace --all-targets -D warnings`, `fmt --check`, UI `lint`/`build`, and the ts-rs binding
+  guard all clean (verbatim in `05` Pass 2); harness end-to-end on a synthetic fixture; the D5 backup
+  printed `integrity_check = ok` + 558/558 frame parity.
+- **Status:** **Phase A paused** — the live DB holds one day (558 frames, 0 marks), well short of the
+  5–10 representative days the evidence phase needs. Maintainer chose to accumulate multi-day usage,
+  then resume labeling → scoring → D9 thresholds. Branch local/unpushed, no PR, until the evidence
+  exists. Early finding: the seed terminal patterns do not recognize this machine's Claude Code /
+  Codex titles (to be tuned on the accumulated captures).
+
 ## 2026-07-07 — 0.4.0 PR1: specs contract (sessions arc)
 
 - **Change:** Normalized the 0.4.0 sessions-arc contract (`docs/0.4.0.md`, "P8 — frames → sessions

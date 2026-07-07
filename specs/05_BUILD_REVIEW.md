@@ -102,3 +102,43 @@ For each build pass, append an entry:
   COALESCE(ended_at, now) > from`, with half-open forms for single-bound requests and request-time
   `now` for open sessions, so long/still-active bands remain visible to Timeline/MCP range queries.
   Still `.md`-only.
+
+## Pass 2 — 2026-07-07 — 0.4.0 PR2 (ground-truth + validation harness; code complete, Phase A paused on data)
+
+- **Implemented:** the dev-only, read-only **segmentation validation harness** (`crates/harness`,
+  lib+bin, standalone workspace member — no internal-crate deps, never bundled by NSIS, no `ts-rs`
+  so the binding guard stays clean). Modules: `model` (export/label types; `Kind`/`Host` mirror the
+  `sessions` CHECK sets; `SessionSpan` = the D9 referee unit), `labels` (per-day TOML parse +
+  validation, touching allowed, `HH:MM`→epoch), `taxonomy` (D7 seed `taxonomy.toml` + substring
+  matcher, app_ok AND title_ok, first-match-wins), `export` (read-only `SQLITE_OPEN_READ_ONLY` +
+  `query_only`, local-day bounds via SQLite tz math with a 24h **DST guard**, `suggest-days`, the
+  **D5 `VACUUM INTO` backup** with integrity + row-count attestation), `digest` (human context-run
+  timeline + labels template), `segmenter` (pure; `resume.rs` generalized per `§7e` — context key
+  `app ⊕ domain ⊕ tool`, close on gap ≥ `gap_close` OR sustained switch, keyless > `gap_close`
+  splits), `score` (**typed DP-optimal** boundary P/R/F1 + edge exclusion, tool accuracy, sweep,
+  freeze-lookback stability), `data` (loaders). **Verification (verbatim):** 57 harness lib tests;
+  full workspace `cargo test --workspace` **581 passed / 0 failed**; `cargo clippy --workspace
+  --all-targets -- -D warnings` clean; `cargo fmt --all -- --check` clean; UI `npm run lint` +
+  `npm run build` clean; `git diff --exit-code -- ui/src/bindings` clean. End-to-end on a **synthetic
+  fixture** DB (F1 1.000, tool 4/4). **D5 backup run against the live DB** (the first live-DB
+  command): `screensearch-2026-07-07.db` outside the repo + app-data dir, `PRAGMA integrity_check`
+  = ok, 558/558 frames, 0/0 marks matched.
+- **Skipped / deferred (Phase A blocked on data):** the ground-truth labeling, scoring, and D9
+  threshold proposal. `suggest-days` on the live DB shows **a single day** (2026-07-07, 558 frames,
+  0 marks) — the DB was recently reset. That is far short of the 5–10 representative days + the
+  contiguous 2–3-day stretch the evidence phase and the freeze-lookback stability check require.
+  **Maintainer decision (2026-07-07): accumulate real multi-day usage, then resume Phase A** (the
+  harness is done and waiting). D9 thresholds, the `06` **#26** binding-gate row, and the
+  freeze-lookback confirmation are therefore **pending real data** (they are the resume deliverable).
+- **Hallucinated / corrected — early recognition finding:** on the one available day the seed
+  taxonomy recognized `claude-desktop` and `vscode`, but the machine's `windowsterminal` runs did
+  **not** match `claude-code`/`codex` (the seed requires "claude"/"codex" in the window title; the
+  real terminal titles do not carry them). This confirms the `§7e` "patterns are tuned in PR2 against
+  real captures, not guessed" clause: the terminal title patterns will need the maintainer's real
+  Claude Code / Codex title shapes, which is exactly what the accumulated data provides. The
+  `vscode`/`cursor` `kind` product call (ai vs focus, seeded ai) stays open for the labeling handoff.
+- **Broke / regressed:** nothing — additive dev-only crate; the full workspace suite is green.
+- **Still risky:** the binding D9 thresholds must not be set on one thin, non-representative day
+  (the arc's headline risk — "looks fine in design, fails on real days"). Held per the
+  accumulate-first decision; the branch (`feat/0.4.0-pr2-validation-harness`) stays local/unpushed,
+  no PR, until the evidence exists.
