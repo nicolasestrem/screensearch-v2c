@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.3] - 2026-07-07
+
 ### Fixed
 - Browsers no longer freeze during capture. The text reader (UI Automation) could hang Chromium
   and Electron windows (Chrome, Edge, Slack, Discord, VS Code, Claude Desktop, and similar) by
