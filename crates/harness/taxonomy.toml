@@ -1,0 +1,121 @@
+# ScreenSearch 0.4.0 recognition taxonomy — D7 SEED set (specs/03 §7e, docs/0.4.0.md D6/D7).
+#
+# This is the versioned data file the recognition heuristic reads. In PR2 it is the harness's
+# candidate; PR4 ships the file TUNED against the real captures this harness scores. Adding a
+# tool = editing this file (a user override file is deferred, 07 #107).
+#
+# Matching (case-insensitive substring), per [[entry]], evaluated in file order, first match
+# wins (most specific entries first):
+#   app_ok   = app_hints empty  OR frame app_hint contains one hint
+#   title_ok = title_patterns empty OR frame window_title contains one pattern
+#   match    = app_ok AND title_ok   (an entry with BOTH lists empty is a parse error)
+# So a terminal entry with title_patterns REQUIRES the title to prove which tool is running,
+# while an app-only entry (a dedicated desktop app / IDE) matches on the executable alone.
+#
+# app_hint is the foreground process file STEM (no ".exe"; crates/capture privacy.rs
+# process_name) — e.g. "WindowsTerminal", "Code", "chrome", "Claude". Patterns are lowercase.
+#
+# domains: matched against browser_url's domain — DORMANT today (production capture persists
+# browser_url = NULL, gap #109). Listed per the §7e format so the refinement activates if URL
+# capture ever lands; browser-AI recognition currently keys on app_hint + window-title.
+#
+# Phase A product call (docs/0.4.0.md §3 PR2): whether vscode / cursor read as kind="ai"
+# (a tool id is recorded) vs kind="focus" (a plain coding session, tool NULL per the §4 CHECK)
+# is the maintainer's call at the labeling handoff. Seeded kind="ai" here to match the literal
+# D7 "tools" list + the sessions.tool CHECK; flipping to focus is a DATA-only edit (change
+# `kind` + drop `host`), no code change. The seed patterns themselves are tuned in Phase B.
+
+version = 1
+
+# ---- AI tools (kind = "ai": a tool id is recorded on the session) ----
+
+[[entry]]
+id = "claude-code"
+kind = "ai"
+host = "terminal"
+app_hints = ["windowsterminal", "wt", "powershell", "pwsh", "cmd", "conhost", "alacritty", "wezterm"]
+title_patterns = ["claude"]
+domains = []
+
+[[entry]]
+id = "codex"
+kind = "ai"
+host = "terminal"
+app_hints = ["windowsterminal", "wt", "powershell", "pwsh", "cmd", "conhost", "alacritty", "wezterm"]
+title_patterns = ["codex"]
+domains = []
+
+[[entry]]
+id = "claude-desktop"
+kind = "ai"
+host = "desktop"
+app_hints = ["claude"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "cursor"
+kind = "ai"
+host = "ide"
+app_hints = ["cursor"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "vscode"
+kind = "ai"
+host = "ide"
+app_hints = ["code"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "browser-ai"
+kind = "ai"
+host = "browser"
+app_hints = ["chrome", "msedge", "firefox", "brave", "opera"]
+title_patterns = ["claude", "chatgpt", "gemini"]
+domains = ["claude.ai", "chatgpt.com", "gemini.google.com"]
+
+# ---- Meetings (kind = "meeting": metadata only, D14; harness scores the id, production
+#      sessions.tool stays NULL per the §4 CHECK — the harness span is not schema-bound) ----
+
+[[entry]]
+id = "zoom"
+kind = "meeting"
+host = "desktop"
+app_hints = ["zoom"]
+title_patterns = ["zoom meeting"]
+domains = []
+
+[[entry]]
+id = "teams"
+kind = "meeting"
+host = "desktop"
+app_hints = ["ms-teams", "teams"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "meet"
+kind = "meeting"
+host = "browser"
+app_hints = ["chrome", "msedge", "firefox", "brave", "opera"]
+title_patterns = ["google meet", "meet -"]
+domains = ["meet.google.com"]
+
+[[entry]]
+id = "webex"
+kind = "meeting"
+host = "desktop"
+app_hints = ["webex", "ciscocollab", "atmgr"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "discord"
+kind = "meeting"
+host = "desktop"
+app_hints = ["discord"]
+title_patterns = []
+domains = []
