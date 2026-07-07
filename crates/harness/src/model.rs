@@ -136,3 +136,13 @@ pub struct DayLabels {
     #[serde(default, rename = "session")]
     pub sessions: Vec<LabeledSession>,
 }
+
+/// Render a unix-ms instant as a local `"HH:MM"` given the day's `local_midnight_ms` (no
+/// timezone library needed — all callers work within one exported local day). An instant in
+/// the next day reads as `"24:MM"`+ and one before midnight carries a `-` sign, so a stray
+/// value is visible rather than silently wrong.
+pub fn local_hhmm(ms: i64, local_midnight_ms: i64) -> String {
+    let min = (ms - local_midnight_ms).div_euclid(60_000);
+    let (sign, m) = if min < 0 { ("-", -min) } else { ("", min) };
+    format!("{sign}{:02}:{:02}", m / 60, m % 60)
+}
