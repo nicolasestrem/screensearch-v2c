@@ -13,24 +13,21 @@ reports) is shipped; the 0.3.0 arc — "P7: surface reduction + flow recall + lo
 triage" (`docs/0.3.1.md`) — is complete (PR1 specs contract; PR2 fixed the #64 vision-throughput
 regression profile-first — `VISION_MAX_EDGE` back to 1280 px, 102 % of the pre-WebP baseline;
 PR3 polish — #59 inline Moment text, #65 report filename/footer, #57-partial version link;
-PR4 audited + released v0.3.1). The active arc is **0.3.2 — "P7.2: product shell mini-arc"**
-(`docs/0.3.2.md`): lifecycle — auto-update #69 (hard-sequenced **before** 0.4.0 ships) + systray
-#56 / quick actions #57 under the pull-based, non-shaming principle (`07` #96/#97, D4) — and
-interface — shell-layout hardening (D9) + the Settings two-tier IA (D6); **zero DB schema
-migrations** (D10). PR1 (specs contract), PR2 (auto-update #69, `tauri-plugin-updater` + signed
-`latest.json`), and **PR3 (systray #56 + quick actions #57 — native Tauri tray in
-`src-tauri/src/tray.rs`, close-to-tray default-on, run-at-startup via `tauri-plugin-autostart`,
-Load/Unload-model + Start/Stop-vision quick actions incl. a new `cancel_vision` command)** are done
-(Rust lane complete), and **PR4 (shell-layout hardening, D9 — UI lane: one scroll context per route
-[Recall virtualizer now scrolls the shell `<main>`; AnswerStream/ReportView/Moment strips wrap;
-sticky Recall header], `scrollbar-gutter`/`contain:paint` shell + reserved-width StatusRail chips +
-skeleton parity for no-CLS, NavRail layer-isolated as the WebView2 ghost-rail mitigation, `07` #106)**
-is done, and **PR5 (Settings two-tier IA, D6 — Essentials [Capture · Hotkeys · Privacy · Models ·
-Storage · App · Data] + seven collapsed-per-group Advanced expanders with per-session state and
-one-sentence section intros; the gap-#100 inline cross-chord conflict warning; the two dead
-settings — `storage.jpeg_quality`, `capture.uia_run_on_interactive` — retired via
-`RETIRED_SETTINGS_KEYS` tolerate-and-drop, D8, `07` #83 ✅)** is done; next: PR6 audit + tag
-`v0.3.2` — then the 0.4.0 sessions arc.**
+PR4 audited + released v0.3.1). The **0.3.2 arc — "P7.2: product shell mini-arc"**
+(`docs/0.3.2.md`) — **shipped as v0.3.2 (2026-07-06)**: lifecycle — **auto-update #69**
+(`tauri-plugin-updater` + a signed GitHub-Releases `latest.json`, pull-based passive UX per D1;
+v0.3.2 is the updater's **genesis release** — every release after it reaches installs
+automatically) and **systray #56 + quick actions #57** (native Tauri tray in
+`src-tauri/src/tray.rs`, passive state icon, close-to-tray default-on, run-at-startup via
+`tauri-plugin-autostart` default-off, Load/Unload-model + Start/Stop-vision incl. `cancel_vision`,
+all pull-based/non-shaming per D4) — and interface — **shell-layout hardening** (D9: one scroll
+context per route, no-CLS skeleton parity, NavRail layer isolation as the WebView2 ghost-rail
+mitigation `07` #106) and the **Settings two-tier IA** (D6: Essentials + seven collapsed Advanced
+expanders; the gap-#100 cross-chord conflict warning; the two dead settings retired via
+`RETIRED_SETTINGS_KEYS` tolerate-and-drop, D8). Zero DB schema migrations (D10, schema stays 10);
+PR6 audited D1–D12 (all PASS), fixed #89 (daily/weekly report filenames carry the kind), and
+released with the signed updater manifest. **Next: the 0.4.0 sessions arc** (`02 §5c`/`§8`;
+`docs/0.4.0.md` to be written), delivered via the auto-updater this arc shipped.
 The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up

@@ -1,11 +1,17 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together **as of 2026-07-05** — reflecting the complete 0.3.0
+How ScreenSearch V2c is actually put together **as of 2026-07-06** — reflecting the complete 0.3.0
 arc (PR1–PR8: surface reduction, Flow overlay, where-was-i + marks, local HTTP API + export, MCP
-server) and the shipped **0.3.1 patch** (P7.1 triage: the #64 vision-throughput fix —
+server), the shipped **0.3.1 patch** (P7.1 triage: the #64 vision-throughput fix —
 `VISION_MAX_EDGE` capped back at 1280 px — plus polish: inline Moment text, dated report
 filenames + self-describing footers, the NavRail version link, the UIA client-lifecycle fix, and
-the `Ctrl+Alt+Z` overlay default), on top of the shipped 0.2.x
+the `Ctrl+Alt+Z` overlay default), and the shipped **0.3.2 product-shell arc** (P7.2:
+auto-update via `tauri-plugin-updater` + a signed GitHub-Releases `latest.json`
+[`src-tauri/src/update.rs`, `.github/workflows/release.yml`, `scripts/make-latest-json.mjs`];
+the native system tray with passive state icon, quick actions, close-to-tray, and
+`tauri-plugin-autostart` run-at-startup [`src-tauri/src/tray.rs`, incl. the `cancel_vision`
+command]; the D9 one-scroll-context shell contract; and the two-tier Settings IA), on top of the
+shipped 0.2.x
 attention-first / Recall work (capture -> OCR/UIA text -> content-text store -> text embeddings ->
 hybrid search -> **inference sidecar**: vision tagging + grounded `ask` + reports -> Command Deck UI
 and Flow overlay). This describes the
@@ -37,7 +43,19 @@ Where they ever disagree, the specs win — open an issue.
   (PR6); the **opt-in localhost HTTP API + JSON export** (`crates/api`, axum, 127.0.0.1-only,
   bearer token — PR7); and the **`screensearch-mcp.exe` stdio MCP server** wrapping that API,
   bundled via NSIS `externalBin` (PR8).
-- Still open: code signing and the remaining 0.3.0 follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
+- Implemented for 0.3.2: **auto-update** — `src-tauri/src/update.rs` (single-flight check →
+  background download → signature-verify → install only on user-initiated restart; launch check
+  in release builds only; manual check in the tray, Settings App section, and NavRail footer),
+  the minisign public key baked into `tauri.conf.json` and the release pipeline
+  (`.github/workflows/release.yml`) signing the NSIS installer and publishing `latest.json` —
+  and the **system tray** — `src-tauri/src/tray.rs` (passive per-state icon fed by the kernel
+  event bus, the six-item menu, close-to-tray default-on with a one-time first-restore toast,
+  `tauri-plugin-autostart` run-at-startup default-off, and the new `cancel_vision` command).
+  UI-side: the D9 shell-layout contract (one scroll context per route) and the two-tier Settings
+  IA (Essentials + seven collapsed Advanced expanders; `storage.jpeg_quality` and
+  `capture.uia_run_on_interactive` retired via `RETIRED_SETTINGS_KEYS` tolerate-and-drop).
+- Still open: Authenticode code signing (the updater's minisign signature is separate and live)
+  and the remaining follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
 
 ---
 

@@ -69,7 +69,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "capture"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "doctor"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "libloading 0.8.9",
  "serde",
@@ -1311,7 +1311,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "embeddings"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2480,7 +2480,7 @@ dependencies = [
 
 [[package]]
 name = "inference"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "mcp"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "api",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "ocr"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4402,7 +4402,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "screensearch"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "api",
@@ -4857,7 +4857,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "store"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4967,7 +4967,7 @@ dependencies = [
 
 [[package]]
 name = "sysmon"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "tracing",
  "traits",
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "textfilter"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "traits",
 ]
@@ -5881,7 +5881,7 @@ dependencies = [
 
 [[package]]
 name = "traits"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5967,7 +5967,7 @@ dependencies = [
 
 [[package]]
 name = "uia"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",

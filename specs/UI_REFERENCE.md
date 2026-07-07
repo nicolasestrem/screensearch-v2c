@@ -114,7 +114,7 @@ the self-exclude capture gate — it must never appear in its own capture histor
 failed hotkey registration is a **visible Settings warning + toast**, never silent (D6).
 
 **NavRail version footer (0.3.1, D4 — the "quick menu" version line of issue #57).** The bottom of
-the NavRail carries a small footer line showing the **app version** (e.g. `v0.3.1`, mono data face,
+the NavRail carries a small footer line showing the **app version** (e.g. `v0.3.2`, mono data face,
 `--ink-faint`); it is a **link** — activating it (click or keyboard) opens
 `https://github.com/nicolasestrem/screensearch-v2c` in the **default browser** (external open, not
 in-app). Visible on every screen; quiet (no accent color — it is telemetry, not a primary action);
@@ -170,7 +170,7 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding; **0.3.0:** where-was-i "Jump back" card + Intentions strip (unresolved marks, newest-first; open/resolve/dismiss; **no badge counts**) |
 | Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
 | Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
-| Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + footer; honest empty on no-evidence ranges. **0.3.1 (D2/D3, #65):** the download is named `screensearch-report-YYYY-MM-DD-HHmm.md` (**local time**; same-minute collisions append `-2`, `-3`, …; extension unchanged); the footer is one plain-text line block stating the **app version, model id used for generation, time span covered, and active filters** (plus the existing counts: passes · periods covered · frames summarized) — no new settings toggle |
+| Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + footer; honest empty on no-evidence ranges. **0.3.1 (D2/D3, #65):** the download is named `screensearch-report-YYYY-MM-DD-HHmm.md` (**local time**; same-minute collisions append `-2`, `-3`, …; extension unchanged); **0.3.2 (#89):** daily/weekly downloads carry the kind in the stem — `screensearch-report-daily-…` / `-weekly-…` — custom keeps the bare shape; the footer is one plain-text line block stating the **app version, model id used for generation, time span covered, and active filters** (plus the existing counts: passes · periods covered · frames summarized) — no new settings toggle |
 | Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank |
 | Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point; **0.3.1 (D1, #59):** the recognized-text **and** raw-text regions **grow inline** with their content — full height, no internal max-height, **no nested scrollbar**; the page is one scroll context (the outer page scrolls) |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
@@ -204,7 +204,8 @@ max-height, no nested scrollbar; one scroll context — D1, `§4`), `JobQueueMet
 Domain (0.2.x): `RecallModeTabs` (Search/Ask/Reports), `TextSourceToggle` (content / include-chrome),
 `ReportBuilder` (daily/weekly/custom range → Generate), `ReportView` (markdown + clickable
 source-frame chips + Copy + `.md` download — 0.3.1 D2: named `screensearch-report-YYYY-MM-DD-HHmm.md`,
-local time, `-2`/`-3` on same-minute collision — + footer, 0.3.1 D3: one plain-text line block with
+local time, `-2`/`-3` on same-minute collision; 0.3.2 #89: daily/weekly stems carry the kind,
+`screensearch-report-daily-…` / `-weekly-…`, custom unchanged — + footer, 0.3.1 D3: one plain-text line block with
 app version · model id used · time span covered · active filters, plus the existing counts (passes · periods covered · frames summarized);
 no new settings toggle), `PromptCardGrid` (premade Ask
 cards: Day Recap, Standup Update, Time Breakdown, Top of Mind, AI Habits — click fills + submits).

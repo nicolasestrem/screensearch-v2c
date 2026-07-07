@@ -3,6 +3,8 @@
 // epoch milliseconds — the `captured_at` wire format. These run only inside the
 // WebView, so the platform `Date` / `Intl` APIs are always available.
 
+import type { ReportKind } from "../bindings/ReportKind";
+
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
@@ -63,16 +65,23 @@ export function clockTime(ms: number): string {
 
 /**
  * Local-time filename stem for a saved recall report:
- * `screensearch-report-YYYY-MM-DD-HHmm` (0.3.1 D2, #65). Uses the running clock (a report
- * is saved "now", not at a captured instant) with zero-padded 24-hour local time. The
- * backend appends the `.md` extension and de-collides same-minute names (`-2`, `-3`, …).
+ * `screensearch-report-YYYY-MM-DD-HHmm` (0.3.1 D2, #65). Daily and weekly reports carry
+ * their kind in the stem — `screensearch-report-daily-…` / `-weekly-…` (#89) — so a
+ * Downloads folder full of reports stays tellable-apart; a custom-range report keeps the
+ * bare 0.3.1 D2 shape. Uses the running clock (a report is saved "now", not at a captured
+ * instant) with zero-padded 24-hour local time. The backend appends the `.md` extension
+ * and de-collides same-minute names (`-2`, `-3`, …).
  */
-export function reportFileStem(ms: number = Date.now()): string {
+export function reportFileStem(
+  kind?: ReportKind,
+  ms: number = Date.now(),
+): string {
   const d = new Date(ms);
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   const h = String(d.getHours()).padStart(2, "0");
   const mi = String(d.getMinutes()).padStart(2, "0");
-  return `screensearch-report-${y}-${mo}-${day}-${h}${mi}`;
+  const kindSegment = kind === "daily" || kind === "weekly" ? `${kind}-` : "";
+  return `screensearch-report-${kindSegment}${y}-${mo}-${day}-${h}${mi}`;
 }

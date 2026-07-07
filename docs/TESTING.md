@@ -422,7 +422,8 @@ the artifact verifies against the pubkey baked into `tauri.conf.json`).**
    Then build the **old** receiver (workspace `Cargo.toml` version → `0.3.2-pre`):
    `npm run build -- --config <scratch>\e2e-old.json`. Revert the `Cargo.toml` edit afterward.
 4. Manifest + server: pass `--expected-version 0.3.2` so the tag matches the overlay-stamped
-   version (the committed `tauri.conf.json` is still `0.3.1`; the flag is the documented test-only
+   version (written when the committed `tauri.conf.json` was still `0.3.1`; adjust the versions to
+   the current release when re-running. The flag is the documented test-only
    override — the release workflow never uses it, so its strict conf-drift guard is untouched):
    `node scripts/make-latest-json.mjs --tag v0.3.2 --expected-version 0.3.2 --bundle-dir <scratch>\serve
    --url-base http://127.0.0.1:8765/ --out <scratch>\serve\latest.json`, then serve it:
