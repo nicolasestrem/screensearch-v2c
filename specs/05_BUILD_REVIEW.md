@@ -64,3 +64,10 @@ For each build pass, append an entry:
 - **Still risky:** `03` §4's sessions DDL is a contract-with-a-PR2-escape (an inline caveat lets PR3
   re-normalize column details — e.g. `context_key` structure — if PR2's evidence demands); `06` stays
   empty unless a contradiction surfaces while implementing PR2–PR7.
+- **Review response (2026-07-07):** the two automated reviewers (Gemini, Codex) both flagged that the
+  `03` §4 DDL documented `sessions.tool` "NULL unless kind='ai'" (D7) and `session_artifacts.role`
+  "NULL unless kind='exchange'" (D8) in comments but did not enforce them, while sibling columns
+  (`kind`/`host`/`frozen`) carry CHECK constraints. Applied both — `tool CHECK (tool IS NULL OR kind =
+  'ai')` and `role CHECK (role IS NULL OR (role IN ('user','agent') AND kind = 'exchange'))` — so the
+  DDL now rejects the invalid `kind='transcript', role='user'` row the Codex note called out. Still
+  `.md`-only. Bot-authored notes not otherwise replied to (maintainer directive).

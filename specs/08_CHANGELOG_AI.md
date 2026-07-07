@@ -45,3 +45,7 @@
   parity run for a no-regression check (`cargo fmt --all -- --check`; `cargo clippy --workspace
   --all-targets -- -D warnings`; `cargo build --workspace`; `cargo test --workspace`; UI `npm run
   lint`/`build`; `git diff --exit-code -- ui/src/bindings` clean). Evidence in `05` Pass 1.
+- **Review follow-up (2026-07-07):** added CHECK constraints tying `sessions.tool` to `kind='ai'`
+  (D7) and `session_artifacts.role` to `kind='exchange'` (D8) in the `03` §4 DDL, per the automated
+  reviewers — the DDL now enforces the two conditional rules its comments already stated. Still
+  `.md`-only.

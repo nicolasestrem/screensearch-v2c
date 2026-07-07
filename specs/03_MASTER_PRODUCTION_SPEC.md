@@ -330,7 +330,7 @@ CREATE TABLE sessions (
   started_at    INTEGER NOT NULL,                 -- unix ms (first frame in the run)
   ended_at      INTEGER,                          -- NULL = open (still accreting)
   kind          TEXT NOT NULL CHECK (kind IN ('focus','meeting','ai','other')),
-  tool          TEXT,                             -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai'
+  tool          TEXT CHECK (tool IS NULL OR kind = 'ai'),  -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai' (D7)
   host          TEXT CHECK (host IN ('terminal','desktop','browser','ide')),
   context_key   TEXT NOT NULL,                    -- the segmenter's key (§7e; the §7b key generalized)
   title         TEXT,                             -- lazily generated + cached (D3); NULL until first asked
@@ -355,7 +355,7 @@ CREATE TABLE session_artifacts (
   id         INTEGER PRIMARY KEY,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL CHECK (kind IN ('exchange','transcript','note')),
-  role       TEXT CHECK (role IN ('user','agent')),   -- NULL unless kind='exchange'
+  role       TEXT CHECK (role IS NULL OR (role IN ('user','agent') AND kind = 'exchange')),  -- roles only on 'exchange' (D8); reserved kinds carry none
   frame_id   INTEGER REFERENCES frames(id) ON DELETE SET NULL,
   content    TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
