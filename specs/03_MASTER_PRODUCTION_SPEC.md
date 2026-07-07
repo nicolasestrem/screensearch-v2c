@@ -355,7 +355,7 @@ CREATE TABLE session_artifacts (
   id         INTEGER PRIMARY KEY,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   kind       TEXT NOT NULL CHECK (kind IN ('exchange','transcript','note')),
-  role       TEXT CHECK (role IS NULL OR (role IN ('user','agent') AND kind = 'exchange')),  -- roles only on 'exchange' (D8); reserved kinds carry none
+  role       TEXT CHECK ((kind = 'exchange' AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS NULL)),  -- exchanges REQUIRE a role, reserved kinds forbid one (D8; §7e "roles never invented")
   frame_id   INTEGER REFERENCES frames(id) ON DELETE SET NULL,
   content    TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
@@ -639,10 +639,14 @@ enabling this is an explicit trust decision.*
   - `GET /v1/sessions?kind=&tool=&from=&to=&limit=` — sessions in the window (open sessions, with
     `ended_at` null, are included). The list surface behind `list_sessions` (§7) and the MCP
     `list_sessions` tool.
-  - `GET /v1/sessions/{id}?include_summary=` — session detail + its `exchange` artifacts;
-    `include_summary=1` triggers lazy summary generation + caching (§7e). For an **open** session the
-    summary is regenerated (or returned null-with-reason) rather than served stale — the exact
-    behavior is PR6's call, recorded in `08`.
+  - `GET /v1/sessions/{id}?include_summary=` — session detail + its `exchange` artifacts.
+    `include_summary=1` returns the **cached** summary if one exists, else `null` — it **never
+    triggers generation** over this surface. D12 makes the API/MCP strictly read-only: a GET must not
+    start inference or write `sessions.summary`/`summary_model`. Lazy generation is an **in-app IPC
+    action** (`session_recap` / the app requesting a summary, §7/§7e); the API only ever reflects
+    already-cached state. For an **open** session the cached summary (if any) is served with an
+    `open: true`/non-final marker, never regenerated on read. (If a future need for API-triggered
+    generation appears, it is an explicit `POST` command — a new write scope, out of this arc, `07`.)
   - `POST /v1/ask` gains an optional **`session_id`** scope — when set, retrieval is restricted to that
     session's frames and the answer cites **only** in-session frames (the arc's strategic payoff:
     *"what did I do in my last Claude Code session?"*). Absent `session_id`, behavior is unchanged (D10).
@@ -733,11 +737,18 @@ job — it never competes with capture/OCR** (throttle-aware like every enrichme
   excursions are absorbed** exactly as in `§7b` — a brief switch away breaks the run only if the
   interrupting context is itself sustained — reusing the same dwell logic rather than inventing a
   second knob.
-- **Freeze rule (D2).** A closed session, once older than the segmenter's lookback window, has its
+- **Freeze rule (D2).** A closed session, once older than the **freeze lookback window**, has its
   `id` and boundaries **frozen** (immutable; `sessions.frozen = 1`). Resegmentation only ever touches
   **unfrozen** (open/recent) sessions. This is what makes a session `id` safe to hand to MCP
   consumers — history keeps its identities; heuristic improvements apply going forward only. (A
   deliberate "resegment history" feature would be its own explicitly-versioned arc item.)
+  - **The lookback window is a named parameter, not a hidden constant.** Proposed default **24 h**
+    (86 400 s) — comfortably beyond `gap_close_secs` and the incremental pass's horizon, so a session
+    stabilizes within a day of closing while the recent tail stays re-segmentable. **PR2 confirms the
+    value against the real-DB harness** (the window that makes boundaries stop moving in practice) and
+    records it in `05`/`06` before PR3/PR4 depend on it. It is deliberately **not** a user setting
+    (kept off the two-key surface in `§8`; ID stability is a correctness property, not a tuning knob) —
+    promoting it to a setting later, if evidence demands, is a separate call recorded in `08`.
 
 **Taxonomy (D6/D7).** Recognition is driven by a **versioned data file in the repo** (a `version`
 field; proposed TOML), compiled/shipped with the app (parsed at startup) — **not** schema and **not**
@@ -761,8 +772,10 @@ kinds are reserved (D14 / future) — made concrete by the schema, not built thi
 
 **Lazy intelligence (D3).** Session creation is pure heuristic — zero model calls. Intelligence is
 generated **on demand**:
-- **Title / summary** generate on first request and **cache** on the row (`sessions.title` /
-  `summary`, with `summary_model` recording provenance); subsequent reads are served from the cache.
+- **Title / summary** generate on first request **from the in-app IPC path** and **cache** on the row
+  (`sessions.title` / `summary`, with `summary_model` recording provenance); subsequent reads are
+  served from the cache. The read-only API/MCP surface (`§7c`, D12) **never** triggers generation — it
+  returns the cached value or `null`; a GET must not start inference or write the row.
 - **Recap** is **not** new machinery and is **not** row-cached: it **is** the existing coverage-first
   **report engine (`§8b`)** scoped to the session's time range and frames, generated per request like
   any report (with the same honest footer reports already carry). Context stays pinned at **8192** —

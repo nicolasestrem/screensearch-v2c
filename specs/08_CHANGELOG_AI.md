@@ -49,3 +49,10 @@
   (D7) and `session_artifacts.role` to `kind='exchange'` (D8) in the `03` §4 DDL, per the automated
   reviewers — the DDL now enforces the two conditional rules its comments already stated. Still
   `.md`-only.
+- **Review follow-up, round 2 (2026-07-07):** three more Codex notes on `03`, all applied: exchange
+  artifacts now **require** a role (`CHECK ((kind='exchange' AND role IN ('user','agent')) OR
+  (kind IN ('transcript','note') AND role IS NULL))`, matching §7e's "roles never invented"); the
+  `§7c` `GET /v1/sessions/{id}` is now strictly read-only — `include_summary` returns cached-or-`null`
+  and never triggers generation (D12; generation lives on the in-app IPC path); and the freeze
+  lookback window is now a **named** parameter in §7e (proposed default 24 h, PR2-confirmed) instead
+  of an unspecified constant. Still `.md`-only.

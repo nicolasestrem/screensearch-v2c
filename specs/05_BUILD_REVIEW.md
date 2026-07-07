@@ -71,3 +71,15 @@ For each build pass, append an entry:
   'ai')` and `role CHECK (role IS NULL OR (role IN ('user','agent') AND kind = 'exchange'))` — so the
   DDL now rejects the invalid `kind='transcript', role='user'` row the Codex note called out. Still
   `.md`-only. Bot-authored notes not otherwise replied to (maintainer directive).
+- **Review response, round 2 (2026-07-07):** three further Codex P2 notes on `03`, all applicable:
+  (1) **exchanges must require a role** — the round-1 CHECK still allowed `kind='exchange', role=NULL`,
+  which contradicts §7e ("roles never invented" ⇒ no role, no exchange); tightened to
+  `CHECK ((kind='exchange' AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS
+  NULL))`. (2) **read-only GET must not mutate** — `include_summary=1` triggering lazy generation +
+  caching is a hidden write under D12; rewrote `§7c` so the API/MCP surface returns cached-or-`null`
+  and **never** generates, with generation moved to the in-app IPC path (`§7e` clarified to match; an
+  API-triggered generation would be an explicit `POST`, out of arc). (3) **freeze lookback undefined**
+  — the freeze rule referenced a lookback window that no §8 key or §7e line pinned, forcing PR4 to
+  invent a hidden constant; defined it as a named parameter (proposed default 24 h, PR2-confirmed
+  against the harness, recorded in `05`/`06`), deliberately **not** a user setting so the `§8` two-key
+  surface holds. Still `.md`-only.
