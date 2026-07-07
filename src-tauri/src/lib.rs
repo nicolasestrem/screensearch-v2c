@@ -8,7 +8,7 @@
 //! provider slots that start the enrichment workers and light up search, vision
 //! tagging, and grounded answers. P5 adds the full Command Deck command surface.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -2196,8 +2196,13 @@ struct UiaWithOcrFallback {
     /// Latched after a spawn failure so we don't retry every frame; cleared on `apply_settings`.
     spawn_failed: std::sync::atomic::AtomicBool,
     /// Per-app circuit breaker: repeated over-budget/timed-out walks against one app route it
-    /// to OCR for a cooldown, so a heavy Chromium/Electron app isn't re-hammered every frame.
+    /// to OCR for a cooldown, so a heavy *native* app isn't re-hammered every frame. Chromium/
+    /// Electron windows never reach it — they're skipped to OCR up front (`07` #93) — so it now
+    /// only backstops native apps and any browser whose class lookup failed.
     breaker: StdMutex<uia::breaker::AppBreaker>,
+    /// `app_hint`s for which we've already logged the "Chromium → OCR" skip, so the info line is
+    /// emitted once per app rather than once per frame (`07` #93).
+    chromium_skip_logged: StdMutex<HashSet<String>>,
 }
 
 impl UiaWithOcrFallback {
@@ -2212,6 +2217,7 @@ impl UiaWithOcrFallback {
                 uia::breaker::BREAKER_CONSECUTIVE_BAD,
                 uia::breaker::BREAKER_COOLDOWN_MS,
             )),
+            chromium_skip_logged: StdMutex::new(HashSet::new()),
         }
     }
 
@@ -2356,6 +2362,31 @@ impl OcrProvider for UiaWithOcrFallback {
             && uia::classify::trigger_runs_uia(frame.trigger)
             && !self.input_gate_skips(frame.trigger, &cfg);
         if run_uia {
+            // Chromium/Electron windows are never walked: the first UIA touch hangs their UI
+            // thread and can't be aborted mid-call (`07` #93). Skip straight to OCR here, before
+            // spawning/dispatching a walk, whenever capture recorded the foreground handle (the
+            // common case). The worker keeps its own `Chrome_WidgetWin_*` backstop for the frames
+            // where `foreground_hwnd` is `None` or focus moved between capture and recognize.
+            if let Some(hwnd) = frame.foreground_hwnd {
+                if uia::hwnd_is_chromium(hwnd) {
+                    if let Some(app) = frame.app_hint.as_deref() {
+                        // Log once per app, not once per frame — browsers are foreground often.
+                        if self
+                            .chromium_skip_logged
+                            .lock()
+                            .expect("chromium skip-log lock")
+                            .insert(app.to_string())
+                        {
+                            tracing::info!(
+                                app,
+                                "UIA disabled for Chromium/Electron app; using OCR (07 #93)"
+                            );
+                        }
+                    }
+                    // A skip is neither a good nor a bad walk, so it feeds nothing to the breaker.
+                    return self.ocr.recognize(frame).await;
+                }
+            }
             // `now_ms` is an i64 epoch-ms; the breaker only does relative comparisons, so a
             // non-negative `u64` is all it needs (clamp guards a pre-1970 clock).
             let now = now_ms().max(0) as u64;

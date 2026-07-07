@@ -112,6 +112,21 @@ pub fn input_gate_skips_uia(
     matches!(trigger, traits::CaptureTrigger::Timer) && ms_since_last_input < suppress_window_ms
 }
 
+/// Whether a foreground window's Win32 class marks it as a Chromium/Electron/CEF app, which
+/// must never be walked by UIA. Chrome, Edge, Brave, Slack, Discord, VS Code, Claude Desktop,
+/// Codex and every other Chromium/CEF/Electron top-level window share the `Chrome_WidgetWin_*`
+/// class. A UIA tree walk of one hangs the target's UI thread: the first touch forces the
+/// process to build its whole accessibility tree synchronously inside a single uninterruptible
+/// cross-process COM call that no client-side timeout or cancel flag can abort mid-call (proven
+/// live 2026-07-07 — the freeze survived killing our own process). So these windows are routed
+/// to OCR, which reads the visible page from the captured bitmap and never touches the target
+/// (`07` #93). Firefox (`MozillaWindowClass`) is not Chromium and does not exhibit the wedge, so
+/// it is deliberately not matched. Pure (no Win32) so it is unit-tested in CI; the live
+/// `GetClassNameW` read that feeds it lives in [`crate::window`].
+pub fn is_chromium_window_class(class_name: &str) -> bool {
+    class_name.starts_with("Chrome_WidgetWin_")
+}
+
 /// Splits a (possibly multi-line) text block into `(line_index, word)` pairs starting at
 /// `first_line`, returning the pairs and the next free line index. Mirrors OCR's
 /// `Lines()`→`Words()` grouping: each `\n`-separated line that has any words is one
@@ -232,6 +247,32 @@ mod tests {
         assert!(!should_emit(50020, false, true));
         // A container never emits its own text.
         assert!(!should_emit(PANE, false, false));
+    }
+
+    #[test]
+    fn chromium_window_classes_are_detected_others_left_alone() {
+        // Chromium/Electron/CEF top-level windows (the ones that hang under a UIA walk).
+        assert!(
+            is_chromium_window_class("Chrome_WidgetWin_1"),
+            "Chrome/Edge/Electron"
+        );
+        assert!(
+            is_chromium_window_class("Chrome_WidgetWin_0"),
+            "CEF secondary widget"
+        );
+        // Native / non-Chromium windows keep UIA (higher fidelity, safe).
+        assert!(!is_chromium_window_class("Notepad"), "classic Win32");
+        assert!(!is_chromium_window_class("CabinetWClass"), "File Explorer");
+        assert!(
+            !is_chromium_window_class("ApplicationFrameWindow"),
+            "UWP host"
+        );
+        assert!(!is_chromium_window_class("HwndWrapper[App;;guid]"), "WPF");
+        assert!(
+            !is_chromium_window_class("MozillaWindowClass"),
+            "Firefox is not Chromium"
+        );
+        assert!(!is_chromium_window_class(""), "empty class");
     }
 
     #[test]

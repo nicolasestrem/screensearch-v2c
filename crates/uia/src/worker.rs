@@ -26,7 +26,7 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic};
 
-use crate::{classify, geometry, monitors, UiaBudget, CONFIDENCE_UNKNOWN};
+use crate::{classify, geometry, monitors, window, UiaBudget, CONFIDENCE_UNKNOWN};
 
 /// A recognize request handed to the MTA worker. Carries only `Send` plain data — never
 /// the captured pixels (UIA reads the live tree, not the bitmap) and never a COM pointer.
@@ -235,6 +235,21 @@ fn read_foreground(
     if let Some(captured) = req.foreground_hwnd {
         if hwnd.0 as isize as i64 != captured {
             bail!("foreground window changed since capture — fall back to OCR");
+        }
+    }
+
+    // Never walk a Chromium/Electron window (`Chrome_WidgetWin_*`): the first UIA touch forces
+    // the target to build its whole accessibility tree synchronously inside one uninterruptible
+    // cross-process COM call that hangs its UI thread ("Not responding"), and nothing here can
+    // abort it mid-call (proven live 2026-07-07 — the freeze survived killing our own process).
+    // The class read is a cheap local `GetClassNameW`, no COM. Bail → OCR carries the frame
+    // (`07` #93). This is the backstop for the `foreground_hwnd == None` / focus-edge cases the
+    // composition-root fast-path can't see; the fast path handles the common case without even
+    // dispatching here. A fast within-budget bail reads as `Neutral` to the breaker (no trip).
+    if let Some(class) = window::class_name_of(hwnd) {
+        if classify::is_chromium_window_class(&class) {
+            tracing::debug!(%class, "UIA skipped: Chromium/Electron window; OCR carries this frame");
+            bail!("chromium/electron window ({class}) — fall back to OCR");
         }
     }
 

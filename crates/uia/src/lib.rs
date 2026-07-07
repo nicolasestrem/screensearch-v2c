@@ -32,7 +32,10 @@ pub mod classify;
 mod geometry;
 pub mod input;
 mod monitors;
+mod window;
 mod worker;
+
+pub use window::hwnd_is_chromium;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -299,7 +302,9 @@ mod tests {
     /// cache-batched walk (`07` #71) is exercised **only** here (never in CI), this is the
     /// acceptance gate: it also asserts the walk returns well inside the hard timeout and prints
     /// the yield (span/char counts) for manual inspection. `#[ignore]`d in CI (needs a real
-    /// desktop session); run locally with `cargo test -p uia -- --ignored --nocapture`.
+    /// desktop session); run locally with `cargo test -p uia -- --ignored --nocapture` **with a
+    /// native (non-Chromium) window foreground** — a `Chrome_WidgetWin_*` foreground now bails to
+    /// OCR by design (`07` #93), which would make the `Ok`/`engine = "uia"` assertions fail.
     #[tokio::test]
     #[ignore = "requires a real desktop (UI Automation); run locally"]
     async fn uia_provider_spawns_and_recognizes_foreground() {

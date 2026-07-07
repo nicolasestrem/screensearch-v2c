@@ -9,7 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet — the next arc (0.4.0 sessions) starts here._
+_Nothing yet._
+
+## [0.3.3] - 2026-07-07
+
+### Fixed
+- Browsers no longer freeze during capture. The text reader (UI Automation) could hang Chromium
+  and Electron windows (Chrome, Edge, Slack, Discord, VS Code, Claude Desktop, and similar) by
+  walking their accessibility tree, occasionally leaving a window "Not Responding". These windows
+  are now read via OCR instead, which never freezes them; their on-screen content stays fully
+  captured and searchable. Native apps are unaffected and keep the higher-fidelity reader.
 
 ## Older versions
 
