@@ -78,6 +78,7 @@ AppShell
      /recall      Recall    — Search · Ask · Reports (0.2.x); content text default, opt-in raw/chrome
      /timeline    Timeline  — the Scanline Timeline browser
      /timeline/:id Moment   — one frame: image, OCR text, vision tags, context, actions
+     /timeline/session/:id  Session drill-in (0.4.0 PR5) — one session: title, span, tool/host, frames strip, exchanges, Recap
      /insights    Insights  — activity analytics (nice-to-have; ships as real or honest-empty)
      /settings    Settings  — two tiers (0.3.2, D6): Essentials (Capture · Hotkeys · Privacy · Models · Storage · App · Data) + Advanced (collapsed per-group expanders)
      *            NotFound
@@ -161,18 +162,43 @@ restart; no modal, no nag, no auto-restart. No update → **zero UI presence** (
 exist, not "shown as zero"). Quiet styling (functional palette, not the bold accent) — it is
 telemetry, not a primary action, same discipline as the version footer.
 
+**Sessions in the UI (0.4.0, D11/D13).** Sessions surface **inside existing routes** — there is **no
+new NavRail entry** (D13 is the fence; a dedicated Sessions route is a 0.4.x conversation only after
+live use proves the in-route surfaces insufficient, `07` #108). Four touch-points, all reusing shipped
+primitives (`03 §7e`):
+- **Timeline — session bands.** A kind-coded band layer over the Scanline ribbon (`§1`), **tokens
+  only, one-accent discipline** (signal-orange stays the single accent — bands are differentiated by
+  the functional palette + labels, not by competing accents). Data comes from `list_sessions`
+  (`03 §7`). Selecting a band opens the drill-in.
+- **Session drill-in** (`/timeline/session/:id`, a Timeline sub-route, **not** a NavRail item): title,
+  span, tool/host chips, the **frames strip**, **exchanges** when present (best-effort — absent when
+  markers didn't match, shown honestly, never invented), and a **Recap** action that runs the existing
+  report engine over the session's range/frames (`03 §8b`) — with the same honest footer reports
+  already carry. Bound by the `§8` shell-layout contract: **one scroll context, no nested scrollbars**
+  (the drill-in must not reintroduce the 0.3.1-#59 nested-scroll problem).
+- **Moment — "part of session" line.** A line linking the frame into its drill-in; a frame with no
+  session simply omits the line (no placeholder).
+- **Deck — where-was-i framing.** The "Jump back" card gains session framing ("Jump back:
+  *repo — VS Code*, session 09:14–14:32").
+
+**Tone (D11).** Truthful, on-demand, neutral — **no** durations-as-judgment, **no** streaks, **no**
+scores, **no** session notifications. Session `confidence` is surfaced honestly (a low-confidence
+session says so); an **open** session reads as still-running with non-final boundaries. Reduced-motion
+honored (`§7`).
+
 ## 4. Per-screen state matrix (the comprehensiveness guarantee)
 **Every view defines all of: `loading` · `empty` · `error` · `partial` · `populated`.** No screen
 ships with only the happy path; no mock data; no "Coming Soon."
 
 | Screen | empty | error | partial | notes |
 |---|---|---|---|---|
-| Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding; **0.3.0:** where-was-i "Jump back" card + Intentions strip (unresolved marks, newest-first; open/resolve/dismiss; **no badge counts**) |
+| Deck | "Capture is off / no frames yet — start capture" | readiness probe failed → retry | capturing but no enrichment yet | drives onboarding; **0.3.0:** where-was-i "Jump back" card + Intentions strip (unresolved marks, newest-first; open/resolve/dismiss; **no badge counts**); **0.4.0:** the "Jump back" card gains session framing ("*repo — VS Code*, session 09:14–14:32", `03 §7e`) |
 | Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
 | Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
 | Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + footer; honest empty on no-evidence ranges. **0.3.1 (D2/D3, #65):** the download is named `screensearch-report-YYYY-MM-DD-HHmm.md` (**local time**; same-minute collisions append `-2`, `-3`, …; extension unchanged); **0.3.2 (#89):** daily/weekly downloads carry the kind in the stem — `screensearch-report-daily-…` / `-weekly-…` — custom keeps the bare shape; the footer is one plain-text line block stating the **app version, model id used for generation, time span covered, and active filters** (plus the existing counts: passes · periods covered · frames summarized) — no new settings toggle |
-| Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank |
-| Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point; **0.3.1 (D1, #59):** the recognized-text **and** raw-text regions **grow inline** with their content — full height, no internal max-height, **no nested scrollbar**; the page is one scroll context (the outer page scrolls) |
+| Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank; **0.4.0:** session bands over the scanline (`03 §7e`) — a range with frames but no sessions yet shows the scrub with **no bands**, never a blank strip |
+| Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point; **0.3.1 (D1, #59):** the recognized-text **and** raw-text regions **grow inline** with their content — full height, no internal max-height, **no nested scrollbar**; the page is one scroll context (the outer page scrolls); **0.4.0:** a "part of session" line links into the drill-in (absent, not placeholdered, when the frame has no session) |
+| Session drill-in (0.4.0) | session has **no exchanges** captured → honest "no exchanges captured for this session" (never invented) | session missing/deleted → explain + back to Timeline | **open session** → "still running — boundaries not final"; summary generating → skeleton line | title/span/tool-host chips + frames strip + exchanges (when present) + **Recap** (runs the report engine, `03 §8b`); low `confidence` surfaced honestly; **one scroll context**, no nested scrollbars (`§8`); loading = skeleton; populated = the assembled session |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
 | Settings | — | save failed → keep form, explain | model downloading (progress) | optimistic + reconcile |
 | Settings · Performance throttle (0.2.1) | toggle OFF → readout collapsed to "Throttle disabled" (empty-off) | status probe failed → "Pressure unavailable", keep toggle + fields | partial: GPU unmonitored → CPU% shown + honest "GPU not monitored" | master toggle + live CPU/GPU + level readout + 8 threshold fields; loading = skeleton readout; populated = live CPU/GPU% + level (Normal/High/Sustained) |
@@ -222,6 +248,10 @@ reveal/copy/regenerate + threat-model copy + the loud port-in-use "pick another"
 `ExportPanel` (Settings "Data export": an **Export…** `Button` → `export_data`, streaming
 frames + content text + marks to a JSON file in the user's Downloads folder, **no images**;
 its own panel so it reads as independent of the API — it **works with the API off** — D12).
+Domain (0.4.0, names proposal-level — PR5 owns): `SessionBands` (the kind-coded band layer over
+`ScanlineTimeline`, tokens only, one-accent — data via `list_sessions`), `SessionDrillIn` (the
+`/timeline/session/:id` view: title/span/tool-host chips + frames strip + exchanges + **Recap** via
+the report engine; one scroll context, no nested scrollbars — `§4`/`§8`).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
 
 ## 6. Data & state (reliability by construction)
@@ -243,9 +273,11 @@ Each component owns one job; a label labels, an example demonstrates — nothing
 
 ## 7. Accessibility (WCAG-AA, non-negotiable)
 AA contrast for all text/controls (palette chosen for it); visible keyboard focus on every
-interactive element; full keyboard nav incl. the timeline (arrow scrub, Enter to open); ARIA on
-custom widgets (timeline = slider semantics); `prefers-reduced-motion` disables scan/ambient;
-respects OS dark (app is dark-only by design); hit targets ≥ 32px.
+interactive element; full keyboard nav incl. the timeline (arrow scrub, Enter to open) and, for
+0.4.0, the **session bands** (keyboard-operable, Enter opens the drill-in) and the **drill-in** view
+(fully keyboard-navigable); ARIA on custom widgets (timeline = slider semantics); `prefers-reduced-motion`
+disables scan/ambient (incl. session-band motion); respects OS dark (app is dark-only by design);
+hit targets ≥ 32px.
 
 ## 8. Performance budgets
 Initial JS ≤ 250 KB gzip; route-split per page; virtualized frame grids/timeline (no full-list

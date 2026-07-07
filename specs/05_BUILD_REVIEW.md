@@ -22,40 +22,45 @@ For each build pass, append an entry:
 > `specs/archive/05_BUILD_REVIEW.v0.3.1.md`.
 > Shipped 0.3.2 history (the P7.2 product-shell mini-arc: PR1–PR6) →
 > `specs/archive/05_BUILD_REVIEW.v0.3.2.md`.
+> Shipped 0.3.3 history (the browser-freeze hotfix: UIA skips Chromium/Electron windows) →
+> `specs/archive/05_BUILD_REVIEW.v0.3.3.md`.
 > Live file holds only the current arc.
 
 ---
 
-## Pass 1 — 2026-07-07 — 0.3.3 hotfix: UIA skips Chromium/Electron windows (`07` #93, `06` #25)
+## Pass 1 — 2026-07-07 — 0.4.0 PR1 (specs contract; specs-only, no code)
 
-- **Implemented:** UIA now never walks a `Chrome_WidgetWin_*` (Chromium/Electron/CEF) foreground
-  window; such frames are routed to OCR before any COM touch. New pure classifier
-  `classify::is_chromium_window_class` (prefix `Chrome_WidgetWin_`), a Win32 helper module
-  `crates/uia/src/window.rs` (`class_name_of` via `GetClassNameW`; public `hwnd_is_chromium`),
-  a composition-root fast-path in `UiaWithOcrFallback::recognize` (logs `UIA disabled for
-  Chromium/Electron app; using OCR` once per app), and a worker backstop in `read_foreground`
-  before `ElementFromHandle`. Browsers stay captured via OCR; native apps keep UIA; the breaker
-  is retained as a native-app backstop.
-- **Verification (verbatim):**
-  - `cargo test -p uia`: `test result: ok. 26 passed; 0 failed; 3 ignored` (incl. new
-    `chromium_window_classes_are_detected_others_left_alone`).
-  - `cargo fmt --all -- --check` clean; UI `npm run lint`/`build` clean;
-    `cargo clippy --workspace --all-targets -- -D warnings` clean;
-    `cargo test --workspace`: **524 passed, 0 failed**; `git diff --exit-code -- ui/src/bindings` clean.
-  - **Live detection** against real handles (`UIA_PROBE_HWND=… cargo test -p uia -- --ignored
-    live_hwnd_classification`): Chrome `class="Chrome_WidgetWin_1" is_chromium=true`; Edge
-    `Chrome_WidgetWin_1 true`; taskbar `Shell_TrayWnd false`; Notepad `Notepad false`.
-  - **Live end-to-end** (`npm run tauri dev`, RUST_LOG=info,uia=debug; capture on): Chrome
-    (the 2026-07-07 repro window) foreground →
-    `INFO … UIA disabled for Chromium/Electron app; using OCR (07 #93) app="chrome"`, capture kept
-    encoding (OCR), **no** `circuit breaker opened for app="chrome"`, **no** `still finishing a
-    walk`, Chrome `Responding=True` throughout and after the dev-app teardown. Notepad foreground →
-    `DEBUG uia::worker: uia walk complete nodes=46 spans=50 elapsed_ms=93` (UIA still walks native).
-- **Skipped / deferred:** no change to the breaker (kept as native-app backstop, `07` #92); no new
-  setting (unconditional, per surface-reduction ethos); the long-term high-fidelity browser path
-  (extension/CDP DOM reader) remains a future 0.4.x option, not built here.
-- **Hallucinated / corrected:** none. Composite `START CAPTURE` accessible name is upper-cased by
-  CSS (matched via UIA name for the live test).
-- **Still risky:** UIA remains active for native apps, where a pathological tree could still be
-  heavy; the unchanged breaker backstops that, exactly as before. First-touch browser wedge is now
-  eliminated by construction (no Chromium tree is ever touched).
+- **Implemented:** The 0.4.0 sessions-arc contract ("P8 — frames → sessions reframe",
+  `docs/0.4.0.md`, decisions D1–D16) normalized into the specs: `02` §5d (new arc section) + §7
+  (non-goals: audio pointer → §5d; D15 permanent no-telemetry commitment) + §8 (status: 0.3.3
+  shipped, 0.4.0 active); `03` §4 (sessions/`session_artifacts` DDL + the 0.4.0-migration prose,
+  10 → 11) + §7 (three proposal IPC rows) + §7b (forward pointer) + §7c (`/v1/sessions*` endpoints,
+  `session_id` ask scope, three MCP tools) + new §7e (segmentation / taxonomy / recognition /
+  exchanges / lazy-intelligence contract) + §8 (two `sessions.*` keys) + §11b (D16 gate) + new §13c
+  (0.4.0 DoD); `04` §1/§2/§3 (reading-order + source-of-truth row + build-order bullet); `UI_REFERENCE`
+  §3 (drill-in route + sessions bold-prose block) + §4 (state-matrix rows) + §5 (components) + §7
+  (a11y); `07` (rows #98/#102/#91 updated; #107/#108 added; two manual-steps bullets — the D5 backup
+  gate and the D15 usage-signals procedure); `docs/MCP.md` (PR6 tool-growth note); `CLAUDE.md`/
+  `AGENTS.md` current-state; `CHANGELOG.md` + `08`. This pass also folded forward the overdue **v0.3.3
+  archival sweep** (05/06/07/08 + `CHANGELOG.md` → `specs/archive/*.v0.3.3.md` + `CHANGELOG-ARCHIVE.md`),
+  per the standing archive-on-release rule. Verification = the diff itself: `git diff --name-only main`
+  shows only `.md` files (paste verbatim on the PR).
+- **Skipped / deferred:** everything with a runtime surface — deliberately (PR2–PR6 implement this
+  contract). The D15 convenience script (`scripts/`) is **not** built here: PR1 acceptance is "no
+  code changes", so the documented reading procedure carries copy-pasteable `gh api` commands
+  instead; the optional script is a later follow-up (runs on the maintainer's machine, never in the
+  app). GitHub hygiene (0.4.0 milestone + `in-progress-0.4.0` label + relabel/milestone #88) is done
+  right after the PR opens (0.3.2-PR1 precedent).
+- **Hallucinated / corrected:** naming left explicitly **proposal-level** where a later PR owns the
+  final call (the 0.3.2 `app.*` precedent): the three IPC command names + the `FrameDetail` session
+  reference (PR5), the two settings keys' clamp ranges + Settings-UI home (PR4/PR5), the drill-in
+  route shape `/timeline/session/:id` + component names (PR5), open-session summary semantics (PR6),
+  the taxonomy file path/crate home (PR4). Recorded drift: issue **#88 carries `deferred-0.3.4`**, not
+  the `deferred-0.4.0` that `docs/0.4.0.md` line 124 and `07` #102 assert — corrected in `07` #102 and
+  by the relabel; the roadmap text is left as-is (settled doc). Post-0.3.3 issue triage
+  (`docs/0.4.0.md` §2 lead-in): **no-op** — no issues filed since 2026-07-07; #88 is the only open
+  issue.
+- **Broke / regressed:** nothing — no code touched (`cargo`/UI suites run for parity only).
+- **Still risky:** `03` §4's sessions DDL is a contract-with-a-PR2-escape (an inline caveat lets PR3
+  re-normalize column details — e.g. `context_key` structure — if PR2's evidence demands); `06` stays
+  empty unless a contradiction surfaces while implementing PR2–PR7.
