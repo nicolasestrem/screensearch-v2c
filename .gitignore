@@ -29,6 +29,8 @@ src-tauri/binaries/
 captures/
 docs/AUDIT*.md
 docs/audits/
+# 0.4.0 PR2 ground-truth exports + hand labels (personal screen history — never commit)
+/harness-data/
 
 # Environment / secrets
 .env
