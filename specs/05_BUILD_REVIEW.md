@@ -95,3 +95,10 @@ For each build pass, append an entry:
   capture lands, and recorded that capture enhancement as `07` **#109** (not sessions work). The `§7e`
   context-key browser-domain term is likewise flagged dormant (matching the shipped `§7b` posture).
   Still `.md`-only.
+
+- **Review response, round 4 (2026-07-07):** addressed the inline P2 on the sessions list range
+  contract: `GET /v1/sessions?from=&to=` now explicitly uses **overlap** semantics, not
+  `started_at BETWEEN` semantics. The predicate is recorded as `started_at < to AND
+  COALESCE(ended_at, now) > from`, with half-open forms for single-bound requests and request-time
+  `now` for open sessions, so long/still-active bands remain visible to Timeline/MCP range queries.
+  Still `.md`-only.

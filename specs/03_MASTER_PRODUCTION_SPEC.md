@@ -636,9 +636,13 @@ enabling this is an explicit trust decision.*
   whole result set or risks OOM on the local box. A Settings **"Export…"** button calls the *same* code
   path internally (streaming to a file), so export works even with the API disabled.
 - **0.4.0 (PR6, D12 — read-only, no new write scopes):**
-  - `GET /v1/sessions?kind=&tool=&from=&to=&limit=` — sessions in the window (open sessions, with
-    `ended_at` null, are included). The list surface behind `list_sessions` (§7) and the MCP
-    `list_sessions` tool.
+  - `GET /v1/sessions?kind=&tool=&from=&to=&limit=` — sessions that **overlap** the requested
+    window, not only sessions that start inside it: predicate is `started_at < to AND
+    COALESCE(ended_at, now) > from` when both bounds are present, with the corresponding half-open
+    single-bound forms (`COALESCE(ended_at, now) > from` for `from` only; `started_at < to` for `to`
+    only). Open sessions (`ended_at` null) use request-time `now` for this overlap test, so a long or
+    still-active session that began before `from` remains visible in Timeline/MCP range queries. The
+    list surface behind `list_sessions` (§7) and the MCP `list_sessions` tool.
   - `GET /v1/sessions/{id}?include_summary=` — session detail + its `exchange` artifacts.
     `include_summary=1` returns the **cached** summary if one exists, else `null` — it **never
     triggers generation** over this surface. D12 makes the API/MCP strictly read-only: a GET must not

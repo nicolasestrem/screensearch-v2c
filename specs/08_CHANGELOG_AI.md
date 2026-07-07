@@ -62,3 +62,8 @@
   `browser-ai` taxonomy seed off the dormant `browser_url` field (production capture sets it `None`)
   onto stored `app_hint` + window-title metadata, domain match a later refinement; recorded the
   `browser_url`-capture enhancement as `07` #109. Still `.md`-only.
+
+- **Review follow-up, round 4 (2026-07-07):** defined `GET /v1/sessions?from=&to=` time filtering as
+  an overlap query (`started_at < to AND COALESCE(ended_at, now) > from`, with half-open single-bound
+  variants) so Timeline/MCP callers do not drop long or open sessions that started before the
+  requested window. Still `.md`-only.
