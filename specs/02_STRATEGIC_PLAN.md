@@ -167,11 +167,12 @@ capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
 - **v1.0 (P0–P5) shipped** (`v0.1.0`, 2026-06-24); the **0.2.x arc shipped** (attention-first text
   signal + recall workflows; `§5b`, `docs/0.2.0.md`); the **0.3.0 arc (P7) shipped** (`v0.3.0`,
   2026-07-04; `§5c`, `docs/0.3.0.md`) and its **0.3.1 triage patch shipped** (`v0.3.1`,
-  2026-07-05; `docs/0.3.1.md` — the #64 vision-throughput fix + polish). The **0.3.2 arc is now
-  active** — "P7.2 product shell mini-arc" (`docs/0.3.2.md`): **lifecycle** (auto-update,
-  hard-sequenced before 0.4.0; systray + quick actions) **and interface** (shell-layout hardening;
-  Settings two-tier IA), under a **zero-DB-schema-migration** constraint. Then the **0.4.0 sessions
-  arc**.
+  2026-07-05; `docs/0.3.1.md` — the #64 vision-throughput fix + polish), and the **0.3.2 arc
+  shipped** (`v0.3.2`, 2026-07-06; "P7.2 product shell mini-arc", `docs/0.3.2.md`): **lifecycle**
+  (auto-update — the updater's genesis release, hard-sequenced before 0.4.0 and met; systray +
+  quick actions) **and interface** (shell-layout hardening; Settings two-tier IA), under the
+  **zero-DB-schema-migration** constraint (held — schema stays 10). **The 0.4.0 sessions arc is
+  next**, delivered via the auto-updater 0.3.2 shipped.
 
 ---
 

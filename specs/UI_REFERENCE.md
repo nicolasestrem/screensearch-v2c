@@ -114,7 +114,7 @@ the self-exclude capture gate — it must never appear in its own capture histor
 failed hotkey registration is a **visible Settings warning + toast**, never silent (D6).
 
 **NavRail version footer (0.3.1, D4 — the "quick menu" version line of issue #57).** The bottom of
-the NavRail carries a small footer line showing the **app version** (e.g. `v0.3.1`, mono data face,
+the NavRail carries a small footer line showing the **app version** (e.g. `v0.3.2`, mono data face,
 `--ink-faint`); it is a **link** — activating it (click or keyboard) opens
 `https://github.com/nicolasestrem/screensearch-v2c` in the **default browser** (external open, not
 in-app). Visible on every screen; quiet (no accent color — it is telemetry, not a primary action);

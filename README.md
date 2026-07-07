@@ -4,17 +4,21 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status — v0.3.1 shipped.** Capture → OCR/UIA text → deferred enrichment →
+> **Status — v0.3.2 shipped.** Capture → OCR/UIA text → deferred enrichment →
 > **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
 > the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
 > The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
 > capture, and a smart enrichment throttle; the 0.3.0 arc trimmed invasive surfaces (event
 > triggers, Beta tier, image embeddings) and added flow recall — where-was-i + marks — plus an
-> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**. The 0.3.1 patch
-> restored vision-tagging throughput to the pre-WebP baseline (#64) and added recall polish
-> (dated, self-describing report downloads; inline Moment text; a nav-rail version link). The
-> unsigned **NSIS installer** ships today; **code-signing** is the lone remaining packaging
-> follow-up. Design lives
+> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**; the 0.3.1 patch
+> restored vision-tagging throughput to the pre-WebP baseline (#64) and added recall polish.
+> The 0.3.2 arc gave the app its product shell: **auto-update** (signed manifest on GitHub
+> Releases, background download, install only on your restart — v0.3.2 is the last manual
+> download), a **system tray** with a passive capture-state icon and quick actions
+> (close-to-tray on by default, run-at-startup off by default), a hardened one-scroll-context
+> layout, and a **two-tier Settings** page. The **NSIS installer** is unsigned (SmartScreen will
+> warn — "More info → Run anyway"); **Authenticode code-signing** is the lone remaining packaging
+> follow-up (the updater's minisign signature is separate and already live). Design lives
 > in [`specs/`](./specs); the as-built architecture is in
 > [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project — no shared
 > code or data with any prior version.
@@ -70,12 +74,21 @@ The **0.3.0 arc** (shipped) was the surface-reduction + flow-recall pass:
 | **Where-was-i + marks** | Resume context (`where_was_i`) and mark-this-moment (`Ctrl+Alt+M`, diff-gate-bypassing `capture_now`) | ✅ Shipped |
 | **Local API + MCP wrapper** | Opt-in localhost API (127.0.0.1 + bearer token), JSON export, and the `screensearch-mcp` stdio wrapper | ✅ Shipped |
 
+The **0.3.2 arc** (shipped) is the product-shell pass — lifecycle + interface:
+
+| Feature | What it adds | Status |
+|---|---|---|
+| **Auto-update** | Signed `latest.json` on GitHub Releases; check on launch + manual check; background download; install only on user-initiated restart — no modal, no nag | ✅ Shipped (v0.3.2 is the updater's genesis — the last manual download) |
+| **System tray + quick actions** | Passive capture-state icon (capturing / paused / error), six-item menu (open, pause/resume, load/unload model, start/stop vision, check for updates, quit); close-to-tray default on; run-at-startup default off | ✅ Shipped |
+| **Shell layout hardening** | One scroll context per route, no nested scrollbars, no layout shift on load; WebView2 ghost-rail mitigation | ✅ Shipped |
+| **Settings two-tier IA** | Essentials always visible; Advanced collapsed into seven groups; live hotkey-conflict warning; two dead settings retired (old configs still load) | ✅ Shipped |
+
 > Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
 > not pushed).
 
 ### Working today
 Start capture → each changed frame's text is read (foreground-window **UIA**, falling back to native
-**WinRT OCR**), stored, and JPEG-archived → an attention-first filter keeps content text over chrome
+**WinRT OCR**), stored, and archived as lossless WebP → an attention-first filter keeps content text over chrome
 → an `embed_text` job is enqueued → a background worker pool embeds it with **fastembed**
 (EmbeddingGemma-300M, 768-dim) → **hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with
 Reciprocal Rank Fusion) returns the right frames in **~33 ms p95 on a 10 000-frame database**.
@@ -91,7 +104,10 @@ Tauri window for quick Search/Ask without leaving the foreground app; `Esc` hide
 opens the selected Moment in the main Command Deck. An **opt-in local HTTP API** (off by default,
 `127.0.0.1` + bearer token) exposes search/ask/frames/marks to local scripts and agents, and
 `screensearch-mcp.exe` — bundled in the installer — wraps it as a stdio **MCP server** for Claude
-Desktop / Claude Code (`docs/API.md`, `docs/MCP.md`).
+Desktop / Claude Code (`docs/API.md`, `docs/MCP.md`). The app lives in the **system tray**
+(closing the window keeps capture running by default — a one-time toast explains it), and
+**updates itself** from v0.3.2 on: a signed manifest is checked at launch, the new installer
+downloads in the background, and it installs only when you choose to restart.
 
 ## What it does (v1.0 target)
 
