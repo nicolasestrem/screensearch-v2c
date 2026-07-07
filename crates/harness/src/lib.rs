@@ -29,6 +29,7 @@
 //! re-runs its **shipped** segmenter through this same scoring code to prove it meets the
 //! thresholds PR2 records — a miss is a stop-and-report, not tune-until-green.
 
+pub mod data;
 pub mod digest;
 pub mod export;
 pub mod labels;
