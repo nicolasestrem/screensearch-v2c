@@ -145,6 +145,44 @@ shipped app, **not** a retrofit of the phases above. It is tracked in detail in 
   nudges** (0.3.0's surfaces are **pull-based only** — no notifications, no shame-analytics), marks
   inside Recall reports, and API write scopes beyond `POST /v1/marks`.
 
+## 5d. Post-1.0 arc — 0.4.0 (sessions: frames → sessions reframe)
+
+The 0.3.x line is shipped (0.3.0 through the 0.3.3 hotfix); **0.4.0 (P8)** is the next **separate
+arc** layered on the shipped app, **not** a retrofit of the phases above. It is tracked in detail in
+`docs/0.4.0.md` (roadmap) and `03` (contract, `§7e`); this section states only the strategic
+*what/why*.
+
+- **The problem.** Everything shipped so far treats the **frame** as the unit of recall — the right
+  foundation, but not how a person (or an AI agent) thinks about the day. Nobody asks "show me frame
+  48 213"; they ask "what happened in **that meeting**", "what did **that Claude Code run** change",
+  "what was I doing **before lunch**". The strategic direction — ambient memory for AI coding agents
+  over the MCP layer, plus personal recall — needs the askable unit to be the **session**. Two issues
+  were deliberately parked for this arc because building them on frames would be throwaway work: #54
+  (app/window-title keyword intelligence, `07` #98) and **#88** (recognize Codex / Claude Code /
+  terminal-vs-desktop and distinguish user input from agent output, `07` #102) — the arc's **anchor
+  issue**, which closes with it.
+- **P8 — Sessions.** Generalize the app's existing proto-session — where-was-i's "last sustained
+  context" (`03 §7b`) — from *the one run behind me* to **every run, persisted, with a stable
+  identity** (the D2 freeze rule), then make those objects **visible** in the UI (Timeline bands +
+  drill-in, Moment, Deck — no new NavRail route, D13) and **queryable** over the API/MCP (`list_sessions`
+  / `get_session` / `ask_session`, read-only — D12). Recognition is a versioned in-repo **taxonomy**
+  (D6/D7); user-vs-agent turns land as best-effort **exchange** artifacts (D8); titles/summaries are
+  **lazy** and the recap **is** the existing report engine (D3). The strategic payoff: *an agent can ask
+  what happened in the user's last session with a given tool.* Hard constraints: **one** schema
+  migration (PR3, 10 → 11 — D4); **additive** — zero frame-level behavior change (D10); **no audio**
+  (D14); **pull-based / non-shaming** (D11). v0.4.0 is the **first auto-delivered release** (D16).
+- **Ships in 0.4.0** (build order): PR1 specs → PR2 ground truth + harness → PR3 schema 10 → 11 →
+  PR4 segmentation engine + recognition → **PR5 UI ∥ PR6 API/MCP** → PR7 audit + tag `v0.4.0`.
+  Strictly sequential through PR4 (contract → evidence → schema → engine); PR5/PR6 are disjoint
+  parallel lanes; PR7 after both. The one migration is forward-only and creates structure only —
+  sessions are derived and fully recomputable from frames (D1), so no frame data is ever at stake.
+- **Deferred (recorded in `07` during PR1, not built this arc):** a **user-editable taxonomy
+  override** file (D6 — the in-repo file is the mechanism this arc, `07` #107); a **dedicated
+  Sessions NavRail route** (D13 — a 0.4.x conversation only if the in-route surfaces prove
+  insufficient, `07` #108); **audio / transcripts** (D14 — the `'transcript'` `session_artifacts`
+  kind is the reserved extension point, `07` #75); and monitor hot-unplug hardening (`07` #91 —
+  sessions make its silent stalls *visible*, raising it to a first-line 0.4.1 candidate).
+
 ## 6. Risks & mitigations
 
 | Risk | Mitigation |
@@ -159,8 +197,14 @@ shipped app, **not** a retrofit of the phases above. It is tracked in detail in 
 
 ## 7. Non-goals (reaffirmed)
 macOS/Linux · OS automation (v1.0) · cloud/telemetry · accounts/multi-user · real-time vision ·
-V1 data import · **proactive nudges / notifications** (0.3.0 recall is pull-based only) · **audio
-capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
+V1 data import · **proactive nudges / notifications** (0.3.0 recall is pull-based only; sessions stay
+non-shaming — no streaks/scores, D11-of-0.4.0) · **audio capture / transcription** (*for now* — a
+0.4.x candidate, `§5d`; the `session_artifacts.kind='transcript'` extension point is reserved but
+unbuilt, D14).
+**No telemetry — a permanent product commitment (D15-of-0.4.0).** The app never phones home beyond
+the existing signed-updater manifest fetch (`03 §11b`). "Is anyone else using this?" is answered by
+**passive repo-side signals** (GitHub release-asset `download_count`, Insights → Traffic, stars/
+issues), never by in-app instrumentation — the reading procedure lives in `07`'s manual steps.
 
 ## 8. Status
 - **License decided: MIT.** No open strategic questions.
@@ -171,8 +215,10 @@ capture / transcription** (*for now* — a 0.4.x candidate, `§5c`).
   shipped** (`v0.3.2`, 2026-07-06; "P7.2 product shell mini-arc", `docs/0.3.2.md`): **lifecycle**
   (auto-update — the updater's genesis release, hard-sequenced before 0.4.0 and met; systray +
   quick actions) **and interface** (shell-layout hardening; Settings two-tier IA), under the
-  **zero-DB-schema-migration** constraint (held — schema stays 10). **The 0.4.0 sessions arc is
-  next**, delivered via the auto-updater 0.3.2 shipped.
+  **zero-DB-schema-migration** constraint (held — schema stays 10); the **0.3.3 hotfix shipped**
+  (`v0.3.3`, 2026-07-07 — UIA skips Chromium/Electron windows to stop browser freezes, `07` #93).
+  **The 0.4.0 sessions arc is now active** (`§5d`, `docs/0.4.0.md`, `03 §7e`; PR1 specs contract in
+  flight), delivered via the auto-updater 0.3.2 shipped — the **first auto-delivered release** (D16).
 
 ---
 

@@ -1,0 +1,12 @@
+# 07 — Known Gaps — archived v0.3.3 rows
+
+> Archived on the v0.3.3 release sweep (2026-07-07, folded into 0.4.0 PR1); original ids preserved.
+> #93 = the first-UIA-walk-hangs-Chromium gap, reversed and implemented in the 0.3.3 hotfix
+> (the window-class skip → OCR). Standing deferrals that merely carry a 0.3.3 *update note*
+> (#92 breaker-thresholds, #95 spawn-vs-save micro-race) remain in the live
+> `specs/07_KNOWN_GAPS.md` as still-open rows.
+> Earlier rows → the v0.1.0 / v0.2.x / v0.3.0 / v0.3.1 / v0.3.2 archives in this folder.
+
+| # | Date | Gap (spec was silent on…) | Resolution / decision | Owner | Needed by |
+|---|---|---|---|---|---|
+| 93 | 2026-07-04 | **First UIA walk flips a Chromium/Electron app into (sticky) accessibility mode — and can hang it outright.** A UIA tree walk of a `Chrome_WidgetWin_*` window is a synchronous cross-process COM call onto the target's UI thread; the first touch forces a full a11y-tree build that no client-side timeout/cancel/hard-timeout/teardown can abort mid-call. On **2026-07-07** this hard-froze Chrome ("Not Responding"); the freeze **survived stopping capture and even killing our own process** (needed a force-kill). The reactive breaker (3 bad walks) never protects the first-touch wedge, and this session tripped it 14× (chrome ×3, msedge ×3, claude ×2, slack…). The user originally **declined** a Chromium window-class skip in favor of UIA fidelity for those apps. | **Reversed and implemented (0.3.3, 2026-07-07).** The window-class skip is now shipped: `Chrome_WidgetWin_*` windows are never walked — routed to OCR before any COM touch, at the composition-root fast-path (`uia::hwnd_is_chromium(frame.foreground_hwnd)` in `UiaWithOcrFallback::recognize`) with a worker backstop (`classify::is_chromium_window_class` on the live `GetClassNameW` in `read_foreground`, before `ElementFromHandle`) for the `foreground_hwnd == None` / focus-edge cases. Browsers stay fully captured via OCR (skip = OCR, **not** ignore — the app's 90%-of-value case); native apps keep UIA. Firefox (`MozillaWindowClass`) is not matched. **Live-verified** (`npm run tauri dev`, RUST_LOG uia=debug): Chrome foreground → `UIA disabled for Chromium/Electron app; using OCR app="chrome"`, no walk, no breaker trip, no wedged-walk detach, Chrome `Responding=True`; Notepad foreground → `uia walk complete nodes=46 spans=50`. Reversal trigger: the recorded "revisit only if the first-walk cost proves too disruptive in practice" condition fired. | user+agent | ✅ implemented 0.3.3 (2026-07-07) |

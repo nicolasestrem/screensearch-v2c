@@ -26,8 +26,13 @@ mitigation `07` #106) and the **Settings two-tier IA** (D6: Essentials + seven c
 expanders; the gap-#100 cross-chord conflict warning; the two dead settings retired via
 `RETIRED_SETTINGS_KEYS` tolerate-and-drop, D8). Zero DB schema migrations (D10, schema stays 10);
 PR6 audited D1–D12 (all PASS), fixed #89 (daily/weekly report filenames carry the kind), and
-released with the signed updater manifest. **Next: the 0.4.0 sessions arc** (`02 §5c`/`§8`;
-`docs/0.4.0.md` to be written), delivered via the auto-updater this arc shipped.
+released with the signed updater manifest. The **0.3.3 hotfix shipped** (`v0.3.3`, 2026-07-07 — UIA
+skips Chromium/Electron windows to stop browser freezes, `07` #93). **The 0.4.0 sessions arc (P8 —
+"frames → sessions reframe") is now active** (`docs/0.4.0.md`, `02 §5d`, `03 §7e`): PR1 specs
+contract, then ground-truth harness → the arc's **one** schema migration (10 → 11, PR3 only, D4) →
+segmentation engine → UI ∥ API/MCP → audit. Sessions are **additive** (D10 — zero frame-level
+behavior change), **pull-based/non-shaming** (D11), **no audio** (D14), **no new NavRail route**
+(D13). v0.4.0 is the **first auto-delivered release** (D16), reaching 0.3.2+ installs automatically.
 The full app exists —
 a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up

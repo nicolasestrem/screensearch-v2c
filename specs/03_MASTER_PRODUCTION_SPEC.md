@@ -322,6 +322,46 @@ CREATE TABLE marks (
 );
 CREATE INDEX idx_marks_open ON marks(resolved_at, created_at DESC);  -- list_marks order: unresolved first (resolved_at NULLs sort first), newest-first within each group (§7/§7b)
 
+-- 0.4.0 sessions (added by the PR3 migration, schema 10 → 11; contract §7e). Derived-but-persisted:
+-- a wiped `sessions` table is fully recomputable from frames (D1). Segmentation is pure heuristic —
+-- zero model calls (D3); titles/summaries are lazily generated + cached on the row.
+CREATE TABLE sessions (
+  id            INTEGER PRIMARY KEY,
+  started_at    INTEGER NOT NULL,                 -- unix ms (first frame in the run)
+  ended_at      INTEGER,                          -- NULL = open (still accreting)
+  kind          TEXT NOT NULL CHECK (kind IN ('focus','meeting','ai','other')),
+  tool          TEXT CHECK (tool IS NULL OR kind = 'ai'),  -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai' (D7)
+  host          TEXT CHECK (host IN ('terminal','desktop','browser','ide')),
+  context_key   TEXT NOT NULL,                    -- the segmenter's key (§7e; the §7b key generalized)
+  title         TEXT,                             -- lazily generated + cached (D3); NULL until first asked
+  summary       TEXT,                             -- lazily generated + cached (D3); NULL until first asked
+  summary_model TEXT,                             -- model id that produced `summary` (provenance)
+  confidence    REAL NOT NULL,                    -- segmenter confidence; surfaced honestly in the UI (D11)
+  frozen        INTEGER NOT NULL DEFAULT 0 CHECK (frozen IN (0,1)),  -- D2 freeze rule: 1 = id + boundaries immutable
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000),
+  updated_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+CREATE INDEX idx_sessions_time ON sessions(started_at, ended_at);
+
+-- frames link to their session (nullable; ON DELETE SET NULL — frames SURVIVE session deletion, D1).
+-- Assigned by PR4's segmenter (incremental + a one-shot historical pass), never by the migration.
+ALTER TABLE frames ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
+CREATE INDEX idx_frames_session ON frames(session_id);
+
+-- the artifact extension point (D8). 'exchange' (user-vs-agent turns) is the only kind USED this arc;
+-- 'transcript' is RESERVED for the audio arc (D14 — made concrete now, not built); 'note' reserved for
+-- future annotation. Roles live here, not on spans — the §3b TextRole (chrome/content) axis is untouched.
+CREATE TABLE session_artifacts (
+  id         INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('exchange','transcript','note')),
+  role       TEXT CHECK ((kind = 'exchange' AND role IS NOT NULL AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS NULL)),  -- exchanges REQUIRE a non-null role, reserved kinds forbid one (D8; §7e "roles never invented"). The IS NOT NULL guard is load-bearing: NULL IN (…) is NULL, and SQLite passes a CHECK that evaluates to NULL.
+  frame_id   INTEGER REFERENCES frames(id) ON DELETE SET NULL,
+  content    TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+CREATE INDEX idx_artifacts_session ON session_artifacts(session_id, created_at);
+
 -- durable job queue (the heart of enrich-deferred) — see §5
 CREATE TABLE jobs (
   id           INTEGER PRIMARY KEY,
@@ -365,6 +405,25 @@ pattern):
   **normal** retention — its image still expires like any other frame (the mark keeps the text
   reconstruction reachable); an unresolved mark never pins a frame or blocks retention. No retention
   pinning in 0.3.0.
+
+**0.4.0 migration** (the arc's **only** schema change — D4; same forward-only mechanics: bumps
+`schema_version` by **exactly one** — 10 → 11 — with the next integer confirmed against
+`crates/store/src/schema.rs::LATEST_SCHEMA_VERSION` rather than a hardcoded number, and a
+populated-DB migration test, the 0.2.1 `frames`-rebuild test as the pattern; if any **other** 0.4.0
+PR appears to need schema, that PR is wrong — stop and report):
+- **PR3 — sessions:** creates the `sessions`, `session_artifacts` tables + indexes above and adds
+  the `frames.session_id` column + `idx_frames_session` (all shown in the DDL block). **Structure
+  only, no backfill** — the migration is fast and creates no session rows; pre-existing frames get
+  `session_id` assigned by PR4's segmenter running over history as a normal resumable background job
+  (`§7e`), not by the migration. **Additive (D10):** every frame-level feature (search, Ask, reports,
+  marks, overlay, where-was-i) is demonstrably unchanged on a populated schema-10 → 11 fixture;
+  a wiped `sessions` table is fully recomputable from frames (D1). Acceptance: fresh-DB and
+  migrated-DB schemas agree. **Backup gate (D5, release-blocker-class):** before this branch's build
+  is ever pointed at the live DB, a dated copy of `screensearch.db` exists outside the app data dir —
+  recorded in `07`'s manual-steps section (the live DB is simultaneously the only production install
+  and the arc's PR2 ground-truth dataset). *PR3 may refine the DDL's column details if PR2's evidence
+  demands (e.g. more structure in `context_key`) — any such refinement is recorded in `06`/`08` and
+  re-normalized into this section by PR3.*
 
 ## 5. Job queue & worker model (the core change)
 
@@ -455,6 +514,15 @@ duplicates). **Commands** (UI → core):
 | `set_api_config` | `{ enabled, port? }` → `ApiStatus` (0.3.0; enable/disable + port; bind failure is loud + guided-change — `§7c`) |
 | `get_api_status` | `()` → `ApiStatus` (0.3.0; enabled, bound port, token-present — `§7c`) |
 | `regenerate_api_token` | `()` → `ApiStatus` (0.3.0; new bearer token — `§7c`) |
+| `list_sessions` | `SessionQuery` → `Session[]` (0.4.0 PR5; filters kind/tool/`TimeRange`/limit; also the Timeline session-bands data source — `§7e`, `UI_REFERENCE §3`) |
+| `get_session` | `session_id` → `SessionDetail` (0.4.0 PR5; span + tool/host + exchanges; `include_summary` triggers lazy generation — `§7e`) |
+| `session_recap` | `session_id` → report (0.4.0 PR5; the existing **§8b report engine** scoped to the session's time range + frames — no new summarization machinery, D3) |
+
+*(0.4.0 command names + shapes are **naming PROPOSALS** — PR5 owns the final call, the 0.3.2 `app.*`
+precedent. `session_recap` may instead land as a session scope on the existing `generate_report`
+command; implementer's call, recorded in `08`. `FrameDetail` (`get_frame`) gains an optional session
+reference — from `frames.session_id` — so Moment can render its "part of session" line; also a PR5
+proposal.)*
 
 **Events** (core → UI): `capture_tick`, `job_progress`, `answer_delta`, `sidecar_status`,
 `readiness_changed`, `toast`, `throttle_changed` (0.2.1; payload `ThrottleStatus`, broadcast each
@@ -494,7 +562,8 @@ adding a second knob (subtraction thesis, `02 §5c`). Excluded from candidacy: t
 **ScreenSearch itself**, and any app on `privacy.excluded_apps`. Returns the run's **representative
 (last) frame** + app, window title, URL, and span start/end (a `ResumeContext`). Surfaced in the
 overlay's empty state (PR5) and as a Deck "Jump back" card (PR6); `Enter`/click opens the Moment, from
-which the existing frame context gets the user back.
+which the existing frame context gets the user back. **0.4.0:** `§7e` generalizes this same context
+key into persisted *sessions*; where-was-i itself is unchanged (additive — D10-of-0.4.0).
 
 **Mark-this-moment (intention capture) — D8/D10.** The mark hotkey (`marks.hotkey`, default
 `Ctrl+Alt+M`; §8) issues **`capture_now`**: a request into the *existing* capture worker that
@@ -566,8 +635,28 @@ enabling this is an explicit trust decision.*
   and bounded by the optional `from`/`to` window, so exporting months of history never buffers the
   whole result set or risks OOM on the local box. A Settings **"Export…"** button calls the *same* code
   path internally (streaming to a file), so export works even with the API disabled.
+- **0.4.0 (PR6, D12 — read-only, no new write scopes):**
+  - `GET /v1/sessions?kind=&tool=&from=&to=&limit=` — sessions that **overlap** the requested
+    window, not only sessions that start inside it: predicate is `started_at < to AND
+    COALESCE(ended_at, now) > from` when both bounds are present, with the corresponding half-open
+    single-bound forms (`COALESCE(ended_at, now) > from` for `from` only; `started_at < to` for `to`
+    only). Open sessions (`ended_at` null) use request-time `now` for this overlap test, so a long or
+    still-active session that began before `from` remains visible in Timeline/MCP range queries. The
+    list surface behind `list_sessions` (§7) and the MCP `list_sessions` tool.
+  - `GET /v1/sessions/{id}?include_summary=` — session detail + its `exchange` artifacts.
+    `include_summary=1` returns the **cached** summary if one exists, else `null` — it **never
+    triggers generation** over this surface. D12 makes the API/MCP strictly read-only: a GET must not
+    start inference or write `sessions.summary`/`summary_model`. Lazy generation is an **in-app IPC
+    action** (`session_recap` / the app requesting a summary, §7/§7e); the API only ever reflects
+    already-cached state. For an **open** session the cached summary (if any) is served with an
+    `open: true`/non-final marker, never regenerated on read. (If a future need for API-triggered
+    generation appears, it is an explicit `POST` command — a new write scope, out of this arc, `07`.)
+  - `POST /v1/ask` gains an optional **`session_id`** scope — when set, retrieval is restricted to that
+    session's frames and the answer cites **only** in-session frames (the arc's strategic payoff:
+    *"what did I do in my last Claude Code session?"*). Absent `session_id`, behavior is unchanged (D10).
 
-Docs: a hand-written `docs/API.md` (OpenAPI-lite; v1 is small, no codegen), authored by PR7.
+Docs: a hand-written `docs/API.md` (OpenAPI-lite; v1 is small, no codegen), authored by PR7; PR6
+extends it with the sessions endpoints.
 
 **MCP server (PR8, D13).** A separate workspace **binary** crate `crates/mcp` → `screensearch-mcp.exe`,
 shipped in the NSIS installer — a thin **stdio** wrapper over this HTTP API, with **no store access and
@@ -576,6 +665,9 @@ args/env (`SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`). Tools: `search_scr
 `ask_screen_history`, `get_moment`, `where_was_i`, `list_marks`, `add_mark`. If the API is off, every
 tool returns a clear "enable the API in ScreenSearch Settings" error. Docs: `docs/MCP.md` (copy-paste
 client config for Claude Desktop / Claude Code + the same threat-model paragraph), authored by PR8.
+**0.4.0 (PR6, D12):** the wrapper gains `list_sessions`, `get_session`, and `ask_session` (over the
+`§7c` sessions endpoints) — still read-only, still a stdio HTTP client with no store access (0.3.0
+D13 holds); `docs/MCP.md`'s tool table + threat-model boundary grow with them.
 
 ## 7d. App lifecycle (0.3.2): tray, close-to-tray, single instance
 
@@ -615,6 +707,97 @@ stopped, and the sidecar terminated via the **Job-Object lifecycle (`§6`)** —
 **No new chords.** 0.3.2 registers no new global hotkeys; the tray is pointer/menu-keyboard only.
 The `overlay.hotkey`/`marks.hotkey` cross-chord conflict check (gap `07` #100) is a **Settings-side
 inline warning** (PR5, `UI_REFERENCE §3`), not a registration-layer change.
+
+## 7e. Sessions (0.4.0): segmentation, taxonomy, recognition, exchanges, lazy intelligence
+
+The sessions arc (P8, `docs/0.4.0.md`) reframes recall from the **frame** to the **session** — a run
+of frames sharing a context, given a stable identity, made visible in the UI (`UI_REFERENCE §3`/`§4`)
+and queryable over the API/MCP (`§7c`). Everything here is **additive (D10)**: it adds derived
+objects on top of the shipped app and changes **no** frame-level behavior (capture, search, Ask,
+reports, marks, overlay, where-was-i). The schema lives in `§4` (`sessions`, `session_artifacts`,
+`frames.session_id`); this section is the behavioral contract behind it. **Build order:** the
+segmenter is validated against the maintainer's real DB in **PR2** *before* the schema freezes in
+**PR3**; PR4 productionizes what PR2 validated; PR5 (UI) ∥ PR6 (API/MCP). PR4 merges **only** if it
+meets the thresholds PR2 recorded on the real-DB harness (**D9** — a miss is a stop-and-report, not
+a tune-until-green).
+
+**Derivation principle (D1).** Sessions are **derived-but-persisted**; frames stay the source of
+truth. Deleting or regenerating session rows never touches frames, text, embeddings, or marks; a
+wiped `sessions` table is fully recomputable from frames. `frames.session_id` is `ON DELETE SET NULL`
+(a frame outlives its session).
+
+**Segmentation.** A pure, unit-tested core (a store query + a pure function over ordered
+frame-metadata sequences; proposed home a small `sessions` crate, or `kernel` if the crate tax isn't
+worth it — implementer's call in PR4, recorded in `08`), scheduled by `kernel` as an **incremental
+background pass** (assign new frames to the open session by context-key continuity) plus a **one-shot
+historical pass** over pre-0.4.0 frames that runs as a normal **resumable, low-priority background
+job — it never competes with capture/OCR** (throttle-aware like every enrichment job).
+- **Context key.** The `§7b` where-was-i key (`app_hint`, refined by browser domain from
+  `browser_url`), **generalized** with taxonomy tool identity: `app_hint` ⊕ browser domain ⊕ tool id.
+  It is stored on the row (`sessions.context_key`). The **browser-domain term is dormant** exactly as
+  in `§7b` (production capture sets `browser_url: None`, `07` #109) — the key is built from `app_hint`
+  + tool id today, with the domain sharpening it only once `browser_url` capture lands.
+- **Close / dwell rules.** A session **closes** when the gap since its last frame, or a sustained
+  context switch, exceeds `sessions.gap_close_secs` (default **300**, `§8`). Session length is floored
+  at `sessions.min_len_secs` (default **120**, mirroring `resume.min_dwell_secs`). **Transient
+  excursions are absorbed** exactly as in `§7b` — a brief switch away breaks the run only if the
+  interrupting context is itself sustained — reusing the same dwell logic rather than inventing a
+  second knob.
+- **Freeze rule (D2).** A closed session, once older than the **freeze lookback window**, has its
+  `id` and boundaries **frozen** (immutable; `sessions.frozen = 1`). Resegmentation only ever touches
+  **unfrozen** (open/recent) sessions. This is what makes a session `id` safe to hand to MCP
+  consumers — history keeps its identities; heuristic improvements apply going forward only. (A
+  deliberate "resegment history" feature would be its own explicitly-versioned arc item.)
+  - **The lookback window is a named parameter, not a hidden constant.** Proposed default **24 h**
+    (86 400 s) — comfortably beyond `gap_close_secs` and the incremental pass's horizon, so a session
+    stabilizes within a day of closing while the recent tail stays re-segmentable. **PR2 confirms the
+    value against the real-DB harness** (the window that makes boundaries stop moving in practice) and
+    records it in `05`/`06` before PR3/PR4 depend on it. It is deliberately **not** a user setting
+    (kept off the two-key surface in `§8`; ID stability is a correctness property, not a tuning knob) —
+    promoting it to a setting later, if evidence demands, is a separate call recorded in `08`.
+
+**Taxonomy (D6/D7).** Recognition is driven by a **versioned data file in the repo** (a `version`
+field; proposed TOML), compiled/shipped with the app (parsed at startup) — **not** schema and **not**
+settings. Adding a tool = editing the file; a user-editable override file is **deferred** (`07` #107).
+Each entry carries: tool id, `kind`, `host`, `app_hint` patterns, window-title patterns, and browser
+domains. **Two recognition dimensions:** tool identity × host (`terminal` / `desktop` / `browser` /
+`ide`). **Seed set (D7):** tools `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`,
+`browser-ai` (Claude / ChatGPT / Gemini in a browser); meetings Zoom,
+Teams, Meet, Webex, Discord (app hints + window-title patterns). **`browser_url` is dormant in
+production capture today** — `capture_loop.rs` persists `browser_url: None` (needs UIA; the same
+dormancy `§7b`/`resume.rs` already document and implement-per-contract). So **browser-AI recognition
+keys on the metadata that IS stored — `app_hint` + window-title patterns** (browsers put the page
+title, e.g. "Claude", "ChatGPT", "Gemini …", in the window title); the claude.ai / chatgpt.com /
+gemini.google.com **domain match is a refinement that activates if/when `browser_url` capture lands**
+(deferred — `07` #109), never the sole signal. **The seed patterns are tuned in PR2
+against real captures, not guessed** — this section fixes the file *format* and seed *set*; PR4 ships
+the tuned file. Recognition emits `kind` / `tool` / `host` onto the session (`tool` NULL unless
+`kind='ai'`, per the `§4` CHECKs). **No model calls anywhere in segmentation or recognition (D3).**
+
+**Exchange extraction (D8, best-effort).** For recognized **AI** sessions, tool-specific markers over
+`content_text` (**never** raw full-screen text — the 0.2.x content-vs-raw rule, `§3b`, holds) extract
+user-vs-agent turns into `session_artifacts` rows (`kind='exchange'`, `role ∈ {user, agent}`).
+Explicitly best-effort: when markers don't match, the session simply has **no** exchanges — roles are
+**never invented**. This is a *separate axis* from `§3b`'s `TextRole` (chrome/content): the span
+schema (`§4 text_spans`) and `TextRole` enum are **untouched**. `'transcript'` and `'note'` artifact
+kinds are reserved (D14 / future) — made concrete by the schema, not built this arc.
+
+**Lazy intelligence (D3).** Session creation is pure heuristic — zero model calls. Intelligence is
+generated **on demand**:
+- **Title / summary** generate on first request **from the in-app IPC path** and **cache** on the row
+  (`sessions.title` / `summary`, with `summary_model` recording provenance); subsequent reads are
+  served from the cache. The read-only API/MCP surface (`§7c`, D12) **never** triggers generation — it
+  returns the cached value or `null`; a GET must not start inference or write the row.
+- **Recap** is **not** new machinery and is **not** row-cached: it **is** the existing coverage-first
+  **report engine (`§8b`)** scoped to the session's time range and frames, generated per request like
+  any report (with the same honest footer reports already carry). Context stays pinned at **8192** —
+  the recap uses the shipped map-reduce, not a bigger window.
+
+**Non-shaming (D11).** Session surfaces are truthful, on-demand, and neutral: **no** session
+notifications, **no** "you spent N hours in X" nudges, **no** streaks or scores. `confidence` is
+surfaced honestly (a low-confidence session says so); an open session is shown as still-running with
+non-final boundaries. **Degradation (D10).** Sessions never gate capture; a segmenter failure degrades
+to "no sessions", never to lost frames.
 
 ## 8. Configuration / settings (keys in `settings`)
 
@@ -726,6 +909,17 @@ same pattern as `api.token`, `§7c`): set to `true` the first time the one-time 
 shown so it never repeats. It is written directly to the `settings` table and read at tray init; it
 never rides through `get_settings`/`set_settings` or the ts-rs bindings.
 
+**0.4.0 sessions keys** (`§7e`; the arc's **only** new settings surface — new keys exist only where a
+PR names them, `docs/0.4.0.md`). The two names + defaults are contract here; the **clamp ranges and
+the Settings-UI home are PR1 proposals** (the 0.3.2 `app.*` naming-proposal precedent) — PR4 owns the
+final keys/clamps, PR5 owns the placement:
+`sessions.min_len_secs` (120 — minimum session length; mirrors `resume.min_dwell_secs`, `§7e`;
+proposed clamp `30..=3600`) ·
+`sessions.gap_close_secs` (300 — the gap / sustained-context-switch close rule, `§7e`; proposed clamp
+`60..=3600`).
+Proposed Settings home: a new **Advanced** expander ("Sessions") under the 0.3.2 two-tier IA
+(`UI_REFERENCE §3`) — PR5's call, not settled here.
+
 **Dead-setting removal mechanics (0.3.2, D8):** a key may be retired in this arc only if **provably
 inert** (the two annotated above). Retirement = UI removal + load tolerance for the orphaned key (no
 error, no migration, no write-back requirement); if the config layer would error on an unknown key,
@@ -808,6 +1002,12 @@ contract:
   so; auto-update delivers releases *to* 0.3.2+ installs from then on (0.4.0 is the first). The
   minisign updater signature is **not Authenticode** — the Windows code-signing gap (`§11`, `07`
   manual steps) stays open and is explicitly not this feature.
+- **First-auto-delivery gate (D16 — 0.4.0):** because 0.4.0 is the first release existing installs
+  receive automatically **and** it carries the arc's one migration, `v0.4.0` is tagged **only** after
+  the live path — a real 0.3.2/0.3.3 install → auto-update check → download → user-initiated restart →
+  first boot runs the **10 → 11** migration → sessions appear over pre-existing history — passes
+  end-to-end on a real machine, with the D5 backup (`07` manual steps) verified present first. Full
+  item in `§13c` (PR7).
 
 ## 12. Failure modes & rollback
 - **Migrations** forward-only via `schema_version`; each ships an idempotent up-script.
@@ -864,6 +1064,48 @@ Each item is demonstrated with verbatim command output or a described-and-perfor
    desktop (`docs/TESTING.md` 0.3.0 sections); `05`–`08` swept current; **v0.3.0** tagged and archived
    per `04 §7`; release notes lead with the **removals** + a one-line rationale each.
 9. Full verification suite green for every PR: `cargo fmt --check` · `cargo clippy --workspace
+   --all-targets -D warnings` · `cargo build --workspace` · `cargo test --workspace` · `ui`
+   `npm run lint && npm run build` · `git diff --exit-code -- ui/src/bindings` clean.
+
+## 13c. Definition of done (0.4.0 arc)
+Each item is demonstrated with verbatim command output or a described-and-performed live check
+(`04 §6`); the per-PR acceptance detail lives in `docs/0.4.0.md`.
+1. **Specs contract (PR1).** No code changes (`git diff --name-only main` shows only `.md`); every
+   decision D1–D16 appears in the specs verbatim or normalized into contract language; a fresh agent
+   session can implement any of PR2–PR6 from the specs alone without reopening `docs/0.4.0.md`.
+2. **Ground truth + harness (PR2).** The candidate segmenter runs end-to-end over a real 5–10-day
+   export; boundary precision/recall + tool-recognition accuracy scored against the maintainer's hand
+   labels; chosen parameters + **proposed D9 thresholds** recorded in `05`/`06`. The labeled dataset is
+   kept **local-only** (git-ignored — it is personal screen history). **Hard stop condition:** if no
+   reasonable parameterization reaches credible boundary agreement, stop and report — the arc redesigns
+   *before* PR3 freezes a schema.
+3. **Sessions schema + migration (PR3).** The 10 → 11 migration is forward-only, bumps `schema_version`
+   by exactly one confirmed against `schema.rs`, and passes a **populated-DB migration test** on a
+   schema-10 fixture with real-shaped data; fresh-DB and migrated-DB schemas agree; every frame-level
+   feature (search, Ask, reports, marks, overlay, where-was-i) is demonstrably unchanged on the fixture
+   (D10); the **D5 backup gate** step is documented in `07`. Structure only — no backfill in the
+   migration. Forward-only schema bump +1 with a populated-DB migration test.
+4. **Segmentation engine + recognition (PR4 — the binding D9 gate).** The shipped segmenter meets the
+   PR2-recorded thresholds when re-run through the harness (a miss is stop-and-report, not
+   tune-until-green); recognition is demonstrated live on a real **Claude Code** session, a **Codex**
+   session, a **browser-AI** session, and a **meeting-titled** window; the historical pass completes on
+   the live DB without disturbing capture; exchange extraction is shown on a real AI session
+   (qualitative, maintainer-judged); where-was-i and all frame-level features are unchanged.
+5. **Sessions in the UI (PR5).** The drill-in round-trips live (band → drill-in → Moment → back); the
+   Recap cites real frames; zero shell-layout-contract violations (one scroll context per route, no
+   nested scrollbars — `UI_REFERENCE §8`); no new NavRail route (D13); `npm run lint`/`build` clean.
+6. **API + MCP session exposure (PR6).** Every new endpoint is exercised against a fixture DB; the
+   API-off and bad-token paths are clean; each MCP tool (`list_sessions`/`get_session`/`ask_session`)
+   round-trips against a live app; `ask_session` answers cite **only** frames from the named session;
+   `docs/API.md` + `docs/MCP.md` updated.
+7. **Audit + release (PR7).** Every acceptance line above is verified end-to-end on a real Windows
+   desktop (`docs/TESTING.md` 0.4.0 sections); D1–D16 are confirmed landed; `05`–`08` swept current and
+   `07` carries every deferral from `docs/0.4.0.md` §2. **The D16 first-auto-delivery gate passes**
+   (0.3.2/0.3.3 install → auto-update → restart → 10 → 11 migration on first boot → sessions over
+   pre-existing history) with the D5 backup verified present beforehand; **v0.4.0** tagged and archived
+   per `04 §7`; release notes lead with **sessions** + the **#88** close, and repeat the
+   unsigned-installer (no Authenticode) caveat.
+8. Full verification suite green for every PR: `cargo fmt --check` · `cargo clippy --workspace
    --all-targets -D warnings` · `cargo build --workspace` · `cargo test --workspace` · `ui`
    `npm run lint && npm run build` · `git diff --exit-code -- ui/src/bindings` clean.
 

@@ -35,6 +35,14 @@ and report); **new settings only where a PR names them**; the Settings restructu
 redesign** (D12). The **specs are the contract** (this arc's PR1 normalized decisions D1–D12 into
 the specs); the roadmap is context.
 
+**For 0.4.0 work:** also read `docs/0.4.0.md` (P8 — the sessions arc: frames → sessions reframe) plus
+`02 §5d` and `03 §4`/`§7e`/`§7c`/`§8`/`§13c` and `UI_REFERENCE §3`/`§4`/`§5`/`§8` — the sessions
+contract. Hard arc constraints: **exactly one schema migration** (PR3 only, 10 → 11 — D4; if any
+other PR appears to need schema, that PR is wrong: stop and report); sessions are **additive** (D10 —
+zero frame-level behavior change); **no audio** (D14); **no new NavRail route** (D13); **pull-based /
+non-shaming** (D11 — nothing notifies, nudges, streaks, or scores). The **specs are the contract**
+(this arc's PR1 normalized decisions D1–D16 into the specs); the roadmap is context.
+
 **Do not** hold the spec in your head from a prior session — re-read; the files evolve.
 
 ## 2. Source of truth (which doc answers which question)
@@ -45,6 +53,7 @@ the specs); the roadmap is context.
 | 0.3.0 arc scope / PR order (subtraction + flow recall + local API) | `docs/0.3.0.md` (+ `02 §5c`) |
 | 0.3.1 patch scope / PR order (post-0.3.0 triage: regression fix + polish) | `docs/0.3.1.md` |
 | 0.3.2 arc scope / PR order (product shell: lifecycle + interface) | `docs/0.3.2.md` |
+| 0.4.0 arc scope / PR order (sessions: frames → sessions reframe) | `docs/0.4.0.md` (+ `02 §5d`) |
 | Environment, constraints, non-goals | `01` |
 | Schema, trait signatures, job-queue/sidecar protocol, settings, DoD | `03` |
 | UI identity, tokens, screens, state matrix, components, a11y/perf | `UI_REFERENCE.md` |
@@ -103,6 +112,20 @@ If the answer is in a doc, **use it verbatim** — do not invent alternatives.
   only (D12):** PR4/PR5 touch layout + IA, never tokens/palette/type. Each PR is its own branch,
   runs the full verification suite, updates `05`–`08`, and **recycles this file (`04`) as its
   operating prompt**.
+- **0.4.0 sessions arc (P8, `docs/0.4.0.md`):** **PR1 Specs contract** → **PR2 ground truth +
+  harness** → **PR3 schema 10 → 11** → **PR4 segmentation engine + recognition** → two lanes →
+  **PR7 Audit + tag (`v0.4.0`)**. **Strictly sequential through PR4** (contract → evidence → schema →
+  engine — each feeds the next). **PR5 (UI) ∥ PR6 (API/MCP)** are disjoint code, safe for parallel
+  worktrees; **PR7 after both**. **PR2 is an evidence phase (dedicated kickoff):** no segmenter ships
+  untested against the real DB; its **hard stop condition** — if no reasonable parameterization
+  reaches credible boundary agreement, STOP and report, the arc redesigns *before* PR3 freezes a
+  schema. **The D9 gate is binding:** PR4 merges only against the thresholds PR2 recorded — a miss is
+  a stop-and-report, not tune-until-green. **Exactly one migration (D4):** PR3 only, 10 → 11; any
+  other PR appearing to need schema is wrong — stop and report. **Additive (D10), no audio (D14), no
+  new NavRail route (D13), pull-based/non-shaming (D11).** Dedicated kickoff prompts for PR2/PR3/PR7
+  (`docs/0.4.0-kickoff-prompt.md`, local-only/git-ignored); the rest use the generic kickoff. Each PR
+  is its own branch, runs the full verification suite, updates `05`–`08`, and **recycles this file
+  (`04`) as its operating prompt**.
 
 ## 4. Guardrails (hard rules — violating any = stop)
 - **No destructive git.** Feature branches only; never force-push or reset shared history; never

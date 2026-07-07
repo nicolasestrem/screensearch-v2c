@@ -9,17 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
-
-## [0.3.3] - 2026-07-07
-
-### Fixed
-- Browsers no longer freeze during capture. The text reader (UI Automation) could hang Chromium
-  and Electron windows (Chrome, Edge, Slack, Discord, VS Code, Claude Desktop, and similar) by
-  walking their accessibility tree, occasionally leaving a window "Not Responding". These windows
-  are now read via OCR instead, which never freezes them; their on-screen content stays fully
-  captured and searchable. Native apps are unaffected and keep the higher-fidelity reader.
+### Changed
+- Specs only (no app changes): the 0.4.0 "sessions" arc contract is now written into the project
+  specs, so the next stages of work can be built straight from them. Sessions group your captured
+  frames into meaningful stretches — a meeting, a Claude Code run, an afternoon in one repo — and
+  are additive: nothing about today's capture, search, Ask, reports, marks, or the overlay changes.
 
 ## Older versions
 
-Releases 0.3.2 and earlier are archived in [CHANGELOG-ARCHIVE.md](./CHANGELOG-ARCHIVE.md).
+Releases 0.3.3 and earlier are archived in [CHANGELOG-ARCHIVE.md](./CHANGELOG-ARCHIVE.md).

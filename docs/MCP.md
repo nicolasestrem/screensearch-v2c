@@ -90,6 +90,12 @@ before this?"*, *"mark this moment."*
 The API's `health`, `export`, and mark-`resolve` surfaces are intentionally **not** exposed as
 tools — the tool set is read + add-a-mark only.
 
+> **Coming in 0.4.0 (PR6).** The sessions arc adds three read-only tools — `list_sessions`,
+> `get_session`, and `ask_session` (over the `/v1/sessions*` endpoints; contract in
+> `specs/03_MASTER_PRODUCTION_SPEC.md §7c`/`§7e`) — so an agent can ask *"what did I do in my last
+> Claude Code session?"*. They keep the boundary above: read-only, no new write scopes, still a
+> stdio wrapper over the HTTP API. This table grows when PR6 lands.
+
 ## Protocol notes
 
 - Transport: newline-delimited JSON-RPC 2.0 over stdio (UTF-8, one message per line).
