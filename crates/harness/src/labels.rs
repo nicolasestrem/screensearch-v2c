@@ -8,6 +8,7 @@
 //!   (`end == next start` — meetings frequently butt against the next block).
 //! - `kind = "ai"` requires a non-empty `tool`; any other kind must omit `tool`.
 //! - enum membership (`kind`/`host`) is enforced by the TOML deserializer.
+//!
 //! Errors name the offending 1-based `[[session]]` index.
 
 use anyhow::{bail, Context, Result};
@@ -75,7 +76,7 @@ pub fn resolve_day(labels: &DayLabels, local_midnight_ms: i64) -> Result<Vec<Res
         }
         match s.kind {
             Kind::Ai => {
-                if !s.tool.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+                if s.tool.as_deref().is_none_or(|t| t.trim().is_empty()) {
                     bail!("session #{idx}: kind = \"ai\" requires a non-empty tool");
                 }
             }
