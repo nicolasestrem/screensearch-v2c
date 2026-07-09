@@ -22,6 +22,30 @@
 
 ---
 
+## 2026-07-09 - 0.4.0 PR2: Phase B interim (over-segmentation finding + codex/vscode fix)
+
+- **Change:** kicked off Phase B on 2 hand-labeled ground-truth days (07-07, 07-08). Verified the
+  maintainer's rough timings against the **shipped live local API** (`GET /v1/export`), wrote the two
+  `labels.toml` (git-ignored), and scored the candidate segmenter. Fixed a recognition bug: app-hint
+  matching was substring, so `codex`.contains(`code`) mis-tagged the Codex desktop app as `vscode`;
+  app-hint matching is now **exact-stem** (`.exe`-stripped), title stays substring; the `codex` entry
+  is corrected to a desktop app and the unused `vscode`/`cursor` entries dropped (`taxonomy.toml`
+  version 1 -> 2). Recorded the headline finding in `07` #110 and the claude-code title limitation in
+  `07` #111; expanded `05` Pass 2.
+- **Why:** `docs/0.4.0.md` §3 PR2 - the segmenter must be validated on real labeled data before PR3
+  freezes schema 11. The evidence shows the `§7e` app-context key over-segments real fragmented days
+  ~10-40x (pooled boundary F1 0.13; the whole param sweep 0.09-0.13; `replay` = one session per
+  app-run, 22/44 vs the labeled 5/2), and no parameterization fixes it. Maintainer decision
+  (2026-07-09): **flag-and-gather** - fix the bug, do NOT freeze PR3, accumulate more days before the
+  redesign call.
+- **Verification:** `cargo test -p harness` 58 passed / 0 failed; `cargo fmt --all -- --check` clean;
+  `cargo clippy -p harness --all-targets -- -D warnings` clean; `git diff --exit-code -- ui/src/bindings`
+  clean. Tool recognition on the 2 labeled days rose 0.20 -> 0.40 after the fix; boundary F1 unchanged
+  (structural). Score/sweep/replay run offline against the git-ignored exports; only aggregate numbers
+  are recorded (no personal titles).
+- **Status:** PR2 **paused short of the D9 thresholds** (and the `06` #26 gate) pending more days + the
+  #110 redesign decision. Branch pushed to `origin` as a backup; not a PR.
+
 ## 2026-07-07 — 0.4.0 PR2: segmentation validation harness (dev-only; Phase A paused for data)
 
 - **Change:** added `crates/harness` — a dev-only, read-only segmentation validation harness (the

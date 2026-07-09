@@ -142,3 +142,36 @@ For each build pass, append an entry:
   (the arc's headline risk — "looks fine in design, fails on real days"). Held per the
   accumulate-first decision; the branch (`feat/0.4.0-pr2-validation-harness`) stays local/unpushed,
   no PR, until the evidence exists.
+
+### Pass 2 continued - 2026-07-09 - Phase B interim (2 labeled days; flag-and-gather)
+
+Data accumulated (07-07..07-09). The maintainer flagged day-kinds and gave rough session timings,
+which I **verified against the shipped live local API** (`GET /v1/export` on `127.0.0.1:43210`;
+bearer token read read-only from the D5 backup, never the live DB) rather than trusting memory. Took
+a fresh **D5 backup** first (`screensearch-2026-07-09.db`, `integrity_check` ok, 1780/1780 frames).
+Wrote ground-truth `harness-data/*/labels.toml` for the two substantive days: 07-07 = Google Meet
+standup 09:58-10:30 + admin/focus + Claude desktop + two short Claude Code terminal stints (a mixed
+day, not Claude-Code-heavy, correcting the maintainer's guess); 07-08 = Codex desktop 16:59-19:00 +
+one Claude Code evening session 19:00-22:54 (the maintainer's call over steady Codex activity
+underneath).
+
+- **Headline finding (redesign checkpoint; `07` #110):** the `§7e` app-context key **over-segments**
+  these real days ~10-40x. Baseline (seed taxonomy, defaults) pooled boundary **F1 0.13** (P 0.07,
+  R 0.75); the full 6x3 sweep is **F1 0.09-0.13, parameter-independent**; `replay` = one session per
+  sustained app-run (22 and 44 vs the labeled 5 and 2). The maintainer's sessions are task-level; the
+  key is app-level. **Decision (2026-07-09): flag-and-gather** - record it, fix the recognition bug,
+  keep PR3 / schema 11 untouched, accumulate more (incl. calmer) days before deciding the redesign.
+- **Fixed in-pass (codex->vscode recognition bug, commit `6c2d746`):** app-hint matching was
+  substring, so `codex`.contains(`code`) tagged the Codex desktop app as `vscode`. Now **exact-stem**
+  (`.exe`-stripped) for app_hint, substring for title; `codex` corrected to a desktop app; unused
+  `vscode`/`cursor` dropped (`taxonomy.toml` v1 -> v2). Tool recognition on the 2 days **0.20 -> 0.40**;
+  boundary F1 unchanged (the over-segmentation is structural). Verification (verbatim): `cargo test
+  -p harness` **58 passed / 0 failed**; `cargo fmt --all -- --check` clean; `cargo clippy -p harness
+  --all-targets -- -D warnings` clean; `git diff --exit-code -- ui/src/bindings` clean.
+- **Known limitation (`07` #111):** Claude-Code-in-terminal titles are task-titled with a `✳`/braille
+  spinner prefix, so the `claude` pattern misses most of them (the spinner marker flagged 61/77 and
+  22/24 frames); a spinner-aware title match is deferred to tune with the #110 redesign.
+- **Branch state:** now **pushed** to `origin/feat/0.4.0-pr2-validation-harness` as a backup (unstable
+  system; not a PR, no merge without approval). Personal labels + `reports/` stay git-ignored
+  (aggregate numbers only here). Still no D9 thresholds and no `06` #26 gate: those wait for the #110
+  redesign call plus more days.
