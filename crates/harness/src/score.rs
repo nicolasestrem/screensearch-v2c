@@ -14,10 +14,45 @@
 //! All functions are pure over in-memory spans + labels — no file IO — so PR4 can drive the
 //! same scoring with its shipped segmenter's spans (the D9 referee contract).
 
+use crate::group::{group_with, segment_grouped};
 use crate::labels::ResolvedLabel;
-use crate::model::{Kind, SegParams, SessionSpan};
-use crate::segmenter::{segment, FrameRow};
+use crate::model::{GroupParams, Kind, SegParams, SessionSpan};
+use crate::segmenter::{segment_micro, FrameRow};
 use crate::taxonomy::Taxonomy;
+
+/// Snap each labeled boundary to the nearest captured frame time. Minute-granular labels that fall
+/// inside a no-frame idle gap otherwise miss the tolerance by the gap size (the observed ~2.3 min
+/// start artifact); snapping to the activity edge is a disclosed scoring policy applied to LABELS
+/// ONLY, never predictions. A no-op when `frame_times` is empty.
+pub fn snap_label_boundaries(labels: &[ResolvedLabel], frame_times: &[i64]) -> Vec<ResolvedLabel> {
+    labels
+        .iter()
+        .map(|l| {
+            let start = snap_one(l.start_ms, frame_times);
+            let end = snap_one(l.end_ms, frame_times).max(start);
+            ResolvedLabel {
+                start_ms: start,
+                end_ms: end,
+                kind: l.kind,
+                tool: l.tool.clone(),
+                host: l.host,
+            }
+        })
+        .collect()
+}
+
+fn snap_one(t: i64, frame_times: &[i64]) -> i64 {
+    frame_times
+        .iter()
+        .copied()
+        .min_by_key(|&ft| (ft - t).abs())
+        .unwrap_or(t)
+}
+
+/// The captured-frame times of a loaded day (for label snapping).
+fn day_frame_times(d: &LoadedDay) -> Vec<i64> {
+    d.frames.iter().map(|f| f.captured_at).collect()
+}
 
 /// Boundary match tallies for one day (start + end boundaries pooled).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,17 +244,16 @@ impl LoadedDay {
     }
 }
 
-/// One parameter-sweep cell: a `(gap_close, min_len)` combination scored across all days.
+/// One Stage-A sweep cell: a `(merge_gap, absorb_max)` combination scored (pooled) through the
+/// GROUPED pipeline, plus the predicted session count (the mega-merge honesty column).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SweepCell {
-    pub gap_close_secs: i64,
-    pub min_len_secs: i64,
+    pub merge_gap_secs: i64,
+    pub absorb_max_secs: i64,
     pub boundary: BoundaryScore,
     pub tool_correct: usize,
     pub tool_total: usize,
-    /// `gap_close <= min_len`: absorption is nearly impossible; kept but flagged so a
-    /// degenerate combo cannot win on a fluke.
-    pub degenerate: bool,
+    pub pred_sessions: usize,
 }
 
 impl SweepCell {
@@ -232,48 +266,162 @@ impl SweepCell {
     }
 }
 
-/// Run the segmenter across a grid of `(gap_close_secs, min_len_secs)` and score each cell
-/// (pooled over all days) at `tol_ms`.
-pub fn sweep(
+/// Score all days through the grouped pipeline at the given params, returning the day scores and
+/// the total predicted session count. Labels are snapped to the nearest frame first (disclosed).
+fn score_days_grouped(
     days: &[LoadedDay],
     tax: &Taxonomy,
-    gap_close_secs: &[i64],
-    min_len_secs: &[i64],
+    sp: &SegParams,
+    gp: &GroupParams,
+    qualify_ms: i64,
+    tol_ms: i64,
+) -> (Vec<DayScore>, usize) {
+    let mut day_scores = Vec::new();
+    let mut pred = 0usize;
+    for d in days {
+        let micros = segment_micro(&d.frames, tax, sp);
+        let spans: Vec<SessionSpan> = group_with(&micros, tax, sp, gp, qualify_ms)
+            .into_iter()
+            .map(|g| g.span)
+            .collect();
+        pred += spans.len();
+        let labels = snap_label_boundaries(&d.labels, &day_frame_times(d));
+        day_scores.push(score_day(
+            &d.date,
+            &spans,
+            &labels,
+            d.day_start_ms,
+            d.day_end_ms,
+            tol_ms,
+        ));
+    }
+    (day_scores, pred)
+}
+
+/// Stage A: sweep the `(merge_gap, absorb_max)` grid through the grouped pipeline (all other knobs
+/// at `gp_base` / the default `IDENTITY_QUALIFY_MS`), scoring each cell pooled over all days.
+pub fn sweep_grid(
+    days: &[LoadedDay],
+    tax: &Taxonomy,
+    sp: &SegParams,
+    gp_base: &GroupParams,
+    merge_gaps_secs: &[i64],
+    absorb_maxes_secs: &[i64],
     tol_ms: i64,
 ) -> Vec<SweepCell> {
+    let qualify = crate::group::IDENTITY_QUALIFY_MS;
     let mut cells = Vec::new();
-    for &g in gap_close_secs {
-        for &m in min_len_secs {
-            let p = SegParams {
-                gap_close_ms: g * 1000,
-                min_len_ms: m * 1000,
+    for &mg in merge_gaps_secs {
+        for &am in absorb_maxes_secs {
+            let gp = GroupParams {
+                merge_gap_ms: mg * 1000,
+                absorb_max_ms: am * 1000,
+                ..*gp_base
             };
-            let day_scores: Vec<DayScore> = days
-                .iter()
-                .map(|d| {
-                    let spans = segment(&d.frames, tax, &p);
-                    score_day(
-                        &d.date,
-                        &spans,
-                        &d.labels,
-                        d.day_start_ms,
-                        d.day_end_ms,
-                        tol_ms,
-                    )
-                })
-                .collect();
-            let (boundary, tc, tt) = pool(&day_scores);
+            let (ds, pred) = score_days_grouped(days, tax, sp, &gp, qualify, tol_ms);
+            let (boundary, tc, tt) = pool(&ds);
             cells.push(SweepCell {
-                gap_close_secs: g,
-                min_len_secs: m,
+                merge_gap_secs: mg,
+                absorb_max_secs: am,
                 boundary,
                 tool_correct: tc,
                 tool_total: tt,
-                degenerate: g <= m,
+                pred_sessions: pred,
             });
         }
     }
     cells
+}
+
+/// A tunable knob for the Stage-B 1-D sweeps. `value` is seconds, except `FocusDensity` (fph).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Knob {
+    MergeGap,
+    AbsorbMax,
+    MeetingGap,
+    FocusMinLen,
+    FocusDensity,
+    GapClose,
+    MinLen,
+    IdentityQualify,
+}
+
+impl Knob {
+    pub fn label(self) -> &'static str {
+        match self {
+            Knob::MergeGap => "merge_gap_secs",
+            Knob::AbsorbMax => "absorb_max_secs",
+            Knob::MeetingGap => "meeting_gap_secs",
+            Knob::FocusMinLen => "focus_min_len_secs",
+            Knob::FocusDensity => "focus_min_density_fph",
+            Knob::GapClose => "gap_close_secs",
+            Knob::MinLen => "min_len_secs",
+            Knob::IdentityQualify => "identity_qualify_secs",
+        }
+    }
+}
+
+/// One Stage-B 1-D sweep point: one knob at one value, all others at base.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OneDimPoint {
+    pub knob: &'static str,
+    pub value: i64,
+    pub boundary: BoundaryScore,
+    pub tool_correct: usize,
+    pub tool_total: usize,
+    pub pred_sessions: usize,
+}
+
+impl OneDimPoint {
+    pub fn tool_accuracy(&self) -> f64 {
+        if self.tool_total == 0 {
+            1.0
+        } else {
+            self.tool_correct as f64 / self.tool_total as f64
+        }
+    }
+}
+
+/// Stage B: vary one `knob` over `values`, holding everything else at the base params, scoring
+/// each through the grouped pipeline. A knob whose response is flat across its range is proposed
+/// to PR4 as a named constant rather than a settings key (the parsimony discipline).
+pub fn sweep_1d(
+    days: &[LoadedDay],
+    tax: &Taxonomy,
+    sp_base: &SegParams,
+    gp_base: &GroupParams,
+    knob: Knob,
+    values: &[i64],
+    tol_ms: i64,
+) -> Vec<OneDimPoint> {
+    values
+        .iter()
+        .map(|&v| {
+            let mut sp = *sp_base;
+            let mut gp = *gp_base;
+            let mut qualify = crate::group::IDENTITY_QUALIFY_MS;
+            match knob {
+                Knob::MergeGap => gp.merge_gap_ms = v * 1000,
+                Knob::AbsorbMax => gp.absorb_max_ms = v * 1000,
+                Knob::MeetingGap => gp.meeting_gap_ms = v * 1000,
+                Knob::FocusMinLen => gp.focus_min_len_ms = v * 1000,
+                Knob::FocusDensity => gp.focus_min_density_fph = v,
+                Knob::GapClose => sp.gap_close_ms = v * 1000,
+                Knob::MinLen => sp.min_len_ms = v * 1000,
+                Knob::IdentityQualify => qualify = v * 1000,
+            }
+            let (ds, pred) = score_days_grouped(days, tax, &sp, &gp, qualify, tol_ms);
+            let (boundary, tc, tt) = pool(&ds);
+            OneDimPoint {
+                knob: knob.label(),
+                value: v,
+                boundary,
+                tool_correct: tc,
+                tool_total: tt,
+                pred_sessions: pred,
+            }
+        })
+        .collect()
 }
 
 /// One freeze-lookback stability measurement.
@@ -302,7 +450,8 @@ fn boundaries(spans: &[SessionSpan]) -> Vec<i64> {
 pub fn stability(
     days: &[LoadedDay],
     tax: &Taxonomy,
-    p: &SegParams,
+    sp: &SegParams,
+    gp: &GroupParams,
     lookbacks_secs: &[i64],
     cutoff_step_ms: i64,
 ) -> Vec<StabilityPoint> {
@@ -316,7 +465,7 @@ pub fn stability(
                 if d.frames.is_empty() {
                     continue;
                 }
-                let full = boundaries(&segment(&d.frames, tax, p));
+                let full = boundaries(&segment_grouped(&d.frames, tax, sp, gp));
                 let (first, last) = d.bounds();
                 let mut t = first + cutoff_step_ms;
                 while t <= last {
@@ -326,7 +475,7 @@ pub fn stability(
                         .filter(|f| f.captured_at <= t)
                         .cloned()
                         .collect();
-                    let tb = boundaries(&segment(&trunc, tax, p));
+                    let tb = boundaries(&segment_grouped(&trunc, tax, sp, gp));
                     let old_cutoff = t - w_ms;
                     for &fb in full.iter().filter(|&&b| b <= old_cutoff) {
                         match tb.iter().map(|&x| (x - fb).abs()).min() {
@@ -507,20 +656,57 @@ mod tests {
     }
 
     #[test]
-    fn sweep_covers_grid_and_flags_degenerate() {
-        let frames = run_frames(1, "Notepad", "n", 0, 600, 30);
+    fn sweep_grid_scores_every_cell_through_the_grouped_pipeline() {
+        // One sustained claude run -> one anchored session per cell.
+        let frames = run_frames(1, "WindowsTerminal", "claude - repo", 0, 600, 30);
         let day = LoadedDay {
             date: "d".into(),
             day_start_ms: 0,
             day_end_ms: 600_000,
-            labels: vec![label(0, 600, Kind::Focus, None)],
+            labels: vec![label(0, 600, Kind::Ai, Some("claude-code"))],
             frames,
         };
-        let cells = sweep(&[day], &Taxonomy::seed(), &[120, 300], &[120, 180], 120_000);
-        assert_eq!(cells.len(), 4);
-        // gap_close 120 <= min_len 120 and 120 <= 180 are degenerate; 300 > both are not.
-        let deg: Vec<bool> = cells.iter().map(|c| c.degenerate).collect();
-        assert_eq!(deg, vec![true, true, false, false]);
+        let cells = sweep_grid(
+            &[day],
+            &Taxonomy::seed(),
+            &SegParams::default(),
+            &GroupParams::default(),
+            &[600, 1500],
+            &[600, 1200],
+            120_000,
+        );
+        assert_eq!(cells.len(), 4, "2 merge_gaps x 2 absorb_maxes");
+        assert!(cells.iter().all(|c| c.pred_sessions >= 1));
+        assert!(cells
+            .iter()
+            .any(|c| c.merge_gap_secs == 1500 && c.absorb_max_secs == 1200));
+    }
+
+    #[test]
+    fn sweep_1d_varies_one_knob() {
+        let frames = run_frames(1, "WindowsTerminal", "claude - repo", 0, 600, 30);
+        let day = LoadedDay {
+            date: "d".into(),
+            day_start_ms: 0,
+            day_end_ms: 600_000,
+            labels: vec![label(0, 600, Kind::Ai, Some("claude-code"))],
+            frames,
+        };
+        let pts = sweep_1d(
+            &[day],
+            &Taxonomy::seed(),
+            &SegParams::default(),
+            &GroupParams::default(),
+            Knob::MergeGap,
+            &[600, 900, 1500],
+            120_000,
+        );
+        assert_eq!(pts.len(), 3);
+        assert!(pts.iter().all(|p| p.knob == "merge_gap_secs"));
+        assert_eq!(
+            pts.iter().map(|p| p.value).collect::<Vec<_>>(),
+            vec![600, 900, 1500]
+        );
     }
 
     #[test]
@@ -530,8 +716,18 @@ mod tests {
         // At an early cutoff (T=100 s) the merged session does not exist yet, so its boundary
         // at 0 is absent: a small lookback treats 0 as "old" and sees it disappear (unstable);
         // a large lookback does not yet consider 0 old (stable).
-        let mut frames = run_frames(1, "Notepad", "n", 0, 60, 30);
-        frames.extend(run_frames(100, "Notepad", "n", 200, 400, 30));
+        // Two claude chunks that merge in the full replay (gap 140 s < gap_close 300 s) into one
+        // AI session [0, 400]; the early chunk alone (60 s) is below the 120 s floor, so a
+        // truncated replay before the merge has no session there.
+        let mut frames = run_frames(1, "WindowsTerminal", "claude - repo", 0, 60, 30);
+        frames.extend(run_frames(
+            100,
+            "WindowsTerminal",
+            "claude - repo",
+            200,
+            400,
+            30,
+        ));
         let day = LoadedDay {
             date: "d".into(),
             day_start_ms: 0,
@@ -539,11 +735,12 @@ mod tests {
             labels: vec![],
             frames,
         };
-        let p = SegParams {
+        let sp = SegParams {
             gap_close_ms: 300_000,
             min_len_ms: 120_000,
         };
-        let pts = stability(&[day], &Taxonomy::seed(), &p, &[0, 600], 50_000);
+        let gp = GroupParams::default();
+        let pts = stability(&[day], &Taxonomy::seed(), &sp, &gp, &[0, 600], 50_000);
         let w0 = pts.iter().find(|p| p.lookback_secs == 0).unwrap();
         let w600 = pts.iter().find(|p| p.lookback_secs == 600).unwrap();
         assert!(

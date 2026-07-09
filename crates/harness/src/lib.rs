@@ -10,7 +10,8 @@
 //!    boundaries + tool identities in a lightweight TOML format ([`digest`], [`labels`]).
 //! 3. Replays a **pure candidate segmenter** — the `where_was_i` context key (`03 §7b`,
 //!    `crates/kernel/src/resume.rs`) generalized with taxonomy tool identity per `03 §7e`
-//!    ([`segmenter`], [`taxonomy`]).
+//!    ([`segmenter`]), then **groups** its micro-runs into task-level sessions ([`group`], the
+//!    `§7e` amendment `06` #27) via [`taxonomy`] recognition.
 //! 4. **Scores** boundary precision/recall (± tolerance) + tool-recognition accuracy against
 //!    the labels, sweeps parameters, and confirms the freeze-lookback window ([`score`]).
 //!
@@ -32,6 +33,7 @@
 pub mod data;
 pub mod digest;
 pub mod export;
+pub mod group;
 pub mod labels;
 pub mod model;
 pub mod score;

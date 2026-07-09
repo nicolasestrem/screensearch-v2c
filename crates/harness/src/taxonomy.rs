@@ -147,6 +147,15 @@ impl Taxonomy {
         Self::parse(SEED_TOML).expect("bundled seed taxonomy.toml is valid")
     }
 
+    /// File-order index of an entry id, or `usize::MAX` if absent. The macro grouping pass uses
+    /// it as the final, deterministic tie-break when selecting a session's AI anchor (`group`).
+    pub fn entry_index(&self, id: &str) -> usize {
+        self.entries
+            .iter()
+            .position(|e| e.id == id)
+            .unwrap_or(usize::MAX)
+    }
+
     /// Recognize a tool/meeting from a frame's context, or `None` if nothing matches.
     pub fn recognize(&self, app_hint: Option<&str>, title: Option<&str>) -> Option<Recognized> {
         let app = app_hint.map(normalize_stem);
