@@ -22,6 +22,29 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2: task-level grouping redesign landed + validated; D9 deferred (concurrency)
+
+- **Change:** implemented the `§7e` task-level grouping redesign in the harness (taxonomy v3 spinner
+  rule; `segment_micro` unfloored pass 1; new `group.rs` two-pass engine = meeting bands + an
+  identity-anchored accretion walk; score.rs sweep/stability rewired to the grouped pipeline with
+  label snapping + Stage-A/B sweeps + `IDENTITY_QUALIFY` threading; main.rs `--algo grouped|micro`,
+  dual 120/180 s scoring, honesty columns, close-reason replay). `segment()` + its 13 pinned tests
+  are unchanged as the A/B baseline. Recorded the fresh-day findings `07` #114 (session concurrency)
+  and #115 (recall-based labels unreliable + non-work fullscreen activity uncapturable).
+- **Why:** `docs/0.4.0.md` §3 PR2 - validate the segmenter before PR3 freezes schema 11. The redesign
+  fixes the #110 over-segmentation (grouped F1 0.50/0.57 vs 0.14/0.16 baseline through the referee;
+  16 vs 129 predicted sessions, in-sample, NOT the D9 gate). But labeling the fresh day surfaced that
+  real usage can be **concurrent** (more than one recognized tool active at once), which the serial
+  model cannot represent, and that ground truth must come from the capture, not recall. So **D9
+  thresholds (`06` #26) are deferred** until the
+  serial-vs-concurrent session-model decision (`07` #114) is made - an acceptance gate cannot be fixed
+  against a target of unsettled shape.
+- **Verification:** `cargo test -p harness` 87 passed / 0 failed; fmt + clippy `-D warnings` + binding
+  guard clean; full CI ladder run at PR time (verbatim in the PR body). Score/sweep/stability run
+  offline against the git-ignored exports; only aggregate numbers recorded.
+- **Status:** PR opened for review of the built serial redesign + harness; **not** claiming final
+  acceptance numbers, **not** merging. PR3 must not freeze schema 11 until #114 is decided.
+
 ## 2026-07-10 - 0.4.0 PR2: Phase B redesign kickoff - the #110 task-level grouping (specs gate)
 
 - **Change (`.md`-only this commit):** recorded the `§7e` **task-level grouping amendment** as

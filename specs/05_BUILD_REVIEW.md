@@ -207,3 +207,36 @@ no-frame gaps; meeting-band floor 10 min; the sweep decides merge_gap.
   `segment_grouped` in the same commit, or the recorded numbers would measure the ungrouped algorithm)
   → Phase B evidence → Phase C D9 thresholds (STOP for approval). Verification for this `.md`-only
   commit: `git diff --name-only` shows specs only; no code touched.
+
+### Pass 2 continued - 2026-07-10 - redesign landed + validated; concurrency fork; D9 DEFERRED
+
+The task-level grouping redesign is **implemented, tested, and pushed** (commits `8b037aa` taxonomy v3
+spinner rule, `f976ee8` `segment_micro` + `GroupParams`, `a76466a` `group.rs` two-pass + referee
+wiring + CLI, `3e92f14` docs). New `crates/harness/src/group.rs` = pass 2 (meeting bands + the
+identity-anchored accretion walk); `segment_micro` = the unfloored pass 1; `segment()` and its **13
+pinned tests unchanged** as the A/B baseline.
+
+- **Implemented + verified (verbatim):** `cargo test -p harness` **87 passed / 0 failed** (13 pinned
+  segmenter + 20 new `group.rs` + taxonomy v3 + score/main rewire); `cargo fmt --all -- --check`
+  clean; `cargo clippy -p harness --all-targets -- -D warnings` clean; binding guard clean. **A/B
+  through the referee on the 2 labeled days (keep_interior ON, defaults, PRELIMINARY / in-sample -
+  NOT the D9 evidence):** grouped pooled typed boundary **F1 0.500 @120s / 0.571 @180s** vs the
+  ungrouped baseline **0.142 / 0.156**; predicted sessions **16 vs 129**. Sweep best in-sample cell
+  0.70 (absorb_max 1800); `meeting_gap` 1-D response FLAT (-> propose as a named constant).
+  **Stability re-proven through the grouped pipeline: 6 h-stable on 3 days (the 24 h default holds
+  with margin).**
+- **Corrected on the fresh day:** attempting to label a fresh day surfaced two findings bigger than
+  #110 (recorded `07` #114/#115): **(1) session concurrency** - more than one recognized tool can be
+  active in the same time window, which the **serial** `§7e` model + non-overlapping segmenter +
+  `labels.toml` cannot represent; **(2) recall-based labels are unreliable** (a rough recollection of
+  the day did not match the capture), so ground truth must be reconstructed from the digest, not
+  recalled. Personal specifics stay out of the repo (recorded only in untracked agent memory).
+- **D9 DEFERRED (maintainer, 2026-07-10):** the binding thresholds (`06` #26) are NOT set this PR.
+  Rationale: an acceptance gate cannot be fixed while the session **model** (serial vs concurrent,
+  `07` #114) is undecided - the referee would score a serial segmenter against a target of unsettled
+  shape. The built serial redesign stands as the baseline regardless. The model decision is the
+  post-holiday conversation; the harness re-validates whichever model is chosen.
+- **Broke / regressed:** nothing (additive dev-only crate; full CI ladder run at PR time).
+- **Still risky:** the serial-vs-concurrent decision (`#114`) is the real gate now; do NOT freeze PR3
+  / schema 11 until it is made. PR opened for review of the built work, **not** to claim final
+  acceptance numbers.
