@@ -494,9 +494,28 @@ tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDA
 4. Hand-label each day's `labels.toml` from its `digest.md` (the readable context-run timeline;
    marks appear as anchors). Under an evening for the whole sample.
 5. `cargo run -p harness -- score` (optionally `replay`, `sweep`, `stability`) scores boundary
-   precision/recall/F1 (+/- tolerance, default 120s) and tool-recognition accuracy against the
-   labels; `sweep` grids the `(gap_close, min_len)` parameters; `stability` confirms the
-   freeze-lookback window. `sweep`/`stability` write markdown to `harness-data/reports/`.
+   precision/recall/F1 (+/- tolerance) and tool-recognition accuracy against the labels.
+   `sweep`/`stability` write markdown to `harness-data/reports/`.
+
+**The two-pass grouped segmenter (`03 section 7e` amendment, `06` #27).** The default algorithm is
+the task-level GROUPED segmenter: pass 1 (`segment_micro`) produces unfloored app-run micro-spans;
+pass 2 (`group.rs`) accretes them into task-level sessions anchored by recognized tool/meeting
+identity (meeting bands are hard barriers; foreign runs up to `absorb_max` are absorbed; sessions
+close on a `merge_gap` gap, a sustained foreign identity, or a band edge; anchorless focus sessions
+pass a `focus_min_len` floor + a `focus_min_density_fph` gate). `--algo micro` selects the ungrouped
+baseline (the old app-context key) for the A/B comparison.
+
+- `score` reports pooled P/R/F1 at BOTH 120 s and 180 s tolerance; labels are snapped to the nearest
+  captured frame (a disclosed scoring policy for boundaries that fall inside no-frame idle gaps).
+- `replay` prints each session's context key, kind, tool, host, frame count, and close reason.
+- `sweep` runs the Stage-A `merge_gap x absorb_max` grid plus Stage-B 1-D sweeps of the remaining
+  knobs (each classified FLAT -> propose as a named constant, or SENSITIVE -> keep as a setting),
+  with a baseline `--algo micro` row and predicted-session-count honesty columns.
+- `stability` re-proves the freeze-lookback window through the grouped pipeline.
+- Group flags (proposed `sessions.*` names; PR4 owns the finals): `--merge-gap` `--absorb-max`
+  `--meeting-gap` `--focus-min-len` `--focus-density`. Seg flags: `--gap-close` `--min-len`.
+  Scoring: `--tolerance`.
 
 The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding
-merge gate). The exported sample and labels are never committed.
+merge gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers
+only.
