@@ -96,14 +96,56 @@ impl Default for SegParams {
     }
 }
 
+/// Macro grouping tunables for pass 2 of the two-pass segmenter (`crate::group`, the `03 §7e`
+/// amendment `06` #27). In the frame clock unit (ms) except the density gate (frames/hour). The
+/// key names are PR1-style **proposals** for the `sessions.*` settings keys — PR4 owns the final
+/// keys, PR5 the Settings UI (the 0.3.2 `app.*` precedent). Defaults sit mid-plateau, above the
+/// physical cliffs measured on the ground truth; PR2's sweep confirms their placement, and any
+/// knob whose 1-D response is flat is proposed to PR4 as a named constant rather than a setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupParams {
+    /// `sessions.merge_gap_secs` × 1000 (default 1_500_000). An inactivity gap this long closes
+    /// the open group (the macro close rule; labeled sessions hold internal lulls up to ~969 s).
+    pub merge_gap_ms: i64,
+    /// `sessions.absorb_max_secs` × 1000 (default 1_200_000). The absorb budget: a single foreign
+    /// micro-run (a different AI identity, or unrecognized activity while an AI anchor is active)
+    /// up to this long is absorbed into the group instead of closing it; longer = a real switch.
+    pub absorb_max_ms: i64,
+    /// `sessions.meeting_gap_secs` × 1000 (default 480_000). Meeting-band chaining gap (must stay
+    /// below the observed post-meeting straggler gap so a band ends at the real presence stop).
+    pub meeting_gap_ms: i64,
+    /// `sessions.focus_min_len_secs` × 1000 (default 600_000). Floor for anchorless focus sessions
+    /// AND the qualification extent for meeting bands (a sub-floor meeting chain never anchors).
+    pub focus_min_len_ms: i64,
+    /// `sessions.focus_min_density_fph` (default 90; 0 disables). Minimum frames/hour for an
+    /// **anchorless** focus session; AI/meeting sessions are exempt. Suppresses fragmented
+    /// low-density blocks that the maintainer labels no-session (gap #113).
+    pub focus_min_density_fph: i64,
+}
+
+impl Default for GroupParams {
+    fn default() -> Self {
+        Self {
+            merge_gap_ms: 1_500_000,
+            absorb_max_ms: 1_200_000,
+            meeting_gap_ms: 480_000,
+            focus_min_len_ms: 600_000,
+            focus_min_density_fph: 90,
+        }
+    }
+}
+
 /// One emitted candidate session. The referee's unit ([`score`](crate::score)). `tool` is
 /// `Some` only when `kind == Ai`; `host` is set when recognition resolved one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSpan {
     pub start_ms: i64,
     pub end_ms: i64,
-    /// The segmenter's context key: `"app"`, `"app|domain"`, or `"app|domain|tool"`
-    /// (`03 §7e` stored-key shape; domain dormant, gap #109).
+    /// The context key. From the ungrouped `segment` this is the **micro-run** key
+    /// (`"app"` / `"app|domain"` / `"app|domain|tool"`; domain dormant, gap #109). From the
+    /// grouped `segment_grouped` it is the **task-level** anchor key
+    /// (`"ai:<tool-id>"` / `"meeting:<taxonomy-id>"` / `"focus:<dominant-stem>"`, the `03 §7e`
+    /// amendment `06` #27 stored-key grammar — what PR3 re-normalizes the `§4` column comment to).
     pub context_key: String,
     pub kind: Kind,
     pub tool: Option<String>,

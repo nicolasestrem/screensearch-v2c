@@ -23,6 +23,13 @@
 //! is additive; not every frame belongs to a session). Recognition emits `kind`/`tool`/`host`
 //! per the taxonomy; `tool` is recorded only for `kind = Ai` (the `sessions.tool` CHECK shape,
 //! `03 §4`). No model calls anywhere (D3).
+//!
+//! **Two-pass split (`§7e` amendment `06` #27).** [`segment_micro`] is pass 1 — the unfloored
+//! micro-runs above. [`segment`] floors + classifies them into the **ungrouped baseline** (its
+//! tests are the A/B reference). The macro **grouping** pass (`group.rs`) instead accretes the
+//! micro-runs into task-level sessions; `segment_grouped` is the composed pipeline the harness
+//! referee scores. The app-level key here over-segments real days ~10-40× (gap #110) — that is
+//! why grouping exists, and why this baseline is kept only for comparison.
 
 use std::collections::HashMap;
 
@@ -110,8 +117,29 @@ fn gap_has_sustained_interrupter(gap: &[Seg], min_len_ms: i64) -> bool {
     spans.values().any(|(f, l)| l - f >= min_len_ms)
 }
 
-/// Segment ordered frame metadata into candidate session spans (`03 §7e`).
-pub fn segment(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<SessionSpan> {
+/// One consolidated, **unfloored** micro-run: a maximal same-context-key span after step-2
+/// excursion absorption, before the `min_len_ms` floor and classification. It is the two-pass
+/// segmenter's pass-1 unit — the macro grouping pass (`group.rs`, `03 §7e` amendment `06` #27)
+/// accretes these into task-level sessions; the ungrouped `segment` floors + classifies them.
+/// Carries `recog` (not a classified kind/tool) so the macro pass can key on tool identity.
+#[derive(Debug, Clone)]
+pub struct MicroSpan {
+    /// The `app|domain|tool` micro-run key (domain dormant, gap #109).
+    pub key: String,
+    pub recog: Option<Recognized>,
+    pub first_ts: i64,
+    pub last_ts: i64,
+    pub first_id: i64,
+    pub last_id: i64,
+    pub frames: usize,
+}
+
+/// Pass 1 of the two-pass segmenter (`03 §7e`): ordered frame metadata → **unfloored** micro-runs.
+/// This is steps 1+2 of the classic algorithm (maximal same-key segments, keyless frames
+/// transparent, `gap_close_ms` cap, then greedy consolidation across non-sustained excursions
+/// with `min_len_ms` as the dwell) **without** the floor or classification. `segment` layers those
+/// back on for the ungrouped baseline; `group` consumes these directly.
+pub fn segment_micro(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<MicroSpan> {
     // Chronological, ties by frame id (multi-monitor cycles share captured_at).
     let mut ordered: Vec<&FrameRow> = frames.iter().collect();
     ordered.sort_by_key(|f| (f.captured_at, f.frame_id));
@@ -145,9 +173,9 @@ pub fn segment(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<Sessio
 
     // 2. Consolidate runs: greedily absorb later same-key segments across non-sustained
     //    excursions within gap_close_ms; consume the in-between excursion segments so they
-    //    never form (overlapping) sessions of their own.
+    //    never form (overlapping) micro-runs of their own.
     let mut consumed = vec![false; segs.len()];
-    let mut spans: Vec<SessionSpan> = Vec::new();
+    let mut micros: Vec<MicroSpan> = Vec::new();
     for start in 0..segs.len() {
         if consumed[start] {
             continue;
@@ -159,7 +187,7 @@ pub fn segment(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<Sessio
         let mut last_ts = segs[start].last_ts;
         let first_id = segs[start].first_id;
         let mut last_id = segs[start].last_id;
-        let mut frame_count = segs[start].frames;
+        let mut frames = segs[start].frames;
         let mut last_seg = start;
 
         while let Some(next) = (last_seg + 1..segs.len()).find(|&k| segs[k].key == key) {
@@ -175,28 +203,52 @@ pub fn segment(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<Sessio
             }
             last_ts = segs[next].last_ts;
             last_id = segs[next].last_id;
-            frame_count += segs[next].frames;
+            frames += segs[next].frames;
             last_seg = next;
         }
 
-        // 3. Floor: a run shorter than min_len_ms is not a session.
-        if last_ts - first_ts < p.min_len_ms {
-            continue;
-        }
-
-        let (kind, tool, host) = classify(&recog);
-        spans.push(SessionSpan {
-            start_ms: first_ts,
-            end_ms: last_ts,
-            context_key: key,
-            kind,
-            tool,
-            host,
-            frame_count,
-            first_frame_id: first_id,
-            last_frame_id: last_id,
+        micros.push(MicroSpan {
+            key,
+            recog,
+            first_ts,
+            last_ts,
+            first_id,
+            last_id,
+            frames,
         });
     }
+    micros.sort_by_key(|m| (m.first_ts, m.first_id));
+    micros
+}
+
+/// Floor + classify one micro-run into the ungrouped baseline `SessionSpan`, or `None` if it is
+/// shorter than the `min_len_ms` floor (its frames stay sessionless — the world is additive).
+fn floor_and_classify(m: &MicroSpan, p: &SegParams) -> Option<SessionSpan> {
+    if m.last_ts - m.first_ts < p.min_len_ms {
+        return None;
+    }
+    let (kind, tool, host) = classify(&m.recog);
+    Some(SessionSpan {
+        start_ms: m.first_ts,
+        end_ms: m.last_ts,
+        context_key: m.key.clone(),
+        kind,
+        tool,
+        host,
+        frame_count: m.frames,
+        first_frame_id: m.first_id,
+        last_frame_id: m.last_id,
+    })
+}
+
+/// The **ungrouped baseline** segmenter (`03 §7b` generalized per `§7e`): micro-runs, floored +
+/// classified. Retained unchanged behavior — its unit tests are the A/B baseline against the
+/// grouped pipeline (`segment_grouped`), so PR4 can never silently regress it.
+pub fn segment(frames: &[FrameRow], tax: &Taxonomy, p: &SegParams) -> Vec<SessionSpan> {
+    let mut spans: Vec<SessionSpan> = segment_micro(frames, tax, p)
+        .iter()
+        .filter_map(|m| floor_and_classify(m, p))
+        .collect();
     spans.sort_by_key(|s| (s.start_ms, s.first_frame_id));
     spans
 }
@@ -281,6 +333,20 @@ mod tests {
         // 90 s < 120 s floor.
         let frames = run(1, "Notepad", "n", 0, 90, 30);
         assert!(seg(&frames).is_empty());
+    }
+
+    #[test]
+    fn segment_micro_keeps_sub_floor_runs_that_segment_drops() {
+        // A 90 s Notepad run is below the 120 s floor: segment() emits nothing, but the unfloored
+        // pass keeps it so the grouping pass can decide (the floor moves to the caller).
+        let frames = run(1, "Notepad", "n", 0, 90, 30);
+        assert!(seg(&frames).is_empty());
+        let micros = segment_micro(&frames, &Taxonomy::seed(), &params());
+        assert_eq!(micros.len(), 1);
+        assert_eq!(micros[0].key, "notepad");
+        assert_eq!(micros[0].last_ts - micros[0].first_ts, 90_000);
+        assert!(micros[0].recog.is_none(), "plain Notepad is unrecognized");
+        assert_eq!(micros[0].frames, 4);
     }
 
     #[test]
