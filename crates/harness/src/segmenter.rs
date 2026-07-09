@@ -357,16 +357,17 @@ mod tests {
 
     #[test]
     fn tool_identity_splits_same_app_into_adjacent_sessions() {
-        // Same terminal app, but a claude-titled run then a codex-titled run: the tool id in
-        // the context key makes them two adjacent AI sessions with the right tools.
+        // Same terminal app, but a claude-titled run then a plain-shell run: the tool id in
+        // the context key makes them two adjacent sessions (Claude Code, then plain focus).
         let mut frames = run(1, "WindowsTerminal", "claude - repo", 0, 150, 30);
-        frames.extend(run(100, "WindowsTerminal", "codex - repo", 180, 330, 30));
+        frames.extend(run(100, "WindowsTerminal", "PowerShell", 180, 330, 30));
         let s = seg(&frames);
-        assert_eq!(s.len(), 2, "claude vs codex split: {s:?}");
+        assert_eq!(s.len(), 2, "claude-code vs plain terminal split: {s:?}");
         assert_eq!(s[0].kind, Kind::Ai);
         assert_eq!(s[0].tool.as_deref(), Some("claude-code"));
         assert_eq!(s[0].host, Some(Host::Terminal));
-        assert_eq!(s[1].tool.as_deref(), Some("codex"));
+        assert_eq!(s[1].kind, Kind::Focus, "plain terminal is focus, not ai");
+        assert_eq!(s[1].tool, None);
         assert!(s[0].context_key.contains("claude-code"));
     }
 

@@ -1,10 +1,11 @@
 //! D7 recognition taxonomy (`specs/03 §7e`).
 //!
 //! Parses the versioned TOML data file (`crates/harness/taxonomy.toml`) and recognizes a
-//! tool/meeting from a frame's `app_hint` + `window_title`. Matching is case-insensitive
-//! substring, entries evaluated in file order, first match wins:
-//! - `app_ok`   = `app_hints` empty OR `app_hint` contains one hint
-//! - `title_ok` = `title_patterns` empty OR `window_title` contains one pattern
+//! tool/meeting from a frame's `app_hint` + `window_title`. Entries are evaluated in file
+//! order, first match wins:
+//! - `app_ok`   = `app_hints` empty OR `app_hint` EQUALS one hint (exact stem, `.exe` stripped,
+//!   case-insensitive) — NOT substring, so a `codex` process never collides with a `code` hint
+//! - `title_ok` = `title_patterns` empty OR `window_title` CONTAINS one pattern (substring)
 //! - `match`    = `app_ok AND title_ok`
 //!
 //! An entry whose `app_hints` and `title_patterns` are both empty would match everything and
@@ -58,6 +59,15 @@ struct RawTaxonomy {
     entries: Vec<Entry>,
 }
 
+/// Lowercase and strip a trailing `.exe` so app_hints compare as bare process stems.
+fn normalize_stem(s: &str) -> String {
+    let lower = s.to_ascii_lowercase();
+    match lower.strip_suffix(".exe") {
+        Some(stem) => stem.to_string(),
+        None => lower,
+    }
+}
+
 impl Taxonomy {
     /// Parse a taxonomy TOML document, validating that no entry has an empty matcher and that
     /// every `Ai` entry carries an id (a meeting id is used only for scoring).
@@ -87,20 +97,28 @@ impl Taxonomy {
 
     /// Recognize a tool/meeting from a frame's context, or `None` if nothing matches.
     pub fn recognize(&self, app_hint: Option<&str>, title: Option<&str>) -> Option<Recognized> {
-        let app = app_hint.map(str::to_ascii_lowercase);
-        let title = title.map(str::to_ascii_lowercase);
+        let app = app_hint.map(normalize_stem);
+        let title = title.map(|t| t.to_ascii_lowercase());
         if app.is_none() && title.is_none() {
             return None;
         }
-        let contains_any = |hay: &Option<String>, needles: &[String]| -> bool {
-            match hay {
-                Some(h) => needles.iter().any(|n| h.contains(n.as_str())),
+        // app_hint matches by exact stem (a process name is not a substring of another);
+        // title matches by substring (the window title carries free-form context).
+        let app_matches = |hints: &[String]| -> bool {
+            match &app {
+                Some(a) => hints.iter().any(|h| a == &normalize_stem(h)),
+                None => false,
+            }
+        };
+        let title_contains = |patterns: &[String]| -> bool {
+            match &title {
+                Some(t) => patterns.iter().any(|p| t.contains(p.as_str())),
                 None => false,
             }
         };
         for e in &self.entries {
-            let app_ok = e.app_hints.is_empty() || contains_any(&app, &e.app_hints);
-            let title_ok = e.title_patterns.is_empty() || contains_any(&title, &e.title_patterns);
+            let app_ok = e.app_hints.is_empty() || app_matches(&e.app_hints);
+            let title_ok = e.title_patterns.is_empty() || title_contains(&e.title_patterns);
             if app_ok && title_ok {
                 return Some(Recognized {
                     id: e.id.clone(),
@@ -120,9 +138,9 @@ mod tests {
     #[test]
     fn seed_parses_and_has_the_d7_set() {
         let t = Taxonomy::seed();
-        assert_eq!(t.version, 1);
-        // 6 tools + 5 meetings = 11 seed entries.
-        assert_eq!(t.entries.len(), 11);
+        assert_eq!(t.version, 2);
+        // 4 tools + 5 meetings = 9 seed entries (vscode + cursor dropped 2026-07-09).
+        assert_eq!(t.entries.len(), 9);
     }
 
     #[test]
@@ -149,26 +167,51 @@ mod tests {
     }
 
     #[test]
-    fn codex_in_terminal() {
+    fn codex_desktop_app() {
         let t = Taxonomy::seed();
-        let r = t
-            .recognize(Some("pwsh"), Some("codex - fixing tests"))
-            .expect("codex");
+        // Codex is a desktop app on this install (app stem "codex", title "Codex"),
+        // recognized on the app stem alone — NOT a terminal.
+        let r = t.recognize(Some("codex"), Some("Codex")).expect("codex");
         assert_eq!(r.id, "codex");
         assert_eq!(r.kind, Kind::Ai);
+        assert_eq!(r.host, Some(Host::Desktop));
     }
 
     #[test]
-    fn vscode_matches_on_executable_alone() {
+    fn codex_stem_does_not_collide_with_a_code_ide_hint() {
         let t = Taxonomy::seed();
-        let r = t
-            .recognize(
-                Some("Code"),
-                Some("labels.rs - screensearch-v2c - Visual Studio Code"),
-            )
-            .expect("vscode");
-        assert_eq!(r.id, "vscode");
-        assert_eq!(r.host, Some(Host::Ide));
+        // Regression (2026-07-09): substring matching tagged "codex" as vscode because
+        // "codex".contains("code"); exact-stem matching + dropping vscode/cursor fixes it.
+        assert_eq!(
+            t.recognize(Some("codex"), Some("Codex")).expect("codex").id,
+            "codex"
+        );
+        // A bare "code" stem is no longer recognized at all (vscode/cursor dropped).
+        assert!(t
+            .recognize(Some("Code"), Some("main.rs - Visual Studio Code"))
+            .is_none());
+    }
+
+    #[test]
+    fn app_hint_matches_by_exact_stem_not_substring() {
+        let t = Taxonomy::seed();
+        // "powershell" is a claude-code terminal stem; a longer look-alike is not.
+        assert_eq!(
+            t.recognize(Some("powershell"), Some("claude - repo"))
+                .expect("claude-code")
+                .id,
+            "claude-code"
+        );
+        assert!(t
+            .recognize(Some("powershellx"), Some("claude - repo"))
+            .is_none());
+        // ".exe" is stripped before comparing stems.
+        assert_eq!(
+            t.recognize(Some("codex.exe"), Some("Codex"))
+                .expect("codex")
+                .id,
+            "codex"
+        );
     }
 
     #[test]
@@ -224,10 +267,8 @@ mod tests {
     #[test]
     fn case_insensitive_and_none_on_empty_context() {
         let t = Taxonomy::seed();
-        assert_eq!(
-            t.recognize(Some("CURSOR"), None).expect("cursor").id,
-            "cursor"
-        );
+        // Case-insensitive app-stem match.
+        assert_eq!(t.recognize(Some("CODEX"), None).expect("codex").id, "codex");
         assert!(t.recognize(None, None).is_none());
     }
 
