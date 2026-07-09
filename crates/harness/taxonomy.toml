@@ -7,8 +7,10 @@
 # Matching (case-insensitive), per [[entry]], evaluated in file order, first match wins
 # (most specific entries first):
 #   app_ok   = app_hints empty  OR frame app_hint EQUALS one hint (exact stem, ".exe" stripped)
-#   title_ok = title_patterns empty OR frame window_title CONTAINS one pattern (substring)
-#   match    = app_ok AND title_ok   (an entry with BOTH lists empty is a parse error)
+#   title_ok = (title_patterns AND title_prefix_ranges both empty) OR window_title CONTAINS one
+#              title_pattern (substring) OR the title's first non-whitespace char has a Unicode
+#              scalar value inside one title_prefix_ranges entry
+#   match    = app_ok AND title_ok   (an entry with ALL THREE lists empty is a parse error)
 # app_hint is matched by exact stem, NOT substring: a process named "codex" must not collide
 # with an IDE hint "code" (the 2026-07-09 PR2 finding). title stays substring so a terminal
 # entry can prove which tool is running from the window title; an app-only entry (a dedicated
@@ -24,11 +26,17 @@
 # Tuning (Phase B, 2026-07-09, on the 07-07/07-08 ground truth): codex is a DESKTOP app on this
 # install (app_hint "codex", title "Codex"), not a terminal — corrected here. vscode and cursor
 # are dropped: unused by the maintainer, and the old substring match made "codex" collide with
-# the vscode "code" stem. Known limitation still open: Claude Code sets the terminal title to the
-# current task with a spinner/sparkle prefix, so the "claude" title pattern misses task-titled
-# frames (a spinner-aware title match is the follow-up; 07 gap).
+# the vscode "code" stem.
+#
+# v3 (2026-07-10, gap #111): Claude Code writes the terminal title as the current task with a
+# spinner/sparkle prefix (✳ U+2733, braille U+2800..=U+28FF), so the "claude" substring caught
+# only ~19% of real Claude-Code terminal frames on the ground truth; the spinner prefix caught
+# ~82% (every "claude"-substring frame was also spinner-prefixed, zero false negatives observed).
+# claude-code gains title_prefix_ranges = ["2733", "2800-28FF"], ANDed to the terminal app_hints
+# (the spinner rule stays confined to terminal stems); the "claude" substring stays as a costless
+# fallback for an idle non-spinning terminal. Specificity outside claude-code is untested (07 #112).
 
-version = 2
+version = 3
 
 # ---- AI tools (kind = "ai": a tool id is recorded on the session) ----
 
@@ -38,6 +46,9 @@ kind = "ai"
 host = "terminal"
 app_hints = ["windowsterminal", "wt", "powershell", "pwsh", "cmd", "conhost", "alacritty", "wezterm"]
 title_patterns = ["claude"]
+# Spinner/sparkle title prefix (gap #111): ✳ U+2733 + braille block U+2800..=U+28FF. ANDed to the
+# terminal app_hints above, so it only ever matches a terminal frame.
+title_prefix_ranges = ["2733", "2800-28FF"]
 domains = []
 
 [[entry]]

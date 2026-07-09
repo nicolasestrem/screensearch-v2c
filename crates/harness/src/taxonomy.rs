@@ -5,12 +5,22 @@
 //! order, first match wins:
 //! - `app_ok`   = `app_hints` empty OR `app_hint` EQUALS one hint (exact stem, `.exe` stripped,
 //!   case-insensitive) — NOT substring, so a `codex` process never collides with a `code` hint
-//! - `title_ok` = `title_patterns` empty OR `window_title` CONTAINS one pattern (substring)
+//! - `title_ok` = (`title_patterns` AND `title_prefix_ranges` both empty) OR `window_title`
+//!   CONTAINS one pattern (substring) OR the first non-whitespace char of `window_title` has a
+//!   Unicode scalar value inside one `title_prefix_ranges` entry
 //! - `match`    = `app_ok AND title_ok`
 //!
-//! An entry whose `app_hints` and `title_patterns` are both empty would match everything and
-//! is rejected at parse time. `domains` are carried for the dormant browser-URL refinement
-//! (gap #109) and are not consulted today.
+//! `title_prefix_ranges` (v3, gap #111) expresses "the title starts with a glyph in this set",
+//! which the substring matcher cannot: Claude Code writes the terminal title as the current task
+//! with a spinner/sparkle prefix (`✳` U+2733, braille `U+2800..=U+28FF`), so `claude-code` adds
+//! `["2733", "2800-28FF"]`. It is ANDed to the terminal `app_hints`, confining the spinner rule
+//! to terminal stems; the `"claude"` substring stays as a costless fallback. Each range spec is
+//! a hex Unicode scalar (`"2733"`) or an inclusive `"lo-hi"` range (`"2800-28FF"`), validated at
+//! parse time (valid hex, valid scalar, `lo <= hi`).
+//!
+//! An entry whose `app_hints`, `title_patterns`, and `title_prefix_ranges` are all empty would
+//! match everything and is rejected at parse time. `domains` are carried for the dormant
+//! browser-URL refinement (gap #109) and are not consulted today.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -40,9 +50,17 @@ struct Entry {
     app_hints: Vec<String>,
     #[serde(default)]
     title_patterns: Vec<String>,
+    /// Hex Unicode scalars / `"lo-hi"` ranges matched against the title's first non-whitespace
+    /// char (v3, gap #111). Raw as written in TOML; parsed into `prefix_ranges` at parse time.
+    #[serde(default)]
+    title_prefix_ranges: Vec<String>,
     #[serde(default)]
     #[allow(dead_code)] // dormant refinement (browser_url is NULL in production, gap #109)
     domains: Vec<String>,
+    /// `title_prefix_ranges` parsed to inclusive `(lo, hi)` scalar ranges. Filled by `parse`
+    /// (not deserialized); the matcher reads this, never re-parses hex per frame.
+    #[serde(skip)]
+    prefix_ranges: Vec<(u32, u32)>,
 }
 
 /// A parsed recognition taxonomy.
@@ -68,21 +86,55 @@ fn normalize_stem(s: &str) -> String {
     }
 }
 
+/// Parse `title_prefix_ranges` specs (`"2733"` or `"2800-28FF"`) into inclusive `(lo, hi)`
+/// Unicode scalar ranges, validating hex, scalar validity, and `lo <= hi`.
+fn parse_prefix_ranges(specs: &[String]) -> Result<Vec<(u32, u32)>> {
+    let mut out = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let spec = spec.trim();
+        let (lo, hi) = match spec.split_once('-') {
+            Some((a, b)) => (parse_hex_scalar(a)?, parse_hex_scalar(b)?),
+            None => {
+                let v = parse_hex_scalar(spec)?;
+                (v, v)
+            }
+        };
+        if lo > hi {
+            bail!("prefix range {spec:?} has lo > hi");
+        }
+        out.push((lo, hi));
+    }
+    Ok(out)
+}
+
+/// Parse one hex string into a Unicode scalar value (rejecting non-hex and surrogate/out-of-range).
+fn parse_hex_scalar(s: &str) -> Result<u32> {
+    let s = s.trim();
+    let v = u32::from_str_radix(s, 16).with_context(|| format!("invalid hex {s:?}"))?;
+    char::from_u32(v).with_context(|| format!("hex {s:?} is not a Unicode scalar value"))?;
+    Ok(v)
+}
+
 impl Taxonomy {
     /// Parse a taxonomy TOML document, validating that no entry has an empty matcher and that
     /// every `Ai` entry carries an id (a meeting id is used only for scoring).
     pub fn parse(doc: &str) -> Result<Self> {
-        let raw: RawTaxonomy = toml::from_str(doc).context("parsing taxonomy.toml")?;
-        for e in &raw.entries {
-            if e.app_hints.is_empty() && e.title_patterns.is_empty() {
+        let mut raw: RawTaxonomy = toml::from_str(doc).context("parsing taxonomy.toml")?;
+        for e in &mut raw.entries {
+            if e.app_hints.is_empty()
+                && e.title_patterns.is_empty()
+                && e.title_prefix_ranges.is_empty()
+            {
                 bail!(
-                    "taxonomy entry {:?} has neither app_hints nor title_patterns (would match every frame)",
+                    "taxonomy entry {:?} has no app_hints, title_patterns, or title_prefix_ranges (would match every frame)",
                     e.id
                 );
             }
             if e.id.trim().is_empty() {
                 bail!("taxonomy entry has an empty id");
             }
+            e.prefix_ranges = parse_prefix_ranges(&e.title_prefix_ranges)
+                .with_context(|| format!("taxonomy entry {:?} title_prefix_ranges", e.id))?;
         }
         Ok(Self {
             version: raw.version,
@@ -102,8 +154,15 @@ impl Taxonomy {
         if app.is_none() && title.is_none() {
             return None;
         }
+        // The title's first non-whitespace char (its scalar value), for prefix-range matching.
+        // ASCII-lowercasing above leaves the spinner glyphs (✳, braille) unchanged.
+        let title_prefix: Option<u32> = title
+            .as_deref()
+            .and_then(|t| t.chars().find(|c| !c.is_whitespace()))
+            .map(|c| c as u32);
         // app_hint matches by exact stem (a process name is not a substring of another);
-        // title matches by substring (the window title carries free-form context).
+        // title matches by substring OR by a first-glyph prefix range (the window title carries
+        // free-form context; the prefix range catches spinner-titled tools, gap #111).
         let app_matches = |hints: &[String]| -> bool {
             match &app {
                 Some(a) => hints.iter().any(|h| a == &normalize_stem(h)),
@@ -116,9 +175,17 @@ impl Taxonomy {
                 None => false,
             }
         };
+        let title_prefix_in = |ranges: &[(u32, u32)]| -> bool {
+            match title_prefix {
+                Some(sc) => ranges.iter().any(|&(lo, hi)| sc >= lo && sc <= hi),
+                None => false,
+            }
+        };
         for e in &self.entries {
             let app_ok = e.app_hints.is_empty() || app_matches(&e.app_hints);
-            let title_ok = e.title_patterns.is_empty() || title_contains(&e.title_patterns);
+            let title_ok = (e.title_patterns.is_empty() && e.prefix_ranges.is_empty())
+                || title_contains(&e.title_patterns)
+                || title_prefix_in(&e.prefix_ranges);
             if app_ok && title_ok {
                 return Some(Recognized {
                     id: e.id.clone(),
@@ -138,9 +205,103 @@ mod tests {
     #[test]
     fn seed_parses_and_has_the_d7_set() {
         let t = Taxonomy::seed();
-        assert_eq!(t.version, 2);
+        // v3 (2026-07-10): claude-code gains title_prefix_ranges (spinner rule, gap #111).
+        assert_eq!(t.version, 3);
         // 4 tools + 5 meetings = 9 seed entries (vscode + cursor dropped 2026-07-09).
         assert_eq!(t.entries.len(), 9);
+    }
+
+    #[test]
+    fn sparkle_prefix_matches_claude_code() {
+        let t = Taxonomy::seed();
+        // A task-titled Claude Code terminal frame with the ✳ (U+2733) prefix and NO "claude"
+        // substring is now recognized (gap #111).
+        let r = t
+            .recognize(
+                Some("WindowsTerminal"),
+                Some("\u{2733} Post review comments on PR"),
+            )
+            .expect("spinner-prefixed claude-code");
+        assert_eq!(r.id, "claude-code");
+        assert_eq!(r.host, Some(Host::Terminal));
+    }
+
+    #[test]
+    fn braille_prefix_matches_claude_code() {
+        let t = Taxonomy::seed();
+        // A braille spinner glyph (U+280B) prefix on a terminal stem, no "claude" substring.
+        let r = t
+            .recognize(Some("pwsh"), Some("\u{280B} building the workspace"))
+            .expect("braille-prefixed claude-code");
+        assert_eq!(r.id, "claude-code");
+    }
+
+    #[test]
+    fn leading_whitespace_before_spinner_tolerated() {
+        let t = Taxonomy::seed();
+        // The first NON-whitespace char is the spinner.
+        assert_eq!(
+            t.recognize(Some("wt"), Some("   \u{2733} working"))
+                .expect("claude-code")
+                .id,
+            "claude-code"
+        );
+    }
+
+    #[test]
+    fn plain_shell_title_does_not_match_prefix() {
+        let t = Taxonomy::seed();
+        // A normal shell prompt (first char 'P') is not a spinner and carries no "claude".
+        assert!(t.recognize(Some("pwsh"), Some("PS C:\\repo>")).is_none());
+    }
+
+    #[test]
+    fn spinner_prefix_confined_to_terminal_stems() {
+        let t = Taxonomy::seed();
+        // Scope guard (gap #112): a spinner-prefixed title on a BROWSER stem is not claude-code
+        // (app mismatch) and not browser-ai (no ai substring; browser-ai has no prefix ranges).
+        assert!(t
+            .recognize(Some("chrome"), Some("\u{2733} not a terminal"))
+            .is_none());
+    }
+
+    #[test]
+    fn substring_fallback_still_recognizes_claude_code() {
+        let t = Taxonomy::seed();
+        // An idle terminal titled literally "claude" (no spinner) still matches via substring.
+        assert_eq!(
+            t.recognize(Some("WindowsTerminal"), Some("claude - repo"))
+                .expect("claude-code")
+                .id,
+            "claude-code"
+        );
+    }
+
+    #[test]
+    fn invalid_prefix_range_rejected_at_parse() {
+        // Non-hex spec.
+        let bad_hex = r#"
+version = 3
+[[entry]]
+id = "x"
+kind = "ai"
+app_hints = ["wt"]
+title_prefix_ranges = ["zzzz"]
+"#;
+        assert!(Taxonomy::parse(bad_hex)
+            .unwrap_err()
+            .to_string()
+            .contains("title_prefix_ranges"));
+        // lo > hi.
+        let bad_order = r#"
+version = 3
+[[entry]]
+id = "x"
+kind = "ai"
+app_hints = ["wt"]
+title_prefix_ranges = ["2800-2700"]
+"#;
+        assert!(Taxonomy::parse(bad_order).is_err());
     }
 
     #[test]
@@ -283,6 +444,6 @@ kind = "other"
         assert!(Taxonomy::parse(doc)
             .unwrap_err()
             .to_string()
-            .contains("neither app_hints nor title_patterns"));
+            .contains("no app_hints, title_patterns, or title_prefix_ranges"));
     }
 }
