@@ -22,6 +22,37 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2: Phase B redesign kickoff - the #110 task-level grouping (specs gate)
+
+- **Change (`.md`-only this commit):** recorded the `§7e` **task-level grouping amendment** as
+  `06` **#27** (open decision row) after the maintainer confirmed the over-segmentation is
+  representative of every real day ("no calm days"), settling the redesign direction. Sessions become
+  **task-level anchored groups** (two-pass: micro app-runs -> macro identity-anchored groups):
+  `sessions.context_key` stores the closed grammar `ai:<tool> | meeting:<id> | focus:<stem>`; a
+  session closes on `merge_gap_secs` inactivity, a foreign recognized identity sustained beyond
+  `absorb_max_secs`, or a meeting-band edge; foreign runs up to `absorb_max` are absorbed; anchorless
+  focus sessions require `focus_min_len_secs` + the `focus_min_density_fph` gate. Reserved `06` **#26**
+  for the binding D9 gate. Added `07` **#112** (accepted limitations: the invisible back-to-back tool
+  handoff = one merged AI band; the one-data-point `HOST_PRECEDENCE`/`IDENTITY_QUALIFY_MS` constants;
+  spinner specificity) and **#113** (density-gate honesty: ON at 90 fph, AI/meeting exempt, residual
+  leisure FP accepted via D11 confidence, fresh-day validation required). `#110` marked
+  redesign-active; `#111` resolving via taxonomy v3.
+- **Why:** `docs/0.4.0.md` §3 PR2 - the segmenter must be validated on real labeled data before PR3
+  freezes schema 11, and the evidence (pooled boundary F1 0.128, parameter-independent across the whole
+  sweep; 34-351 app-runs per labeled session) shows the app-context key structurally cannot yield
+  task-level sessions. The amendment goes through the `06`/`07` spec channel **before** the code that
+  depends on it (stop-at-contradiction), resolved at Phase C with the harness rerun numbers + commit.
+  **Zero DDL change** - macro rows satisfy every schema-11 CHECK; PR3 re-normalizes only the `§4`
+  context_key comment via the sanctioned escape hatch (`03 §4`).
+- **Engineering calls recorded:** the redesign came from a read-only design panel (analyze -> 3
+  independent designs -> 2 judges -> synthesis) run entirely over the git-ignored exports; the winning
+  "anchored two-pass grouping" chassis keeps `segment()` + its 13 pinned tests as the A/B baseline and
+  adds a `group.rs` macro pass, per the harness seams. Eleven product calls were taken from the
+  maintainer (unlabeled = no-session; 19:00-class = one merged band; density gate ON at 90 fph;
+  label-snapping ON; meeting-band floor 10 min; sweep decides merge_gap).
+- **Verification:** `git diff --name-only` = specs `.md` only (no code touched this commit). Full CI
+  ladder + harness rerun numbers land with the code commits and Phase C.
+
 ## 2026-07-09 - 0.4.0 PR2: Phase B interim (over-segmentation finding + codex/vscode fix)
 
 - **Change:** kicked off Phase B on 2 hand-labeled ground-truth days (07-07, 07-08). Verified the

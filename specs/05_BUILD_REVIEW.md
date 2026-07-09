@@ -175,3 +175,35 @@ underneath).
   system; not a PR, no merge without approval). Personal labels + `reports/` stay git-ignored
   (aggregate numbers only here). Still no D9 thresholds and no `06` #26 gate: those wait for the #110
   redesign call plus more days.
+
+### Pass 2 continued - 2026-07-10 - Phase B redesign (the #110 task-level grouping; specs gate)
+
+The maintainer confirmed **every real day is heavily fragmented** ("no calm days"), which voids the
+gather-to-decide pause: the over-segmentation is representative, not a two-day fluke, so the redesign
+direction is settled. Decision (`docs/0.4.0.md` §3): **redesign now, one PR2** — implement the
+task-level grouping in the harness, validate, propose the D9 thresholds, then open the PR. A design
+panel (analyze → 3 independent designs → 2 judges → synthesis, all read-only over the git-ignored
+exports) produced the **anchored two-pass grouping** algorithm; its constituent designs reconstructed
+to pooled boundary F1 **0.73–0.79** vs today's **0.128** (estimates only — the recorded numbers come
+from the harness referee at Phase C). Eleven product calls were taken from the maintainer and recorded
+(`06` #27, `07` #112/#113): unlabeled time = affirmatively no-session; the invisible 19:00-class tool
+handoff = one merged AI band with exact outer edges (interior split out of heuristic reach); density
+gate ON at 90 fph for anchorless focus only (AI/meeting exempt); label-snapping ON for labels inside
+no-frame gaps; meeting-band floor 10 min; the sweep decides merge_gap.
+
+- **Specs gate (this commit, `.md`-only):** `06` **#27** records the `§7e` amendment (two-level key;
+  merge_gap / absorb_max / meeting-band close rule; identity-generalized excursion absorption;
+  anchorless floors + density gate; kind/tool/context_key freeze with boundaries) as an **open
+  decision row** resolved at Phase C with the rerun numbers + commit; **zero DDL change** (macro rows
+  satisfy every schema-11 CHECK; PR3 re-normalizes only the `§4` context_key comment via the escape
+  hatch). `06` **#26** reserved for the binding D9 gate. `07` **#112** (accepted limitations),
+  **#113** (density-gate honesty). `#110` notes the redesign is active under #27 (flips to
+  resolved-by-#27 at Phase C); `#111` resolves via taxonomy v3 (the spinner-prefix matcher).
+- **Amendment procedure honored:** the contract change goes through `06`/`07` **before** the code that
+  depends on it (stop-at-ambiguity); the model.rs `SessionSpan.context_key` doc comment is updated in
+  the same code commit as the two-level key, so code-doc and spec never silently diverge.
+- **Next:** taxonomy v3 (spinner rule) → `segment_micro` extraction (13 pinned tests unchanged as the
+  A/B baseline) → `group.rs` two-pass + referee wiring (both `score.rs` call sites switch to
+  `segment_grouped` in the same commit, or the recorded numbers would measure the ungrouped algorithm)
+  → Phase B evidence → Phase C D9 thresholds (STOP for approval). Verification for this `.md`-only
+  commit: `git diff --name-only` shows specs only; no code touched.
