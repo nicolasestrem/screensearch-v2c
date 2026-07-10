@@ -22,7 +22,7 @@ import type { ModelDownloadStatus } from "../../bindings/ModelDownloadStatus";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 import type { Mark } from "../../bindings/Mark";
-import type { ResumeContext } from "../../bindings/ResumeContext";
+import type { UiResumeContext } from "../../bindings/UiResumeContext";
 import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { UpdateStatus } from "../../bindings/UpdateStatus";
 
@@ -262,7 +262,7 @@ export function useInsights(
  * mount. `enabled` lets the overlay hold it idle until an empty-query strip is shown.
  */
 export function useWhereWasI(enabled = true) {
-  const q = useQuery<ResumeContext | null>({
+  const q = useQuery<UiResumeContext | null>({
     queryKey: queryKeys.whereWasI,
     queryFn: cmd.whereWasI,
     enabled,

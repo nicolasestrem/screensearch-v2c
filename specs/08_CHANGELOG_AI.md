@@ -349,3 +349,7 @@
   endpoints, no cross-session leakage, missing/deleted references, query normalization, detail
   filtering, cached intelligence, scoped Recap citations, and no-evidence zero calls. The combined
   `cargo test -p traits -p store -p kernel -p screensearch` and task-relevant clippy passed.
+- **Review follow-up:** Split the session-bearing frame/resume shapes into Tauri-only generated DTOs
+  so the existing API/MCP JSON remains unchanged; made the preflight use Rust whitespace semantics;
+  and clamped the store sampler itself to 24. Focused RED→GREEN tests, UI lint/build, fmt, and focused
+  clippy passed; broad integration verification remains controller-owned.

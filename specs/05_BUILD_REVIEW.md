@@ -990,3 +990,9 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   was corrected.
 - **Still risky:** Live Tauri/UI round-trip and Recap sidecar behavior require the PR5 integrated UI
   and real-app acceptance pass. Rust coverage proves exact frame ownership and no-model empty evidence.
+- **Review follow-up:** Kept HTTP/API/MCP response DTOs byte-shape compatible by moving session
+  hydration into flattened Tauri-only `UiFrameDetail`/`UiResumeContext` responses; aligned the Recap
+  evidence preflight with Rust `str::trim()` so tab/newline-only rows never acquire the provider; and
+  enforced the 24-frame cap inside the store regardless of caller input. Each finding was reproduced
+  RED and passed focused GREEN tests; UI lint/build and focused clippy/fmt are clean. The controller
+  owns the final integrated broad suite.

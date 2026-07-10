@@ -11,6 +11,8 @@ use traits::{
 
 use crate::SqliteStore;
 
+const MAX_SESSION_FRAME_SAMPLE: u32 = 24;
+
 fn kind_from_db(value: &str) -> rusqlite::Result<SessionKind> {
     match value {
         "focus" => Ok(SessionKind::Focus),
@@ -303,6 +305,7 @@ impl SqliteStore {
         session_id: i64,
         limit: u32,
     ) -> Result<SessionFrameSample> {
+        let limit = limit.min(MAX_SESSION_FRAME_SAMPLE);
         self.with_conn(move |conn| {
             let total: i64 = conn.query_row(
                 "SELECT count(*) FROM frames WHERE session_id=?1",
@@ -383,15 +386,19 @@ impl SqliteStore {
 
     pub async fn session_has_usable_content(&self, session_id: i64) -> Result<bool> {
         self.with_conn(move |conn| {
-            Ok(conn.query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM frames f
-                     JOIN frame_text ft ON ft.frame_id=f.id
-                     WHERE f.session_id=?1 AND trim(ft.content_text)<>''
-                 )",
-                [session_id],
-                |row| row.get::<_, i64>(0),
-            )? != 0)
+            let mut stmt = conn.prepare(
+                "SELECT ft.content_text FROM frames f
+                 JOIN frame_text ft ON ft.frame_id=f.id
+                 WHERE f.session_id=?1",
+            )?;
+            let mut rows = stmt.query([session_id])?;
+            while let Some(row) = rows.next()? {
+                let content: String = row.get(0)?;
+                if !content.trim().is_empty() {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         })
         .await
     }

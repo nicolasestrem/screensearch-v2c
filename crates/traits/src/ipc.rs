@@ -344,8 +344,16 @@ pub struct FrameDetail {
     pub suppressed_text_count: u32,
     pub vision: Option<VisionAnalysis>,
     pub tags: Vec<String>,
-    /// Session containing this frame, omitted when segmentation has not assigned one
-    /// or the derived session row was deleted.
+}
+
+/// Tauri-only frame response. The flattened base preserves the shipped Moment wire
+/// shape while the in-app command adds a session reference without changing HTTP/MCP.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct UiFrameDetail {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub frame: FrameDetail,
     pub session: Option<SessionReference>,
 }
 
@@ -1056,7 +1064,16 @@ pub struct ResumeContext {
     pub span_end: i64,
     pub image_path: String,
     pub image_purged: bool,
-    /// Session containing the representative frame, if that derived row still exists.
+}
+
+/// Tauri-only where-was-i response. HTTP/MCP retain the shipped `ResumeContext`
+/// object; the in-app command receives the same flattened fields plus session context.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct UiResumeContext {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub context: ResumeContext,
     pub session: Option<SessionReference>,
 }
 
@@ -1244,6 +1261,7 @@ mod ts_number_guard {
             ("StorageStats", StorageStats::inline()),
             ("AppSuppression", AppSuppression::inline()),
             ("FrameDetail", FrameDetail::inline()),
+            ("UiFrameDetail", UiFrameDetail::inline()),
             ("VisionTarget", VisionTarget::inline()),
             ("CaptureTick", CaptureTick::inline()),
             ("AnswerEvent", AnswerEvent::inline()),
@@ -1254,6 +1272,7 @@ mod ts_number_guard {
             ("ReportResponse", ReportResponse::inline()),
             ("OpenMoment", OpenMoment::inline()),
             ("ResumeContext", ResumeContext::inline()),
+            ("UiResumeContext", UiResumeContext::inline()),
             ("Mark", Mark::inline()),
             ("MarkToast", MarkToast::inline()),
             ("PressureSample", PressureSample::inline()),

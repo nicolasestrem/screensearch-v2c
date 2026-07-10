@@ -1,9 +1,9 @@
 use traits::{
     SegmentationParams, Session, SessionArtifact, SessionArtifactKind, SessionArtifactRole,
     SessionDetail, SessionHost, SessionKind, SessionQuery, SessionRecapRequest, SessionReference,
-    SESSION_ABSORB_MAX_MS, SESSION_FOCUS_MIN_DENSITY_FPH, SESSION_FOCUS_MIN_LEN_MS,
-    SESSION_FREEZE_LOOKBACK_MS, SESSION_IDENTITY_QUALIFY_MS, SESSION_MEETING_GAP_MS,
-    SESSION_MERGE_GAP_MS,
+    UiFrameDetail, UiResumeContext, SESSION_ABSORB_MAX_MS, SESSION_FOCUS_MIN_DENSITY_FPH,
+    SESSION_FOCUS_MIN_LEN_MS, SESSION_FREEZE_LOOKBACK_MS, SESSION_IDENTITY_QUALIFY_MS,
+    SESSION_MEETING_GAP_MS, SESSION_MERGE_GAP_MS,
 };
 use ts_rs::TS;
 
@@ -59,4 +59,21 @@ fn session_ui_contract_exports_without_bigint() {
             "{name} exported bigint: {declaration}"
         );
     }
+}
+
+#[test]
+fn external_frame_and_resume_contracts_remain_session_free() {
+    let frame = traits::FrameDetail::inline();
+    let resume = traits::ResumeContext::inline();
+    assert!(
+        !frame.contains("session"),
+        "external FrameDetail drifted: {frame}"
+    );
+    assert!(
+        !resume.contains("session"),
+        "external ResumeContext drifted: {resume}"
+    );
+
+    assert!(UiFrameDetail::inline().contains("session"));
+    assert!(UiResumeContext::inline().contains("session"));
 }

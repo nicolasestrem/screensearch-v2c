@@ -19,12 +19,12 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use traits::{
     AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
-    CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
-    JobStats, Mark, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig,
-    ReportKind, ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse,
-    ResumeContext, RetrievedChunk, SearchHit, SearchQuery, Session, SessionArtifactKind,
-    SessionDetail, SessionFilter, SessionQuery, SessionRecapRequest, SetModelTier, Settings,
-    StorageStats, Store, TextSpan, ThrottleStatus, TimeRange, TimelineBucket, ToastLevel,
+    CapturedFrame, ComponentReadiness, ComponentStatus, FrameMeta, InsightsSummary, JobStats, Mark,
+    ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
+    ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
+    SearchHit, SearchQuery, Session, SessionArtifactKind, SessionDetail, SessionFilter,
+    SessionQuery, SessionRecapRequest, SetModelTier, Settings, StorageStats, Store, TextSpan,
+    ThrottleStatus, TimeRange, TimelineBucket, ToastLevel, UiFrameDetail, UiResumeContext,
     VisionTarget,
 };
 
@@ -149,6 +149,17 @@ async fn load_session_detail(
 
 async fn session_recap_has_evidence(store: &dyn Store, session_id: i64) -> traits::Result<bool> {
     store.session_has_usable_content(session_id).await
+}
+
+async fn load_ui_resume_context(
+    store: &dyn Store,
+    settings: &Settings,
+) -> traits::Result<Option<UiResumeContext>> {
+    let Some(context) = kernel::resume::where_was_i(store, settings).await? else {
+        return Ok(None);
+    };
+    let session = store.session_reference_for_frame(context.frame_id).await?;
+    Ok(Some(UiResumeContext { context, session }))
 }
 
 /// A slot the composition root fills off the launch thread, shared with command
@@ -289,12 +300,23 @@ async fn list_sidecar_devices(state: State<'_, AppState>) -> Result<Vec<String>,
 async fn get_frame(
     frame_id: i64,
     state: State<'_, AppState>,
-) -> Result<Option<FrameDetail>, String> {
+) -> Result<Option<UiFrameDetail>, String> {
     let store = state
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
-    store.get_frame(frame_id).await.map_err(|e| e.to_string())
+    let Some(frame) = store
+        .get_frame(frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let session = store
+        .session_reference_for_frame(frame_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(UiFrameDetail { frame, session }))
 }
 
 /// Lists sessions overlapping the optional half-open range. Open rows use this
@@ -419,13 +441,13 @@ async fn cancel_vision(state: State<'_, AppState>) -> Result<u64, String> {
 /// `None` = "nothing to resume yet". Reads the live `resume.min_dwell_secs` +
 /// `privacy.excluded_apps`; the heuristic itself is the pure `kernel::resume`.
 #[tauri::command]
-async fn where_was_i(state: State<'_, AppState>) -> Result<Option<ResumeContext>, String> {
+async fn where_was_i(state: State<'_, AppState>) -> Result<Option<UiResumeContext>, String> {
     let store = state
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     let settings = kernel::settings::load_settings(store.as_ref()).await;
-    kernel::resume::where_was_i(store.as_ref(), &settings)
+    load_ui_resume_context(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2907,6 +2929,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ui_resume_context_hydrates_session_without_changing_external_resume_shape() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut ids = Vec::new();
+        for (at, app) in [
+            (0, "Code"),
+            (120_000, "Code"),
+            (200_000, "Firefox"),
+            (320_000, "Firefox"),
+        ] {
+            ids.push(
+                store
+                    .insert_frame(traits::NewFrame {
+                        captured_at: at,
+                        monitor_index: 0,
+                        width: 1920,
+                        height: 1080,
+                        image_path: format!("frames/{at}.webp"),
+                        content_hash: format!("resume-{at}"),
+                        app_hint: Some(app.to_string()),
+                        window_title: Some(app.to_string()),
+                        browser_url: None,
+                        capture_trigger: None,
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let session_id = store
+            .insert_session(traits::NewSession {
+                started_at: 0,
+                ended_at: Some(120_000),
+                kind: traits::SessionKind::Focus,
+                tool: None,
+                host: Some(traits::SessionHost::Ide),
+                context_key: "focus:code".to_string(),
+                confidence: 0.75,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        store
+            .assign_frames_session(&ids[..2], Some(session_id))
+            .await
+            .unwrap();
+
+        let joined = load_ui_resume_context(store.as_ref(), &Settings::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(joined.context.frame_id, ids[1]);
+        assert_eq!(
+            joined.session.as_ref().map(|session| session.id),
+            Some(session_id)
+        );
+
+        assert!(store.delete_unfrozen_session(session_id).await.unwrap());
+        let deleted = load_ui_resume_context(store.as_ref(), &Settings::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted.context.frame_id, ids[1]);
+        assert!(deleted.session.is_none());
+    }
+
+    #[tokio::test]
     async fn session_recap_evidence_probe_rejects_missing_text_before_provider_acquisition() {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
         let session_id = store
@@ -2945,6 +3032,24 @@ mod tests {
         assert!(!session_recap_has_evidence(store.as_ref(), session_id)
             .await
             .unwrap());
+        store
+            .insert_ocr(
+                frame_id,
+                traits::OcrResult {
+                    text: "\t\n \r".to_string(),
+                    mean_confidence: 0.9,
+                    engine: "test".to_string(),
+                    spans: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            !session_recap_has_evidence(store.as_ref(), session_id)
+                .await
+                .unwrap(),
+            "Rust str::trim whitespace must not acquire the answer provider"
+        );
         store
             .insert_ocr(
                 frame_id,

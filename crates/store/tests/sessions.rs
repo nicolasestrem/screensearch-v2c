@@ -335,10 +335,26 @@ async fn session_frame_sample_reports_total_and_even_chronological_endpoints_wit
         expected_ids,
         "sample is evenly rank-spaced across the complete session"
     );
+
+    let oversized_request = store.session_frame_sample(wanted, 100).await.unwrap();
+    assert_eq!(oversized_request.total_count, 30);
+    assert_eq!(
+        oversized_request.frames.len(),
+        24,
+        "store enforces the drill-in ceiling even when a caller asks for more"
+    );
+    assert_eq!(
+        oversized_request.frames.first().map(|frame| frame.frame_id),
+        wanted_ids.first().copied()
+    );
+    assert_eq!(
+        oversized_request.frames.last().map(|frame| frame.frame_id),
+        wanted_ids.last().copied()
+    );
 }
 
 #[tokio::test]
-async fn frame_detail_joins_session_reference_and_omits_deleted_session() {
+async fn session_reference_for_frame_omits_deleted_session() {
     let store = SqliteStore::open_in_memory().unwrap();
     let frame_id = seed_frame(&store, 100, "content").await;
     let session_id = store
@@ -350,20 +366,19 @@ async fn frame_detail_joins_session_reference_and_omits_deleted_session() {
         .await
         .unwrap();
 
-    let joined = store.get_frame(frame_id).await.unwrap().unwrap();
-    assert_eq!(
-        joined.session.as_ref().map(|session| session.id),
-        Some(session_id)
-    );
-    assert_eq!(
-        joined
-            .session
-            .as_ref()
-            .and_then(|session| session.tool.as_deref()),
-        Some("claude-code")
-    );
+    let joined = store
+        .session_reference_for_frame(frame_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(joined.id, session_id);
+    assert_eq!(joined.tool.as_deref(), Some("claude-code"));
 
     assert!(store.delete_unfrozen_session(session_id).await.unwrap());
-    let deleted = store.get_frame(frame_id).await.unwrap().unwrap();
-    assert!(deleted.session.is_none());
+    assert!(store.get_frame(frame_id).await.unwrap().is_some());
+    assert!(store
+        .session_reference_for_frame(frame_id)
+        .await
+        .unwrap()
+        .is_none());
 }
