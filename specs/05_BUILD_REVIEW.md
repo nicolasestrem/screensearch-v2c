@@ -537,6 +537,143 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
   ```
 
+- **Full CI-parity ladder (UI first; raw output):** the required non-quiet workspace test emitted
+  1060 green lines; the compact rerun below preserves representative raw suite summaries without
+  paraphrasing their pass/fail counts.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+
+  151 packages are looking for funding
+    run `npm fund` for details
+
+  found 0 vulnerabilities
+  npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+  npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+  npm warn allow-scripts
+  npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+
+  $ npm run lint
+  > screensearch-ui@0.3.3 lint
+  > eslint .
+
+  $ npm run build
+  > screensearch-ui@0.3.3 build
+  > tsc --noEmit && vite build
+
+  vite v6.4.3 building for production...
+  transforming...
+  ✓ 434 modules transformed.
+  rendering chunks...
+  computing gzip size...
+  dist/index.html                                  0.80 kB │ gzip:  0.36 kB
+  dist/overlay.html                                0.99 kB │ gzip:  0.42 kB
+  dist/assets/globals-oPR43bCE.css                 31.54 kB │ gzip:  6.69 kB
+  dist/assets/timeRanges-BJgzkTNX.js                0.29 kB │ gzip:  0.19 kB
+  dist/assets/openExternal-cOuZy8U8.js              0.31 kB │ gzip:  0.23 kB
+  dist/assets/useAdaptiveBucketCount-pnT9Dvsn.js    0.35 kB │ gzip:  0.26 kB
+  dist/assets/NotFound-GT5xmkd7.js                  0.44 kB │ gzip:  0.32 kB
+  dist/assets/EmptyState-CIH9-Lyf.js                0.52 kB │ gzip:  0.31 kB
+  dist/assets/Panel-C7dEyHdc.js                     0.68 kB │ gzip:  0.44 kB
+  dist/assets/timelineDraw-B37WQvuk.js              0.75 kB │ gzip:  0.44 kB
+  dist/assets/FrameTile-CvZpniId.js                 0.95 kB │ gzip:  0.53 kB
+  dist/assets/time-cX9c3v95.js                      1.01 kB │ gzip:  0.46 kB
+  dist/assets/FrameImage-PCfV_Ty8.js                1.62 kB │ gzip:  0.85 kB
+  dist/assets/HighlightedSnippet-DKdy48F9.js        1.65 kB │ gzip:  0.83 kB
+  dist/assets/HotkeyField-C0RHDXNK.js               2.54 kB │ gzip:  1.32 kB
+  dist/assets/path-B-7-bRzz.js                      3.83 kB │ gzip:  0.96 kB
+  dist/assets/Insights-DsVkGRfs.js                  5.46 kB │ gzip:  2.11 kB
+  dist/assets/Timeline-DpYfWqP9.js                  6.50 kB │ gzip:  2.97 kB
+  dist/assets/Moment-lfN7bZwI.js                    7.33 kB │ gzip:  2.74 kB
+  dist/assets/Deck-CkSQWV7a.js                     10.66 kB │ gzip:  3.61 kB
+  dist/assets/overlay-CRRPoGHe.js                  10.93 kB │ gzip:  3.85 kB
+  dist/assets/globals-Dyr3sT_-.js                  15.89 kB │ gzip:  5.84 kB
+  dist/assets/main-D3G4FMmK.js                     22.61 kB │ gzip:  7.32 kB
+  dist/assets/query-u_0r_xiX.js                    35.77 kB │ gzip: 10.59 kB
+  dist/assets/Recall-D0S9Iphb.js                   40.42 kB │ gzip: 13.20 kB
+  dist/assets/Settings-C3mGMQhp.js                 46.83 kB │ gzip: 13.28 kB
+  dist/assets/router-CL_afuJ-.js                   64.86 kB │ gzip: 22.21 kB
+  dist/assets/react-vendor-DTiTYlFD.js            143.42 kB │ gzip: 46.01 kB
+  dist/assets/AnswerStream-D4T9ftQq.js            160.09 kB │ gzip: 48.97 kB
+  ✓ built in 1.84s
+
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] building screensearch-mcp (release)...
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.29s
+
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Checking traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+      Checking mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+      Checking doctor v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\doctor)
+      Checking textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+      Checking sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+      Checking inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+      Checking kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+      Checking api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+      Checking capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+      Checking uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+      Checking ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+      Checking sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+      Checking embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+      Checking store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+      Checking harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.62s
+
+  $ cargo build --workspace
+     Compiling traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+     Compiling sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+     Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+     Compiling textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+     Compiling embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+     Compiling uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+     Compiling ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+     Compiling capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+     Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+     Compiling sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+     Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+     Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+     Compiling harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.96s
+
+  $ cargo test --workspace
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 29.42s
+
+  $ cargo test --workspace --quiet   # compact verbatim rerun of the same workspace suites
+  running 119 tests
+  ....................................................................................... 87/119
+  ................................
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  running 105 tests
+  ....................................................................................... 87/105
+  ..................
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.04s
+  running 49 tests
+  .................................................
+  test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+  running 38 tests
+  ......................................
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+  running 64 tests
+  .........................i......................................
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  running 66 tests
+  ..................................................................
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  running 30 tests
+  ........................iiii..
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+
 - **Skipped / deferred at this checkpoint:** PR5 IPC/UI and PR6 API/MCP; no command or NavRail route
   is added. Full workspace/UI/binding verification and the D5-backed live checks remain before PR
   open and will be appended here verbatim.
