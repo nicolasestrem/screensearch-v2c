@@ -332,7 +332,9 @@ CREATE TABLE sessions (
   kind          TEXT NOT NULL CHECK (kind IN ('focus','meeting','ai','other')),
   tool          TEXT CHECK (tool IS NULL OR kind = 'ai'),  -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai' (D7)
   host          TEXT CHECK (host IN ('terminal','desktop','browser','ide')),
-  context_key   TEXT NOT NULL,                    -- the segmenter's key (§7e; the §7b key generalized)
+  context_key   TEXT NOT NULL,                    -- closed task-level grammar (06 #27/#28): 'ai:<tool-id>' |
+                                                  --   'meeting:<taxonomy-id>' | 'focus:<dominant-app-stem>'
+                                                  --   (bare 'focus' when no stem qualifies); the §7b key generalized (§7e)
   title         TEXT,                             -- lazily generated + cached (D3); NULL until first asked
   summary       TEXT,                             -- lazily generated + cached (D3); NULL until first asked
   summary_model TEXT,                             -- model id that produced `summary` (provenance)

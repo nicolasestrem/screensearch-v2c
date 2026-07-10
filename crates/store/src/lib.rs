@@ -370,8 +370,10 @@ impl Store for SqliteStore {
 
 #[cfg(test)]
 mod migration_tests {
-    use super::{bootstrap_and_migrate, register_vec_extension, schema};
+    use super::{bootstrap_and_migrate, register_vec_extension, schema, SqliteStore};
     use rusqlite::Connection;
+    use std::sync::Arc;
+    use traits::{Embedding, EmbeddingProvider, SearchQuery};
 
     /// Applies migrations `v1..=through` to a fresh connection exactly as an older build
     /// would (each in its own transaction, foreign keys ON), leaving the DB at
@@ -439,8 +441,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 10,
-            "latest schema is v10 (0.3.0 PR6 added the marks table)"
+            version, 11,
+            "latest schema is v11 (0.4.0 PR3 added the sessions tables)"
         );
 
         let frame_rows: i64 = conn
@@ -641,8 +643,8 @@ mod migration_tests {
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
         assert_eq!(
-            version, 10,
-            "latest schema is v10 (0.3.0 PR6 added the marks table)"
+            version, 11,
+            "latest schema is v11 (0.4.0 PR3 added the sessions tables)"
         );
 
         // No image-lane object survives — tables, trigger, or vec0 shadow tables.
@@ -722,7 +724,10 @@ mod migration_tests {
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("read version");
         assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
-        assert_eq!(version, 10, "latest schema is v10 (marks table added)");
+        assert_eq!(
+            version, 11,
+            "latest schema is v11 (0.4.0 PR3 added the sessions tables)"
+        );
 
         // The marks table and its open-marks index exist.
         let objs: i64 = conn
@@ -759,10 +764,11 @@ mod migration_tests {
         assert_eq!(marks_after, 0, "a mark must CASCADE with its frame (D10)");
     }
 
-    /// Acceptance (`03 §13b.3`): a fresh DB (V1..V9 in one bootstrap) and a v8 DB upgraded
+    /// Acceptance (`03 §13b.3`): a fresh DB (V1..V11 in one bootstrap) and a v8 DB upgraded
     /// by the same runner must agree on the final schema — identical object set and
     /// identical DDL text. Both paths execute the same forward-only migration chain, so
-    /// the removed image lane (created in V1, dropped in V9) leaves no trace in either.
+    /// the removed image lane (created in V1, dropped in V9) leaves no trace in either, and
+    /// the 0.4.0 PR3 sessions objects (added in V11) appear identically on both.
     #[test]
     fn fresh_and_migrated_schemas_agree_at_latest() {
         fn schema_objects(conn: &Connection) -> Vec<(String, String, String)> {
@@ -788,6 +794,487 @@ mod migration_tests {
             schema_objects(&fresh),
             schema_objects(&migrated),
             "fresh-DB and migrated-DB schemas must agree at LATEST (03 §13b.3)"
+        );
+    }
+
+    /// Little-endian `FLOAT[768]` blob with `1.0` at `hot` — the byte shape sqlite-vec
+    /// stores. Distinct hot indices give cosine distance 1.0, identical ones ~0.
+    fn embedding_blob(hot: usize) -> Vec<u8> {
+        let mut v = vec![0.0_f32; schema::EMBEDDING_DIM];
+        v[hot] = 1.0;
+        v.iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
+
+    /// A one-hot [`Embedding`] (dim 768) — the query-side counterpart of
+    /// [`embedding_blob`], used to drive the vector arm deterministically.
+    fn one_hot(hot: usize) -> Embedding {
+        let mut v = vec![0.0_f32; schema::EMBEDDING_DIM];
+        v[hot] = 1.0;
+        Embedding(v)
+    }
+
+    /// Real-shaped schema-10 data (`docs/0.4.0.md` §3 PR3): three frames carrying
+    /// `app_hint`/`window_title`/`browser_url`/`capture_trigger` (one image-purged),
+    /// `frame_text` (the FTS mirrors fill via the v3 triggers), a `text_spans` row each,
+    /// two marks (open + resolved), two text embeddings with their vec0 vector blobs, and
+    /// a mixed jobs queue. This is what the 10 → 11 migration must carry across untouched.
+    fn seed_v10_fixture(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO frames (id, captured_at, monitor_index, width, height, image_path, content_hash, app_hint, window_title, browser_url, capture_trigger, image_purged) VALUES
+               (1, 1000, 0, 1920, 1080, 'frames/1.jpg', 'h1', 'Code.exe',   'store.rs screensearch',    NULL,                        'timer',             0),
+               (2, 2000, 0, 1920, 1080, 'frames/2.jpg', 'h2', 'chrome.exe', 'Inbox',                    'https://mail.example.com',  'foreground_change', 0),
+               (3, 3000, 0, 1920, 1080, 'frames/3.jpg', 'h3', 'Code.exe',   'lib.rs screensearch',      NULL,                        'idle',              1);
+
+             INSERT INTO frame_text (frame_id, raw_text, content_text, primary_source, filter_version, suppressed_count) VALUES
+               (1, 'quarterly invoice draft ready for review [window chrome]', 'quarterly invoice draft ready for review', 'ocr', 2, 1),
+               (2, 'inbox unread messages from the team [window chrome]',       'inbox unread messages from the team',       'ocr', 2, 0),
+               (3, 'editing lib.rs migration tests [window chrome]',            'editing lib.rs migration tests',            'ocr', 2, 2);
+
+             INSERT INTO text_spans (frame_id, span_index, text, normalized_text, source, role, x, y, w, h, is_searchable, line_index) VALUES
+               (1, 0, 'quarterly invoice draft', 'quarterly invoice draft', 'ocr', 'content', 0.1, 0.1, 0.5, 0.1, 1, 0),
+               (2, 0, 'inbox unread messages',   'inbox unread messages',   'ocr', 'content', 0.1, 0.1, 0.5, 0.1, 1, 0),
+               (3, 0, 'editing lib.rs',          'editing lib.rs',          'ocr', 'content', 0.1, 0.1, 0.5, 0.1, 1, 0);
+
+             INSERT INTO marks (id, frame_id, created_at, note, resolved_at) VALUES
+               (1, 1, 1500, 'ship it', NULL),
+               (2, 2, 2500, NULL,      2600);
+
+             INSERT INTO embeddings (id, frame_id, chunk_index, chunk_text, source, model, dim, content_hash) VALUES
+               (1, 1, 0, 'quarterly invoice draft ready for review', 'ocr', 'gemma', 768, 'ce1'),
+               (2, 2, 0, 'inbox unread messages from the team',       'ocr', 'gemma', 768, 'ce2');
+
+             INSERT INTO jobs (id, kind, frame_id, state) VALUES
+               (1, 'embed_text', 1, 'pending'),
+               (2, 'vision_tag', 2, 'done');",
+        )
+        .expect("seed v10 fixture");
+
+        // vec0 vector rows need the blob bound as a parameter.
+        conn.execute(
+            "INSERT INTO embedding_vectors (embedding_id, embedding) VALUES (1, ?1)",
+            rusqlite::params![embedding_blob(7)],
+        )
+        .expect("insert vector 1");
+        conn.execute(
+            "INSERT INTO embedding_vectors (embedding_id, embedding) VALUES (2, ?1)",
+            rusqlite::params![embedding_blob(300)],
+        )
+        .expect("insert vector 2");
+    }
+
+    /// v11 (0.4.0 PR3) creates the sessions structure. Seeded at v10 with real-shaped data,
+    /// this proves: the version bumps by exactly one to LATEST; all five new schema objects
+    /// exist; the migration is STRUCTURE ONLY — no session rows, no artifact rows, and every
+    /// pre-existing frame's `session_id IS NULL` (no backfill, D4); every pre-existing row
+    /// survives (incl. FTS matching); FK integrity holds.
+    #[test]
+    fn migration_v11_adds_sessions_structure_only() {
+        let mut conn = open_at_version(10);
+        seed_v10_fixture(&conn);
+
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .expect("read version");
+        assert_eq!(version, schema::LATEST_SCHEMA_VERSION);
+        assert_eq!(
+            version, 11,
+            "latest schema is v11 (0.4.0 PR3 added the sessions tables)"
+        );
+
+        // All five new objects (2 tables + 3 indexes) exist by exact name and type.
+        let objs: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE (type = 'table' AND name IN ('sessions', 'session_artifacts'))
+                    OR (type = 'index' AND name IN ('idx_sessions_time', 'idx_frames_session', 'idx_artifacts_session'))",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read sqlite_master");
+        assert_eq!(objs, 5, "v11 creates 2 tables + 3 indexes");
+
+        // Structure only — the migration creates zero rows and backfills nothing (D4).
+        let sessions: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .expect("count sessions");
+        assert_eq!(
+            sessions, 0,
+            "the migration creates no session rows (no backfill)"
+        );
+        let artifacts: i64 = conn
+            .query_row("SELECT count(*) FROM session_artifacts", [], |r| r.get(0))
+            .expect("count artifacts");
+        assert_eq!(artifacts, 0, "the migration creates no artifact rows");
+        let assigned: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM frames WHERE session_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count assigned frames");
+        assert_eq!(
+            assigned, 0,
+            "every pre-existing frame has session_id NULL (no backfill)"
+        );
+
+        // Every pre-existing row survives the migration.
+        for (table, expected) in [
+            ("frames", 3),
+            ("frame_text", 3),
+            ("text_spans", 3),
+            ("marks", 2),
+            ("embeddings", 2),
+            ("embedding_vectors", 2),
+            ("jobs", 2),
+        ] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap_or_else(|e| panic!("count {table}: {e}"));
+            assert_eq!(n, expected, "{table} rows must survive the migration");
+        }
+
+        // FTS still answers over the carried-across content.
+        let fts: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM frame_text_fts WHERE frame_text_fts MATCH 'invoice'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("fts match");
+        assert_eq!(fts, 1, "FTS index must still match pre-existing content");
+
+        assert_eq!(fk_violation_count(&conn), 0, "no FK violations after v11");
+    }
+
+    /// The `sessions` CHECK constraints fail loudly on invalid writes (`03 §4`): `kind` is a
+    /// closed set; `tool` is NULL unless `kind='ai'` (D7); `host` is a closed set (NULL passes
+    /// by design — the un-guarded `IN (…)` is the deliberate nullable-CHECK idiom); `frozen`
+    /// is `{0,1}`.
+    #[test]
+    fn migration_v11_sessions_check_constraints() {
+        let mut conn = open_at_version(10);
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        // Valid: an AI session with a tool + host, and a focus session with both NULL.
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, kind, tool, host, context_key, confidence)
+             VALUES (1, 1000, 'ai', 'claude-code', 'terminal', 'ai:claude-code', 0.9)",
+            [],
+        )
+        .expect("valid ai session");
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, kind, tool, host, context_key, confidence)
+             VALUES (2, 2000, 'focus', NULL, NULL, 'focus', 0.5)",
+            [],
+        )
+        .expect("valid focus session with NULL host (nullable-CHECK idiom)");
+
+        // Rejections.
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions (id, started_at, kind, context_key, confidence)
+                 VALUES (3, 3000, 'bogus', 'k', 0.1)",
+                []
+            )
+            .is_err(),
+            "an unknown kind must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions (id, started_at, kind, tool, context_key, confidence)
+                 VALUES (4, 4000, 'focus', 'claude-code', 'k', 0.1)",
+                []
+            )
+            .is_err(),
+            "a non-NULL tool with kind != 'ai' must violate the CHECK (D7)"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions (id, started_at, kind, host, context_key, confidence)
+                 VALUES (5, 5000, 'focus', 'bogus', 'k', 0.1)",
+                []
+            )
+            .is_err(),
+            "an unknown host must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO sessions (id, started_at, kind, context_key, confidence, frozen)
+                 VALUES (6, 6000, 'focus', 'k', 0.1, 2)",
+                []
+            )
+            .is_err(),
+            "frozen outside {{0,1}} must violate the CHECK"
+        );
+
+        // The freeze write is accepted.
+        conn.execute("UPDATE sessions SET frozen = 1 WHERE id = 1", [])
+            .expect("freezing a session must satisfy the CHECK");
+    }
+
+    /// The compound `session_artifacts.role` CHECK (`03 §4`): exchanges REQUIRE a
+    /// `'user'`/`'agent'` role; reserved kinds (`transcript`/`note`) forbid one. The
+    /// NULL-role-on-exchange rejection is the load-bearing case — without the `role IS NOT
+    /// NULL` guard, `NULL IN (…)` is NULL and SQLite would admit a roleless exchange.
+    #[test]
+    fn migration_v11_artifact_role_kind_coupling() {
+        let mut conn = open_at_version(10);
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, kind, tool, host, context_key, confidence)
+             VALUES (1, 1000, 'ai', 'claude-code', 'terminal', 'ai:claude-code', 0.9)",
+            [],
+        )
+        .expect("parent session");
+
+        // Accepted shapes.
+        for (id, kind, role) in [
+            (1, "exchange", Some("user")),
+            (2, "exchange", Some("agent")),
+            (3, "transcript", None),
+            (4, "note", None),
+        ] {
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (?1, 1, ?2, ?3, 'c')",
+                rusqlite::params![id, kind, role],
+            )
+            .unwrap_or_else(|e| panic!("valid artifact ({kind}, {role:?}) rejected: {e}"));
+        }
+
+        // Rejected shapes.
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (10, 1, 'exchange', NULL, 'c')",
+                []
+            )
+            .is_err(),
+            "an exchange with a NULL role must violate the CHECK (the load-bearing guard case)"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (11, 1, 'exchange', 'bogus', 'c')",
+                []
+            )
+            .is_err(),
+            "an exchange with an unknown role must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (12, 1, 'transcript', 'user', 'c')",
+                []
+            )
+            .is_err(),
+            "a transcript with a role must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (13, 1, 'note', 'agent', 'c')",
+                []
+            )
+            .is_err(),
+            "a note with a role must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (14, 1, 'bogus', NULL, 'c')",
+                []
+            )
+            .is_err(),
+            "an unknown kind must violate the CHECK"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (15, 1, 'transcript', NULL, NULL)",
+                []
+            )
+            .is_err(),
+            "NULL content must violate NOT NULL"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO session_artifacts (id, session_id, kind, role, content)
+                 VALUES (16, 999, 'transcript', NULL, 'c')",
+                []
+            )
+            .is_err(),
+            "a dangling session_id must violate the FK (foreign_keys ON post-migration)"
+        );
+    }
+
+    /// The three v11 FK behaviors (`03 §4`, D1): deleting a session SET-NULLs
+    /// `frames.session_id` (a frame SURVIVES its session) and CASCADEs its artifacts;
+    /// deleting a frame SET-NULLs `session_artifacts.frame_id` (the artifact survives as
+    /// session evidence).
+    #[test]
+    fn migration_v11_fk_set_null_and_cascade() {
+        let mut conn = open_at_version(10);
+        seed_v10_fixture(&conn);
+        bootstrap_and_migrate(&mut conn).expect("migrate to latest");
+
+        conn.execute(
+            "INSERT INTO sessions (id, started_at, kind, tool, host, context_key, confidence)
+             VALUES (1, 1000, 'ai', 'claude-code', 'terminal', 'ai:claude-code', 0.9)",
+            [],
+        )
+        .expect("session");
+        conn.execute("UPDATE frames SET session_id = 1 WHERE id IN (1, 2)", [])
+            .expect("link frames to session");
+        conn.execute(
+            "INSERT INTO session_artifacts (id, session_id, kind, role, frame_id, content)
+             VALUES (1, 1, 'exchange', 'user', 1, 'q'), (2, 1, 'exchange', 'agent', 2, 'a')",
+            [],
+        )
+        .expect("artifacts");
+
+        // Deleting a frame SET-NULLs the artifact's frame_id (artifact survives).
+        conn.execute("DELETE FROM frames WHERE id = 2", [])
+            .expect("delete frame 2");
+        let (rows, null_fid): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), count(*) FILTER (WHERE frame_id IS NULL) FROM session_artifacts WHERE id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("read artifact 2");
+        assert_eq!(
+            (rows, null_fid),
+            (1, 1),
+            "artifact survives frame delete with frame_id NULL"
+        );
+
+        // Deleting the session SET-NULLs frames.session_id and CASCADEs its artifacts.
+        conn.execute("DELETE FROM sessions WHERE id = 1", [])
+            .expect("delete session 1");
+        let frame_alive: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM frames WHERE id = 1 AND session_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read frame 1");
+        assert_eq!(
+            frame_alive, 1,
+            "frame survives session delete with session_id NULL (D1)"
+        );
+        let artifacts_left: i64 = conn
+            .query_row("SELECT count(*) FROM session_artifacts", [], |r| r.get(0))
+            .expect("count artifacts");
+        assert_eq!(artifacts_left, 0, "artifacts CASCADE with their session");
+
+        assert_eq!(
+            fk_violation_count(&conn),
+            0,
+            "no FK violations after the deletes"
+        );
+    }
+
+    /// Deterministic stand-in embedder: every query maps to the same one-hot vector, so the
+    /// vec0 KNN arm of `hybrid_search` runs identically before and after the migration.
+    struct FixedEmbedder(Embedding);
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FixedEmbedder {
+        fn dim(&self) -> usize {
+            schema::EMBEDDING_DIM
+        }
+        async fn embed_texts(&self, inputs: &[String]) -> traits::Result<Vec<Embedding>> {
+            Ok(vec![self.0.clone(); inputs.len()])
+        }
+    }
+
+    /// Every store read behind the frame-level features (`03 §13c.3`, D10): search (FTS +
+    /// vector arms) also backs overlay/Ask; `ocr_texts` is Ask's context assembly; `list_marks`
+    /// backs marks + overlay; `recent_frame_contexts` is the kernel `where_was_i` heuristic's
+    /// only store input; `timeline_buckets` + `sample_frames_in_range` + `insights_summary`
+    /// back reports.
+    #[allow(clippy::type_complexity)]
+    async fn surface_snapshot(
+        store: &SqliteStore,
+    ) -> (
+        Vec<traits::SearchHit>,
+        std::collections::HashMap<i64, String>,
+        Vec<traits::Mark>,
+        Vec<traits::FrameContextRow>,
+        Vec<traits::TimelineBucket>,
+        Vec<traits::FrameMeta>,
+        traits::InsightsSummary,
+    ) {
+        let hits = store
+            .hybrid_search(&SearchQuery {
+                text: "invoice".to_string(),
+                limit: 10,
+                time_range: None,
+                include_chrome: false,
+            })
+            .await
+            .expect("hybrid_search");
+        let ocr = store.ocr_texts(&[1, 2, 3]).await.expect("ocr_texts");
+        let marks = store.list_marks().await.expect("list_marks");
+        let contexts = store
+            .recent_frame_contexts(10)
+            .await
+            .expect("recent_frame_contexts");
+        let buckets = store
+            .timeline_buckets(0, 10_000, 10)
+            .await
+            .expect("timeline_buckets");
+        let samples = store
+            .sample_frames_in_range(0, 10_000, 10)
+            .await
+            .expect("sample_frames_in_range");
+        let insights = store
+            .insights_summary(0, 10_000, 10)
+            .await
+            .expect("insights_summary");
+        (hits, ocr, marks, contexts, buckets, samples, insights)
+    }
+
+    /// D10 acceptance (`docs/0.4.0.md` §3 PR3): every frame-level surface returns identical
+    /// results on the same populated fixture before and after the 10 → 11 migration. The
+    /// migration only ADDs (two tables, three indexes, one nullable `frames` column) and every
+    /// `frames` read uses an explicit column list, so nothing observable may change.
+    #[tokio::test]
+    async fn migration_v11_preserves_frame_surfaces() {
+        let conn = open_at_version(10);
+        seed_v10_fixture(&conn);
+        let store = SqliteStore::from_conn(conn);
+        store.set_embedder(Arc::new(FixedEmbedder(one_hot(7))));
+
+        let pre = surface_snapshot(&store).await;
+
+        // Vacuity guards — an empty ≡ empty comparison would prove nothing.
+        assert!(!pre.0.is_empty(), "fixture must produce search hits");
+        assert_eq!(pre.1.len(), 3, "fixture must produce ocr texts");
+        assert_eq!(pre.2.len(), 2, "fixture must produce marks");
+        assert!(
+            !pre.3.is_empty(),
+            "fixture must produce where-was-i contexts"
+        );
+        assert!(!pre.5.is_empty(), "fixture must produce report samples");
+
+        // Migrate 10 -> 11 on the same connection the store holds.
+        {
+            let mut guard = store.conn.lock().expect("store mutex");
+            bootstrap_and_migrate(&mut guard).expect("migrate 10 -> 11");
+            let v: i32 = guard
+                .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+                .expect("read version");
+            assert_eq!(v, schema::LATEST_SCHEMA_VERSION);
+        }
+
+        let post = surface_snapshot(&store).await;
+        assert_eq!(
+            pre, post,
+            "D10: every frame-level surface must be identical across the 10 -> 11 migration"
         );
     }
 }
