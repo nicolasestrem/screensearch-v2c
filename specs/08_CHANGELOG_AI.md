@@ -25,7 +25,9 @@
 ## 2026-07-10 — 0.4.0 PR5 Task 2: session recall surfaces
 
 - **Change:** Added generated-type IPC/TanStack Query integration for session lists, base/lazy detail,
-  and Recap; fixed-height deterministic Timeline bands; the code-split session drill-in with inline
+  and Recap; deterministic Timeline bands whose configured ribbon height is a minimum and whose
+  token-height normal-flow lanes expand as needed, with no hidden lanes or nested or horizontal
+  scrollbar; the code-split session drill-in with inline
   summary/exchanges, wrapped representative frames, existing report rendering and citations; safe
   Session↔Moment route-state round-trips; optional Moment/Deck session context; and the collapsed
   Advanced Sessions settings group. Capture and retention now invalidate session caches with frames.

@@ -1028,9 +1028,11 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   narrowed it to two fixed overlay bars so the frame ribbon stays visible. The session-band slider was
   split into sibling ARIA slider/button layers so interactive buttons are never nested inside a slider.
 - **Broke / regressed:** Nothing observed in lint, TypeScript, or Vite production build.
-- **Still risky:** Dense real-world overlaps can produce many deterministic lanes inside the shipped
-  fixed-height ribbon; native screenshot/DPI review remains important in the integrated pass. Recap
-  runtime behavior still depends on a ready local answer model, and is covered by its inline retry.
+- **Still risky:** Dense real-world overlaps can produce many deterministic lanes. The configured
+  ribbon height is a minimum; token-height normal-flow lanes expand it as needed, with no hidden
+  lanes or nested or horizontal scrollbar. Native screenshot/DPI review remains important in the
+  integrated pass. Recap runtime behavior still depends on a ready local answer model, and is
+  covered by its inline retry.
 - **Verification:** Fresh `npm ci` → `npm run lint` → `npm run build` completed at exit 0 (348
   packages, 0 vulnerabilities; ESLint clean; TypeScript + Vite transformed 437 modules and emitted a
   distinct 6.65 kB `Session-*.js` chunk). `git diff --exit-code -- ui/src/bindings` and
