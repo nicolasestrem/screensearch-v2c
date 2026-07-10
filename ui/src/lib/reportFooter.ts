@@ -6,6 +6,12 @@
 import { absoluteDate } from "./time";
 import type { ReportResponse } from "../bindings/ReportResponse";
 import type { ReportRequest } from "../bindings/ReportRequest";
+import type { TimeRange } from "../bindings/TimeRange";
+
+export interface ReportFooterScope {
+  timeRange: TimeRange;
+  activeFilter: string;
+}
 
 /**
  * One plain-text footer block for a finished report. Returns null for a no-evidence
@@ -15,26 +21,32 @@ export function buildReportFooter(
   report: ReportResponse,
   request: Omit<ReportRequest, "request_id"> | null,
   appVersion: string | null,
+  scope?: ReportFooterScope,
 ): string | null {
   if (report.passes <= 0) return null;
   const segments: string[] = [];
   segments.push(appVersion ? `ScreenSearch v${appVersion}` : "ScreenSearch");
   if (report.model) segments.push(report.model);
-  if (request) {
+  const timeRange = request?.time_range ?? scope?.timeRange;
+  if (timeRange) {
     // `time_range.end` is exclusive (the local midnight after the last covered day), so
     // the last covered instant is `end - 1`; dating that avoids labeling the day after.
-    const startDate = absoluteDate(request.time_range.start);
-    const endDate = absoluteDate(request.time_range.end - 1);
+    const startDate = absoluteDate(timeRange.start);
+    const endDate = absoluteDate(timeRange.end - 1);
     segments.push(
       startDate === endDate ? startDate : `${startDate} – ${endDate}`,
     );
     // Reports carry no other filters (include_chrome is always false); kind + the optional
     // Custom focus prompt are the whole story.
-    segments.push(
-      request.kind === "custom" && request.prompt
-        ? `custom (focus: ${request.prompt})`
-        : request.kind,
-    );
+    if (scope) {
+      segments.push(scope.activeFilter);
+    } else if (request) {
+      segments.push(
+        request.kind === "custom" && request.prompt
+          ? `custom (focus: ${request.prompt})`
+          : request.kind,
+      );
+    }
   }
   segments.push(`${report.passes} pass${report.passes === 1 ? "" : "es"}`);
   segments.push(`${report.periods_covered}/${report.periods_total} periods`);

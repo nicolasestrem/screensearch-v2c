@@ -22,6 +22,23 @@
 
 ---
 
+## 2026-07-10 — 0.4.0 PR5 Task 2: session recall surfaces
+
+- **Change:** Added generated-type IPC/TanStack Query integration for session lists, base/lazy detail,
+  and Recap; fixed-height deterministic Timeline bands; the code-split session drill-in with inline
+  summary/exchanges, wrapped representative frames, existing report rendering and citations; safe
+  Session↔Moment route-state round-trips; optional Moment/Deck session context; and the collapsed
+  Advanced Sessions settings group. Capture and retention now invalidate session caches with frames.
+- **Why:** `03 §7`/`§7e`/`§8b`, `UI_REFERENCE §3`–`§8`, and the PR5 Task 2 brief require sessions to
+  become visible inside existing routes without a NavRail addition, new report machinery, duplicate
+  server state, nested scrollbars, or frame-level behavior change.
+- **Verification:** `npm run lint`, `npm run typecheck`, and `npm run build` pass. The production build
+  emits a distinct `Session-*.js` chunk. Focused state review covers invalid/missing/loading/error/
+  partial/populated drill-in, session-band loading/error/empty/populated, open boundaries, absent
+  exchanges/session references, summary/Recap retries, and direct-link versus route-state navigation.
+- **Remaining acceptance:** native real-data/sidecar/DPI walkthrough under `03 §13c-5`; no browser-only
+  mock was introduced to make that integration appear exercised.
+
 ## 2026-07-10 - 0.4.0 PR4: production sessions engine + recognition
 
 - **Change:** added `crates/sessions` as the production home for the pure concurrent segmenter,

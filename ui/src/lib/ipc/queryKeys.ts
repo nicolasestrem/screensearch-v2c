@@ -3,6 +3,7 @@
 // bucket-count/range variant) — see useLiveEvents.
 import type { SearchQuery } from "../../bindings/SearchQuery";
 import type { TimeRange } from "../../bindings/TimeRange";
+import type { SessionQuery } from "../../bindings/SessionQuery";
 
 export const queryKeys = {
   readiness: ["readiness"] as const,
@@ -26,6 +27,16 @@ export const queryKeys = {
     ["timeline", range, bucketCount] as const,
   framePrefix: ["frame"] as const,
   frame: (frameId: number) => ["frame", frameId] as const,
+  // Session list + base/summary detail variants. Capture/retention invalidates the
+  // whole family because open rows accrete and representative frame images can expire.
+  sessionsPrefix: ["sessions"] as const,
+  sessionListsPrefix: ["sessions", "list"] as const,
+  sessionList: (query: SessionQuery) => ["sessions", "list", query] as const,
+  sessionDetailsPrefix: ["sessions", "detail"] as const,
+  sessionDetail: (sessionId: number, includeSummary: boolean) =>
+    ["sessions", "detail", sessionId, includeSummary] as const,
+  sessionRecap: (sessionId: number) =>
+    ["sessions", "recap", sessionId] as const,
   // A frame's text spans (for the text+layout reconstruction of a degraded capture).
   frameSpansPrefix: ["frameSpans"] as const,
   frameSpans: (frameId: number) => ["frameSpans", frameId] as const,

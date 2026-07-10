@@ -33,6 +33,10 @@ import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { ExportRequest } from "../../bindings/ExportRequest";
 import type { ExportResult } from "../../bindings/ExportResult";
 import type { UpdateStatus } from "../../bindings/UpdateStatus";
+import type { Session } from "../../bindings/Session";
+import type { SessionDetail } from "../../bindings/SessionDetail";
+import type { SessionQuery } from "../../bindings/SessionQuery";
+import type { SessionRecapRequest } from "../../bindings/SessionRecapRequest";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -60,6 +64,18 @@ export const listSidecarDevices = (): Promise<string[]> =>
 /** Full per-frame detail; `null` if the id is unknown. */
 export const getFrame = (frameId: number): Promise<UiFrameDetail | null> =>
   invoke<UiFrameDetail | null>("get_frame", { frameId });
+
+/** Sessions overlapping the requested range, with optional kind/tool filters. */
+export const listSessions = (query: SessionQuery): Promise<Session[]> =>
+  invoke<Session[]>("list_sessions", { query });
+
+/** A bounded session drill-in. `includeSummary` lazily generates and caches the
+ *  title/summary on the in-app path; the base read remains inference-free. */
+export const getSession = (
+  sessionId: number,
+  includeSummary: boolean,
+): Promise<SessionDetail | null> =>
+  invoke<SessionDetail | null>("get_session", { sessionId, includeSummary });
 
 /** A frame's recognized text spans (normalized geometry + role), reading order. Backs
  *  the Moment text+layout reconstruction shown when a screenshot has been degraded. */
@@ -101,6 +117,12 @@ export const generateReport = (
 /** Cancel an in-flight report by request id (stops at the next pass boundary). */
 export const cancelReport = (requestId: string): Promise<void> =>
   invoke<void>("cancel_report", { requestId });
+
+/** Generate the existing coverage-first report over one stable session id. */
+export const sessionRecap = (
+  request: SessionRecapRequest,
+): Promise<ReportResponse> =>
+  invoke<ReportResponse>("session_recap", { request });
 
 /** Save a report's markdown to a date-stamped `.md` file in Downloads and return the
  *  written path (0.3.1 D2, #65). `stem` is the local-time filename stem the UI builds;

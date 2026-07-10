@@ -18,6 +18,7 @@ import { saveReportMarkdown } from "../../lib/ipc/commands";
 import { useAppVersion } from "../../lib/useAppVersion";
 import { reportFileStem } from "../../lib/time";
 import { buildReportFooter } from "../../lib/reportFooter";
+import type { ReportFooterScope } from "../../lib/reportFooter";
 import { handleExternalLinkClick } from "../../lib/openExternal";
 import type { ReportKind } from "../../bindings/ReportKind";
 import type { ReportResponse } from "../../bindings/ReportResponse";
@@ -29,6 +30,9 @@ export interface ReportViewProps {
    *  (0.3.1 D3). `null` only in the unreachable "done with no request" state. */
   request: Omit<ReportRequest, "request_id"> | null;
   onOpenFrame: (frameId: number) => void;
+  /** Optional non-Recall scope. Session Recap uses the same renderer/footer while
+   *  naming its stable session id as the active filter. */
+  footerScope?: ReportFooterScope;
 }
 
 /** How many citation chips to render before collapsing the rest into a count. */
@@ -77,12 +81,17 @@ async function copyMarkdown(markdown: string) {
   }
 }
 
-export function ReportView({ report, request, onOpenFrame }: ReportViewProps) {
+export function ReportView({
+  report,
+  request,
+  onOpenFrame,
+  footerScope,
+}: ReportViewProps) {
   const appVersion = useAppVersion();
   const cited = report.cited_frame_ids;
   const shown = cited.slice(0, CITATION_CAP);
   const overflow = cited.length - shown.length;
-  const footer = buildReportFooter(report, request, appVersion);
+  const footer = buildReportFooter(report, request, appVersion, footerScope);
   // Copy + save carry the same self-describing footer the screen shows (0.3.1 D3).
   const exportMarkdown = withFooter(report.markdown, footer);
 

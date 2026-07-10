@@ -6,7 +6,9 @@
 // disclosure — raw is preserved and viewable even though search defaults to content
 // (03 §3b). Purely presentational: the route owns data fetching and wires
 // `onQueueVision` to the enqueue_vision mutation. Tokens only.
-import type { FrameDetail } from "../../bindings/FrameDetail";
+import { Link } from "react-router-dom";
+
+import type { UiFrameDetail } from "../../bindings/UiFrameDetail";
 import type { CaptureTrigger } from "../../bindings/CaptureTrigger";
 import type { TextSpan } from "../../bindings/TextSpan";
 import { Button, Chip, Panel } from "../primitives";
@@ -28,7 +30,7 @@ const TRIGGER_LABEL: Record<CaptureTrigger, string> = {
 };
 
 export interface MomentDetailProps {
-  detail: FrameDetail;
+  detail: UiFrameDetail;
   /** Enqueue on-demand vision tagging for this frame. */
   onQueueVision: () => void;
   /** A vision job for this frame is in flight. */
@@ -154,6 +156,18 @@ export function MomentDetail({
             <Meta label="App" value={detail.app_hint} />
             <Meta label="Window" value={detail.window_title} />
             <Meta label="URL" value={detail.browser_url} />
+            {detail.session ? (
+              <div className="flex flex-col gap-1">
+                <span className="eyebrow">Part of session</span>
+                <Link
+                  to={`/timeline/session/${detail.session.id}`}
+                  className="inline-flex min-h-hit-min items-center break-words text-body text-ink underline decoration-line underline-offset-4 hover:text-accent font-body"
+                >
+                  {detail.session.title?.trim() ||
+                    `Session ${detail.session.id}`}
+                </Link>
+              </div>
+            ) : null}
             <Meta
               label="Monitor"
               value={`#${detail.monitor_index} · ${detail.width}×${detail.height}`}

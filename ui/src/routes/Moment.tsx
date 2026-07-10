@@ -4,7 +4,7 @@
 // "gone" (unknown / deleted id) → explain + back; partial (vision not yet tagged) →
 // queue action (inside MomentDetail); populated. A context strip + prev/next walk
 // the neighbouring captures.
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Button, ErrorState, Panel, Skeleton } from "../components/primitives";
 import { FrameTile, MomentDetail } from "../components/domain";
@@ -20,10 +20,22 @@ import { toast } from "../state/toastStore";
 const NEIGHBOUR_HALF_MS = 30 * 60 * 1000; // ±30 min context window
 const NEIGHBOUR_EACH = 12; // closest captures to load on each side of the anchor
 
+function sessionReturnPath(state: unknown): string | null {
+  if (!state || typeof state !== "object" || !("fromSession" in state)) {
+    return null;
+  }
+  const value = (state as { fromSession?: unknown }).fromSession;
+  return typeof value === "string" && /^\/timeline\/session\/\d+$/.test(value)
+    ? value
+    : null;
+}
+
 export function Component() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const frameId = id != null && /^\d+$/.test(id) ? Number(id) : null;
+  const returnPath = sessionReturnPath(location.state);
 
   const detail = useFrame(frameId);
   const enqueue = useEnqueueVision();
@@ -63,9 +75,9 @@ export function Component() {
       variant="ghost"
       size="sm"
       leadingIcon={<IconArrowLeft size={16} />}
-      onClick={() => navigate("/timeline")}
+      onClick={() => navigate(returnPath ?? "/timeline")}
     >
-      Timeline
+      {returnPath ? "Session" : "Timeline"}
     </Button>
   );
 
@@ -143,7 +155,12 @@ export function Component() {
             size="sm"
             leadingIcon={<IconChevronLeft size={16} />}
             disabled={!prev}
-            onClick={() => prev && navigate(`/timeline/${prev.frame_id}`)}
+            onClick={() =>
+              prev &&
+              navigate(`/timeline/${prev.frame_id}`, {
+                state: returnPath ? { fromSession: returnPath } : undefined,
+              })
+            }
           >
             Prev
           </Button>
@@ -151,7 +168,12 @@ export function Component() {
             variant="ghost"
             size="sm"
             disabled={!next}
-            onClick={() => next && navigate(`/timeline/${next.frame_id}`)}
+            onClick={() =>
+              next &&
+              navigate(`/timeline/${next.frame_id}`, {
+                state: returnPath ? { fromSession: returnPath } : undefined,
+              })
+            }
           >
             Next
             <IconChevronRight size={16} />

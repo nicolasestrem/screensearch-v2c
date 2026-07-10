@@ -29,6 +29,11 @@ export const router = createBrowserRouter([
         errorElement: <RouteError />,
       },
       {
+        path: "timeline/session/:id",
+        lazy: () => import("../routes/Session"),
+        errorElement: <RouteError />,
+      },
+      {
         path: "timeline/:id",
         lazy: () => import("../routes/Moment"),
         errorElement: <RouteError />,

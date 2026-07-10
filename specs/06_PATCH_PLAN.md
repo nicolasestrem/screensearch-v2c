@@ -27,3 +27,9 @@ When the spec contradicts itself, stop, ask the user, and log the resolution her
 
 No new patch rows: the typed IPC, detail sampling, and exact session Recap requirements were
 internally consistent with `03 §7`/`§7e`/`§8b`; no schema or contract amendment was required.
+
+## 2026-07-10 — 0.4.0 PR5 Task 2 audit
+
+No new patch rows: the Task 2 UI brief is consistent with the generated Task 1 interfaces and
+`UI_REFERENCE §3`–`§8`. The implementation required no schema, API/MCP, segmentation, taxonomy,
+setting-semantic, or visual-token amendment.

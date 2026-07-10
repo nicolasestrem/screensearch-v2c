@@ -2,8 +2,8 @@
 // **Essentials** (always visible, in the D6 order): Capture · Hotkeys · Privacy ·
 // Models · Storage · App · Data. **Advanced** (collapsed by default, one `Expander`
 // per group, per-session state in the ui store): Capture tuning · Text source / UIA ·
-// Enrichment & scheduling · Performance throttle · Text filtering · Reports &
-// retrieval · Inference engine. Every section opens with one plain-language sentence
+// Enrichment & scheduling · Sessions · Performance throttle · Text filtering ·
+// Reports & retrieval · Inference engine. Every section opens with one plain-language sentence
 // (§9). Presentation-first (D7): zero key renames, zero semantic changes — the form
 // still edits one draft of the typed `Settings` binding; Save persists the whole
 // draft (optimistic + reconcile via useSetSettings). Model tiers additionally
@@ -70,6 +70,7 @@ const APPLY_ASK = "Applies to your next question.";
 const APPLY_CAPTURE = "Applies on the next capture start.";
 const APPLY_RESTART = "Applies on restart.";
 const APPLY_SIDECAR = "Applies to the next sidecar launch.";
+const APPLY_SESSION = "Changes apply on the next session pass.";
 
 /** Parse a comma-separated list of non-negative monitor indices; empty → []. */
 function parseIntList(raw: string): number[] {
@@ -1009,6 +1010,34 @@ export function Component() {
             idleSecs={draft.enrich_vision_idle_secs}
             batchSize={draft.enrich_vision_batch_size}
             onChange={patch}
+          />
+        </div>
+      </Expander>
+
+      <Expander
+        title="Sessions"
+        intro="How short context runs are joined and which runs become recallable sessions."
+        open={!!settingsExpanded["sessions"]}
+        onToggle={() => toggleSettingsGroup("sessions")}
+      >
+        <div className="flex flex-col gap-4">
+          <Field
+            label="Minimum session length (seconds)"
+            type="number"
+            min={30}
+            max={3600}
+            value={draft.sessions_min_len_secs}
+            onChange={intHandler("sessions_min_len_secs")}
+            hint={`Runs shorter than this stay as frames without a session. ${APPLY_SESSION}`}
+          />
+          <Field
+            label="Close gap (seconds)"
+            type="number"
+            min={60}
+            max={3600}
+            value={draft.sessions_gap_close_secs}
+            onChange={intHandler("sessions_gap_close_secs")}
+            hint={`A context gap this long closes the current micro-run. ${APPLY_SESSION}`}
           />
         </div>
       </Expander>

@@ -113,3 +113,10 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
 No new silent-spec gaps were opened. The remaining live acceptance work is already contracted in
 `03 §13c-5`: the integrated frontend/live-app drill-in and real-frame Recap check belong to the rest
 of PR5, while API/MCP session exposure remains PR6-owned.
+
+### 0.4.0 PR5 Task 2 gap audit — 2026-07-10
+
+No new silent-spec gaps were opened. Static UI gates cover Hooks, typing, code splitting, and the
+production bundle; the already-contracted `03 §13c-5` live acceptance remains: run the native app on
+real session data and verify band → drill-in → Moment → back, cited Recap, and the fixed-height/
+single-scroll layout at supported sizes and DPI. API/MCP exposure remains PR6-owned.

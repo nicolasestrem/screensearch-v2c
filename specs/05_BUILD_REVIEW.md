@@ -996,3 +996,44 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   enforced the 24-frame cap inside the store regardless of caller input. Each finding was reproduced
   RED and passed focused GREEN tests; UI lint/build and focused clippy/fmt are clean. The controller
   owns the final integrated broad suite.
+
+## Pass 7 — 2026-07-10 — 0.4.0 PR5 Task 2 (sessions UI surfaces)
+
+- **Implemented:** Added typed command/TanStack Query wrappers and stable list/base-detail/
+  summary-detail/Recap keys. Capture ticks and retention cleanup invalidate session lists and
+  details alongside their frame sources. Timeline now overlays deterministic interval-packed native
+  session buttons without replacing or resizing the density ribbon; focus/AI/meeting/other use only
+  the existing neutral/ok/warn token vocabulary. Loading, error, and no-session outcomes stay partial.
+- **Drill-in:** Added the lazy `/timeline/session/:id` route with invalid/missing/loading/error/
+  partial/populated states. The inference-free detail and lazy title/summary calls start together;
+  the view shows neutral fallback title, exact absolute span, kind/tool/host, numeric confidence,
+  truthful open boundaries, wrapped representative frames with total count, honest empty exchanges,
+  and inline-growing summary/exchange content. Recap is a TanStack mutation over the existing report
+  response/progress stream and reuses `ReportView`, wrapped citation tiles, bare custom filename, and
+  footer behavior with `session id: <stable-id>` as the active filter.
+- **Round-trip/settings:** Session frame/citation/exchange links carry a validated route-state return
+  path, so drill-in → Moment → Session survives while direct Moment/session deep links remain valid.
+  Moment conditionally links `Part of session`; Deck preserves its existing Moment selection while
+  adding the optional session span. Advanced Settings gains a collapsed Sessions expander immediately
+  after Enrichment & scheduling with only the two already-generated settings and final clamps/copy.
+- **React/performance:** The route remains a separate Vite chunk; independent base/summary requests
+  avoid a waterfall; TanStack Query is the sole session server-state owner; only interval lane packing
+  is memoized (on primitive range dependencies); no global listener, dependency, handwritten wire
+  type, nested vertical scroller, or horizontal strip was added.
+- **Skipped / deferred:** No Rust/core/API/MCP/schema/segmentation/taxonomy changes. No frontend test
+  runner or dependency was added, per the task brief. A native live-app walkthrough with real session
+  data/sidecar remains the integrated PR5 acceptance pass (`03 §13c-5`), not something browser-only
+  Vite can truthfully emulate.
+- **Hallucinated / corrected:** The first Timeline loading treatment covered too much density; review
+  narrowed it to two fixed overlay bars so the frame ribbon stays visible. The session-band slider was
+  split into sibling ARIA slider/button layers so interactive buttons are never nested inside a slider.
+- **Broke / regressed:** Nothing observed in lint, TypeScript, or Vite production build.
+- **Still risky:** Dense real-world overlaps can produce many deterministic lanes inside the shipped
+  fixed-height ribbon; native screenshot/DPI review remains important in the integrated pass. Recap
+  runtime behavior still depends on a ready local answer model, and is covered by its inline retry.
+- **Verification:** Fresh `npm ci` → `npm run lint` → `npm run build` completed at exit 0 (348
+  packages, 0 vulnerabilities; ESLint clean; TypeScript + Vite transformed 437 modules and emitted a
+  distinct 6.65 kB `Session-*.js` chunk). `git diff --exit-code -- ui/src/bindings` and
+  `git diff --check` were silent at exit 0; the scope guard printed
+  `No Rust/core/API/MCP/schema/segmentation files changed.` Full verbatim output is preserved in
+  `.superpowers/sdd/task-2-report.md`.

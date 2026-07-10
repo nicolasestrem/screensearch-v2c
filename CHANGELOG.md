@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Sessions are now visible throughout the existing recall flow: Timeline shows accessible,
+  lane-packed session bands; a code-split drill-in shows lazy summaries, representative frames,
+  exchanges, and cited Recaps; Moment and Deck link the same context back to its session; and
+  Advanced Settings exposes the two existing session-pass thresholds. No new navigation item or
+  frame-level behavior was added.
 - The in-app sessions surface now has typed core commands to list overlapping sessions, load a
   bounded drill-in with representative frames and extracted exchanges, connect Moment and
   where-was-i frames back to their session, lazily cache session title/summary intelligence, and

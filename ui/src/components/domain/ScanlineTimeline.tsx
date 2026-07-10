@@ -13,6 +13,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 
 import type { TimelineBucket } from "../../bindings/TimelineBucket";
@@ -35,6 +36,9 @@ export interface ScanlineTimelineProps {
   thumbnails?: FrameMeta[];
   /** Ribbon height in CSS px. */
   height?: number;
+  /** Additive session-band layer. Kept outside the slider node so its native
+   *  buttons do not become interactive descendants of an ARIA slider. */
+  sessionLayer?: ReactNode;
 }
 
 const clamp = (v: number, lo: number, hi: number) =>
@@ -76,8 +80,10 @@ export function ScanlineTimeline({
   onOpen,
   thumbnails = [],
   height = 96,
+  sessionLayer,
 }: ScanlineTimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const sliderRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragging = useRef(false);
   const [size, setSize] = useState({ w: 0, h: height });
@@ -136,7 +142,7 @@ export function ScanlineTimeline({
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     dragging.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
-    containerRef.current?.focus();
+    sliderRef.current?.focus();
     onScrub(xToTime(e.clientX));
   };
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -199,62 +205,68 @@ export function ScanlineTimeline({
   return (
     <div
       ref={containerRef}
-      role="slider"
-      tabIndex={0}
-      aria-label="Capture timeline — arrow keys scrub, Enter opens the moment"
-      aria-valuemin={range.start}
-      aria-valuemax={range.end}
-      aria-valuenow={clamp(position, range.start, range.end)}
-      aria-valuetext={absoluteTime(position)}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onPointerLeave={() => {
-        setHover(null);
-      }}
-      onDoubleClick={(e) => onOpen(xToTime(e.clientX))}
-      onKeyDown={onKeyDown}
-      className="relative w-full cursor-crosshair select-none overflow-hidden rounded-none bg-base outline-none"
+      className="relative w-full select-none overflow-hidden rounded-none bg-base"
       style={{ height }}
     >
-      <canvas ref={canvasRef} className="block h-full w-full" />
-
-      {/* Faint scanline texture — the subject's native material; drift is disabled
-          under prefers-reduced-motion (globals.css). */}
       <div
-        className="scanlines scanlines-drift pointer-events-none absolute inset-0"
-        aria-hidden="true"
-      />
-
-      {/* The sweeping signal-orange scan-head + its time read-out. */}
-      <div
-        className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-accent shadow-scan"
-        style={{ left: `${positionPct * 100}%` }}
-        aria-hidden="true"
+        ref={sliderRef}
+        role="slider"
+        tabIndex={0}
+        aria-label="Capture timeline — arrow keys scrub, Enter opens the moment"
+        aria-valuemin={range.start}
+        aria-valuemax={range.end}
+        aria-valuenow={clamp(position, range.start, range.end)}
+        aria-valuetext={absoluteTime(position)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onPointerLeave={() => {
+          setHover(null);
+        }}
+        onDoubleClick={(e) => onOpen(xToTime(e.clientX))}
+        onKeyDown={onKeyDown}
+        className="absolute inset-0 cursor-crosshair outline-none"
       >
-        <span className="absolute -top-px left-1 whitespace-nowrap rounded-chip bg-overlay px-1 font-mono text-data text-accent">
-          {clockTime(position)}
-        </span>
-      </div>
+        <canvas ref={canvasRef} className="block h-full w-full" />
 
-      {/* Hover thumbnail preview (nearest frame to the cursor). */}
-      {hover && hoverFrame && (
+        {/* Faint scanline texture — the subject's native material; drift is disabled
+            under prefers-reduced-motion (globals.css). */}
         <div
-          className="pointer-events-none absolute bottom-full z-rail mb-2 w-40 -translate-x-1/2"
-          style={{ left: clamp(hover.x, 80, Math.max(80, size.w - 80)) }}
+          className="scanlines scanlines-drift pointer-events-none absolute inset-0"
+          aria-hidden="true"
+        />
+
+        {/* The sweeping signal-orange scan-head + its time read-out. */}
+        <div
+          className="pointer-events-none absolute bottom-0 top-0 w-0.5 bg-accent shadow-scan"
+          style={{ left: `${positionPct * 100}%` }}
           aria-hidden="true"
         >
-          <FrameImage
-            imagePath={hoverFrame.image_path}
-            alt=""
-            className="aspect-video w-full rounded-chip border border-line object-cover bg-overlay"
-          />
-          <span className="mt-1 block text-center font-mono text-data text-ink-muted">
-            {clockTime(hoverFrame.captured_at)}
+          <span className="absolute -top-px left-1 whitespace-nowrap rounded-chip bg-overlay px-1 font-mono text-data text-accent">
+            {clockTime(position)}
           </span>
         </div>
-      )}
+
+        {/* Hover thumbnail preview (nearest frame to the cursor). */}
+        {hover && hoverFrame ? (
+          <div
+            className="pointer-events-none absolute bottom-full z-rail mb-2 w-40 -translate-x-1/2"
+            style={{ left: clamp(hover.x, 80, Math.max(80, size.w - 80)) }}
+            aria-hidden="true"
+          >
+            <FrameImage
+              imagePath={hoverFrame.image_path}
+              alt=""
+              className="aspect-video w-full rounded-chip border border-line object-cover bg-overlay"
+            />
+            <span className="mt-1 block text-center font-mono text-data text-ink-muted">
+              {clockTime(hoverFrame.captured_at)}
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {sessionLayer}
     </div>
   );
 }

@@ -16,9 +16,9 @@ import {
   Panel,
   Skeleton,
 } from "../components/primitives";
-import { ScanlineTimeline } from "../components/domain";
+import { ScanlineTimeline, SessionBands } from "../components/domain";
 import * as cmd from "../lib/ipc/commands";
-import { useFrames, useTimeline } from "../lib/ipc/queries";
+import { useFrames, useSessions, useTimeline } from "../lib/ipc/queries";
 import { useUiStore } from "../state/uiStore";
 import { toast } from "../state/toastStore";
 import { absoluteDate, absoluteTime } from "../lib/time";
@@ -60,6 +60,12 @@ export function Component() {
   );
   const timeline = useTimeline(range, bucketCount);
   const thumbs = useFrames(range, THUMB_LIMIT);
+  const sessions = useSessions({
+    time_range: range,
+    kind: null,
+    tool: null,
+    limit: null,
+  });
 
   // Keep the head inside the window when the range changes.
   useEffect(() => {
@@ -157,11 +163,25 @@ export function Component() {
                 onScrub={setPosition}
                 onOpen={openAt}
                 thumbnails={thumbs.data ?? []}
+                sessionLayer={
+                  <SessionBands
+                    sessions={sessions.data ?? []}
+                    range={range}
+                    loading={sessions.isLoading}
+                    error={sessions.isError ? String(sessions.error) : null}
+                    onRetry={() => sessions.refetch()}
+                    onOpen={(sessionId) =>
+                      navigate(`/timeline/session/${sessionId}`)
+                    }
+                  />
+                }
               />
               <p className="px-1 text-caption text-ink-faint font-body">
                 Drag or use ← → to scrub (Shift for bigger steps, Home/End to
                 jump). Enter opens the moment.
                 {thumbs.isLoading ? " · Loading thumbnails…" : ""}
+                {sessions.isLoading ? " · Loading sessions…" : ""}
+                {sessions.isError ? " · Session bands unavailable." : ""}
               </p>
             </div>
           )}

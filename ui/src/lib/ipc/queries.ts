@@ -25,6 +25,7 @@ import type { Mark } from "../../bindings/Mark";
 import type { UiResumeContext } from "../../bindings/UiResumeContext";
 import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { UpdateStatus } from "../../bindings/UpdateStatus";
+import type { SessionQuery } from "../../bindings/SessionQuery";
 
 /** Subsystem readiness; kept live by `readiness_changed` (see useLiveEvents). */
 export function useReadiness() {
@@ -221,6 +222,37 @@ export function useFrame(frameId: number | null) {
     queryKey,
     queryFn: () => cmd.getFrame(frameId as number),
     enabled: frameId != null,
+  });
+  return useMaybeOverride(q, queryKey);
+}
+
+/** Sessions overlapping a Timeline range. TanStack Query deduplicates identical
+ *  consumers and keeps the frame ribbon independent from this additive layer. */
+export function useSessions(query: SessionQuery, enabled = true) {
+  const queryKey = queryKeys.sessionList(query);
+  const q = useQuery({
+    queryKey,
+    queryFn: () => cmd.listSessions(query),
+    enabled:
+      enabled &&
+      (query.time_range == null ||
+        query.time_range.end > query.time_range.start),
+  });
+  return useMaybeOverride(q, queryKey);
+}
+
+/** One session detail. Base and summary reads use distinct keys so a drill-in can
+ *  start both together: metadata paints immediately while lazy intelligence runs. */
+export function useSession(
+  sessionId: number | null,
+  includeSummary: boolean,
+  enabled = true,
+) {
+  const queryKey = queryKeys.sessionDetail(sessionId ?? -1, includeSummary);
+  const q = useQuery({
+    queryKey,
+    queryFn: () => cmd.getSession(sessionId as number, includeSummary),
+    enabled: enabled && sessionId != null,
   });
   return useMaybeOverride(q, queryKey);
 }

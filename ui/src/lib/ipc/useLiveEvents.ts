@@ -102,6 +102,7 @@ export function useLiveEvents() {
           // the density ribbon.
           qc.invalidateQueries({ queryKey: queryKeys.framesPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.frameContextPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.sessionsPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.jobStats });
           qc.invalidateQueries({ queryKey: queryKeys.storageStats });
           const readiness = qc.getQueryData<Readiness>(queryKeys.readiness);
@@ -149,6 +150,7 @@ export function useLiveEvents() {
           qc.invalidateQueries({ queryKey: queryKeys.framePrefix });
           qc.invalidateQueries({ queryKey: queryKeys.frameSpansPrefix });
           qc.invalidateQueries({ queryKey: queryKeys.searchPrefix });
+          qc.invalidateQueries({ queryKey: queryKeys.sessionsPrefix });
         }
       }),
     );

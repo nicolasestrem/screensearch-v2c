@@ -12,12 +12,19 @@ import { cn } from "../../lib/cn";
 export interface FrameTileProps {
   frame: FrameMeta;
   className?: string;
+  /** Optional router state for round-trips such as Session → Moment → Session. */
+  navigationState?: unknown;
 }
 
-export function FrameTile({ frame, className }: FrameTileProps) {
+export function FrameTile({
+  frame,
+  className,
+  navigationState,
+}: FrameTileProps) {
   return (
     <Link
       to={`/timeline/${frame.frame_id}`}
+      state={navigationState}
       title={absoluteTime(frame.captured_at)}
       className={cn(
         "group flex flex-col gap-2 rounded-panel border border-line bg-surface p-2",
