@@ -1002,8 +1002,10 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **Implemented:** Added typed command/TanStack Query wrappers and stable list/base-detail/
   summary-detail/Recap keys. Capture ticks and retention cleanup invalidate session lists and
   details alongside their frame sources. Timeline now overlays deterministic interval-packed native
-  session buttons without replacing or resizing the density ribbon; focus/AI/meeting/other use only
-  the existing neutral/ok/warn token vocabulary. Loading, error, and no-session outcomes stay partial.
+  session buttons without replacing the density ribbon. Its configured height is a minimum;
+  token-height normal-flow lanes expand it as needed, with no hidden lanes or nested or horizontal
+  scrollbar. Focus/AI/meeting/other use only the existing neutral/ok/warn token vocabulary. Loading,
+  error, and no-session outcomes stay partial.
 - **Drill-in:** Added the lazy `/timeline/session/:id` route with invalid/missing/loading/error/
   partial/populated states. The inference-free detail and lazy title/summary calls start together;
   the view shows neutral fallback title, exact absolute span, kind/tool/host, numeric confidence,
