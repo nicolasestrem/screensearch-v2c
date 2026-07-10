@@ -204,6 +204,17 @@ mod sessions_scheduler_contract_tests {
     }
 
     #[test]
+    fn overlap_matching_does_not_reuse_a_merely_touching_session() {
+        let existing = vec![row(7, 0, Some(100), "ai:codex", false)];
+        let drafts = vec![draft(100, 200, "ai:codex", &[2])];
+
+        assert_eq!(
+            match_drafts_to_existing(&drafts, &existing, 1_000),
+            vec![None]
+        );
+    }
+
+    #[test]
     fn historical_cut_extends_to_the_next_global_merge_gap() {
         let frames = vec![frame(1, 0), frame(2, 100), frame(3, 200), frame(4, 1_000)];
         assert_eq!(safe_backfill_cut(&frames, 150, 500, 2_000), Some(1_000));

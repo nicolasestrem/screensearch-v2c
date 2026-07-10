@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Review hardening now includes the final frame when sampling session intelligence, parses taxonomy
   match strings once instead of allocating per frame, treats frozen boundary timestamps as
-  inclusive, and resumes a crash-interrupted historical row without creating a duplicate session.
+  inclusive, refuses to match merely touching mutable sessions, and resumes a crash-interrupted
+  historical row without creating a duplicate session.
 - Session backfill now safely resumes when its original historical cutoff lands inside a continuous
   activity track, reconciles delayed work before immutable frozen tails, and preserves exact frame
   ownership across absorbed short excursions and frozen boundaries.

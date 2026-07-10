@@ -891,6 +891,10 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   normalized repeatedly in the per-frame matcher. Production now treats stored endpoints as
   inclusive, reuses and completes the stable partial row id while assigning only unowned frames,
   samples first+last, and normalizes taxonomy entries once at startup.
+- **Late automatic review:** after the first follow-up push, Claude added a seventh inline finding:
+  `overlap_ms >= 0` treated adjacent same-key sessions as stable-id matches. The red regression
+  returned `[Some(7)]` where `[None]` was required; reconciliation now requires strictly positive
+  overlap, while the existing positive-overlap stable-id test remains green.
 - **Not applied:** the micro-interrupter proposal conflicts with the frozen harness contract, whose
   documented and tested behavior treats fragmented presence of the same key as sustained; changing
   only production would break D9 parity. The `debug_assert!` ownership note was defense-in-depth, not
@@ -906,11 +910,12 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
   $ cargo test -p kernel --lib -- --nocapture
-  running 54 tests
+  running 55 tests
   test sessions_intel::tests::even_sampling_includes_both_session_endpoints ... ok
   test sessions_scheduler_contract_tests::frozen_guard_treats_equal_last_frame_timestamp_as_overlap ... ok
   test sessions_scheduler_contract_tests::historical_backfill_reuses_an_exact_unfrozen_partial_row ... ok
-  test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+  test sessions_scheduler_contract_tests::overlap_matching_does_not_reuse_a_merely_touching_session ... ok
+  test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
   ```
 - **Workflow disposition:** routine GitHub review is automatic. `AGENTS.md`/`CLAUDE.md` now forbid
   routine bot mentions and ritual merge warnings; actionable feedback is addressed in code without
@@ -919,7 +924,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   `8/7/6` vs labeled `11/5/8`, tool `9/11 = 0.818`, pooled partitioned F1 `0.400/0.489` at
   ±120/180 s. The untouched baselines remain micro `0.077/0.086` and grouped `0.391/0.435`.
 - **Fresh post-comment full ladder:** the exact non-quiet `cargo test --workspace` completed with
-  exit 0 (1,064 output lines); the compact rerun below records the changed and gate-bearing suites.
+  exit 0 (1,063 output lines); the compact rerun below records the changed and gate-bearing suites.
 
   ```text
   $ cd ui && npm ci
@@ -929,21 +934,21 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   > eslint .
   $ npm run build
   ✓ 434 modules transformed.
-  ✓ built in 1.71s
+  ✓ built in 1.75s
   $ node scripts/stage-mcp.mjs
   [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
       Finished `release` profile [optimized] target(s) in 0.21s
   $ cargo fmt --all -- --check
   (no output; exit 0)
   $ cargo clippy --workspace --all-targets -- -D warnings
-      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.80s
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.62s
   $ cargo build --workspace
-      Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.27s
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.82s
   $ cargo test --workspace --quiet
   test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
   test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
   test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
-  test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+  test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
   test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
   test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
   test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s

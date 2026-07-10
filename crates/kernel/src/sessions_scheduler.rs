@@ -157,7 +157,7 @@ pub(crate) fn trim_drafts_against_frozen(
 fn overlap_ms(draft: &SessionDraft, session: &Session, now_ms: i64) -> Option<i64> {
     let session_end = session.ended_at.unwrap_or(now_ms);
     let overlap = draft.ended_at.min(session_end) - draft.started_at.max(session.started_at);
-    (overlap >= 0).then_some(overlap)
+    (overlap > 0).then_some(overlap)
 }
 
 /// One-to-one, deterministic draft→row matching by exact context key + maximum time overlap.

@@ -78,6 +78,9 @@
   demonstrated. PR review automation is now recorded in `AGENTS.md`/`CLAUDE.md`: no routine bot
   mentions, ritual merge warnings, or bot replies. The post-review D9 rerun remained unchanged:
   shipped F1 `0.400/0.489`, tool `0.818`, ahead of micro `0.077/0.086` and grouped `0.391/0.435`.
+  A later automatic Claude pass then found that reconciliation counted a zero-length endpoint touch
+  as overlap; a red test reproduced stable-id reuse across adjacent windows, and the matcher now
+  requires strictly positive overlap.
 
 ---
 
