@@ -275,3 +275,37 @@ change.
   draft D9 (`06` #26) → **STOP 2** (maintainer approves the numbers; never tune-until-green). Every
   recorded number comes from the harness binary; design-doc estimates are never transcribed.
   Verification for this `.md`-only commit: `git diff --name-only` shows specs only; no code touched.
+
+### Pass 3 continued - 2026-07-10 - labels.toml v2 + digest-first drafts + STOP 1 resolved
+
+- **`labels.toml` v2 (code, TDD):** `resolve_day` relaxed from one global non-overlap chain to
+  **per-identity-track** non-overlap (`ai` by tool, `focus`/`other` pooled per kind, `meeting`
+  exempt), keeping a global sort-by-start requirement; serial files stay valid. New `track_key`
+  helper. `cargo test -p harness labels::` = **14 passed** (4 new: cross-identity-overlap accepted,
+  same-tool/focus overlap rejected, serial files still valid, out-of-start-order rejected); fmt +
+  clippy clean.
+- **Fresh data:** 07-10 exported read-only (DB size+mtime byte-identical before/after, verbatim);
+  `harness-data/` confirmed git-ignored. 07-10 is a **partial** overnight capture (00:22-06:49).
+- **Digest-first label drafts (gap #115) + STOP 1 (maintainer, 2026-07-10):** four concurrent label
+  files drafted from the digests and reviewed. Tuning days 07-07/08 **revised for concurrency and
+  approved**: 07-07 splits the old single 15:15 session into concurrent `claude-code ∥ claude-desktop`
+  (the serial label already noted the desktop app "open alongside"); 07-08 is the concurrency source -
+  `codex` runs continuously 16:59-22:53 **under** two `claude-code` terminal stints (17:02-17:11,
+  20:13-21:39), correcting the recalled serial `claude-code 19:00-22:54`. Held-out 07-09 (primary
+  fresh day): the leisure-heavy 19:01-20:23 block **unlabeled** per maintainer (Telegram chatting,
+  not focus); the 12:05-13:24 analytics block kept as focus. Parser-validated (per-identity
+  non-overlap holds on all four); the serial `--algo grouped` scores the new concurrent 07-07/08
+  labels at pooled F1 0.44/0.50 - lower than the old serial-label 0.50/0.57 precisely because the
+  serial algo cannot represent the concurrency the labels now encode (the gap the concurrent
+  segmenter must close).
+- **Two held-out findings recorded (`07` #117):** the 07-10 4-agent day exposed that (a) capture is
+  **foreground-only + diff-gated**, so a background agent (codex-desktop) is nearly uncaptured; (b)
+  spinner ambiguity (`#112c`) makes codex-CLI look like `claude-code`; (c) OpenAI **renamed the Codex
+  desktop app to "ChatGPT"** ~4 h before the capture, so it lands under `app_hint "chatgpt"` and the
+  `codex` entry misses it (scored days 07-07/08/09 predate the rename, so the taxonomy is left
+  unchanged). Net: 07-10's recoverable tool-accuracy/recall are structurally capped by capture +
+  taxonomy, so **07-10 is the capture-limit demonstrator, not a D9 scoring day** (07-09 is the primary
+  held-out day) - maintainer decision.
+- **Next:** freeze params on 07-07/08 only, then build `group.rs` concurrent per-track walk +
+  `score.rs` partitioned referee (serial path byte-untouched; the 13 pinned `segment()` tests
+  unchanged), evaluate 07-09 (+ 07-10 as demonstrator), draft the D9 gate, **STOP 2** for approval.
