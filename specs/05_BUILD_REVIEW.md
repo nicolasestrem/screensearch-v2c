@@ -240,3 +240,38 @@ pinned tests unchanged** as the A/B baseline.
 - **Still risky:** the serial-vs-concurrent decision (`#114`) is the real gate now; do NOT freeze PR3
   / schema 11 until it is made. PR opened for review of the built work, **not** to claim final
   acceptance numbers.
+
+## Pass 3 — 2026-07-10 — PR2b: concurrency resolved, specs gate first
+
+The serial-vs-concurrent decision (`07` #114) is made: **concurrent** (maintainer, 2026-07-10, via
+the resume-PR2 kickoff). Real usage runs parallel recognized tools, so the serial model of `06` #27
+collapses ground truth into single precedence-attributed bands. PR2b builds the concurrent model in
+the harness, keeps the serial redesign as the `--algo grouped` A/B baseline, and sets the D9 gate on
+the concurrent metric against the held-out fresh days. Branch `feat/0.4.0-pr2b-concurrent-sessions`
+(off `main` @ `6530288`, PR #100 merged); baseline `cargo test -p harness` **91 passed** before any
+change.
+
+- **Specs gate (this commit, `.md`-only, the #27 procedure repeated):** `07` **#114 → resolved
+  (concurrent)** with the load-bearing finding recorded — **exclusive frame ownership** (one
+  `app_hint` → one micro-span → one track → one session) means overlapping sessions fit **schema 11
+  with zero DDL change** (verified against `03 §4`: no non-overlap constraint, overlap-agnostic time
+  index, single nullable `frames.session_id` FK), so **PR3 is not affected** by concurrency. `06`
+  **#28** records the per-identity-track amendment layered on #27 (track map replacing the single
+  open group; anchor selection + `HOST_PRECEDENCE` inert on the shipped path but kept in the serial
+  baseline; anchor **qualification** survives via `IDENTITY_QUALIFY_MS`; `SustainedForeignIdentity`
+  close removed; per-track None-budget absorption into the last-touched AI track; meeting bands no
+  longer barriers; `labels.toml` v2 per-identity non-overlap; identity-partitioned referee). `06`
+  **#26** (D9 gate) flips from DEFERRED to **unblocked → lands at PR2b Phase C** on the partitioned
+  metric with the fresh-day gate. `07` **#116** records the accepted concurrency limitations
+  (same-tool instances and `browser-ai` fold into one track; thin overlap evidence → re-verify on
+  every new labeled day). Concurrency **structurally removes** the #112(b) host-precedence pathology
+  from the shipped path.
+- **Amendment procedure honored:** the contract change goes through `06`/`07` **before** the code
+  that depends on it (stop-at-ambiguity). No code touched in this commit.
+- **Next:** `labels.rs` v2 (per-identity non-overlap, TDD) + export 07-10 + digest-first label drafts
+  → **STOP 1** (maintainer sanity-checks the four label files) → `group.rs` concurrent per-track walk
+  + `score.rs` partitioned referee (serial path byte-untouched; the 13 pinned `segment()` tests
+  unchanged) → tune on 07-07/08 only and freeze params → fresh-day eval on 07-09/10 + stability +
+  draft D9 (`06` #26) → **STOP 2** (maintainer approves the numbers; never tune-until-green). Every
+  recorded number comes from the harness binary; design-doc estimates are never transcribed.
+  Verification for this `.md`-only commit: `git diff --name-only` shows specs only; no code touched.

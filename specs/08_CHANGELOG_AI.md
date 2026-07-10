@@ -22,6 +22,29 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2b: concurrent session model (`07` #114 resolved) - specs gate
+
+- **Change:** recorded the concurrency resolution in the spec channel **before any code** (the #27
+  procedure). `07` #114 → **resolved: concurrent** (option b), with the finding that **exclusive
+  frame ownership** keeps overlapping sessions inside **schema 11 with zero DDL change** (PR3
+  unaffected). `06` #28 added — the per-identity-track amendment layered on #27 (track map replaces
+  the single open group; anchor selection + `HOST_PRECEDENCE` inert on the shipped path, kept in the
+  `--algo grouped` serial baseline; anchor **qualification** survives via `IDENTITY_QUALIFY_MS`;
+  `SustainedForeignIdentity` close removed; per-track None-budget absorption into the last-touched AI
+  track; meeting bands no longer barriers; `labels.toml` v2 per-identity non-overlap;
+  identity-partitioned referee metric). `06` #26 (D9 gate) flipped DEFERRED → **unblocked, lands at
+  PR2b Phase C** on the partitioned metric with the held-out fresh-day gate. `07` #116 added (accepted
+  concurrency limitations: same-tool instances and `browser-ai` fold to one track; thin overlap
+  evidence → re-verify per new labeled day). `05` Pass 3 opened.
+- **Why:** the serial `§7e`/#27 model collapses parallel recognized tools into one band; PR2's
+  fresh-day labeling proved real usage is concurrent. The contract must change (through `06`/`07`)
+  before the harness code that depends on it (stop-at-ambiguity, `04 §5`). Keeping the serial
+  redesign as the A/B baseline preserves the validated 0.50/0.57 anchor.
+- **Verification:** `git diff --name-only` shows specs only (`05`/`06`/`07`/`08`); no code touched in
+  this commit. Baseline `cargo test -p harness` = 91 passed on the branch before edits.
+
+---
+
 ## 2026-07-10 - 0.4.0 PR2: task-level grouping redesign landed + validated; D9 deferred (concurrency)
 
 - **Change:** implemented the `§7e` task-level grouping redesign in the harness (taxonomy v3 spinner
