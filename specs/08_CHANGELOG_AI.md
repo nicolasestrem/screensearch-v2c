@@ -61,6 +61,12 @@
   and required colons for generic desktop/browser role headings. A live-shaped regression is green
   (sessions crate now 3 unit + 18 integration tests). The clean live recomputation is paused mid-
   checkpoint for the user-requested break; exact DB/process/resume disposition is in `05`.
+- **Live-check amendment 2:** resumed capture exposed Explorer breadcrumb rows beginning with ASCII
+  `>` inside Claude-Code-attributed sessions; the real Claude prompt glyph is `❯`. Removed the ASCII
+  alias and made an empty `❯` inert so it cannot absorb the terminal status bar. Two red/green live-
+  shaped regressions pin both cases. Final artifact recomputation: no breadcrumb matches, no invalid
+  roles, no exchanges on non-AI sessions; genuine inline Claude prompts + `●` outputs remain. The
+  full workspace/UI ladder was rerun after these changes (verbatim excerpts in `05`).
 
 ---
 

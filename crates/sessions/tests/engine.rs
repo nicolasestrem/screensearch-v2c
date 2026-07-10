@@ -304,3 +304,27 @@ fn no_marker_means_no_exchange_and_duplicates_collapse() {
     let got = extract_exchanges("browser-ai", &[same.clone(), same]);
     assert_eq!(got.len(), 1);
 }
+
+#[test]
+fn windows_breadcrumb_chevrons_are_not_claude_code_prompts() {
+    let extracted = extract_exchanges(
+        "claude-code",
+        &[content(
+            1,
+            "> This pc\nUsers > nicol > Documents\n> Network\n234 items",
+        )],
+    );
+    assert!(extracted.is_empty());
+}
+
+#[test]
+fn empty_claude_prompt_does_not_capture_the_terminal_status_bar() {
+    let extracted = extract_exchanges(
+        "claude-code",
+        &[content(
+            1,
+            "❯\n────────────────────\nnicol@TBX repo Opus 4.8 ctx:84%\nauto mode on",
+        )],
+    );
+    assert!(extracted.is_empty());
+}

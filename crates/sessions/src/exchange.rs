@@ -155,10 +155,9 @@ fn blocks(tool_id: &str, text: &str) -> Vec<(SessionArtifactRole, String)> {
 
 fn marker(tool_id: &str, line: &str) -> Option<(SessionArtifactRole, Option<String>)> {
     if tool_id == "claude-code" {
-        for prefix in ["❯", ">"] {
-            if let Some(rest) = line.strip_prefix(prefix) {
-                return Some((SessionArtifactRole::User, nonempty(rest.trim().to_string())));
-            }
+        if let Some(rest) = line.strip_prefix("❯") {
+            return nonempty(rest.trim().to_string())
+                .map(|content| (SessionArtifactRole::User, Some(content)));
         }
         for prefix in ["⏺", "●"] {
             if let Some(rest) = line.strip_prefix(prefix) {

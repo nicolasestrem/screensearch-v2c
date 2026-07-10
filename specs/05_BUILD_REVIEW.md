@@ -738,3 +738,70 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   exists in history) and judges real exchange output; (4) spot-check search/Ask/Timeline/marks/
   where-was-i; (5) rerun the full CI ladder because extraction code changed after the prior full run;
   (6) adversarial review, final commit/push, open PR. No PR exists and nothing is merged.
+
+### Pass 5 resumed live/final-verification evidence — 2026-07-10
+
+- **Historical pass + capture:** corrected recomputation reached
+  `{"cursor_ms":1783609157370,"target_ms":1783609157370}`. While it advanced, live capture grew
+  from frame 3114 to 3154; final derived history held 20 sessions / 1,614 assigned frames and
+  `PRAGMA foreign_key_check` returned no rows. Recognition rows included one `browser-ai`/browser,
+  nine `claude-code`/terminal, five `claude-desktop`/desktop, four `codex`/desktop, and one focus
+  session. Real Meet-titled frames were captured, but their longest chained band was ~8m25s, below
+  the frozen 10-minute meeting floor, so the live meeting-session row remains a maintainer/manual
+  gate rather than being misreported as passing.
+- **D8 live correction:** real output traced two false-positive sources to the exact input lines:
+  Windows Explorer emits `> This pc` / `> Network`, while genuine Claude Code uses `❯`; and an empty
+  standalone `❯` is followed by the terminal status bar. Removed only the ambiguous ASCII alias and
+  required inline content after `❯`. Both regressions were red before the fix and green after it.
+  A final artifact-only recomputation produced genuine prompt/agent samples, zero `This pc`/`Network`
+  artifacts, zero invalid exchange roles, and zero exchange rows on non-AI sessions. Codex/browser
+  sessions with no strong marker correctly emitted no exchanges. Sessions test output:
+
+  ```text
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  running 20 tests
+  test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Fresh post-fix CI ladder:** the first `npm ci` attempt failed with `EPERM unlink esbuild.exe`
+  because the required Tauri/Vite dev launch still held the binary. After stopping only that
+  worktree's dev processes (and verifying no orphaned `llama-server`), the exact ladder passed:
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 3s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.76s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.28s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.84s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.09s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+
+- **Launch-surface correction:** a direct `target/debug/screensearch.exe` launch was attempted for a
+  read-only API spot-check; the maintainer corrected that this repository must always launch through
+  `npm run tauri dev`. The direct process was stopped immediately, its unauthorized API output is not
+  counted as evidence, and subsequent live work uses only the required npm/Tauri launch surface.
+- **Still manual before PR:** maintainer confirmation of search/Ask/Timeline/marks/where-was-i in the
+  UI, plus a qualifying ten-minute meeting-title band if the meeting row is held as a hard PR gate.
+  Automated/D9/backup/backfill/capture/recognition/exchange/full-suite gates are otherwise evidenced.
