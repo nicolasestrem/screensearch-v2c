@@ -1128,6 +1128,12 @@ mod migration_tests {
         .expect("session");
         conn.execute("UPDATE frames SET session_id = 1 WHERE id IN (1, 2)", [])
             .expect("link frames to session");
+        // A frames.session_id pointing at a missing session is rejected (FK, foreign_keys ON).
+        assert!(
+            conn.execute("UPDATE frames SET session_id = 999 WHERE id = 3", [])
+                .is_err(),
+            "a dangling frames.session_id must violate the FK"
+        );
         conn.execute(
             "INSERT INTO session_artifacts (id, session_id, kind, role, frame_id, content)
              VALUES (1, 1, 'exchange', 'user', 1, 'q'), (2, 1, 'exchange', 'agent', 2, 'a')",
@@ -1259,7 +1265,9 @@ mod migration_tests {
             !pre.3.is_empty(),
             "fixture must produce where-was-i contexts"
         );
+        assert!(!pre.4.is_empty(), "fixture must produce timeline buckets");
         assert!(!pre.5.is_empty(), "fixture must produce report samples");
+        assert!(pre.6.total_frames > 0, "fixture must produce insights");
 
         // Migrate 10 -> 11 on the same connection the store holds.
         {

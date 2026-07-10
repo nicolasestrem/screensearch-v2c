@@ -369,7 +369,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **Implemented:** `MIGRATION_V11` (`crates/store/src/schema.rs`) — the sessions arc's **only**
   schema change (D4). Creates `sessions`, `session_artifacts`, `frames.session_id`, and the three
   indexes (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`), transcribed verbatim
-  from the authoritative DDL in `03 §4:328–363` (both hardened CHECKs included:
+  from the authoritative DDL in `03 §4:328–365` (both hardened CHECKs included:
   `sessions.tool CHECK (tool IS NULL OR kind = 'ai')` and the compound `session_artifacts.role`
   CHECK with the load-bearing `role IS NOT NULL` guard). **Structure only, no backfill** — plain
   `CREATE TABLE` + `ALTER TABLE ... ADD COLUMN` + `CREATE INDEX`, no table rebuild, so the runner's
