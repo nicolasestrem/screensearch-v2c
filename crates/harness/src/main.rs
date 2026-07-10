@@ -183,8 +183,13 @@ fn cmd_export(args: &[String]) -> Result<()> {
     let conn = export::open_readonly(&path)?;
     for date in days.split(',').map(str::trim).filter(|d| !d.is_empty()) {
         let bounds = export::day_bounds(&conn, date)?;
-        let dir = export::write_day(&out, date, bounds, &conn)?;
-        println!("exported {date} -> {}", dir.display());
+        let done = export::write_day(&out, date, bounds, &conn)?;
+        let labels = if done.labels_preserved {
+            " (kept existing labels.toml)"
+        } else {
+            ""
+        };
+        println!("exported {date} -> {}{labels}", done.dir.display());
     }
     println!(
         "\nExports are git-ignored (harness-data/). Hand-label each day's labels.toml from its \

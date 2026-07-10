@@ -491,6 +491,8 @@ tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDA
    2-3-day stretch for the stability check). June-July days avoid the DST-transition guard.
 3. `cargo run -p harness -- export --days 2026-06-15,2026-06-16,...` writes each day to
    `harness-data/<day>/` (`day.json`, `frames.jsonl`, `marks.jsonl`, `digest.md`, `labels.toml`).
+   Re-exporting a day refreshes the data files but preserves an existing hand-edited
+   `labels.toml` (it prints `(kept existing labels.toml)`), so it is safe to re-run.
 4. Hand-label each day's `labels.toml` from its `digest.md` (the readable context-run timeline;
    marks appear as anchors). Under an evening for the whole sample.
 5. `cargo run -p harness -- score` (optionally `replay`, `sweep`, `stability`) scores boundary

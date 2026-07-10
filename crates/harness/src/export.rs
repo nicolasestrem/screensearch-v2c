@@ -213,13 +213,27 @@ pub fn today_local(conn: &Connection) -> Result<String> {
     )
 }
 
+/// The outcome of writing one day's export directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayExport {
+    pub dir: PathBuf,
+    /// True when an existing hand-edited `labels.toml` was kept instead of being
+    /// overwritten with a fresh template (a re-export of an already-labeled day).
+    pub labels_preserved: bool,
+}
+
 /// Export one day's frames + marks + digest + labels template into `out_dir/<date>/`.
+///
+/// Regenerated data (`day.json`, `frames.jsonl`, `marks.jsonl`, `digest.md`) is always
+/// rewritten, but an existing `labels.toml` is preserved: re-exporting a day to refresh
+/// its frames or digest must never clobber the hand-edited ground truth the scoring and
+/// sweep steps depend on. The template is written only when no labels file is present.
 pub fn write_day(
     out_dir: &Path,
     date: &str,
     bounds: DayBounds,
     conn: &Connection,
-) -> Result<PathBuf> {
+) -> Result<DayExport> {
     let frames = day_frames(conn, bounds)?;
     let marks = day_marks(conn, bounds)?;
     let header = DayHeader {
@@ -240,11 +254,18 @@ pub fn write_day(
         dir.join("digest.md"),
         render_digest(&header, &frames, &marks),
     )?;
-    std::fs::write(
-        dir.join("labels.toml"),
-        render_labels_template(date, &marks, bounds.local_midnight_ms),
-    )?;
-    Ok(dir)
+    let labels_path = dir.join("labels.toml");
+    let labels_preserved = labels_path.exists();
+    if !labels_preserved {
+        std::fs::write(
+            &labels_path,
+            render_labels_template(date, &marks, bounds.local_midnight_ms),
+        )?;
+    }
+    Ok(DayExport {
+        dir,
+        labels_preserved,
+    })
 }
 
 fn write_jsonl<T: serde::Serialize>(path: &Path, rows: &[T]) -> Result<()> {
@@ -377,8 +398,15 @@ CREATE TABLE marks (
 );
 "#;
 
-    // 2026-07-01 local midnight (Europe/Paris). All fixture frames sit inside this day.
-    const MID: i64 = 1_782_856_800_000;
+    // Local-midnight epoch (ms) for the fixture day, derived at runtime from the process
+    // timezone via the same query `day_bounds` uses. NOT hardcoded: `cargo test` must pass on
+    // any runner (CI is UTC, dev may be Europe/Paris), so frames placed at `day_mid() + N`
+    // always fall inside the queried day regardless of the active timezone. July 1 is never a
+    // DST-transition day, so the 24h invariant holds everywhere.
+    fn day_mid() -> i64 {
+        let c = Connection::open_in_memory().unwrap();
+        day_bounds(&c, "2026-07-01").unwrap().local_midnight_ms
+    }
 
     fn insert_frame(
         c: &Connection,
@@ -393,7 +421,7 @@ CREATE TABLE marks (
              (id, captured_at, monitor_index, width, height, image_path, content_hash,
               app_hint, window_title, browser_url, capture_trigger)
              VALUES (?1, ?2, ?3, 1920, 1080, 'f.webp', 'h', ?4, ?5, NULL, 'timer')",
-            rusqlite::params![id, MID + min * 60_000, monitor, app, title],
+            rusqlite::params![id, day_mid() + min * 60_000, monitor, app, title],
         )
         .unwrap();
     }
@@ -419,21 +447,26 @@ CREATE TABLE marks (
         c.execute(
             "INSERT INTO marks (id, frame_id, created_at, note, resolved_at)
              VALUES (10, 3, ?1, 'fix the CI', NULL)",
-            [MID + 3 * 60_000],
+            [day_mid() + 3 * 60_000],
         )
         .unwrap();
         path
     }
 
     #[test]
-    fn day_bounds_are_24h_and_offset_120() {
+    fn day_bounds_are_24h_and_offset_is_consistent() {
         let tmp = tempfile::tempdir().unwrap();
         let path = fixture(tmp.path());
         let c = open_readonly(&path).unwrap();
         let b = day_bounds(&c, "2026-07-01").unwrap();
-        assert_eq!(b.local_midnight_ms, MID);
+        assert_eq!(b.local_midnight_ms, day_mid());
         assert_eq!(b.day_end_ms - b.local_midnight_ms, 86_400_000);
-        assert_eq!(b.utc_offset_min, 120);
+        // Timezone-agnostic: local midnight shifted by the reported offset lands on a UTC
+        // midnight (divisible by a whole day). Holds for Paris (+120), UTC (0), or any runner.
+        assert_eq!(
+            (b.local_midnight_ms + b.utc_offset_min * 60_000).rem_euclid(86_400_000),
+            0
+        );
     }
 
     #[test]
@@ -500,7 +533,9 @@ CREATE TABLE marks (
         let out = tmp.path().join("out");
         let c = open_readonly(&path).unwrap();
         let b = day_bounds(&c, "2026-07-01").unwrap();
-        let dir = write_day(&out, "2026-07-01", b, &c).unwrap();
+        let done = write_day(&out, "2026-07-01", b, &c).unwrap();
+        assert!(!done.labels_preserved); // fresh export writes the template
+        let dir = done.dir;
         for f in [
             "day.json",
             "frames.jsonl",
@@ -512,7 +547,7 @@ CREATE TABLE marks (
         }
         let day: DayHeader =
             serde_json::from_str(&std::fs::read_to_string(dir.join("day.json")).unwrap()).unwrap();
-        assert_eq!(day.local_midnight_ms, MID);
+        assert_eq!(day.local_midnight_ms, day_mid());
         assert_eq!(day.frame_count, 5);
         let frames_jsonl = std::fs::read_to_string(dir.join("frames.jsonl")).unwrap();
         assert_eq!(frames_jsonl.lines().count(), 5);
@@ -520,6 +555,31 @@ CREATE TABLE marks (
         let first: ExportFrame =
             serde_json::from_str(frames_jsonl.lines().next().unwrap()).unwrap();
         assert_eq!(first.frame_id, 1);
+    }
+
+    #[test]
+    fn re_export_preserves_hand_edited_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = fixture(tmp.path());
+        let out = tmp.path().join("out");
+        let c = open_readonly(&path).unwrap();
+        let b = day_bounds(&c, "2026-07-01").unwrap();
+
+        // First export writes the template.
+        let first = write_day(&out, "2026-07-01", b, &c).unwrap();
+        assert!(!first.labels_preserved);
+        let labels_path = first.dir.join("labels.toml");
+        std::fs::write(&labels_path, "# hand-edited ground truth\n").unwrap();
+
+        // Re-export (e.g. to refresh frames.jsonl) must NOT clobber the labels.
+        let second = write_day(&out, "2026-07-01", b, &c).unwrap();
+        assert!(second.labels_preserved);
+        assert_eq!(
+            std::fs::read_to_string(&labels_path).unwrap(),
+            "# hand-edited ground truth\n"
+        );
+        // Regenerated data is still refreshed.
+        assert!(second.dir.join("frames.jsonl").exists());
     }
 
     #[test]
