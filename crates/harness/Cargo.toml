@@ -16,12 +16,11 @@ path = "src/lib.rs"
 name = "harness"
 path = "src/main.rs"
 
-# Standalone referee by design: NO internal-crate dependencies (traits/store/kernel).
-# The harness embeds the frames+marks DDL it needs for its fixture and re-implements the
-# candidate segmenter, so PR4 can adapt its shipped segmenter's output to this harness's
-# SessionSpan for the binding D9 re-run without the harness pinning shipped internals.
+# PR4 adds the harness's first internal dependency: the pure `sessions` crate, solely for
+# the `--algo shipped` D9 adapter. It still never links store/kernel or enters the installer.
 [dependencies]
 anyhow.workspace = true
+sessions.workspace = true
 rusqlite.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true

@@ -499,7 +499,7 @@ tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDA
    precision/recall/F1 (+/- tolerance) and tool-recognition accuracy against the labels.
    `sweep`/`stability` write markdown to `harness-data/reports/`.
 
-**The segmenters — `--algo micro | grouped | concurrent`.** Pass 1 (`segment_micro`) produces
+**The segmenters — `--algo micro | grouped | concurrent | shipped`.** Pass 1 (`segment_micro`) produces
 unfloored app-run micro-spans; pass 2 groups them. Three algorithms:
 - `concurrent` (**default**, `06` #28 / `07` #114): the **per-identity-track** model. Sessions of
   different identities may overlap in wall-clock time (an AI track spans a meeting; two AI tools run
@@ -511,6 +511,9 @@ unfloored app-run micro-spans; pass 2 groups them. Three algorithms:
 - `grouped` (`06` #27): the serial two-pass segmenter (one open group, meeting bands as barriers) —
   kept as the A/B baseline.
 - `micro`: the ungrouped `§7b` app-context baseline.
+- `shipped` (PR4): calls the production `crates/sessions` concurrent engine with the frozen
+  `merge_gap=2700s`, `absorb_max=1800s`, `meeting_gap=480s`, focus floor/density, qualification,
+  and W constants. The harness `--gap-close`/`--min-len` flags still exercise the two final settings.
 
 **`labels.toml` is v2 (`06` #28):** non-overlap is enforced **per identity track**, not globally —
 `ai` sessions may not overlap another `ai` with the same `tool`; `focus`/`other` may not overlap
@@ -534,3 +537,30 @@ Different identities may overlap. Serial (pre-v2) label files stay valid.
 
 The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding merge
 gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers only.
+
+### PR4 production gate and live checks
+
+1. **CI-runnable parity:** `cargo test -p harness --test shipped_parity`. The synthetic day includes
+   interleaved Claude Code/Codex tracks plus both renamed `app_hint=chatgpt,title=Codex` and excluded
+   `ChatGPT Classic` frames; production output must equal harness-concurrent output exactly.
+2. **Binding D9 re-run:** prepare an input directory containing only `2026-07-07`, `2026-07-08`,
+   and held-out `2026-07-09` (do not include the 07-10 capture-limit demonstrator), then run:
+   `cargo run -p harness -- score --algo shipped --data <three-day-dir>`, followed by the same command
+   with `--algo micro` and `--algo grouped`. With no explicit tolerance, each command prints both
+   ±120 s and ±180 s. Gate criteria are verbatim in `06` #26; a miss stops the PR with no retuning.
+3. **D5 backup before live launch:**
+   `cargo run -p harness -- backup --to <outside-repo-and-app-data-dir>`. Confirm the printed
+   integrity check and frame/mark count parity, then print the backup's full path, byte size, and
+   mtime. Only after this gate may `npm run tauri dev` open the live schema-11 DB.
+4. **Historical/incremental observation:** keep capture running while logs show
+   `sessions historical backfill advanced` (`cursor_ms` increasing toward `target_ms`). Query
+   `sessions`, `frames.session_id`, and `session_artifacts` to confirm old rows appear, open/recent ids
+   reconcile stably, and new frames continue arriving. A segmenter error must log and leave capture
+   active.
+5. **Recognition + D8 qualitative check (maintainer in the loop):** foreground a real Claude Code
+   session, Codex desktop session, browser-AI page, and meeting-titled window long enough to pass the
+   frozen floors; inspect `kind/tool/host/context_key`. For an AI row, inspect `kind='exchange'`
+   artifacts: explicit user/agent markers may produce rows; no marker must produce none, never an
+   invented role.
+6. **D10 regression spot-check:** exercise where-was-i, frame search, Ask, Timeline, and marks while
+   capture continues. PR4 adds no commands, no NavRail route, no audio, and no notification surface.

@@ -223,6 +223,9 @@ function sanitizeSettings(s: Settings): Settings {
     // dwell clamps to 10..=86400s; an empty mark chord falls back to the default.
     marks_hotkey: s.marks_hotkey.trim() || DEFAULT_MARKS_HOTKEY,
     resume_min_dwell_secs: clampInt(s.resume_min_dwell_secs, 10, 86_400),
+    // 0.4.0 PR4 sessions keys — UI placement stays PR5; mirror backend final clamps now.
+    sessions_min_len_secs: clampInt(s.sessions_min_len_secs, 30, 3_600),
+    sessions_gap_close_secs: clampInt(s.sessions_gap_close_secs, 60, 3_600),
     // 0.2.1 enrichment throttle — mirror the backend clamps (03 §8); each exit % is kept
     // strictly below its enter % so the hysteresis band is always valid.
     throttle_cpu_enter_pct: clampInt(s.throttle_cpu_enter_pct, 1, 100),

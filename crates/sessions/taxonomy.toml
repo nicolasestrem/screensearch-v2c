@@ -1,0 +1,82 @@
+# ScreenSearch 0.4.0 recognition taxonomy — tuned v3 seed (D6/D7, 06 #26/#28).
+# Exact app stems, case-insensitive; title patterns are case-insensitive substrings.
+# `title_prefix_ranges` matches the first non-whitespace Unicode scalar. Domains remain
+# dormant while production capture persists browser_url=NULL (07 #109).
+
+version = 3
+
+[[entry]]
+id = "claude-code"
+kind = "ai"
+host = "terminal"
+app_hints = ["windowsterminal", "wt", "powershell", "pwsh", "cmd", "conhost", "alacritty", "wezterm"]
+title_patterns = ["claude"]
+title_prefix_ranges = ["2733", "2800-28FF"]
+domains = []
+
+[[entry]]
+id = "codex"
+kind = "ai"
+host = "desktop"
+# Gap #117 decision (PR4): OpenAI's renamed desktop Codex app now reports `chatgpt`.
+# The separate legacy consumer app is explicitly excluded by its `ChatGPT Classic` title.
+app_hints = ["codex", "chatgpt"]
+title_patterns = []
+title_exclude_patterns = ["chatgpt classic"]
+domains = []
+
+[[entry]]
+id = "claude-desktop"
+kind = "ai"
+host = "desktop"
+app_hints = ["claude"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "browser-ai"
+kind = "ai"
+host = "browser"
+app_hints = ["chrome", "msedge", "firefox", "brave", "opera"]
+title_patterns = ["claude", "chatgpt", "gemini"]
+domains = ["claude.ai", "chatgpt.com", "gemini.google.com"]
+
+[[entry]]
+id = "zoom"
+kind = "meeting"
+host = "desktop"
+app_hints = ["zoom"]
+title_patterns = ["zoom meeting"]
+domains = []
+
+[[entry]]
+id = "teams"
+kind = "meeting"
+host = "desktop"
+app_hints = ["ms-teams", "teams"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "meet"
+kind = "meeting"
+host = "browser"
+app_hints = ["chrome", "msedge", "firefox", "brave", "opera"]
+title_patterns = ["google meet", "meet -"]
+domains = ["meet.google.com"]
+
+[[entry]]
+id = "webex"
+kind = "meeting"
+host = "desktop"
+app_hints = ["webex", "ciscocollab", "atmgr"]
+title_patterns = []
+domains = []
+
+[[entry]]
+id = "discord"
+kind = "meeting"
+host = "desktop"
+app_hints = ["discord"]
+title_patterns = []
+domains = []

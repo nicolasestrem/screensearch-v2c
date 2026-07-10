@@ -469,3 +469,84 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   property holds). Pure performance, additive, no behavior change (D10). Tests updated: the structure
   test asserts **six** new objects (2 tables + 4 indexes); the FK test adds an `EXPLAIN QUERY PLAN`
   assertion that the frame-delete lookup uses the new index. Full ladder re-run green after the change.
+
+## Pass 5 — 2026-07-10 — 0.4.0 PR4 (segmentation engine + recognition; pre-live checkpoint)
+
+- **Implemented:** the production `crates/sessions` concurrent engine and v3 taxonomy; session-domain
+  provider/store contracts; schema-11 SQL persistence with frozen guards; incremental reconciliation,
+  freeze, exchange refresh, and resumable six-hour historical chunks in `kernel`; lazy cached in-app
+  title/summary generation; the two final settings keys/clamps; composition-root lifecycle wiring;
+  and the harness `--algo shipped` adapter/parity test. `03 §7e` now carries the `06` #27/#28
+  concurrent amendments, and `07` #117 records the ChatGPT→Codex/Classic-exclusion decision.
+- **D9 binding gate:** **MET, no retuning.** The input was an isolated copy containing only labeled
+  07-07, 07-08, and held-out 07-09; 07-10 was excluded. Verbatim referee output:
+
+  ```text
+  $ cargo run -p harness -- score --algo shipped --data <three-day-dir>
+  Scoring 3 labeled day(s), algo=shipped, merge_gap 2700s, absorb_max 1800s, focus_min_len 600s, density 90fph. Labels snapped to the nearest frame.
+  PRIMARY metric = identity-PARTITIONED typed boundary F1 (`07` #114); the pooled position-only F1 (the 0.128/0.50 history) is shown beside it as `posF1`.
+
+  -- tolerance 120s --
+  day            pred   lab match      P     R    F1   posF1       tool
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     0   0.00  0.00  0.00    0.17     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.429 R=0.375 F1=0.400 (matched 9/21 pred, 9/24 lab); posF1=0.489; tool 9/11 = 0.818
+
+  -- tolerance 180s --
+  day            pred   lab match      P     R    F1   posF1       tool
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     2   0.29  0.40  0.33    0.33     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.524 R=0.458 F1=0.489 (matched 11/21 pred, 11/24 lab); posF1=0.533; tool 9/11 = 0.818
+
+  $ cargo run -p harness -- score --algo micro --data <three-day-dir>
+  -- tolerance 120s --
+  POOLED(part) P=0.043 R=0.375 F1=0.077 (matched 9/209 pred, 9/24 lab); posF1=0.120; tool 8/11 = 0.727
+  -- tolerance 180s --
+  POOLED(part) P=0.048 R=0.417 F1=0.086 (matched 10/209 pred, 10/24 lab); posF1=0.146; tool 8/11 = 0.727
+
+  $ cargo run -p harness -- score --algo grouped --data <three-day-dir>
+  -- tolerance 120s --
+  POOLED(part) P=0.409 R=0.375 F1=0.391 (matched 9/22 pred, 9/24 lab); posF1=0.435; tool 10/11 = 0.909
+  -- tolerance 180s --
+  POOLED(part) P=0.455 R=0.417 F1=0.435 (matched 10/22 pred, 10/24 lab); posF1=0.478; tool 10/11 = 0.909
+  ```
+
+  Gate check: tool `0.818 >= 0.65`; daily predicted/labeled `8/11`, `7/5`, `6/8` are each within
+  2×; shipped beats micro and grouped at both tolerances; ±120 s F1 `0.400 >= 0.20`.
+- **Focused verification (verbatim terminal summaries):**
+
+  ```text
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy -p kernel -p harness -p sessions -p store --all-targets -- -D warnings
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.39s
+  $ cargo test -p harness
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ cargo test -p kernel sessions_scheduler_contract_tests
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.01s
+  $ cargo test -p kernel --test sessions_intel
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  $ cargo test -p store --test sessions
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  $ cargo test -p sessions
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Skipped / deferred at this checkpoint:** PR5 IPC/UI and PR6 API/MCP; no command or NavRail route
+  is added. Full workspace/UI/binding verification and the D5-backed live checks remain before PR
+  open and will be appended here verbatim.
+- **Hallucinated / corrected:** the first backfill cut helper treated an empty scanned chunk as proof
+  that the entire future target was empty; a red regression test exposed the skip, and the helper now
+  advances only to the scanned desired boundary. The initial shipped score banner printed harness
+  model defaults even though the shipped arm correctly used 2700/1800; the banner now reads the
+  production params. The canonical taxonomy's new Classic exclusion initially was ignored by the
+  harness parser; the parity fixture now covers both renamed Codex and Classic, and both parsers
+  apply the exclusion.
+- **Broke / regressed:** none observed in focused suites; full/additive and live checks pending.
+- **Still risky:** the live historical pass and real marker extraction remain qualitative gates;
+  backup is mandatory before launching the branch against the live DB.

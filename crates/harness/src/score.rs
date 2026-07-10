@@ -40,6 +40,8 @@ pub enum Algo {
     Micro,
     Grouped,
     Concurrent,
+    /// The production `sessions` crate at its frozen PR2 parameters (PR4 D9 gate).
+    Shipped,
 }
 
 /// The predicted spans for one day at the given params, algorithm, and anchor-qualification
@@ -64,7 +66,58 @@ pub fn spans_for_algo(
                 .map(|g| g.span)
                 .collect()
         }
+        Algo::Shipped => shipped_spans(frames, sp),
     }
+}
+
+fn shipped_spans(frames: &[FrameRow], sp: &SegParams) -> Vec<SessionSpan> {
+    let production_frames: Vec<sessions::SegmenterFrame> = frames
+        .iter()
+        .map(|frame| sessions::SegmenterFrame {
+            id: frame.frame_id,
+            captured_at: frame.captured_at,
+            app_hint: frame.app_hint.clone(),
+            window_title: frame.window_title.clone(),
+            browser_url: frame.browser_url.clone(),
+        })
+        .collect();
+    // The referee scores complete exported days. Advance `now` past the frozen merge gap so
+    // every end-of-day draft is closed; the span boundaries themselves remain last-frame times.
+    let now_ms = frames
+        .iter()
+        .map(|frame| frame.captured_at)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(sessions::SESSION_MERGE_GAP_MS);
+    let params = sessions::SegmentationParams::shipped(now_ms, sp.gap_close_ms, sp.min_len_ms);
+    sessions::segment_concurrent(&production_frames, &params)
+        .into_iter()
+        .map(|draft| {
+            let kind = match draft.kind {
+                sessions::SessionKind::Focus => Kind::Focus,
+                sessions::SessionKind::Meeting => Kind::Meeting,
+                sessions::SessionKind::Ai => Kind::Ai,
+                sessions::SessionKind::Other => Kind::Other,
+            };
+            let host = draft.host.map(|host| match host {
+                sessions::SessionHost::Terminal => crate::model::Host::Terminal,
+                sessions::SessionHost::Desktop => crate::model::Host::Desktop,
+                sessions::SessionHost::Browser => crate::model::Host::Browser,
+                sessions::SessionHost::Ide => crate::model::Host::Ide,
+            });
+            SessionSpan {
+                start_ms: draft.started_at,
+                end_ms: draft.ended_at,
+                context_key: draft.context_key,
+                kind,
+                tool: draft.tool,
+                host,
+                frame_count: draft.frame_ids.len(),
+                first_frame_id: draft.frame_ids.first().copied().unwrap_or(0),
+                last_frame_id: draft.frame_ids.last().copied().unwrap_or(0),
+            }
+        })
+        .collect()
 }
 
 /// The identity-track partition key for boundary scoring: `ai:<tool>` per tool, `meeting` pooled

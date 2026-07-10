@@ -83,6 +83,8 @@ async fn round_trips_non_default_values() {
         overlay_max_results: 12,
         // 0.3.0 flow recall — away from defaults, within the sanitize clamps.
         resume_min_dwell_secs: 300,
+        sessions_min_len_secs: 240,
+        sessions_gap_close_secs: 600,
         marks_hotkey: "Ctrl+Shift+M".to_string(),
         // Enrichment throttle — every field away from its default, within the sanitize
         // clamps (each exit % kept below its enter %), so the round-trip exercises the
@@ -692,4 +694,46 @@ async fn save_settings_never_writes_retired_keys() {
             "save_settings must not write retired key {key}"
         );
     }
+}
+
+#[tokio::test]
+async fn session_settings_round_trip_and_clamp_to_the_final_contract() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    let settings = Settings {
+        sessions_min_len_secs: 3_601,
+        sessions_gap_close_secs: 1,
+        ..Settings::default()
+    };
+
+    save_settings(dyn_store, &settings).await.unwrap();
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.sessions_min_len_secs, 3_600);
+    assert_eq!(loaded.sessions_gap_close_secs, 60);
+    assert_eq!(
+        store
+            .get_setting("sessions.min_len_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("3600")
+    );
+    assert_eq!(
+        store
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("60")
+    );
+
+    let low = kernel::settings::sanitize_settings(Settings {
+        sessions_min_len_secs: 0,
+        sessions_gap_close_secs: 99_999,
+        ..Settings::default()
+    });
+    assert_eq!(low.sessions_min_len_secs, 30);
+    assert_eq!(low.sessions_gap_close_secs, 3_600);
+    assert_eq!(Settings::default().sessions_min_len_secs, 120);
+    assert_eq!(Settings::default().sessions_gap_close_secs, 300);
 }

@@ -1,0 +1,37 @@
+use traits::{
+    SegmentationParams, SessionArtifactKind, SessionArtifactRole, SessionHost, SessionKind,
+    SESSION_ABSORB_MAX_MS, SESSION_FOCUS_MIN_DENSITY_FPH, SESSION_FOCUS_MIN_LEN_MS,
+    SESSION_FREEZE_LOOKBACK_MS, SESSION_IDENTITY_QUALIFY_MS, SESSION_MEETING_GAP_MS,
+    SESSION_MERGE_GAP_MS,
+};
+
+#[test]
+fn shipped_segmentation_params_pin_the_pr2_gate_values() {
+    let params = SegmentationParams::shipped(9_000_000, 321_000, 123_000);
+
+    assert_eq!(params.now_ms, 9_000_000);
+    assert_eq!(params.gap_close_ms, 321_000);
+    assert_eq!(params.min_len_ms, 123_000);
+    assert_eq!(params.merge_gap_ms, SESSION_MERGE_GAP_MS);
+    assert_eq!(params.absorb_max_ms, SESSION_ABSORB_MAX_MS);
+    assert_eq!(params.meeting_gap_ms, SESSION_MEETING_GAP_MS);
+    assert_eq!(params.focus_min_len_ms, SESSION_FOCUS_MIN_LEN_MS);
+    assert_eq!(params.focus_min_density_fph, SESSION_FOCUS_MIN_DENSITY_FPH);
+    assert_eq!(params.identity_qualify_ms, SESSION_IDENTITY_QUALIFY_MS);
+    assert_eq!(params.freeze_lookback_ms, SESSION_FREEZE_LOOKBACK_MS);
+}
+
+#[test]
+fn session_database_tokens_match_schema_eleven() {
+    assert_eq!(SessionKind::Focus.as_str(), "focus");
+    assert_eq!(SessionKind::Meeting.as_str(), "meeting");
+    assert_eq!(SessionKind::Ai.as_str(), "ai");
+    assert_eq!(SessionKind::Other.as_str(), "other");
+    assert_eq!(SessionHost::Terminal.as_str(), "terminal");
+    assert_eq!(SessionHost::Desktop.as_str(), "desktop");
+    assert_eq!(SessionHost::Browser.as_str(), "browser");
+    assert_eq!(SessionHost::Ide.as_str(), "ide");
+    assert_eq!(SessionArtifactKind::Exchange.as_str(), "exchange");
+    assert_eq!(SessionArtifactRole::User.as_str(), "user");
+    assert_eq!(SessionArtifactRole::Agent.as_str(), "agent");
+}

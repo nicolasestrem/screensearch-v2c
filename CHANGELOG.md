@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The sessions engine now groups captured frames in the background into stable focus, meeting, and
+  recognized AI-tool sessions. It supports overlapping tools while keeping each frame owned by one
+  session, incrementally updates the recent tail, and resumably backfills existing history without
+  blocking capture. Recognition ships from the real-data-tuned v3 taxonomy (Claude Code, Codex,
+  Claude desktop, browser AI, and five meeting identities); explicit chat exchanges are extracted
+  best-effort from filtered content text, and session title/summary generation is lazy and cached for
+  the forthcoming in-app surface. No new UI/API commands land in this stage.
 - Groundwork for sessions (no visible changes yet). The database gains the tables that will let
   ScreenSearch group your frames into sessions: a meeting, a Claude Code run, a stretch of focused
   work. The upgrade runs on first launch, adds structure only, and creates no sessions on its own;

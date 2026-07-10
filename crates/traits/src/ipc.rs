@@ -580,6 +580,12 @@ pub struct Settings {
     /// "sustained context" worth resuming, and the same threshold decides whether a
     /// brief excursion breaks a run. One knob, never hardcoded (`03 §3b` stance).
     pub resume_min_dwell_secs: u32,
+    /// Minimum emitted session length (`sessions.min_len_secs`, 0.4.0 PR4). Final clamp
+    /// 30..=3600 seconds; this is one of the arc's exactly two typed settings keys.
+    pub sessions_min_len_secs: u32,
+    /// Pass-1 micro gap close (`sessions.gap_close_secs`, 0.4.0 PR4). Final clamp
+    /// 60..=3600 seconds; macro grouping parameters remain named constants, not settings.
+    pub sessions_gap_close_secs: u32,
     /// Global mark-this-moment hotkey (`marks.hotkey`, 0.3.0 PR6; `03 §7b`, D6). Same
     /// shell-registered/validated posture as `overlay_hotkey`: a bad/colliding value
     /// surfaces as the D6 Settings warning + toast, never a silent rewrite.
@@ -732,6 +738,8 @@ impl Default for Settings {
             // for where-was-i (D9), and the mark-this-moment chord (D6, non-OS-reserved,
             // shell-registered so a conflict surfaces loudly in Settings).
             resume_min_dwell_secs: 120,
+            sessions_min_len_secs: 120,
+            sessions_gap_close_secs: 300,
             marks_hotkey: "Ctrl+Alt+M".to_string(),
             // 0.2.1 smart enrichment throttle (docs/0.2.0.md former PR5, 07 #49). Opt-in
             // master OFF: flipping it on backs enrichment off under sustained load. Enter

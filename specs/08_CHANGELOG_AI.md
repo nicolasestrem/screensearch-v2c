@@ -22,6 +22,42 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR4: production sessions engine + recognition
+
+- **Change:** added `crates/sessions` as the production home for the pure concurrent segmenter,
+  tuned v3 taxonomy, deterministic confidence, and conservative exchange extraction. The concrete
+  provider is wired by `src-tauri`; `kernel` depends only on the new `SessionSegmenter` trait. Added
+  schema-11 session persistence methods with unfrozen SQL guards and frozen-frame ownership guards;
+  the kernel now reconciles the mutable 24 h tail, freezes closed rows, refreshes AI exchanges, and
+  advances one throttle-aware historical chunk per 60 s tick through the raw
+  `sessions.backfill_done_until` checkpoint. Added lazy in-app title/summary generation with one
+  model call and cached `summary_model` provenance; no IPC/API command is added in this PR. Added the
+  two final typed settings/clamps and the `--algo shipped` harness adapter + synthetic parity gate.
+- **Implementer's calls:** (1) the crate tax is worthwhile: `crates/sessions` keeps the algorithm
+  pure and independently testable while the provider seam preserves `03 §2`; (2) only
+  `gap_close`/`min_len` come from settings — merge/absorb/meeting/focus/density/qualification and
+  W are named constants at the D9-frozen values; (3) exchange artifacts are delete-then-inserted on
+  every mutable AI reconciliation (therefore also on close) and once during frozen backfill,
+  idempotently; (4) confidence bands are anchored `0.70..=0.95` (absorbed-time penalty),
+  focus-with-stem `0.45..=0.65` (density margin), bare focus `0.30`, keeping every anchorless result
+  below every anchored result; (5) the single raw checkpoint key stores `{cursor_ms,target_ms}` JSON
+  so the initial one-shot horizon is resumable without adding another typed setting; empty scanned
+  ranges advance only to the scanned chunk edge, never to an unscanned future target; (6) gap #117
+  is resolved by mapping app stem `chatgpt` to `codex` while excluding a title containing
+  `ChatGPT Classic`; the canonical taxonomy moved to `crates/sessions/taxonomy.toml`, and both
+  production and referee parsers apply that negative evidence.
+- **Why:** `docs/0.4.0.md` PR4 / `03 §7e` / `06` #26–#28. This productionizes the already-approved
+  concurrent ground-truth model without schema or frame-level changes (D4/D10), keeps generation
+  lazy and in-app-only (D3/D12), and preserves honest no-match exchange behavior (D8).
+- **Verification so far:** focused red/green suites cover 20 sessions-core tests, seven store
+  persistence tests, scheduler reconciliation/frozen guards/chunk cuts, settings clamps, lazy
+  intelligence, and shipped↔harness parity. The binding D9 re-run on 07-07/08 + held-out 07-09
+  **met with no retuning**: shipped pooled partitioned F1 `0.400/0.489` at ±120/180 s, tool
+  `9/11 = 0.818`, daily counts `8/7/6` vs labels `11/5/8`; micro `0.077/0.086`, grouped
+  `0.391/0.435`. Full CI ladder + live backup/backfill checks are recorded in `05` before PR open.
+
+---
+
 ## 2026-07-10 - 0.4.0 PR3: sessions schema + migration (10 -> 11)
 
 - **Change:** appended `MIGRATION_V11` (`crates/store/src/schema.rs`) and bumped

@@ -18,15 +18,17 @@ pub mod domain;
 pub mod ipc;
 pub mod jobs;
 pub mod privacy;
+pub mod sessions;
 
 pub use contracts::{
     AnswerProvider, BackfillControl, CaptureSource, EmbeddingProvider, OcrProvider, PressureProbe,
-    Store, VisionProvider,
+    SessionSegmenter, Store, VisionProvider,
 };
 pub use domain::*;
 pub use ipc::*;
 pub use jobs::*;
 pub use privacy::is_excluded;
+pub use sessions::*;
 
 /// Workspace-wide fallible result type (`03 §3`).
 ///

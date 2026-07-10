@@ -186,6 +186,9 @@ pub async fn load_settings(store: &dyn Store) -> Settings {
         overlay_hotkey: load_overlay_hotkey(store, d.overlay_hotkey).await,
         overlay_max_results: num(store, "overlay.max_results", d.overlay_max_results).await,
         resume_min_dwell_secs: num(store, "resume.min_dwell_secs", d.resume_min_dwell_secs).await,
+        sessions_min_len_secs: num(store, "sessions.min_len_secs", d.sessions_min_len_secs).await,
+        sessions_gap_close_secs: num(store, "sessions.gap_close_secs", d.sessions_gap_close_secs)
+            .await,
         marks_hotkey: json(store, "marks.hotkey", d.marks_hotkey).await,
         throttle_enabled: boolean(store, "throttle.enabled", d.throttle_enabled).await,
         throttle_cpu_enter_pct: num(store, "throttle.cpu_enter_pct", d.throttle_cpu_enter_pct)
@@ -458,6 +461,14 @@ pub async fn save_settings(store: &dyn Store, s: &Settings) -> Result<()> {
             s.resume_min_dwell_secs.to_string(),
         ),
         (
+            "sessions.min_len_secs".into(),
+            s.sessions_min_len_secs.to_string(),
+        ),
+        (
+            "sessions.gap_close_secs".into(),
+            s.sessions_gap_close_secs.to_string(),
+        ),
+        (
             "marks.hotkey".into(),
             serde_json::to_string(&s.marks_hotkey)?,
         ),
@@ -597,6 +608,10 @@ pub fn sanitize_settings(mut s: Settings) -> Settings {
     // → default, same shell-registered posture as the overlay hotkey. Thresholds/chords are
     // settings, never hardcoded (`03 §3b` stance); the shell surfaces a bad chord loudly (D6).
     s.resume_min_dwell_secs = clamp_u32(s.resume_min_dwell_secs, 10, 86_400);
+    // 0.4.0 PR4 final clamps. These are the arc's only two user-tunable segmentation knobs;
+    // merge/absorb/meeting/focus-density/freeze values are named correctness constants.
+    s.sessions_min_len_secs = clamp_u32(s.sessions_min_len_secs, 30, 3_600);
+    s.sessions_gap_close_secs = clamp_u32(s.sessions_gap_close_secs, 60, 3_600);
     let default_marks_hotkey = Settings::default().marks_hotkey;
     s.marks_hotkey = match s.marks_hotkey.trim() {
         "" => default_marks_hotkey,

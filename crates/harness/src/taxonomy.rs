@@ -8,7 +8,8 @@
 //! - `title_ok` = (`title_patterns` AND `title_prefix_ranges` both empty) OR `window_title`
 //!   CONTAINS one pattern (substring) OR the first non-whitespace char of `window_title` has a
 //!   Unicode scalar value inside one `title_prefix_ranges` entry
-//! - `match`    = `app_ok AND title_ok`
+//! - `excluded` = `window_title` CONTAINS one `title_exclude_patterns` entry
+//! - `match`    = `app_ok AND title_ok AND NOT excluded`
 //!
 //! `title_prefix_ranges` (v3, gap #111) expresses "the title starts with a glyph in this set",
 //! which the substring matcher cannot: Claude Code writes the terminal title as the current task
@@ -28,7 +29,7 @@ use serde::Deserialize;
 use crate::model::{Host, Kind};
 
 /// The bundled seed taxonomy, compiled into the harness for tests and the default matcher.
-const SEED_TOML: &str = include_str!("../taxonomy.toml");
+const SEED_TOML: &str = include_str!("../../sessions/taxonomy.toml");
 
 /// A recognition outcome for one frame's context.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,11 @@ struct Entry {
     /// char (v3, gap #111). Raw as written in TOML; parsed into `prefix_ranges` at parse time.
     #[serde(default)]
     title_prefix_ranges: Vec<String>,
+    /// Explicit negative title evidence used by the tuned v3 ChatGPT→Codex rename decision
+    /// (gap #117). Kept in the referee parser so its canonical taxonomy interpretation remains
+    /// byte-for-byte equivalent to the shipped provider.
+    #[serde(default)]
+    title_exclude_patterns: Vec<String>,
     #[serde(default)]
     #[allow(dead_code)] // dormant refinement (browser_url is NULL in production, gap #109)
     domains: Vec<String>,
@@ -195,7 +201,12 @@ impl Taxonomy {
             let title_ok = (e.title_patterns.is_empty() && e.prefix_ranges.is_empty())
                 || title_contains(&e.title_patterns)
                 || title_prefix_in(&e.prefix_ranges);
-            if app_ok && title_ok {
+            let title_excluded = title.as_ref().is_some_and(|title| {
+                e.title_exclude_patterns
+                    .iter()
+                    .any(|pattern| title.contains(&pattern.to_ascii_lowercase()))
+            });
+            if app_ok && title_ok && !title_excluded {
                 return Some(Recognized {
                     id: e.id.clone(),
                     kind: e.kind,
@@ -345,6 +356,20 @@ title_prefix_ranges = ["2800-2700"]
         assert_eq!(r.id, "codex");
         assert_eq!(r.kind, Kind::Ai);
         assert_eq!(r.host, Some(Host::Desktop));
+    }
+
+    #[test]
+    fn renamed_chatgpt_stem_maps_to_codex_except_classic() {
+        let t = Taxonomy::seed();
+        assert_eq!(
+            t.recognize(Some("chatgpt"), Some("Codex"))
+                .expect("renamed codex desktop")
+                .id,
+            "codex"
+        );
+        assert!(t
+            .recognize(Some("chatgpt"), Some("ChatGPT Classic"))
+            .is_none());
     }
 
     #[test]

@@ -25,8 +25,9 @@ use rusqlite::Connection;
 use traits::{
     AppSuppression, ChunkSource, Embedding, EmbeddingProvider, FrameContextRow,
     FrameEnrichmentInput, FrameMeta, InsightsSummary, Job, JobKind, JobStats, Mark, NewFrame,
-    NewJob, OcrResult, Result, SearchHit, SearchQuery, TextFilterContext, TimelineBucket,
-    VisionAnalysis,
+    NewJob, NewSession, NewSessionArtifact, OcrResult, Result, SearchHit, SearchQuery,
+    SegmenterFrame, Session, SessionArtifact, SessionArtifactKind, SessionContent, SessionFilter,
+    TextFilterContext, TimelineBucket, VisionAnalysis,
 };
 
 mod embeddings;
@@ -37,6 +38,7 @@ mod marks;
 mod records;
 mod schema;
 mod search;
+mod sessions;
 mod settings;
 mod timeline;
 
@@ -362,6 +364,69 @@ impl Store for SqliteStore {
     }
     async fn recent_frame_contexts(&self, limit: u32) -> Result<Vec<FrameContextRow>> {
         SqliteStore::recent_frame_contexts(self, limit).await
+    }
+    async fn insert_session(&self, session: NewSession) -> Result<i64> {
+        SqliteStore::insert_session(self, session).await
+    }
+    async fn update_unfrozen_session(&self, id: i64, session: NewSession) -> Result<bool> {
+        SqliteStore::update_unfrozen_session(self, id, session).await
+    }
+    async fn delete_unfrozen_session(&self, id: i64) -> Result<bool> {
+        SqliteStore::delete_unfrozen_session(self, id).await
+    }
+    async fn assign_frames_session(
+        &self,
+        frame_ids: &[i64],
+        session_id: Option<i64>,
+    ) -> Result<u64> {
+        SqliteStore::assign_frames_session(self, frame_ids, session_id).await
+    }
+    async fn freeze_sessions(&self, older_than_ms: i64) -> Result<u64> {
+        SqliteStore::freeze_sessions(self, older_than_ms).await
+    }
+    async fn unfrozen_sessions(&self) -> Result<Vec<Session>> {
+        SqliteStore::unfrozen_sessions(self).await
+    }
+    async fn sessions_in_range(&self, filter: SessionFilter) -> Result<Vec<Session>> {
+        SqliteStore::sessions_in_range(self, filter).await
+    }
+    async fn get_session(&self, id: i64) -> Result<Option<Session>> {
+        SqliteStore::get_session(self, id).await
+    }
+    async fn session_frames_meta(&self, session_id: i64) -> Result<Vec<SegmenterFrame>> {
+        SqliteStore::session_frames_meta(self, session_id).await
+    }
+    async fn frames_meta_in_range(&self, from_ms: i64, to_ms: i64) -> Result<Vec<SegmenterFrame>> {
+        SqliteStore::frames_meta_in_range(self, from_ms, to_ms).await
+    }
+    async fn content_texts_for_frames(&self, frame_ids: &[i64]) -> Result<Vec<SessionContent>> {
+        SqliteStore::content_texts_for_frames(self, frame_ids).await
+    }
+    async fn insert_session_artifacts(
+        &self,
+        session_id: i64,
+        artifacts: &[NewSessionArtifact],
+    ) -> Result<Vec<i64>> {
+        SqliteStore::insert_session_artifacts(self, session_id, artifacts).await
+    }
+    async fn list_session_artifacts(&self, session_id: i64) -> Result<Vec<SessionArtifact>> {
+        SqliteStore::list_session_artifacts(self, session_id).await
+    }
+    async fn delete_session_artifacts_by_kind(
+        &self,
+        session_id: i64,
+        kind: SessionArtifactKind,
+    ) -> Result<u64> {
+        SqliteStore::delete_session_artifacts_by_kind(self, session_id, kind).await
+    }
+    async fn set_session_title_summary(
+        &self,
+        id: i64,
+        title: &str,
+        summary: &str,
+        model: &str,
+    ) -> Result<bool> {
+        SqliteStore::set_session_title_summary(self, id, title, summary, model).await
     }
     fn set_embedder(&self, embedder: Arc<dyn EmbeddingProvider>) {
         SqliteStore::set_embedder(self, embedder);

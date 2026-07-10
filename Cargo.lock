@@ -2010,6 +2010,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sessions",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
 ]
@@ -2692,6 +2693,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "sessions",
  "store",
  "tempfile",
  "tokio",
@@ -4426,6 +4428,7 @@ dependencies = [
  "kernel",
  "ocr",
  "serde_json",
+ "sessions",
  "store",
  "sysmon",
  "tauri",
@@ -4675,6 +4678,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "sessions"
+version = "0.3.3"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml 0.9.12+spec-1.1.0",
+ "traits",
 ]
 
 [[package]]

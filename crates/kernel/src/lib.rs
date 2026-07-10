@@ -20,18 +20,204 @@ use tokio::task::JoinHandle;
 use traits::{
     AnswerProvider, BackfillControl, CaptureConfig, CaptureNowReceiver, CaptureNowRequest,
     CaptureSource, ComponentReadiness, ComponentStatus, EmbeddingProvider, JobKind,
-    ModelDownloadStatus, NewJob, OcrProvider, PressureProbe, Readiness, SidecarState,
-    SidecarStatus, Store, ThrottleStatus, Toast, ToastLevel, VisionProvider, VisionTarget,
+    ModelDownloadStatus, NewJob, OcrProvider, PressureProbe, Readiness, SessionSegmenter,
+    SidecarState, SidecarStatus, Store, ThrottleStatus, Toast, ToastLevel, VisionProvider,
+    VisionTarget,
 };
 
 mod capture_loop;
 mod events;
 pub mod reports;
 pub mod resume;
+pub mod sessions_intel;
+mod sessions_scheduler;
 pub mod settings;
 mod throttle;
 mod vision_scheduler;
 mod worker_pool;
+
+#[cfg(test)]
+// These contract tests need private scheduler reconciliation helpers and the real store/provider
+// dev dependencies; keeping them at the module seam avoids widening production visibility.
+#[allow(clippy::items_after_test_module)]
+mod sessions_scheduler_contract_tests {
+    use traits::{
+        NewSession, SegmenterFrame, Session, SessionDraft, SessionFilter, SessionHost, SessionKind,
+    };
+
+    use crate::sessions_scheduler::{
+        match_drafts_to_existing, safe_backfill_cut, trim_drafts_against_frozen,
+    };
+
+    fn row(id: i64, start: i64, end: Option<i64>, key: &str, frozen: bool) -> Session {
+        Session {
+            id,
+            started_at: start,
+            ended_at: end,
+            kind: if key.starts_with("ai:") {
+                SessionKind::Ai
+            } else {
+                SessionKind::Focus
+            },
+            tool: key.strip_prefix("ai:").map(str::to_string),
+            host: key.starts_with("ai:").then_some(SessionHost::Terminal),
+            context_key: key.to_string(),
+            title: None,
+            summary: None,
+            summary_model: None,
+            confidence: 0.9,
+            frozen,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn draft(start: i64, end: i64, key: &str, ids: &[i64]) -> SessionDraft {
+        SessionDraft {
+            started_at: start,
+            ended_at: end,
+            kind: if key.starts_with("ai:") {
+                SessionKind::Ai
+            } else {
+                SessionKind::Focus
+            },
+            tool: key.strip_prefix("ai:").map(str::to_string),
+            host: None,
+            context_key: key.to_string(),
+            confidence: 0.8,
+            frame_ids: ids.to_vec(),
+            open: false,
+        }
+    }
+
+    fn frame(id: i64, at: i64) -> SegmenterFrame {
+        SegmenterFrame {
+            id,
+            captured_at: at,
+            app_hint: Some("app".to_string()),
+            window_title: None,
+            browser_url: None,
+        }
+    }
+
+    #[test]
+    fn frozen_guard_trims_only_the_same_identity_track() {
+        let drafts = vec![
+            draft(50, 200, "focus:notepad", &[1, 2, 3, 4]),
+            draft(50, 200, "ai:codex", &[5, 6, 7, 8]),
+        ];
+        let frozen = vec![row(10, 0, Some(100), "focus:browser", true)];
+        let frames = vec![
+            frame(1, 50),
+            frame(2, 99),
+            frame(3, 100),
+            frame(4, 200),
+            frame(5, 50),
+            frame(6, 99),
+            frame(7, 100),
+            frame(8, 200),
+        ];
+
+        let got = trim_drafts_against_frozen(drafts, &frozen, &frames);
+        let focus = got
+            .iter()
+            .find(|draft| draft.kind == SessionKind::Focus)
+            .unwrap();
+        assert_eq!(focus.started_at, 100);
+        assert_eq!(focus.frame_ids, vec![3, 4]);
+        let ai = got
+            .iter()
+            .find(|draft| draft.kind == SessionKind::Ai)
+            .unwrap();
+        assert_eq!(ai.started_at, 50, "cross-track overlap stays allowed");
+    }
+
+    #[test]
+    fn overlap_matching_reuses_one_unfrozen_id_per_draft() {
+        let existing = vec![
+            row(7, 0, None, "ai:codex", false),
+            row(8, 500, Some(700), "ai:codex", false),
+        ];
+        let drafts = vec![
+            draft(50, 400, "ai:codex", &[1]),
+            draft(550, 750, "ai:codex", &[2]),
+        ];
+        let matched = match_drafts_to_existing(&drafts, &existing, 1_000);
+        assert_eq!(matched, vec![Some(7), Some(8)]);
+    }
+
+    #[test]
+    fn historical_cut_extends_to_the_next_global_merge_gap() {
+        let frames = vec![frame(1, 0), frame(2, 100), frame(3, 200), frame(4, 1_000)];
+        assert_eq!(safe_backfill_cut(&frames, 150, 500, 2_000), Some(1_000));
+        assert_eq!(safe_backfill_cut(&frames[..3], 150, 500, 250), None);
+    }
+
+    #[test]
+    fn historical_cut_never_skips_unscanned_future_frames() {
+        assert_eq!(safe_backfill_cut(&[], 500, 100, 5_000), Some(500));
+        assert_eq!(
+            safe_backfill_cut(&[frame(1, 0), frame(2, 100)], 500, 100, 5_000),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn new_session_projection_keeps_open_rows_null_ended() {
+        let mut value = draft(0, 100, "ai:codex", &[1]);
+        value.open = true;
+        assert_eq!(value.as_new_session(false).ended_at, None);
+        let _: SessionFilter = SessionFilter::default();
+        let _: NewSession = value.as_new_session(false);
+    }
+
+    #[tokio::test]
+    async fn incremental_reconciliation_keeps_the_unfrozen_id_stable() {
+        let store = store::SqliteStore::open_in_memory().unwrap();
+        for (index, at) in (0..=180_000).step_by(30_000).enumerate() {
+            store
+                .insert_frame(traits::NewFrame {
+                    captured_at: at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{at}.webp"),
+                    content_hash: format!("h{index}"),
+                    app_hint: Some("codex".to_string()),
+                    window_title: Some("Codex".to_string()),
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+        }
+        let engine = sessions::SessionEngine::new().unwrap();
+        crate::sessions_scheduler::run_incremental_pass(
+            &store,
+            &engine,
+            200_000,
+            &traits::Settings::default(),
+        )
+        .await
+        .unwrap();
+        let first = store.unfrozen_sessions().await.unwrap();
+        assert_eq!(first.len(), 1);
+        let stable_id = first[0].id;
+
+        crate::sessions_scheduler::run_incremental_pass(
+            &store,
+            &engine,
+            250_000,
+            &traits::Settings::default(),
+        )
+        .await
+        .unwrap();
+        let second = store.unfrozen_sessions().await.unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].id, stable_id);
+        assert_eq!(store.session_frames_meta(stable_id).await.unwrap().len(), 7);
+    }
+}
 
 pub use capture_loop::{run_capture_loop, CaptureLoopExit, LoopCtx, PendingDemand};
 pub use events::KernelEvent;
@@ -112,6 +298,12 @@ pub struct Kernel {
     answer: Mutex<Option<Arc<dyn AnswerProvider>>>,
     /// The running timer/idle vision scheduler; `None` until inference is attached.
     scheduler: Mutex<Option<vision_scheduler::SchedulerHandle>>,
+    /// The session segmenter supplied by the composition root. The kernel owns only
+    /// the contract; the concrete `sessions` crate remains outside this crate.
+    session_segmenter: RwLock<Option<Arc<dyn SessionSegmenter>>>,
+    /// The incremental + resumable historical session scheduler. Independent of
+    /// capture and enrichment so a failure degrades to no sessions, never lost frames.
+    sessions_scheduler: Mutex<Option<sessions_scheduler::SchedulerHandle>>,
     /// System-pressure probe for the enrichment throttle (`03 §5/§8`); injected by the
     /// composition root (the kernel forbids `unsafe`). `None` if the platform probe
     /// couldn't be built — the throttle then stays off.
@@ -207,6 +399,8 @@ impl Kernel {
             vision: Arc::new(RwLock::new(None)),
             answer: Mutex::new(None),
             scheduler: Mutex::new(None),
+            session_segmenter: RwLock::new(None),
+            sessions_scheduler: Mutex::new(None),
             pressure_probe: RwLock::new(None),
             throttle_level: Arc::new(AtomicU8::new(0)),
             // Min clamp; the real value is written from settings by `start_workers` and the
@@ -566,6 +760,39 @@ impl Kernel {
     /// The attached answer provider, if any (backs the `ask` command).
     pub async fn answer_provider(&self) -> Option<Arc<dyn AnswerProvider>> {
         self.answer.lock().await.clone()
+    }
+
+    /// Attaches the pure session engine and starts its independent background
+    /// scheduler. Idempotent: the first provider remains authoritative for the run.
+    pub async fn attach_segmenter(&self, segmenter: Arc<dyn SessionSegmenter>) {
+        {
+            let mut slot = self
+                .session_segmenter
+                .write()
+                .expect("session segmenter slot lock poisoned");
+            if slot.is_some() {
+                return;
+            }
+            *slot = Some(segmenter.clone());
+        }
+
+        let mut scheduler = self.sessions_scheduler.lock().await;
+        if scheduler.is_none() {
+            *scheduler = Some(sessions_scheduler::spawn(
+                self.store.clone(),
+                segmenter,
+                self.throttle_level.clone(),
+            ));
+            tracing::info!("sessions scheduler started");
+        }
+    }
+
+    /// Stops the sessions scheduler (idempotent). Called on application shutdown.
+    pub async fn stop_sessions_scheduler(&self) {
+        if let Some(handle) = self.sessions_scheduler.lock().await.take() {
+            handle.stop().await;
+            tracing::info!("sessions scheduler stopped");
+        }
     }
 
     /// Enqueues deferred vision tagging for a frame or a time range (`enqueue_vision`,

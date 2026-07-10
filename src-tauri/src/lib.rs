@@ -1233,6 +1233,18 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(forward_events(kernel.clone(), handle));
 
+                // The pure sessions engine lives in its own module crate; the kernel
+                // sees only `SessionSegmenter`. A bundled-taxonomy parse failure is a
+                // startup wiring error, while runtime pass failures remain isolated
+                // inside the scheduler and never gate capture (0.4.0 D10).
+                let segmenter = Arc::new(sessions::SessionEngine::new()?);
+                {
+                    let kernel = kernel.clone();
+                    tauri::async_runtime::spawn(async move {
+                        kernel.attach_segmenter(segmenter).await;
+                    });
+                }
+
                 // Inject the system-pressure probe (the only `unsafe`, in `sysmon`) and
                 // start the enrichment-throttle governor if `throttle.enabled` (docs/0.2.0.md
                 // former PR5). Independent of inference — it also governs embed_text.
@@ -1459,6 +1471,7 @@ pub(crate) async fn graceful_shutdown(app: &tauri::AppHandle) {
     local_api::stop_server(&api_runtime).await;
     if let Some(kernel) = kernel {
         kernel.stop_throttle().await;
+        kernel.stop_sessions_scheduler().await;
         kernel.stop_vision_scheduler().await;
         kernel.stop_workers().await;
     }
