@@ -69,7 +69,7 @@ fn evenly_sample_ids(frames: &[traits::SegmenterFrame], limit: usize) -> Vec<i64
         return frames.iter().map(|frame| frame.id).collect();
     }
     (0..limit)
-        .map(|index| frames[index * frames.len() / limit].id)
+        .map(|index| frames[index * (frames.len() - 1) / (limit - 1)].id)
         .collect()
 }
 
@@ -92,4 +92,29 @@ fn parse_generated(value: &str) -> anyhow::Result<(String, String)> {
 fn nonempty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(id: i64) -> traits::SegmenterFrame {
+        traits::SegmenterFrame {
+            id,
+            captured_at: id,
+            app_hint: None,
+            window_title: None,
+            browser_url: None,
+        }
+    }
+
+    #[test]
+    fn even_sampling_includes_both_session_endpoints() {
+        let frames: Vec<_> = (1..=100).map(frame).collect();
+        let sampled = evenly_sample_ids(&frames, 24);
+
+        assert_eq!(sampled.len(), 24);
+        assert_eq!(sampled.first(), Some(&1));
+        assert_eq!(sampled.last(), Some(&100));
+    }
 }

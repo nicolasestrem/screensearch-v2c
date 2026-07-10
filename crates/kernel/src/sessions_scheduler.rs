@@ -129,7 +129,7 @@ pub(crate) fn trim_drafts_against_frozen(
                 .filter(|session| partition(session.kind, &session.context_key) == own_partition)
                 .filter_map(|session| {
                     let end = session.ended_at?;
-                    (draft.started_at < end && draft.ended_at > session.started_at).then_some(end)
+                    (draft.started_at <= end && draft.ended_at >= session.started_at).then_some(end)
                 })
                 .max();
             if let Some(cut) = cut {
@@ -470,17 +470,16 @@ pub(crate) async fn run_backfill_chunk(
             })
             .await?;
         for draft in drafts {
-            let existing_id = existing
+            let existing_match = existing
                 .iter()
                 .find(|session| {
-                    session.frozen
-                        && session.context_key == draft.context_key
+                    session.context_key == draft.context_key
                         && session.started_at == draft.started_at
                         && session.ended_at == Some(draft.ended_at)
                 })
-                .map(|session| session.id);
-            let (session_id, draft, inserted_unfrozen) = match existing_id {
-                Some(id) => (id, draft, false),
+                .map(|session| (session.id, !session.frozen));
+            let (session_id, draft, needs_freeze) = match existing_match {
+                Some((id, needs_freeze)) => (id, draft, needs_freeze),
                 None => {
                     let overlapping_frozen = existing.iter().any(|session| {
                         session.frozen
@@ -510,23 +509,25 @@ pub(crate) async fn run_backfill_chunk(
                 .into_iter()
                 .map(|frame| frame.id)
                 .collect();
-            let expected_changes = draft
+            let unowned_ids: Vec<i64> = draft
                 .frame_ids
                 .iter()
                 .filter(|id| !already_owned.contains(id))
-                .count() as u64;
+                .copied()
+                .collect();
+            let expected_changes = unowned_ids.len() as u64;
             let changed = store
-                .assign_frames_session(&draft.frame_ids, Some(session_id))
+                .assign_frames_session(&unowned_ids, Some(session_id))
                 .await?;
             if changed != expected_changes {
-                if inserted_unfrozen {
+                if needs_freeze {
                     store.delete_unfrozen_session(session_id).await?;
                 }
                 anyhow::bail!(
                     "historical session {session_id} assigned {changed}/{expected_changes} new frames"
                 );
             }
-            if inserted_unfrozen {
+            if needs_freeze {
                 store.freeze_sessions(current_frozen_horizon).await?;
                 if !store
                     .get_session(session_id)

@@ -88,6 +88,10 @@ Re-read each session — the files are the source of truth, not your memory.
 - **Schema changes = forward-only migration** with a `schema_version` bump. No schema drift.
 - **Branches, not main.** New work on a feature branch; no force-push; no commit to `main` without
   review. Never commit models, secrets, or DB files (see `.gitignore`).
+- **PR review is automatic.** Opening or updating a PR triggers the configured reviewers; do not
+  `@`-mention review bots for routine review or post ritual "do not merge" reminders. Mention a
+  reviewer only when the maintainer explicitly asks for a targeted follow-up on a specific area.
+  Address actionable bot feedback in code; bot-thread replies are unnecessary.
 - **UI:** typed IPC via `ts-rs` only; every view defines all states (loading/empty/error/partial/
   populated); Rules-of-Hooks is an error-level gate; tokens only (no hardcoded hex/font/spacing).
 

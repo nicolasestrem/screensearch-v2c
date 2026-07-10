@@ -104,6 +104,15 @@ impl Taxonomy {
                     entry.id
                 );
             }
+            for hint in &mut entry.app_hints {
+                *hint = normalize_stem(hint);
+            }
+            for pattern in &mut entry.title_patterns {
+                *pattern = pattern.to_lowercase();
+            }
+            for pattern in &mut entry.title_exclude_patterns {
+                *pattern = pattern.to_lowercase();
+            }
             entry.prefix_ranges = parse_prefix_ranges(&entry.title_prefix_ranges)
                 .with_context(|| format!("taxonomy entry {:?} title_prefix_ranges", entry.id))?;
         }
@@ -134,18 +143,15 @@ impl Taxonomy {
 
         for entry in &self.entries {
             let app_ok = entry.app_hints.is_empty()
-                || app.as_ref().is_some_and(|app| {
-                    entry
-                        .app_hints
-                        .iter()
-                        .any(|hint| app == &normalize_stem(hint))
-                });
+                || app
+                    .as_ref()
+                    .is_some_and(|app| entry.app_hints.iter().any(|hint| app == hint));
             let title_ok = (entry.title_patterns.is_empty() && entry.prefix_ranges.is_empty())
                 || title.as_ref().is_some_and(|title| {
                     entry
                         .title_patterns
                         .iter()
-                        .any(|pattern| title.contains(&pattern.to_lowercase()))
+                        .any(|pattern| title.contains(pattern))
                 })
                 || title_prefix.is_some_and(|scalar| {
                     entry
@@ -157,7 +163,7 @@ impl Taxonomy {
                 entry
                     .title_exclude_patterns
                     .iter()
-                    .any(|pattern| title.contains(&pattern.to_lowercase()))
+                    .any(|pattern| title.contains(pattern))
             });
             if app_ok && title_ok && !excluded {
                 return Some(Recognized {
@@ -193,5 +199,24 @@ title_prefix_ranges = ["2800-2700"]
         let taxonomy = Taxonomy::seed().unwrap();
         assert_eq!(taxonomy.version, 3);
         assert_eq!(taxonomy.entries.len(), 9);
+    }
+
+    #[test]
+    fn parsing_normalizes_match_inputs_once() {
+        let doc = r#"
+version = 3
+[[entry]]
+id = "x"
+kind = "ai"
+app_hints = ["  Example.EXE  "]
+title_patterns = ["Mixed Case"]
+title_exclude_patterns = ["Do Not Match"]
+"#;
+        let taxonomy = Taxonomy::parse(doc).unwrap();
+        let entry = &taxonomy.entries[0];
+
+        assert_eq!(entry.app_hints, ["example"]);
+        assert_eq!(entry.title_patterns, ["mixed case"]);
+        assert_eq!(entry.title_exclude_patterns, ["do not match"]);
     }
 }

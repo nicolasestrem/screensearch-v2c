@@ -881,3 +881,78 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   16:54:21. The 18-minute gap exceeds `meeting_gap`, so no qualifying session row is expected. This
   remains honest capture-limited evidence. All future app launches use only `npm run dev`; direct
   executable launch is forbidden.
+
+### Pass 6 open-PR review follow-up — 2026-07-10
+
+- **Thread audit:** the thread-aware PR read found six unresolved inline threads and one substantive
+  top-level review. Four findings were applicable and reproduced with red tests: exact frozen-end
+  equality retained the boundary frame; a crash-interrupted unfrozen historical row was ignored on
+  retry and duplicated; even summary sampling omitted the final frame; taxonomy patterns were
+  normalized repeatedly in the per-frame matcher. Production now treats stored endpoints as
+  inclusive, reuses and completes the stable partial row id while assigning only unowned frames,
+  samples first+last, and normalizes taxonomy entries once at startup.
+- **Not applied:** the micro-interrupter proposal conflicts with the frozen harness contract, whose
+  documented and tested behavior treats fragmented presence of the same key as sustained; changing
+  only production would break D9 parity. The `debug_assert!` ownership note was defense-in-depth, not
+  a reproduced defect; promoting it to a release panic would violate D10 (failure degrades to no
+  sessions, never a dead scheduler). Existing exactly-once ownership tests remain the enforcement.
+- **Focused red evidence:** the new tests failed before production edits with `Some(96)` vs
+  `Some(100)`, unnormalized `"  Example.EXE  "`, retained start `100` vs expected `200`, and two
+  sessions vs one after partial-row restart. After the fixes:
+
+  ```text
+  $ cargo test -p sessions --lib -- --nocapture
+  running 4 tests
+  test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+  $ cargo test -p kernel --lib -- --nocapture
+  running 54 tests
+  test sessions_intel::tests::even_sampling_includes_both_session_endpoints ... ok
+  test sessions_scheduler_contract_tests::frozen_guard_treats_equal_last_frame_timestamp_as_overlap ... ok
+  test sessions_scheduler_contract_tests::historical_backfill_reuses_an_exact_unfrozen_partial_row ... ok
+  test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+  ```
+- **Workflow disposition:** routine GitHub review is automatic. `AGENTS.md`/`CLAUDE.md` now forbid
+  routine bot mentions and ritual merge warnings; actionable feedback is addressed in code without
+  bot-thread replies. The PR remains open under the standing maintainer-approval rule.
+- **Post-review D9 rerun (no retuning):** unchanged and still above every gate: shipped predicted
+  `8/7/6` vs labeled `11/5/8`, tool `9/11 = 0.818`, pooled partitioned F1 `0.400/0.489` at
+  ±120/180 s. The untouched baselines remain micro `0.077/0.086` and grouped `0.391/0.435`.
+- **Fresh post-comment full ladder:** the exact non-quiet `cargo test --workspace` completed with
+  exit 0 (1,064 output lines); the compact rerun below records the changed and gate-bearing suites.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.71s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.21s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.80s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.27s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+  test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  $ git diff --check
+  (no output; exit 0)
+  ```

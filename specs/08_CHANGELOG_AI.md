@@ -67,6 +67,17 @@
   shaped regressions pin both cases. Final artifact recomputation: no breadcrumb matches, no invalid
   roles, no exchanges on non-AI sessions; genuine inline Claude prompts + `●` outputs remain. The
   full workspace/UI ladder was rerun after these changes (verbatim excerpts in `05`).
+- **Open-PR review follow-up:** evaluated all six unresolved inline threads plus Claude's top-level
+  review. Added red/green regressions and fixed four applicable areas: inclusive equality at the
+  frozen last-frame boundary; exact reuse and completion of an unfrozen crash-interrupted historical
+  row (assigning only its still-unowned frames before freezing); inclusion of both endpoints in lazy
+  summary sampling; and one-time taxonomy normalization during parse. The fragmented-interrupter
+  suggestion was rejected because the frozen harness deliberately counts a fragmented same-key
+  presence span and D9 requires shipped parity; the release-assert suggestion was rejected because a
+  panic would violate D10's no-sessions degradation contract and no duplicate-producing path was
+  demonstrated. PR review automation is now recorded in `AGENTS.md`/`CLAUDE.md`: no routine bot
+  mentions, ritual merge warnings, or bot replies. The post-review D9 rerun remained unchanged:
+  shipped F1 `0.400/0.489`, tool `0.818`, ahead of micro `0.077/0.086` and grouped `0.391/0.435`.
 
 ---
 

@@ -176,6 +176,20 @@ mod sessions_scheduler_contract_tests {
     }
 
     #[test]
+    fn frozen_guard_treats_equal_last_frame_timestamp_as_overlap() {
+        let drafts = vec![draft(100, 200, "focus:notepad", &[1, 2])];
+        let frozen = vec![row(10, 0, Some(100), "focus:browser", true)];
+        let frames = vec![frame(1, 100), frame(2, 200)];
+
+        let got = trim_drafts_against_frozen(drafts, &frozen, &frames);
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].started_at, 200);
+        assert_eq!(got[0].ended_at, 200);
+        assert_eq!(got[0].frame_ids, vec![2]);
+    }
+
+    #[test]
     fn overlap_matching_reuses_one_unfrozen_id_per_draft() {
         let existing = vec![
             row(7, 0, None, "ai:codex", false),
@@ -272,6 +286,69 @@ mod sessions_scheduler_contract_tests {
                 .len(),
             1,
             "completed retry must be idempotent"
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_backfill_reuses_an_exact_unfrozen_partial_row() {
+        const HOUR: i64 = 3_600_000;
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("backfill-partial-row.db");
+        let store = store::SqliteStore::open_path(&db).unwrap();
+        let inserted = seed_continuous_backfill_track(&store).await;
+        let historical: Vec<_> = inserted
+            .iter()
+            .copied()
+            .filter(|(_, at)| *at < 7 * HOUR)
+            .collect();
+        let partial_id = store
+            .insert_session(NewSession {
+                started_at: historical.first().unwrap().1,
+                ended_at: Some(historical.last().unwrap().1),
+                kind: SessionKind::Ai,
+                tool: Some("codex".to_string()),
+                host: Some(SessionHost::Desktop),
+                context_key: "ai:codex".to_string(),
+                confidence: 0.9,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let already_assigned: Vec<i64> = historical
+            .iter()
+            .take(historical.len() / 2)
+            .map(|(id, _)| *id)
+            .collect();
+        store
+            .assign_frames_session(&already_assigned, Some(partial_id))
+            .await
+            .unwrap();
+        drop(store);
+
+        let store = store::SqliteStore::open_path(&db).unwrap();
+        let engine = sessions::SessionEngine::new().unwrap();
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            traits::SESSION_FREEZE_LOOKBACK_MS + 8 * HOUR,
+            &traits::Settings::default(),
+        )
+        .await
+        .unwrap();
+
+        let rows = store
+            .sessions_in_range(SessionFilter {
+                now_ms: traits::SESSION_FREEZE_LOOKBACK_MS + 8 * HOUR,
+                ..SessionFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "retry must not create a ghost duplicate");
+        assert_eq!(rows[0].id, partial_id, "the partial row id remains stable");
+        assert!(rows[0].frozen);
+        assert_eq!(
+            store.session_frames_meta(partial_id).await.unwrap().len(),
+            historical.len()
         );
     }
 
