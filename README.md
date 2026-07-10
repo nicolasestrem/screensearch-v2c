@@ -208,7 +208,7 @@ git diff --exit-code -- ui/src/bindings
 
 # Run the app (debug) — the Tauri CLI ships as the npm dev-dependency `@tauri-apps/cli`,
 # so launch via the root npm script (use `cargo tauri dev` only if you `cargo install tauri-cli`).
-npm run tauri dev
+npm run dev
 ```
 
 Model-backed and hardware tests are gated behind `#[ignore]` (they download models or need a real

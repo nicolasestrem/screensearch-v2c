@@ -1117,7 +1117,7 @@ pub fn run() {
             let (store, db_readiness) = open_store(&db_path);
             app.manage(overlay::OverlayState::default());
             // Auto-update state (0.3.2 PR2, #69). Check on launch in **release builds
-            // only** — a debug build (`npm run tauri dev`) skips the check so development
+            // only** — a debug build (`npm run dev`) skips the check so development
             // never hits the live GitHub-Releases endpoint on every start. The manual
             // "Check for updates" command works in every build. Pull-based + quiet (D1):
             // a found update downloads in the background and installs only on a
@@ -1232,6 +1232,18 @@ pub fn run() {
             if let (Some(kernel), Some(store)) = (&kernel, &store) {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(forward_events(kernel.clone(), handle));
+
+                // The pure sessions engine lives in its own module crate; the kernel
+                // sees only `SessionSegmenter`. A bundled-taxonomy parse failure is a
+                // startup wiring error, while runtime pass failures remain isolated
+                // inside the scheduler and never gate capture (0.4.0 D10).
+                let segmenter = Arc::new(sessions::SessionEngine::new()?);
+                {
+                    let kernel = kernel.clone();
+                    tauri::async_runtime::spawn(async move {
+                        kernel.attach_segmenter(segmenter).await;
+                    });
+                }
 
                 // Inject the system-pressure probe (the only `unsafe`, in `sysmon`) and
                 // start the enrichment-throttle governor if `throttle.enabled` (docs/0.2.0.md
@@ -1459,6 +1471,7 @@ pub(crate) async fn graceful_shutdown(app: &tauri::AppHandle) {
     local_api::stop_server(&api_runtime).await;
     if let Some(kernel) = kernel {
         kernel.stop_throttle().await;
+        kernel.stop_sessions_scheduler().await;
         kernel.stop_vision_scheduler().await;
         kernel.stop_workers().await;
     }

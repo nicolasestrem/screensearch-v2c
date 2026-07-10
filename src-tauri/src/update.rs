@@ -86,7 +86,7 @@ fn set_status(app: &AppHandle, status: UpdateStatus) {
 }
 
 /// Launch-time check, spawned from `setup` on release builds only (dev builds skip it so
-/// `npm run tauri dev` never hits the live endpoint on every start).
+/// `npm run dev` never hits the live endpoint on every start).
 pub async fn launch_check(app: AppHandle) {
     run_check(&app).await;
 }

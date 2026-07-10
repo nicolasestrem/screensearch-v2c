@@ -731,42 +731,59 @@ truth. Deleting or regenerating session rows never touches frames, text, embeddi
 wiped `sessions` table is fully recomputable from frames. `frames.session_id` is `ON DELETE SET NULL`
 (a frame outlives its session).
 
-**Segmentation.** A pure, unit-tested core (a store query + a pure function over ordered
-frame-metadata sequences; proposed home a small `sessions` crate, or `kernel` if the crate tax isn't
-worth it — implementer's call in PR4, recorded in `08`), scheduled by `kernel` as an **incremental
-background pass** (assign new frames to the open session by context-key continuity) plus a **one-shot
-historical pass** over pre-0.4.0 frames that runs as a normal **resumable, low-priority background
-job — it never competes with capture/OCR** (throttle-aware like every enrichment job).
-- **Context key.** The `§7b` where-was-i key (`app_hint`, refined by browser domain from
-  `browser_url`), **generalized** with taxonomy tool identity: `app_hint` ⊕ browser domain ⊕ tool id.
-  It is stored on the row (`sessions.context_key`). The **browser-domain term is dormant** exactly as
-  in `§7b` (production capture sets `browser_url: None`, `07` #109) — the key is built from `app_hint`
-  + tool id today, with the domain sharpening it only once `browser_url` capture lands.
-- **Close / dwell rules.** A session **closes** when the gap since its last frame, or a sustained
-  context switch, exceeds `sessions.gap_close_secs` (default **300**, `§8`). Session length is floored
-  at `sessions.min_len_secs` (default **120**, mirroring `resume.min_dwell_secs`). **Transient
-  excursions are absorbed** exactly as in `§7b` — a brief switch away breaks the run only if the
-  interrupting context is itself sustained — reusing the same dwell logic rather than inventing a
-  second knob.
+**Segmentation.** The production core lives in `crates/sessions`: a pure, unit-tested function over
+ordered frame metadata, exposed to `kernel` behind the `SessionSegmenter` provider trait so the
+module-dependency rule (`§2`) remains intact. The `kernel` scheduler runs an **incremental pass** over
+the unfrozen tail plus a **one-shot, resumable, throttle-aware historical pass** over pre-0.4.0
+frames. Its raw checkpoint is `sessions.backfill_done_until` (not part of typed `Settings`); one
+approximately six-hour chunk runs per tick and extends to the next global `merge_gap` before it is
+committed, so chunk boundaries cannot split a session. Any pass failure logs and degrades to no
+sessions; capture/OCR never waits on it (D10).
+- **Two key levels ([a]).** The `§7b`-generalized key — `app_hint` ⊕ browser domain ⊕ taxonomy tool
+  id — remains the internal **micro-run** key; where-was-i/`resume.rs` is untouched. The persisted
+  task-level grammar is exactly `ai:<tool-id>` | `meeting:<taxonomy-id>` |
+  `focus:<dominant-app-stem>` (bare `focus` when no stem qualifies). The browser-domain term remains
+  dormant while production persists `browser_url: None` (`07` #109).
+- **Concurrent tracks ([b]).** The shipped model has one `ai:<tool>` track per taxonomy id, one
+  `meeting:<id>` track per meeting identity, and **one** residual `focus` track (not one per stem).
+  Each frame has one owner; sessions on the same track never overlap, while different tracks may
+  overlap. A track closes only on **its own** inactivity `>= merge_gap` or at end of input — a foreign
+  recognized identity opens its own track and never closes the incumbent
+  (`SustainedForeignIdentity` is absent). `sessions.gap_close_secs` remains the pass-1 micro close
+  rule; `sessions.min_len_secs` remains the emitted-session floor.
+- **Absorption + meetings ([c]).** An unrecognized run `<= absorb_max` is assigned to the
+  last-touched open AI track; a leading run ramps into an opening AI track; a longer run becomes
+  focus material. Meetings never absorb, but meeting bands are not walk barriers: AI tracks may span
+  them, and overlapping meeting identities emit overlapping sessions. Frame ownership remains
+  exclusive even where session time spans overlap.
+- **Accretion, floors, and freeze ([d]–[f]).** Incremental reconciliation follows anchor continuity
+  and reuses an overlapping row with the same persisted context key, preserving stable unfrozen ids.
+  An AI track emits only when its **own recognized presence** reaches `IDENTITY_QUALIFY_MS`; AI and
+  meetings are density-exempt. Focus requires `focus_min_len` plus the `focus_min_density` gate
+  (`0` disables it). Anchorless focus confidence is always below anchored AI/meeting confidence.
+  `kind`, `tool`, and `context_key` freeze at the same instant as boundaries.
+- **Frozen shipped parameters.** `merge_gap = 2_700_000 ms`; `absorb_max = 1_800_000 ms`;
+  `meeting_gap = 480_000 ms`; `focus_min_len = 600_000 ms`; `focus_min_density = 90 fph`;
+  `IDENTITY_QUALIFY_MS = 120_000 ms`; micro defaults `gap_close = 300_000 ms` and
+  `min_len = 120_000 ms`; freeze lookback **W = 86_400_000 ms (24 h)**. Only `gap_close` and
+  `min_len` are settings (`§8`); every other value is a named correctness constant, never a hidden
+  knob. These are the PR2b/D9-approved production values (`06` #26/#28), not the harness model's
+  old `1_500_000`/`1_200_000` defaults.
 - **Freeze rule (D2).** A closed session, once older than the **freeze lookback window**, has its
   `id` and boundaries **frozen** (immutable; `sessions.frozen = 1`). Resegmentation only ever touches
   **unfrozen** (open/recent) sessions. This is what makes a session `id` safe to hand to MCP
   consumers — history keeps its identities; heuristic improvements apply going forward only. (A
   deliberate "resegment history" feature would be its own explicitly-versioned arc item.)
-  - **The lookback window is a named parameter, not a hidden constant.** Proposed default **24 h**
-    (86 400 s) — comfortably beyond `gap_close_secs` and the incremental pass's horizon, so a session
-    stabilizes within a day of closing while the recent tail stays re-segmentable. **PR2 confirms the
-    value against the real-DB harness** (the window that makes boundaries stop moving in practice) and
-    records it in `05`/`06` before PR3/PR4 depend on it. It is deliberately **not** a user setting
-    (kept off the two-key surface in `§8`; ID stability is a correctness property, not a tuning knob) —
-    promoting it to a setting later, if evidence demands, is a separate call recorded in `08`.
+  - **The lookback window is the named constant W = 24 h (86 400 000 ms).** PR2b confirmed the
+    tuning-day boundaries were stable by 6 h, so 24 h holds with wide margin (`06` #26). It is
+    deliberately **not** a user setting (ID stability is a correctness property, not a tuning knob).
 
 **Taxonomy (D6/D7).** Recognition is driven by a **versioned data file in the repo** (a `version`
 field; proposed TOML), compiled/shipped with the app (parsed at startup) — **not** schema and **not**
 settings. Adding a tool = editing the file; a user-editable override file is **deferred** (`07` #107).
 Each entry carries: tool id, `kind`, `host`, `app_hint` patterns, window-title patterns, and browser
 domains. **Two recognition dimensions:** tool identity × host (`terminal` / `desktop` / `browser` /
-`ide`). **Seed set (D7):** tools `claude-code`, `codex`, `claude-desktop`, `cursor`, `vscode`,
+`ide`). **Tuned v3 set (D7, nine entries):** tools `claude-code`, `codex`, `claude-desktop`,
 `browser-ai` (Claude / ChatGPT / Gemini in a browser); meetings Zoom,
 Teams, Meet, Webex, Discord (app hints + window-title patterns). **`browser_url` is dormant in
 production capture today** — `capture_loop.rs` persists `browser_url: None` (needs UIA; the same
@@ -776,7 +793,10 @@ title, e.g. "Claude", "ChatGPT", "Gemini …", in the window title); the claude.
 gemini.google.com **domain match is a refinement that activates if/when `browser_url` capture lands**
 (deferred — `07` #109), never the sole signal. **The seed patterns are tuned in PR2
 against real captures, not guessed** — this section fixes the file *format* and seed *set*; PR4 ships
-the tuned file. Recognition emits `kind` / `tool` / `host` onto the session (`tool` NULL unless
+the tuned file. `vscode`/`cursor` were dropped by the PR2 evidence. Claude Code is terminal-stem AND
+(`"claude"` in title OR first-glyph U+2733/U+2800–U+28FF); Codex is a desktop app and accepts the
+post-rename `chatgpt` process stem except an explicit `"ChatGPT Classic"` title exclusion (`07`
+#117). Recognition emits `kind` / `tool` / `host` onto the session (`tool` NULL unless
 `kind='ai'`, per the `§4` CHECKs). **No model calls anywhere in segmentation or recognition (D3).**
 
 **Exchange extraction (D8, best-effort).** For recognized **AI** sessions, tool-specific markers over
@@ -915,12 +935,11 @@ shown so it never repeats. It is written directly to the `settings` table and re
 never rides through `get_settings`/`set_settings` or the ts-rs bindings.
 
 **0.4.0 sessions keys** (`§7e`; the arc's **only** new settings surface — new keys exist only where a
-PR names them, `docs/0.4.0.md`). The two names + defaults are contract here; the **clamp ranges and
-the Settings-UI home are PR1 proposals** (the 0.3.2 `app.*` naming-proposal precedent) — PR4 owns the
-final keys/clamps, PR5 owns the placement:
+PR names them, `docs/0.4.0.md`). The two names, defaults, and clamp ranges are final; PR5 owns only
+their Settings-UI placement:
 `sessions.min_len_secs` (120 — minimum session length; mirrors `resume.min_dwell_secs`, `§7e`;
-proposed clamp `30..=3600`) ·
-`sessions.gap_close_secs` (300 — the gap / sustained-context-switch close rule, `§7e`; proposed clamp
+clamp `30..=3600`) ·
+`sessions.gap_close_secs` (300 — pass-1 micro gap close, `§7e`; clamp
 `60..=3600`).
 Proposed Settings home: a new **Advanced** expander ("Sessions") under the 0.3.2 two-tier IA
 (`UI_REFERENCE §3`) — PR5's call, not settled here.

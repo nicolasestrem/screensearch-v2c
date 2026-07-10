@@ -19,6 +19,10 @@ use crate::ipc::{
     SearchQuery, TimelineBucket,
 };
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
+use crate::sessions::{
+    ExtractedExchange, NewSession, NewSessionArtifact, SegmentationParams, SegmenterFrame, Session,
+    SessionArtifact, SessionArtifactKind, SessionContent, SessionDraft, SessionFilter,
+};
 use crate::{MonitorInfo, Result};
 
 /// Screen capture source (WGC impl in `capture`, `03 §3`).
@@ -141,6 +145,22 @@ pub trait AnswerProvider: Send + Sync {
     fn answer_context_budget(&self) -> Option<u32> {
         None
     }
+}
+
+/// Pure session segmentation + best-effort exchange extraction (`03 §7e`). The concrete
+/// implementation lives in the `sessions` module crate; the kernel sees only this provider
+/// seam, preserving the workspace dependency rule (`03 §2`).
+pub trait SessionSegmenter: Send + Sync {
+    /// Segments ordered or unordered frame metadata into deterministic session drafts.
+    fn segment(&self, frames: &[SegmenterFrame], params: &SegmentationParams) -> Vec<SessionDraft>;
+
+    /// Extracts only explicitly marked user/agent exchanges from filtered `content_text`.
+    /// No recognized marker means no artifact; roles are never inferred.
+    fn extract_exchanges(
+        &self,
+        tool_id: &str,
+        contents: &[SessionContent],
+    ) -> Vec<ExtractedExchange>;
 }
 
 /// The durable data spine: frames, OCR, embeddings, retrieval, job queue, settings
@@ -350,6 +370,101 @@ pub trait Store: Send + Sync {
     /// plain capped window. Default returns empty for stores without frame browsing.
     async fn recent_frame_contexts(&self, _limit: u32) -> Result<Vec<FrameContextRow>> {
         Ok(Vec::new())
+    }
+
+    // 0.4.0 sessions (`03 §4`/`§7e`, PR4). Defaults keep existing fakes/source-compatible;
+    // mutating operations that need an honest id fail loudly when unsupported.
+
+    async fn insert_session(&self, _session: NewSession) -> Result<i64> {
+        Err(anyhow::anyhow!("sessions not supported by this store"))
+    }
+
+    /// Updates classification + boundaries only while `frozen = 0`. Returns whether a row changed.
+    async fn update_unfrozen_session(&self, _id: i64, _session: NewSession) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Deletes only while `frozen = 0`. Frames survive via `ON DELETE SET NULL`.
+    async fn delete_unfrozen_session(&self, _id: i64) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Bulk assignment. Implementations must never rewrite a frame owned by a frozen session.
+    async fn assign_frames_session(
+        &self,
+        _frame_ids: &[i64],
+        _session_id: Option<i64>,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+
+    /// Freezes closed sessions whose end is older than `older_than_ms`.
+    async fn freeze_sessions(&self, _older_than_ms: i64) -> Result<u64> {
+        Ok(0)
+    }
+
+    async fn unfrozen_sessions(&self) -> Result<Vec<Session>> {
+        Ok(Vec::new())
+    }
+
+    async fn sessions_in_range(&self, _filter: SessionFilter) -> Result<Vec<Session>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_session(&self, _id: i64) -> Result<Option<Session>> {
+        Ok(None)
+    }
+
+    async fn session_frames_meta(&self, _session_id: i64) -> Result<Vec<SegmenterFrame>> {
+        Ok(Vec::new())
+    }
+
+    async fn frames_meta_in_range(
+        &self,
+        _from_ms: i64,
+        _to_ms: i64,
+    ) -> Result<Vec<SegmenterFrame>> {
+        Ok(Vec::new())
+    }
+
+    async fn content_texts_for_frames(&self, _frame_ids: &[i64]) -> Result<Vec<SessionContent>> {
+        Ok(Vec::new())
+    }
+
+    async fn insert_session_artifacts(
+        &self,
+        _session_id: i64,
+        artifacts: &[NewSessionArtifact],
+    ) -> Result<Vec<i64>> {
+        if artifacts.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(anyhow::anyhow!(
+                "session artifacts not supported by this store"
+            ))
+        }
+    }
+
+    async fn list_session_artifacts(&self, _session_id: i64) -> Result<Vec<SessionArtifact>> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_session_artifacts_by_kind(
+        &self,
+        _session_id: i64,
+        _kind: SessionArtifactKind,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+
+    async fn set_session_title_summary(
+        &self,
+        _id: i64,
+        _title: &str,
+        _summary: &str,
+        _model: &str,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     /// Injects (or replaces) the query-embedding provider that lights up the vector

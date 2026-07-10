@@ -218,6 +218,16 @@ overlay_max_results: number,
  */
 resume_min_dwell_secs: number, 
 /**
+ * Minimum emitted session length (`sessions.min_len_secs`, 0.4.0 PR4). Final clamp
+ * 30..=3600 seconds; this is one of the arc's exactly two typed settings keys.
+ */
+sessions_min_len_secs: number, 
+/**
+ * Pass-1 micro gap close (`sessions.gap_close_secs`, 0.4.0 PR4). Final clamp
+ * 60..=3600 seconds; macro grouping parameters remain named constants, not settings.
+ */
+sessions_gap_close_secs: number, 
+/**
  * Global mark-this-moment hotkey (`marks.hotkey`, 0.3.0 PR6; `03 §7b`, D6). Same
  * shell-registered/validated posture as `overlay_hotkey`: a bad/colliding value
  * surfaces as the D6 Settings warning + toast, never a silent rewrite.

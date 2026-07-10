@@ -21,6 +21,7 @@ members = [
     "crates/api",
     "crates/mcp",
     "crates/harness",
+    "crates/sessions",
 ]
 
 [workspace.package]
@@ -142,6 +143,7 @@ inference = { path = "crates/inference" }
 textfilter = { path = "crates/textfilter" }
 sysmon = { path = "crates/sysmon" }
 api = { path = "crates/api" }
+sessions = { path = "crates/sessions" }
 
 [profile.release]
 strip = true

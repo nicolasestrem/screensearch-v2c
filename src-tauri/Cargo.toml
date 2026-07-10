@@ -52,6 +52,7 @@ serde_json.workspace = true
 traits.workspace = true
 store.workspace = true
 kernel.workspace = true
+sessions.workspace = true
 capture.workspace = true
 ocr.workspace = true
 uia.workspace = true

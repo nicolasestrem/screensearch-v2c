@@ -430,7 +430,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 
   3036 frames migrated in **~146 ms** (well under the test's 30 s bound), fk clean, sessions +
   artifacts empty, zero backfilled frames — structure-only confirmed on real, live-shaped data.
-  **`npm run tauri dev` was NOT run on this branch** (the dev build shares the live Roaming data dir;
+  **`npm run dev` was NOT run on this branch** (the dev build shares the live Roaming data dir;
   a v11-migrated live DB would brick the installed v0.3.3, which rejects newer schema versions).
 - **Full verification ladder (verbatim, all green):**
 
@@ -469,3 +469,495 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   property holds). Pure performance, additive, no behavior change (D10). Tests updated: the structure
   test asserts **six** new objects (2 tables + 4 indexes); the FK test adds an `EXPLAIN QUERY PLAN`
   assertion that the frame-delete lookup uses the new index. Full ladder re-run green after the change.
+
+## Pass 5 — 2026-07-10 — 0.4.0 PR4 (segmentation engine + recognition; pre-live checkpoint)
+
+- **Implemented:** the production `crates/sessions` concurrent engine and v3 taxonomy; session-domain
+  provider/store contracts; schema-11 SQL persistence with frozen guards; incremental reconciliation,
+  freeze, exchange refresh, and resumable six-hour historical chunks in `kernel`; lazy cached in-app
+  title/summary generation; the two final settings keys/clamps; composition-root lifecycle wiring;
+  and the harness `--algo shipped` adapter/parity test. `03 §7e` now carries the `06` #27/#28
+  concurrent amendments, and `07` #117 records the ChatGPT→Codex/Classic-exclusion decision.
+- **D9 binding gate:** **MET, no retuning.** The input was an isolated copy containing only labeled
+  07-07, 07-08, and held-out 07-09; 07-10 was excluded. Verbatim referee output:
+
+  ```text
+  $ cargo run -p harness -- score --algo shipped --data <three-day-dir>
+  Scoring 3 labeled day(s), algo=shipped, merge_gap 2700s, absorb_max 1800s, focus_min_len 600s, density 90fph. Labels snapped to the nearest frame.
+  PRIMARY metric = identity-PARTITIONED typed boundary F1 (`07` #114); the pooled position-only F1 (the 0.128/0.50 history) is shown beside it as `posF1`.
+
+  -- tolerance 120s --
+  day            pred   lab match      P     R    F1   posF1       tool
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     0   0.00  0.00  0.00    0.17     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.429 R=0.375 F1=0.400 (matched 9/21 pred, 9/24 lab); posF1=0.489; tool 9/11 = 0.818
+
+  -- tolerance 180s --
+  day            pred   lab match      P     R    F1   posF1       tool
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     2   0.29  0.40  0.33    0.33     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.524 R=0.458 F1=0.489 (matched 11/21 pred, 11/24 lab); posF1=0.533; tool 9/11 = 0.818
+
+  $ cargo run -p harness -- score --algo micro --data <three-day-dir>
+  -- tolerance 120s --
+  POOLED(part) P=0.043 R=0.375 F1=0.077 (matched 9/209 pred, 9/24 lab); posF1=0.120; tool 8/11 = 0.727
+  -- tolerance 180s --
+  POOLED(part) P=0.048 R=0.417 F1=0.086 (matched 10/209 pred, 10/24 lab); posF1=0.146; tool 8/11 = 0.727
+
+  $ cargo run -p harness -- score --algo grouped --data <three-day-dir>
+  -- tolerance 120s --
+  POOLED(part) P=0.409 R=0.375 F1=0.391 (matched 9/22 pred, 9/24 lab); posF1=0.435; tool 10/11 = 0.909
+  -- tolerance 180s --
+  POOLED(part) P=0.455 R=0.417 F1=0.435 (matched 10/22 pred, 10/24 lab); posF1=0.478; tool 10/11 = 0.909
+  ```
+
+  Gate check: tool `0.818 >= 0.65`; daily predicted/labeled `8/11`, `7/5`, `6/8` are each within
+  2×; shipped beats micro and grouped at both tolerances; ±120 s F1 `0.400 >= 0.20`.
+- **Focused verification (verbatim terminal summaries):**
+
+  ```text
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy -p kernel -p harness -p sessions -p store --all-targets -- -D warnings
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.39s
+  $ cargo test -p harness
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ cargo test -p kernel sessions_scheduler_contract_tests
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.01s
+  $ cargo test -p kernel --test sessions_intel
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+  $ cargo test -p store --test sessions
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  $ cargo test -p sessions
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Full CI-parity ladder (UI first; raw output):** the required non-quiet workspace test emitted
+  1060 green lines; the compact rerun below preserves representative raw suite summaries without
+  paraphrasing their pass/fail counts.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+
+  151 packages are looking for funding
+    run `npm fund` for details
+
+  found 0 vulnerabilities
+  npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+  npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+  npm warn allow-scripts
+  npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+
+  $ npm run lint
+  > screensearch-ui@0.3.3 lint
+  > eslint .
+
+  $ npm run build
+  > screensearch-ui@0.3.3 build
+  > tsc --noEmit && vite build
+
+  vite v6.4.3 building for production...
+  transforming...
+  ✓ 434 modules transformed.
+  rendering chunks...
+  computing gzip size...
+  dist/index.html                                  0.80 kB │ gzip:  0.36 kB
+  dist/overlay.html                                0.99 kB │ gzip:  0.42 kB
+  dist/assets/globals-oPR43bCE.css                 31.54 kB │ gzip:  6.69 kB
+  dist/assets/timeRanges-BJgzkTNX.js                0.29 kB │ gzip:  0.19 kB
+  dist/assets/openExternal-cOuZy8U8.js              0.31 kB │ gzip:  0.23 kB
+  dist/assets/useAdaptiveBucketCount-pnT9Dvsn.js    0.35 kB │ gzip:  0.26 kB
+  dist/assets/NotFound-GT5xmkd7.js                  0.44 kB │ gzip:  0.32 kB
+  dist/assets/EmptyState-CIH9-Lyf.js                0.52 kB │ gzip:  0.31 kB
+  dist/assets/Panel-C7dEyHdc.js                     0.68 kB │ gzip:  0.44 kB
+  dist/assets/timelineDraw-B37WQvuk.js              0.75 kB │ gzip:  0.44 kB
+  dist/assets/FrameTile-CvZpniId.js                 0.95 kB │ gzip:  0.53 kB
+  dist/assets/time-cX9c3v95.js                      1.01 kB │ gzip:  0.46 kB
+  dist/assets/FrameImage-PCfV_Ty8.js                1.62 kB │ gzip:  0.85 kB
+  dist/assets/HighlightedSnippet-DKdy48F9.js        1.65 kB │ gzip:  0.83 kB
+  dist/assets/HotkeyField-C0RHDXNK.js               2.54 kB │ gzip:  1.32 kB
+  dist/assets/path-B-7-bRzz.js                      3.83 kB │ gzip:  0.96 kB
+  dist/assets/Insights-DsVkGRfs.js                  5.46 kB │ gzip:  2.11 kB
+  dist/assets/Timeline-DpYfWqP9.js                  6.50 kB │ gzip:  2.97 kB
+  dist/assets/Moment-lfN7bZwI.js                    7.33 kB │ gzip:  2.74 kB
+  dist/assets/Deck-CkSQWV7a.js                     10.66 kB │ gzip:  3.61 kB
+  dist/assets/overlay-CRRPoGHe.js                  10.93 kB │ gzip:  3.85 kB
+  dist/assets/globals-Dyr3sT_-.js                  15.89 kB │ gzip:  5.84 kB
+  dist/assets/main-D3G4FMmK.js                     22.61 kB │ gzip:  7.32 kB
+  dist/assets/query-u_0r_xiX.js                    35.77 kB │ gzip: 10.59 kB
+  dist/assets/Recall-D0S9Iphb.js                   40.42 kB │ gzip: 13.20 kB
+  dist/assets/Settings-C3mGMQhp.js                 46.83 kB │ gzip: 13.28 kB
+  dist/assets/router-CL_afuJ-.js                   64.86 kB │ gzip: 22.21 kB
+  dist/assets/react-vendor-DTiTYlFD.js            143.42 kB │ gzip: 46.01 kB
+  dist/assets/AnswerStream-D4T9ftQq.js            160.09 kB │ gzip: 48.97 kB
+  ✓ built in 1.84s
+
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] building screensearch-mcp (release)...
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.29s
+
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Checking traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+      Checking mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+      Checking doctor v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\doctor)
+      Checking textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+      Checking sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+      Checking inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+      Checking kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+      Checking api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+      Checking capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+      Checking uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+      Checking ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+      Checking sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+      Checking embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+      Checking store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+      Checking harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.62s
+
+  $ cargo build --workspace
+     Compiling traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+     Compiling sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+     Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+     Compiling textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+     Compiling embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+     Compiling uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+     Compiling ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+     Compiling capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+     Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+     Compiling sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+     Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+     Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+     Compiling harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.96s
+
+  $ cargo test --workspace
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 29.42s
+
+  $ cargo test --workspace --quiet   # compact verbatim rerun of the same workspace suites
+  running 119 tests
+  ....................................................................................... 87/119
+  ................................
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  running 105 tests
+  ....................................................................................... 87/105
+  ..................
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.04s
+  running 49 tests
+  .................................................
+  test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+  running 38 tests
+  ......................................
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+  running 64 tests
+  .........................i......................................
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  running 66 tests
+  ..................................................................
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  running 30 tests
+  ........................iiii..
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+
+- **Skipped / deferred at this checkpoint:** PR5 IPC/UI and PR6 API/MCP; no command or NavRail route
+  is added. Full workspace/UI/binding verification and the D5-backed live checks remain before PR
+  open and will be appended here verbatim.
+- **Hallucinated / corrected:** the first backfill cut helper treated an empty scanned chunk as proof
+  that the entire future target was empty; a red regression test exposed the skip, and the helper now
+  advances only to the scanned desired boundary. The initial shipped score banner printed harness
+  model defaults even though the shipped arm correctly used 2700/1800; the banner now reads the
+  production params. The canonical taxonomy's new Classic exclusion initially was ignored by the
+  harness parser; the parity fixture now covers both renamed Codex and Classic, and both parsers
+  apply the exclusion.
+- **Broke / regressed:** none observed in focused suites; full/additive and live checks pending.
+- **Still risky:** the live historical pass and real marker extraction remain qualitative gates;
+  backup is mandatory before launching the branch against the live DB.
+
+### Pass 5 pause disposition — 2026-07-10
+
+- **D5/live evidence obtained:** backup command output was:
+
+  ```text
+  D5 backup written: \\?\C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  PRAGMA integrity_check: ok
+  row counts — source: 3114 frames / 0 marks; copy: 3114 frames / 0 marks (match: true)
+
+  FullName      : C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  Length        : 185266176
+  LastWriteTime : 7/10/2026 2:19:32 PM
+  BACKUP_OUTSIDE_APP_DATA=True
+  BACKUP_OUTSIDE_REPO=True
+  ```
+
+  The dev build opened the live DB at schema 11, started the sessions scheduler, and advanced the
+  checkpoint once per minute while inference/vision work continued. The first pass reached its
+  target and produced 20 sessions / 1,614 assigned frames, including real `claude-code`, `codex`,
+  `claude-desktop`, and `browser-ai` recognition.
+- **Live D8 finding + fix:** the first Codex extraction treated a bare `Codex` navigation label as an
+  agent marker and consumed unrelated screen chrome. That fails the high-precision acceptance. The
+  parser now requires the observed Codex desktop nav signature plus bounded `Q … File` prompt and
+  `Working/Worked for <duration>` response structures; generic desktop/browser roles require an
+  explicit colon. A new live-shaped regression proves navigation is not emitted. Raw focused result:
+
+  ```text
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  running 18 tests
+  test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Derived-data reset correction:** to re-run the live backfill through the corrected extractor,
+  only `frames.session_id`, `sessions`, `session_artifacts`, and the internal checkpoint were reset;
+  frames/text/embeddings/marks stayed `3114/3114/2910/0`. The standalone sqlite CLI connection had
+  foreign keys off by default, so deleting sessions initially left 355 derived orphan artifacts;
+  these were explicitly deleted immediately, `PRAGMA foreign_key_check` returned no rows, and the
+  corrected app began recomputation from source frames. This is recorded as a tooling correction,
+  not hidden as a successful cascade test (the Store-path cascade is separately automated).
+- **Exact pause state:** app + `llama-server` + dev cargo processes are stopped (no orphans). Live DB
+  is schema 11 with 3,114 source frames; corrected recomputation is safely resumable at
+  `{"cursor_ms":1783473465286,"target_ms":1783600094929}` with 14 sessions, 5 frozen, 800 assigned
+  frames, and 116 artifacts. On resume, launching `npm run dev` continues the checkpoint.
+- **Remaining before PR:** (1) let corrected backfill reach cursor=target, then re-check exchange
+  samples; (2) manually start capture (it was paused before launch; max frame stayed 3114) and prove
+  frame growth during a pass; (3) maintainer foregrounds a meeting-titled window (browser AI already
+  exists in history) and judges real exchange output; (4) spot-check search/Ask/Timeline/marks/
+  where-was-i; (5) rerun the full CI ladder because extraction code changed after the prior full run;
+  (6) adversarial review, final commit/push, open PR. No PR exists and nothing is merged.
+
+### Pass 5 resumed live/final-verification evidence — 2026-07-10
+
+- **Historical pass + capture:** corrected recomputation reached
+  `{"cursor_ms":1783609157370,"target_ms":1783609157370}`. While it advanced, live capture grew
+  from frame 3114 to 3154; final derived history held 20 sessions / 1,614 assigned frames and
+  `PRAGMA foreign_key_check` returned no rows. Recognition rows included one `browser-ai`/browser,
+  nine `claude-code`/terminal, five `claude-desktop`/desktop, four `codex`/desktop, and one focus
+  session. Real Meet-titled frames were captured, but their longest chained band was ~8m25s, below
+  the frozen 10-minute meeting floor, so the live meeting-session row remains a maintainer/manual
+  gate rather than being misreported as passing.
+- **D8 live correction:** real output traced two false-positive sources to the exact input lines:
+  Windows Explorer emits `> This pc` / `> Network`, while genuine Claude Code uses `❯`; and an empty
+  standalone `❯` is followed by the terminal status bar. Removed only the ambiguous ASCII alias and
+  required inline content after `❯`. Both regressions were red before the fix and green after it.
+  A final artifact-only recomputation produced genuine prompt/agent samples, zero `This pc`/`Network`
+  artifacts, zero invalid exchange roles, and zero exchange rows on non-AI sessions. Codex/browser
+  sessions with no strong marker correctly emitted no exchanges. Sessions test output:
+
+  ```text
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  running 20 tests
+  test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Fresh post-fix CI ladder:** the first `npm ci` attempt failed with `EPERM unlink esbuild.exe`
+  because the required Tauri/Vite dev launch still held the binary. After stopping only that
+  worktree's dev processes (and verifying no orphaned `llama-server`), the exact ladder passed:
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 3s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.76s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.28s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.84s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.09s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+
+- **Launch-surface correction:** a direct `target/debug/screensearch.exe` launch was attempted for a
+  read-only API spot-check; the maintainer corrected that this repository must always launch through
+  `npm run dev`. The direct process was stopped immediately, its unauthorized API output is not
+  counted as evidence, and subsequent live work uses only the required npm/Tauri launch surface.
+- **Still manual before PR:** maintainer confirmation of search/Ask/Timeline/marks/where-was-i in the
+  UI, plus a qualifying ten-minute meeting-title band if the meeting row is held as a hard PR gate.
+  Automated/D9/backup/backfill/capture/recognition/exchange/full-suite gates are otherwise evidenced.
+
+### Pass 5 adversarial-review corrections — 2026-07-10
+
+- **Review verdict and fixes:** the reserved read-only adversarial pass found two critical and three
+  important correctness gaps. Publication paused. Red regressions proved that pass-1 short excursions
+  were marked consumed without transferring their frame ids; a frozen-boundary frame at exactly
+  `ended_at` was retained even though `ended_at` is the last owned-frame time; and a checkpoint whose
+  fixed historical target cut a continuous track could never scan far enough on later ticks to see
+  the closing gap. Production now transfers every consumed id exactly once, trims incremental tails
+  strictly after frozen `ended_at` using true min/max timestamps, and preserves the fixed checkpoint
+  target while allowing later scans through the current frozen horizon.
+- **Delayed/restarted backfill hardening:** a persisted on-disk checkpoint test now closes a track
+  beyond the initial target after reopening the store and proves the completed retry is idempotent.
+  A second real-store test seeds a frozen incremental overlap: backfill keeps only the historical
+  prefix, assigns every pre-gap frame exactly once, freezes only after successful assignment, and
+  emits no same-track overlap. Exact frozen retries count already-owned ids before validating the
+  assignment result; partial new rows remain deletable until assignment succeeds.
+- **Parity expansion:** the frozen harness implementation and scorer remain unchanged. The shipped
+  parity suite grew from one fixture to a table covering interleaved identities, None absorption,
+  meetings, merge-gap equality, density, qualification failure, and open projection. All referee
+  fields match; only the deliberate production ownership extension may have a larger frame count for
+  pass-1-consumed excursions because the harness stored counts but not owned ids.
+- **Post-fix D9 gate rerun (no retuning):** output remained exactly at the approved evidence line:
+
+  ```text
+  -- tolerance 120s --
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     0   0.00  0.00  0.00    0.17     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.429 R=0.375 F1=0.400 (matched 9/21 pred, 9/24 lab); posF1=0.489; tool 9/11 = 0.818
+  -- tolerance 180s --
+  POOLED(part) P=0.524 R=0.458 F1=0.489 (matched 11/21 pred, 11/24 lab); posF1=0.533; tool 9/11 = 0.818
+  ```
+
+- **Focused raw verification:** `sessions` 21/21, kernel scheduler-contract 8/8, shipped parity 3/3,
+  and clippy for `sessions`/`kernel`/`harness` passed with warnings denied.
+- **Fresh full post-review ladder (verbatim compact output):** the exact non-quiet
+  `cargo test --workspace` also exited 0 before the compact evidence rerun.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.63s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.26s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.39s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.09s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+  test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.57s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+- **Meeting live note:** the maintainer held the meeting for eleven wall-clock minutes, but the DB
+  contains only a 17:12:28–17:14:05 title band (six frames, 1.62 minutes); the prior band ended at
+  16:54:21. The 18-minute gap exceeds `meeting_gap`, so no qualifying session row is expected. This
+  remains honest capture-limited evidence. All future app launches use only `npm run dev`; direct
+  executable launch is forbidden.
+
+### Pass 6 open-PR review follow-up — 2026-07-10
+
+- **Thread audit:** the thread-aware PR read found six unresolved inline threads and one substantive
+  top-level review. Four findings were applicable and reproduced with red tests: exact frozen-end
+  equality retained the boundary frame; a crash-interrupted unfrozen historical row was ignored on
+  retry and duplicated; even summary sampling omitted the final frame; taxonomy patterns were
+  normalized repeatedly in the per-frame matcher. Production now treats stored endpoints as
+  inclusive, reuses and completes the stable partial row id while assigning only unowned frames,
+  samples first+last, and normalizes taxonomy entries once at startup.
+- **Late automatic review:** after the first follow-up push, Claude added a seventh inline finding:
+  `overlap_ms >= 0` treated adjacent same-key sessions as stable-id matches. The red regression
+  returned `[Some(7)]` where `[None]` was required; reconciliation now requires strictly positive
+  overlap, while the existing positive-overlap stable-id test remains green.
+- **Not applied:** the micro-interrupter proposal conflicts with the frozen harness contract, whose
+  documented and tested behavior treats fragmented presence of the same key as sustained; changing
+  only production would break D9 parity. The `debug_assert!` ownership note was defense-in-depth, not
+  a reproduced defect; promoting it to a release panic would violate D10 (failure degrades to no
+  sessions, never a dead scheduler). Existing exactly-once ownership tests remain the enforcement.
+- **Focused red evidence:** the new tests failed before production edits with `Some(96)` vs
+  `Some(100)`, unnormalized `"  Example.EXE  "`, retained start `100` vs expected `200`, and two
+  sessions vs one after partial-row restart. After the fixes:
+
+  ```text
+  $ cargo test -p sessions --lib -- --nocapture
+  running 4 tests
+  test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+  $ cargo test -p kernel --lib -- --nocapture
+  running 55 tests
+  test sessions_intel::tests::even_sampling_includes_both_session_endpoints ... ok
+  test sessions_scheduler_contract_tests::frozen_guard_treats_equal_last_frame_timestamp_as_overlap ... ok
+  test sessions_scheduler_contract_tests::historical_backfill_reuses_an_exact_unfrozen_partial_row ... ok
+  test sessions_scheduler_contract_tests::overlap_matching_does_not_reuse_a_merely_touching_session ... ok
+  test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+  ```
+- **Workflow disposition:** routine GitHub review is automatic. `AGENTS.md`/`CLAUDE.md` now forbid
+  routine bot mentions and ritual merge warnings; actionable feedback is addressed in code without
+  bot-thread replies. The PR remains open under the standing maintainer-approval rule.
+- **Post-review D9 rerun (no retuning):** unchanged and still above every gate: shipped predicted
+  `8/7/6` vs labeled `11/5/8`, tool `9/11 = 0.818`, pooled partitioned F1 `0.400/0.489` at
+  ±120/180 s. The untouched baselines remain micro `0.077/0.086` and grouped `0.391/0.435`.
+- **Fresh post-comment full ladder:** the exact non-quiet `cargo test --workspace` completed with
+  exit 0 (1,063 output lines); the compact rerun below records the changed and gate-bearing suites.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.75s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.21s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.62s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.82s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+  test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  $ git diff --check
+  (no output; exit 0)
+  ```

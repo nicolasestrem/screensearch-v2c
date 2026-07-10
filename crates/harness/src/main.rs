@@ -5,11 +5,12 @@
 //!   harness backup --to <dir> [--db <path>]      (D5 pre-migration snapshot; run FIRST)
 //!   harness export --days <d1,d2,...> [--db <path>] [--out harness-data]
 //! Phase B/C (score.rs, group.rs):
-//!   harness replay | score | sweep | stability [--algo micro|grouped|concurrent] [--data ...] [...]
+//!   harness replay | score | sweep | stability [--algo micro|grouped|concurrent|shipped] [--data ...] [...]
 //!
 //! `--algo` selects the segmenter: `micro` (ungrouped `§7b` baseline), `grouped` (the serial
 //! `06` #27 two-pass segmenter — the A/B baseline), or `concurrent` (the per-identity-track
-//! segmenter, `06` #28 / `07` #114 — the **default**, validated + approved at PR2b Phase C).
+//! segmenter, `06` #28 / `07` #114 — the **default**, validated + approved at PR2b Phase C),
+//! or `shipped` (PR4's production `sessions` crate at its frozen parameters).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -64,7 +65,8 @@ fn algo_of(args: &[String]) -> Result<Algo> {
         None | Some("concurrent") => Ok(Algo::Concurrent),
         Some("grouped") => Ok(Algo::Grouped),
         Some("micro") => Ok(Algo::Micro),
-        Some(other) => bail!("--algo must be micro|grouped|concurrent, got {other:?}"),
+        Some("shipped") => Ok(Algo::Shipped),
+        Some(other) => bail!("--algo must be micro|grouped|concurrent|shipped, got {other:?}"),
     }
 }
 
@@ -73,6 +75,7 @@ fn algo_label(a: Algo) -> &'static str {
         Algo::Micro => "micro",
         Algo::Grouped => "grouped",
         Algo::Concurrent => "concurrent",
+        Algo::Shipped => "shipped",
     }
 }
 
@@ -125,9 +128,9 @@ fn usage() -> &'static str {
      \x20 harness suggest-days [--db <path>]\n\
      \x20 harness backup --to <dir> [--db <path>]        (D5 snapshot; run before any other live-DB command)\n\
      \x20 harness export --days <d1,d2,...> [--db <path>] [--out harness-data]\n\
-     \x20 harness replay [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
-     \x20 harness score  [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
-     \x20 harness sweep | stability [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
+     \x20 harness replay [--algo micro|grouped|concurrent|shipped] [--data harness-data] [seg/group flags]\n\
+     \x20 harness score  [--algo micro|grouped|concurrent|shipped] [--data harness-data] [seg/group flags]\n\
+     \x20 harness sweep | stability [--algo micro|grouped|concurrent|shipped] [--data harness-data] [seg/group flags]\n\
      \n\
      --algo default = concurrent (per-identity-track, 06 #28 / 07 #114); grouped = serial 06 #27 A/B baseline.\n\
      Group flags: --merge-gap <s> --absorb-max <s> --meeting-gap <s> --focus-min-len <s> --focus-density <fph>\n\
@@ -237,7 +240,7 @@ fn cmd_replay(args: &[String]) -> Result<()> {
         let detailed = match algo {
             Algo::Grouped => Some(segment_grouped_detailed(&d.frames, &tax, &sp, &gp)),
             Algo::Concurrent => Some(segment_concurrent_detailed(&d.frames, &tax, &sp, &gp)),
-            Algo::Micro => None,
+            Algo::Micro | Algo::Shipped => None,
         };
         let spans = spans_for(algo, &d.frames, &tax, &sp, &gp);
         println!(
@@ -294,15 +297,32 @@ fn cmd_score(args: &[String]) -> Result<()> {
             data_dir(args).display()
         );
     }
+    let (merge_gap_ms, absorb_max_ms, focus_min_len_ms, focus_min_density_fph) =
+        if algo == Algo::Shipped {
+            let shipped = sessions::SegmentationParams::shipped(0, sp.gap_close_ms, sp.min_len_ms);
+            (
+                shipped.merge_gap_ms,
+                shipped.absorb_max_ms,
+                shipped.focus_min_len_ms,
+                shipped.focus_min_density_fph,
+            )
+        } else {
+            (
+                gp.merge_gap_ms,
+                gp.absorb_max_ms,
+                gp.focus_min_len_ms,
+                gp.focus_min_density_fph,
+            )
+        };
     println!(
         "Scoring {} labeled day(s), algo={}, merge_gap {}s, absorb_max {}s, focus_min_len {}s, \
          density {}fph. Labels snapped to the nearest frame.",
         labeled.len(),
         algo_label(algo),
-        gp.merge_gap_ms / 1000,
-        gp.absorb_max_ms / 1000,
-        gp.focus_min_len_ms / 1000,
-        gp.focus_min_density_fph,
+        merge_gap_ms / 1000,
+        absorb_max_ms / 1000,
+        focus_min_len_ms / 1000,
+        focus_min_density_fph,
     );
     println!(
         "PRIMARY metric = identity-PARTITIONED typed boundary F1 (`07` #114); the pooled \

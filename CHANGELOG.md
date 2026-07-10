@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The sessions engine now groups captured frames in the background into stable focus, meeting, and
+  recognized AI-tool sessions. It supports overlapping tools while keeping each frame owned by one
+  session, incrementally updates the recent tail, and resumably backfills existing history without
+  blocking capture. Recognition ships from the real-data-tuned v3 taxonomy (Claude Code, Codex,
+  Claude desktop, browser AI, and five meeting identities); explicit chat exchanges are extracted
+  best-effort from filtered content text, and session title/summary generation is lazy and cached for
+  the forthcoming in-app surface. No new UI/API commands land in this stage.
 - Groundwork for sessions (no visible changes yet). The database gains the tables that will let
   ScreenSearch group your frames into sessions: a meeting, a Claude Code run, a stretch of focused
   work. The upgrade runs on first launch, adds structure only, and creates no sessions on its own;
@@ -19,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,000-frame database in testing.
 
 ### Changed
+- Review hardening now includes the final frame when sampling session intelligence, parses taxonomy
+  match strings once instead of allocating per frame, treats frozen boundary timestamps as
+  inclusive, refuses to match merely touching mutable sessions, and resumes a crash-interrupted
+  historical row without creating a duplicate session.
+- Session backfill now safely resumes when its original historical cutoff lands inside a continuous
+  activity track, reconciles delayed work before immutable frozen tails, and preserves exact frame
+  ownership across absorbed short excursions and frozen boundaries.
 - Specs only (no app changes): the 0.4.0 "sessions" arc contract is now written into the project
   specs, so the next stages of work can be built straight from them. Sessions group your captured
   frames into meaningful stretches (a meeting, a Claude Code run, an afternoon in one repo), and

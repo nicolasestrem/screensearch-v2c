@@ -77,7 +77,7 @@ Want it to be `ok`. If it's not — stop and ask.
 PR7 is a live UI audit over the user's populated app-data store. Run the app with:
 
 ```sh
-npm run tauri dev
+npm run dev
 ```
 
 Use the existing `%APPDATA%\app.screensearchv2c.desktop` DB. Do not reset or backfill it. Store local
@@ -100,7 +100,7 @@ summaries live in `CHANGELOG.md` and `specs/05_BUILD_REVIEW.md` / `07_KNOWN_GAPS
 ## 🎛️ Manual acceptance — event-driven capture (0.2.1; trimmed 0.3.0 PR2)
 
 Opt-in event-driven capture (`07` #47) needs a quick live check on a real Windows desktop with
-`npm run tauri dev`. **0.3.0 PR2** trimmed the six triggers to **foreground + idle** (clipboard,
+`npm run dev`. **0.3.0 PR2** trimmed the six triggers to **foreground + idle** (clipboard,
 click, scroll-stop, and typing-pause removed — `docs/0.3.0.md`); the Settings panel now shows only
 the master toggle, app-switch, idle, and the three surviving thresholds (debounce, min-interval,
 idle-threshold — plus the fallback interval).
@@ -130,7 +130,7 @@ idle-threshold — plus the fallback interval).
 
 **0.3.0 PR3** retired the **Beta** model tier: each lane (Vision, Answer) now offers **Default** and
 **Quality** only (`docs/0.3.0.md`, D3/D4). Quick live check on a real Windows desktop with
-`npm run tauri dev`.
+`npm run dev`.
 
 - **Two tiers per lane.** Settings → Models shows the tier picker with exactly **Default** and
   **Quality** for both the Vision and Answer models — no **Beta** button. Hovering a tier shows the
@@ -153,7 +153,7 @@ idle-threshold — plus the fallback interval).
 **0.3.0 PR4** removed the dark-launched, flag-off nomic-embed-vision **image-embedding lane**: the
 `enrich.image_embeddings` setting, the second vec0 table, and the `embed_image` job kind are gone,
 proven by a forward-only **v8 → v9** migration that drops *only derived, re-derivable* vectors
-(`docs/0.3.0.md` PR4, D5/D15). Quick live check on a real Windows desktop with `npm run tauri dev`,
+(`docs/0.3.0.md` PR4, D5/D15). Quick live check on a real Windows desktop with `npm run dev`,
 against a **backed-up copy** of a populated 0.2.x/PR3 profile (`<app-data>\screensearch.db`).
 
 > **PR9 audit note (2026-07-04):** the live populated-0.2.x-profile pass below was **waived by
@@ -184,7 +184,7 @@ against a **backed-up copy** of a populated 0.2.x/PR3 profile (`<app-data>\scree
 
 **0.3.0 PR5** adds the global-hotkey Flow overlay: a hidden, capture-protected second Tauri window
 for quick Search/Ask over the current foreground context (`docs/0.3.0.md` PR5, D6/D7). Run on a
-real Windows desktop with `npm run tauri dev`, capture enabled, and at least a few searchable frames
+real Windows desktop with `npm run dev`, capture enabled, and at least a few searchable frames
 in the profile.
 
 - **Default hotkey and keyboard loop.** Focus an unrelated app, press `Ctrl+Alt+Z`: the overlay
@@ -219,7 +219,7 @@ in the profile.
 **0.3.0 PR6** adds two pull-based flow-recall features (`docs/0.3.0.md` Part II, D8/D9/D10/D14): the
 **where-was-i** heuristic (overlay empty state + Deck card) and **mark-this-moment** (global hotkey
 `Ctrl+Alt+M` → a `capture_now` past the diff gate + a mark, with a non-focus-stealing toast). Run on a
-real Windows desktop with `npm run tauri dev`, capture enabled, and a few minutes of history.
+real Windows desktop with `npm run dev`, capture enabled, and a few minutes of history.
 
 - **Where-was-i offers the work context (the core flow).** Spend ≥ 2 minutes (the default
   `resume.min_dwell_secs = 120`) in one app (e.g. VS Code), then switch to a browser for a short detour
@@ -259,7 +259,7 @@ real Windows desktop with `npm run tauri dev`, capture enabled, and a few minute
 ## Manual acceptance — local API + export (0.3.0 PR7)
 
 **0.3.0 PR7** adds the opt-in local HTTP API and JSON export (`docs/0.3.0.md` Part III, D11/D12;
-`03 §7c`). Run on a real Windows desktop with `npm run tauri dev`, capture enabled, and a few minutes
+`03 §7c`). Run on a real Windows desktop with `npm run dev`, capture enabled, and a few minutes
 of history. Use a terminal with `curl` (and `jq` for readability). The token is shown in
 Settings → **Local API** after you enable it.
 
@@ -322,7 +322,7 @@ Settings → **Local API** after you enable it.
 **0.3.0 PR8** adds `screensearch-mcp.exe`, a stdio MCP server wrapping the PR7 local API
 (`docs/0.3.0.md` Part III, D13; `03 §7c`/`§13b.7`). Full config in `docs/MCP.md`. Run on a real
 Windows desktop. First: `node scripts/stage-mcp.mjs` (once per clone — see "Before you push"), then
-`npm run tauri dev`, enable **Settings → Local API**, and copy the token.
+`npm run dev`, enable **Settings → Local API**, and copy the token.
 
 - **Handshake + tool listing over stdio.** Save a session file `mcp-session.jsonl` with one request
   per line:
@@ -359,7 +359,7 @@ Windows desktop. First: `node scripts/stage-mcp.mjs` (once per clone — see "Be
 ## Manual acceptance — polish bundle (0.3.1 PR3)
 
 **0.3.1 PR3** ships three small, user-visible polish items (`docs/0.3.1.md` PR3; decisions
-D1/D2/D3/D4). Run `npm run tauri dev` (or a release build); all three are pure UI/command work,
+D1/D2/D3/D4). Run `npm run dev` (or a release build); all three are pure UI/command work,
 no schema or settings change.
 
 - **#59 — Moment recognized-text has no nested scrollbar (D1).** Open a **terminal-heavy** or
@@ -499,7 +499,7 @@ tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDA
    precision/recall/F1 (+/- tolerance) and tool-recognition accuracy against the labels.
    `sweep`/`stability` write markdown to `harness-data/reports/`.
 
-**The segmenters — `--algo micro | grouped | concurrent`.** Pass 1 (`segment_micro`) produces
+**The segmenters — `--algo micro | grouped | concurrent | shipped`.** Pass 1 (`segment_micro`) produces
 unfloored app-run micro-spans; pass 2 groups them. Three algorithms:
 - `concurrent` (**default**, `06` #28 / `07` #114): the **per-identity-track** model. Sessions of
   different identities may overlap in wall-clock time (an AI track spans a meeting; two AI tools run
@@ -511,6 +511,9 @@ unfloored app-run micro-spans; pass 2 groups them. Three algorithms:
 - `grouped` (`06` #27): the serial two-pass segmenter (one open group, meeting bands as barriers) —
   kept as the A/B baseline.
 - `micro`: the ungrouped `§7b` app-context baseline.
+- `shipped` (PR4): calls the production `crates/sessions` concurrent engine with the frozen
+  `merge_gap=2700s`, `absorb_max=1800s`, `meeting_gap=480s`, focus floor/density, qualification,
+  and W constants. The harness `--gap-close`/`--min-len` flags still exercise the two final settings.
 
 **`labels.toml` is v2 (`06` #28):** non-overlap is enforced **per identity track**, not globally —
 `ai` sessions may not overlap another `ai` with the same `tool`; `focus`/`other` may not overlap
@@ -534,3 +537,34 @@ Different identities may overlap. Serial (pre-v2) label files stay valid.
 
 The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding merge
 gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers only.
+
+### PR4 production gate and live checks
+
+1. **CI-runnable parity:** `cargo test -p harness --test shipped_parity`. The table-driven fixtures
+   cover interleaved tools, short None absorption, meeting overlap, merge-gap equality, focus density,
+   AI qualification, open projection, renamed `app_hint=chatgpt,title=Codex`, and excluded
+   `ChatGPT Classic`. Boundaries/identity/host and first/last metadata match harness-concurrent;
+   production additionally owns pass-1-consumed excursion frame ids, which the frozen referee only
+   counted as absorbed time.
+2. **Binding D9 re-run:** prepare an input directory containing only `2026-07-07`, `2026-07-08`,
+   and held-out `2026-07-09` (do not include the 07-10 capture-limit demonstrator), then run:
+   `cargo run -p harness -- score --algo shipped --data <three-day-dir>`, followed by the same command
+   with `--algo micro` and `--algo grouped`. With no explicit tolerance, each command prints both
+   ±120 s and ±180 s. Gate criteria are verbatim in `06` #26; a miss stops the PR with no retuning.
+3. **D5 backup before live launch:**
+   `cargo run -p harness -- backup --to <outside-repo-and-app-data-dir>`. Confirm the printed
+   integrity check and frame/mark count parity, then print the backup's full path, byte size, and
+   mtime. Only after this gate may `npm run dev` open the live schema-11 DB. Never launch the debug
+   executable directly.
+4. **Historical/incremental observation:** keep capture running while logs show
+   `sessions historical backfill advanced` (`cursor_ms` increasing toward `target_ms`). Query
+   `sessions`, `frames.session_id`, and `session_artifacts` to confirm old rows appear, open/recent ids
+   reconcile stably, and new frames continue arriving. A segmenter error must log and leave capture
+   active.
+5. **Recognition + D8 qualitative check (maintainer in the loop):** foreground a real Claude Code
+   session, Codex desktop session, browser-AI page, and meeting-titled window long enough to pass the
+   frozen floors; inspect `kind/tool/host/context_key`. For an AI row, inspect `kind='exchange'`
+   artifacts: explicit user/agent markers may produce rows; no marker must produce none, never an
+   invented role.
+6. **D10 regression spot-check:** exercise where-was-i, frame search, Ask, Timeline, and marks while
+   capture continues. PR4 adds no commands, no NavRail route, no audio, and no notification surface.
