@@ -289,6 +289,20 @@ pub struct BackupReport {
     pub integrity_ok: bool,
 }
 
+/// Walk up from `start` to the git working-tree root (the first ancestor holding a `.git`
+/// entry; `.git` is a dir in a normal clone and a file in a worktree, so `exists()` covers
+/// both). None when `start` is not inside a git tree.
+fn git_root(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
 /// Take a consistent `VACUUM INTO` snapshot of `src` into `to_dir/screensearch-<ymd>.db`.
 /// Refuses to overwrite, and refuses a destination inside the repo tree or the app data dir.
 /// Reads the source read-only; the source file is never modified.
@@ -300,12 +314,16 @@ pub fn backup(src: &Path, to_dir: &Path, ymd: &str) -> Result<BackupReport> {
 
     if let Ok(cwd) = std::env::current_dir() {
         if let Ok(cwd) = cwd.canonicalize() {
-            if to_abs.starts_with(&cwd) {
+            // Guard the whole repo tree, not just the current directory: running from a
+            // subdirectory (e.g. crates/harness) must still reject a `--to` that lands anywhere
+            // under the repo root (e.g. ../../backups). Fall back to CWD when not in a git tree.
+            let repo_root = git_root(&cwd).unwrap_or(cwd);
+            if to_abs.starts_with(&repo_root) {
                 bail!(
                     "backup destination {} is inside the repo tree ({}) \u{2014} the backup must \
                      live outside the repo (it is personal data and a safety copy)",
                     to_abs.display(),
-                    cwd.display()
+                    repo_root.display()
                 );
             }
         }
@@ -610,5 +628,16 @@ CREATE TABLE marks (
         let inside = std::env::current_dir().unwrap().join("target");
         let err = backup(&src, &inside, "2026-07-07").unwrap_err().to_string();
         assert!(err.contains("inside the repo tree"), "{err}");
+    }
+
+    #[test]
+    fn git_root_walks_above_the_crate_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = git_root(&cwd).expect("tests run inside a git tree");
+        // The crate dir (CWD during tests) is strictly below the repo root, so the old
+        // CWD-only guard would have missed a dest under the root but outside the crate dir.
+        assert!(cwd.starts_with(&root));
+        assert_ne!(cwd, root, "crate dir should be below the git root");
+        assert!(root.join(".git").exists());
     }
 }

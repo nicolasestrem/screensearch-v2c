@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::labels::{parse_labels, resolve_day};
 use crate::model::{DayHeader, ExportFrame};
@@ -34,6 +34,18 @@ pub fn load_day(dir: &Path) -> Result<LoadedDay> {
     let labels_path = dir.join("labels.toml");
     let labels = if labels_path.exists() {
         let day = parse_labels(&std::fs::read_to_string(&labels_path)?)?;
+        // Fail fast if a labels file was copied between day dirs or its date header went stale:
+        // its HH:MM times would otherwise resolve silently against THIS day's midnight and
+        // corrupt the acceptance evidence.
+        if day.date != header.date {
+            bail!(
+                "{}: labels date {:?} does not match the exported day {:?} \
+                 (wrong day's labels.toml?)",
+                labels_path.display(),
+                day.date,
+                header.date
+            );
+        }
         resolve_day(&day, header.local_midnight_ms)
             .with_context(|| format!("validating {}", labels_path.display()))?
     } else {
@@ -134,5 +146,48 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("reports")).unwrap();
         let all = load_all(tmp.path()).unwrap();
         assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn rejects_labels_whose_date_mismatches_the_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("2026-07-01");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mid = 1_782_856_800_000i64;
+        let header = DayHeader {
+            schema: "harness-day-v1".into(),
+            date: "2026-07-01".into(),
+            local_midnight_ms: mid,
+            utc_offset_min: 120,
+            frame_count: 1,
+            mark_count: 0,
+        };
+        std::fs::write(
+            dir.join("day.json"),
+            serde_json::to_string(&header).unwrap(),
+        )
+        .unwrap();
+        let frame = ExportFrame {
+            frame_id: 1,
+            captured_at: mid + 60_000,
+            app_hint: Some("Code".into()),
+            window_title: Some("a.rs".into()),
+            browser_url: None,
+            capture_trigger: Some("timer".into()),
+        };
+        std::fs::write(
+            dir.join("frames.jsonl"),
+            serde_json::to_string(&frame).unwrap(),
+        )
+        .unwrap();
+        // A labels file carrying a different day's date (copied/stale header).
+        std::fs::write(
+            dir.join("labels.toml"),
+            "date = \"2026-07-02\"\n[[session]]\nstart=\"00:01\"\nend=\"00:02\"\nkind=\"focus\"\n",
+        )
+        .unwrap();
+
+        let err = load_day(&dir).unwrap_err().to_string();
+        assert!(err.contains("does not match the exported day"), "{err}");
     }
 }
