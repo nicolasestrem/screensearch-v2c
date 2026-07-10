@@ -22,6 +22,33 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR3: sessions schema + migration (10 -> 11)
+
+- **Change:** appended `MIGRATION_V11` (`crates/store/src/schema.rs`) and bumped
+  `LATEST_SCHEMA_VERSION` 10 -> 11 — the sessions arc's only schema change (D4). Creates the
+  `sessions` and `session_artifacts` tables, the `frames.session_id` column, and the three indexes
+  (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`), transcribed verbatim from the
+  authoritative DDL in `03 §4`. Structure only, no backfill, no table rebuild (PR4's segmenter assigns
+  history later). Updated the three post-migration-latest tripwire asserts to 11 and extended the
+  fresh-vs-migrated parity test to span v11. Added five inline `migration_tests` (structure-only /
+  no-backfill, sessions CHECKs, the compound artifact role CHECK incl. the load-bearing
+  NULL-role-on-exchange rejection, FK SET-NULL/CASCADE behaviors, and the D10 additivity proof: seven
+  store surfaces identical pre/post on a populated fixture) plus an env-gated `#[ignore]` Gate 0
+  live-copy test (`crates/store/tests/store.rs`). Re-normalized the `03 §4` `context_key` column
+  comment to the `06` #27/#28 closed grammar; logged the `03`-vs-`0.4.0.md` DDL divergence as `06` #29
+  (03 wins, by-design PR1 normalization).
+- **Why:** `docs/0.4.0.md` §3 PR3 / `03 §4` "0.4.0 migration" / `03 §13c.3` (D1/D4/D8/D10). Additive
+  (D10) — every frame-level feature is proven unchanged; structure-only +1 forward-only migration (D4).
+- **Verification:** `cargo test -p store --lib migration` -> **11 passed** (5 new v11 tests + the
+  parity test now spanning v11). Full ladder green (`05` Pass 4): UI lint + `built in 2.02s`;
+  `stage-mcp` up to date; `cargo fmt --check` clean; `clippy --workspace --all-targets -D warnings`
+  no warnings; `cargo build --workspace` ok; `cargo test --workspace` all suites ok (store lib 38,
+  store.rs 63 + 1 ignored Gate 0); `git diff --exit-code -- ui/src/bindings` clean (no ts-rs changes).
+  Gate 0 (D5) on a throwaway copy of the real live DB: `Gate 0: migrated 3036 frames 10 -> 11 in
+  145.678ms (fk clean, sessions empty)` — the live DB itself was never opened by this build.
+
+---
+
 ## 2026-07-10 - 0.4.0 PR2b: PR review fixes (3 harness correctness findings)
 
 - **Change:** addressed three automated-review findings on the open PR, all dev-only harness code.

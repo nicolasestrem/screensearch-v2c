@@ -84,6 +84,15 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
   evidence, so this is not rollback theater but the proportionate safety net (`docs/0.4.0.md` D5).
   Owner = maintainer. Re-verified present at the PR7 **D16** first-auto-delivery gate before `v0.4.0`
   is tagged.
+  - ✅ **Gate 0 satisfied at 0.4.0 PR3 (2026-07-10).** Maintainer attested in-session that a dated
+    pristine copy of `screensearch.db` exists outside the app data dir. PR3's build **never opened the
+    live DB** (its mtime stayed `07/10/2026 10:55:06`, 183,693,312 bytes, throughout; the app was not
+    running) — all PR3 tests run on in-memory fixtures, and the migration was proven on a separate
+    **throwaway** copy (live `.db` + `-wal` + `-shm` → isolated scratchpad) via the env-gated
+    `live_db_copy_migrates_to_v11_fast_and_clean` test: **3036 frames migrated 10 → 11 in ~146 ms**,
+    fk clean, sessions/artifacts empty, zero backfill (output in `05` Pass 4). The throwaway copy (now
+    schema 11) was deleted. `npm run tauri dev` was **not** run on the PR3 branch. Re-verify the
+    pristine copy is present again at the PR7 **D16** gate.
 - **Usage-signals reading procedure (0.4.0, D15 — no in-app telemetry, ever):** the app never phones
   home beyond the signed-updater manifest fetch (`02 §7`, `03 §11b`). To answer "is anyone else using
   this?", read **passive repo-side signals** (owner = maintainer; needs `push` access for traffic):

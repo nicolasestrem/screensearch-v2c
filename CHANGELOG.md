@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Groundwork for sessions (no visible changes yet). The database gains the tables that will let
+  ScreenSearch group your frames into sessions: a meeting, a Claude Code run, a stretch of focused
+  work. The upgrade runs on first launch, adds structure only, and creates no sessions on its own;
+  the actual grouping arrives in a later stage. It changes nothing about today's features. Search,
+  Ask, reports, marks, the overlay, and where-was-i are proven byte-for-byte identical before and
+  after the upgrade on a real, populated database, and the upgrade completed in about 150 ms over a
+  3,000-frame database in testing.
+
 ### Changed
 - Specs only (no app changes): the 0.4.0 "sessions" arc contract is now written into the project
   specs, so the next stages of work can be built straight from them. Sessions group your captured
