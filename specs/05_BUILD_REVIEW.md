@@ -687,3 +687,54 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **Broke / regressed:** none observed in focused suites; full/additive and live checks pending.
 - **Still risky:** the live historical pass and real marker extraction remain qualitative gates;
   backup is mandatory before launching the branch against the live DB.
+
+### Pass 5 pause disposition — 2026-07-10
+
+- **D5/live evidence obtained:** backup command output was:
+
+  ```text
+  D5 backup written: \\?\C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  PRAGMA integrity_check: ok
+  row counts — source: 3114 frames / 0 marks; copy: 3114 frames / 0 marks (match: true)
+
+  FullName      : C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  Length        : 185266176
+  LastWriteTime : 7/10/2026 2:19:32 PM
+  BACKUP_OUTSIDE_APP_DATA=True
+  BACKUP_OUTSIDE_REPO=True
+  ```
+
+  The dev build opened the live DB at schema 11, started the sessions scheduler, and advanced the
+  checkpoint once per minute while inference/vision work continued. The first pass reached its
+  target and produced 20 sessions / 1,614 assigned frames, including real `claude-code`, `codex`,
+  `claude-desktop`, and `browser-ai` recognition.
+- **Live D8 finding + fix:** the first Codex extraction treated a bare `Codex` navigation label as an
+  agent marker and consumed unrelated screen chrome. That fails the high-precision acceptance. The
+  parser now requires the observed Codex desktop nav signature plus bounded `Q … File` prompt and
+  `Working/Worked for <duration>` response structures; generic desktop/browser roles require an
+  explicit colon. A new live-shaped regression proves navigation is not emitted. Raw focused result:
+
+  ```text
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  running 18 tests
+  test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Derived-data reset correction:** to re-run the live backfill through the corrected extractor,
+  only `frames.session_id`, `sessions`, `session_artifacts`, and the internal checkpoint were reset;
+  frames/text/embeddings/marks stayed `3114/3114/2910/0`. The standalone sqlite CLI connection had
+  foreign keys off by default, so deleting sessions initially left 355 derived orphan artifacts;
+  these were explicitly deleted immediately, `PRAGMA foreign_key_check` returned no rows, and the
+  corrected app began recomputation from source frames. This is recorded as a tooling correction,
+  not hidden as a successful cascade test (the Store-path cascade is separately automated).
+- **Exact pause state:** app + `llama-server` + dev cargo processes are stopped (no orphans). Live DB
+  is schema 11 with 3,114 source frames; corrected recomputation is safely resumable at
+  `{"cursor_ms":1783473465286,"target_ms":1783600094929}` with 14 sessions, 5 frozen, 800 assigned
+  frames, and 116 artifacts. On resume, launching `npm run tauri dev` continues the checkpoint.
+- **Remaining before PR:** (1) let corrected backfill reach cursor=target, then re-check exchange
+  samples; (2) manually start capture (it was paused before launch; max frame stayed 3114) and prove
+  frame growth during a pass; (3) maintainer foregrounds a meeting-titled window (browser AI already
+  exists in history) and judges real exchange output; (4) spot-check search/Ask/Timeline/marks/
+  where-was-i; (5) rerun the full CI ladder because extraction code changed after the prior full run;
+  (6) adversarial review, final commit/push, open PR. No PR exists and nothing is merged.

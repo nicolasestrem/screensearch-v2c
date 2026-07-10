@@ -257,7 +257,7 @@ fn desktop_and_browser_markers_extract_heading_blocks() {
         "codex",
         &[content(
             1,
-            "You\nReview this diff\nCodex\nThe guard is correct",
+            "Codex\nNew task\nScheduled\nPlugins\nChat\nProjects\nQ\nReview this diff\nFile\nWorked for 12s\nThe guard is correct\nView all",
         )],
     );
     assert_eq!(desktop.len(), 2);
@@ -268,16 +268,39 @@ fn desktop_and_browser_markers_extract_heading_blocks() {
         "browser-ai",
         &[content(
             2,
-            "User:\nExplain WAL\nChatGPT:\nWAL permits readers",
+            "User: Explain WAL\nChatGPT: WAL permits readers",
         )],
     );
     assert_eq!(browser.len(), 2);
 }
 
 #[test]
+fn codex_desktop_chrome_is_not_misclassified_as_an_agent_turn() {
+    let extracted = extract_exchanges(
+        "codex",
+        &[content(
+            3,
+            "Edit\nView Help\nFile\nCodex\nNew task\nScheduled\nPlugins\nChat\nProjects\nQ\nFix login\nHow do I authenticate the MCP?\nFile\nCodex\nTasks\nWorking for 34s\nI'm checking the current configuration guidance.\nThe login state is machine-local.\n@ Ran commands\nAsk for follow-up changes",
+        )],
+    );
+
+    assert_eq!(extracted.len(), 2);
+    assert_eq!(extracted[0].role, SessionArtifactRole::User);
+    assert!(extracted[0].content.contains("How do I authenticate"));
+    assert_eq!(extracted[1].role, SessionArtifactRole::Agent);
+    assert_eq!(
+        extracted[1].content,
+        "I'm checking the current configuration guidance.\nThe login state is machine-local."
+    );
+    assert!(extracted
+        .iter()
+        .all(|exchange| !exchange.content.starts_with("New task")));
+}
+
+#[test]
 fn no_marker_means_no_exchange_and_duplicates_collapse() {
     assert!(extract_exchanges("codex", &[content(1, "plain captured prose")]).is_empty());
-    let same = content(1, "You\nReview this diff");
-    let got = extract_exchanges("codex", &[same.clone(), same]);
+    let same = content(1, "User: Review this diff");
+    let got = extract_exchanges("browser-ai", &[same.clone(), same]);
     assert_eq!(got.len(), 1);
 }

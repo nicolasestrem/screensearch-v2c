@@ -12,11 +12,21 @@ pub fn extract_exchanges(tool_id: &str, contents: &[SessionContent]) -> Vec<Extr
     let mut out = Vec::new();
     let mut seen: HashSet<(SessionArtifactRole, String)> = HashSet::new();
     for frame in ordered {
-        for (role, content) in blocks(tool_id, &frame.content_text) {
+        let candidates = if tool_id == "codex" {
+            codex_desktop_blocks(&frame.content_text)
+        } else {
+            blocks(tool_id, &frame.content_text)
+        };
+        for (role, content) in candidates {
             let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
-            if normalized.is_empty() || !seen.insert((role, normalized)) {
+            let duplicate = seen.iter().any(|(seen_role, seen_content)| {
+                *seen_role == role
+                    && (seen_content.contains(&normalized) || normalized.contains(seen_content))
+            });
+            if normalized.is_empty() || duplicate {
                 continue;
             }
+            seen.insert((role, normalized));
             out.push(ExtractedExchange {
                 role,
                 content,
@@ -25,6 +35,89 @@ pub fn extract_exchanges(tool_id: &str, contents: &[SessionContent]) -> Vec<Extr
         }
     }
     out
+}
+
+/// Codex desktop's flattened UIA/OCR text has no reliable `You:`/`Codex:` headings: a bare
+/// `Codex` in the navigation chrome caused the original generic parser to consume the whole
+/// screen as an agent turn. Use two app-specific, observed structural markers instead:
+/// - the prompt icon `Q`, bounded by the next `File` menu label, inside the Codex nav signature;
+/// - `Working/Worked for <duration>`, followed by at most four response lines and stopped by
+///   known controls/tool rows.
+///
+/// If the signature or a boundary is absent, emit nothing. D8 favors omission over invented roles.
+fn codex_desktop_blocks(text: &str) -> Vec<(SessionArtifactRole, String)> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let has_nav_signature = ["Codex", "New task", "Projects"]
+        .iter()
+        .all(|needle| lines.contains(needle));
+    if !has_nav_signature {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if *line == "Q" {
+            let tail = &lines[index + 1..lines.len().min(index + 9)];
+            if let Some(file_index) = tail.iter().position(|candidate| *candidate == "File") {
+                let content = tail[..file_index].join("\n");
+                if !content.is_empty() {
+                    out.push((SessionArtifactRole::User, content));
+                }
+            }
+            continue;
+        }
+        if !is_codex_work_status(line) {
+            continue;
+        }
+        let content = lines[index + 1..]
+            .iter()
+            .take_while(|candidate| !is_codex_response_stop(candidate))
+            .take(4)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !content.is_empty() {
+            out.push((SessionArtifactRole::Agent, content));
+        }
+    }
+    out
+}
+
+fn is_codex_work_status(line: &str) -> bool {
+    ["Working for ", "Worked for "].iter().any(|prefix| {
+        line.strip_prefix(prefix).is_some_and(|duration| {
+            duration.ends_with('s')
+                && duration
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, 'h' | 'm' | 's' | ' '))
+        })
+    })
+}
+
+fn is_codex_response_stop(line: &&str) -> bool {
+    line.starts_with('@')
+        || line.chars().all(|c| c.is_ascii_digit())
+        || matches!(
+            *line,
+            "File"
+                | "Codex"
+                | "New task"
+                | "Scheduled"
+                | "Plugins"
+                | "Chat"
+                | "Projects"
+                | "Tasks"
+                | "Outputs"
+                | "Sources"
+                | "Web search"
+                | "View all"
+                | "Ask for follow-up changes"
+                | "Full access"
+        )
 }
 
 fn blocks(tool_id: &str, text: &str) -> Vec<(SessionArtifactRole, String)> {
@@ -77,9 +170,10 @@ fn marker(tool_id: &str, line: &str) -> Option<(SessionArtifactRole, Option<Stri
         }
     }
 
-    let (head, tail) = line
-        .split_once(':')
-        .map_or((line, None), |(h, t)| (h, nonempty(t.trim().to_string())));
+    // Desktop/browser role names without punctuation are common navigation labels. Require the
+    // explicit colon form outside the stronger Claude-Code and Codex-specific structures.
+    let (head, tail_text) = line.split_once(':')?;
+    let tail = nonempty(tail_text.trim().to_string());
     let head = head.trim().to_ascii_lowercase();
     let role = match tool_id {
         "claude-code" => match head.as_str() {

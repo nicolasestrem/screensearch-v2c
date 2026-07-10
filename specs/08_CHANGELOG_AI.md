@@ -55,6 +55,12 @@
   **met with no retuning**: shipped pooled partitioned F1 `0.400/0.489` at ±120/180 s, tool
   `9/11 = 0.818`, daily counts `8/7/6` vs labels `11/5/8`; micro `0.077/0.086`, grouped
   `0.391/0.435`. Full CI ladder + live backup/backfill checks are recorded in `05` before PR open.
+- **Live-check amendment:** real Codex UI text exposed a false-positive in the first marker set: the
+  standalone `Codex` navigation label started an oversized agent block. Tightened desktop extraction
+  to observed, bounded Codex structures (`Q … File` prompt; `Working/Worked for <duration>` response)
+  and required colons for generic desktop/browser role headings. A live-shaped regression is green
+  (sessions crate now 3 unit + 18 integration tests). The clean live recomputation is paused mid-
+  checkpoint for the user-requested break; exact DB/process/resume disposition is in `05`.
 
 ---
 
