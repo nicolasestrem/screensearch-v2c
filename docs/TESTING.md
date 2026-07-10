@@ -499,26 +499,38 @@ tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDA
    precision/recall/F1 (+/- tolerance) and tool-recognition accuracy against the labels.
    `sweep`/`stability` write markdown to `harness-data/reports/`.
 
-**The two-pass grouped segmenter (`03 section 7e` amendment, `06` #27).** The default algorithm is
-the task-level GROUPED segmenter: pass 1 (`segment_micro`) produces unfloored app-run micro-spans;
-pass 2 (`group.rs`) accretes them into task-level sessions anchored by recognized tool/meeting
-identity (meeting bands are hard barriers; foreign runs up to `absorb_max` are absorbed; sessions
-close on a `merge_gap` gap, a sustained foreign identity, or a band edge; anchorless focus sessions
-pass a `focus_min_len` floor + a `focus_min_density_fph` gate). `--algo micro` selects the ungrouped
-baseline (the old app-context key) for the A/B comparison.
+**The segmenters — `--algo micro | grouped | concurrent`.** Pass 1 (`segment_micro`) produces
+unfloored app-run micro-spans; pass 2 groups them. Three algorithms:
+- `concurrent` (**default**, `06` #28 / `07` #114): the **per-identity-track** model. Sessions of
+  different identities may overlap in wall-clock time (an AI track spans a meeting; two AI tools run
+  at once) while a frame belongs to exactly one session. A foreign AI id opens its own track; a short
+  unrecognized run absorbs into the last-touched open AI track, a leading one ramps into an opening
+  track, a run over `absorb_max` is focus; an AI track emits only if its summed recognized presence
+  reaches `IDENTITY_QUALIFY_MS`; meeting bands are no longer barriers and overlapping meetings are
+  not merged.
+- `grouped` (`06` #27): the serial two-pass segmenter (one open group, meeting bands as barriers) —
+  kept as the A/B baseline.
+- `micro`: the ungrouped `§7b` app-context baseline.
 
-- `score` reports pooled P/R/F1 at BOTH 120 s and 180 s tolerance by default (the D9 evidence pair);
-  an explicit `--tolerance <s>` overrides that with a single ad-hoc window. Labels are snapped to the
-  nearest captured frame (a disclosed scoring policy for boundaries that fall inside no-frame idle gaps).
-- `replay` prints each session's context key, kind, tool, host, frame count, and close reason.
-- `sweep` runs the Stage-A `merge_gap x absorb_max` grid plus Stage-B 1-D sweeps of the remaining
-  knobs (each classified FLAT -> propose as a named constant, or SENSITIVE -> keep as a setting),
-  with a baseline `--algo micro` row and predicted-session-count honesty columns.
-- `stability` re-proves the freeze-lookback window through the grouped pipeline.
+**`labels.toml` is v2 (`06` #28):** non-overlap is enforced **per identity track**, not globally —
+`ai` sessions may not overlap another `ai` with the same `tool`; `focus`/`other` may not overlap
+another of the same kind; `meeting` labels may overlap; the file is globally sorted by start.
+Different identities may overlap. Serial (pre-v2) label files stay valid.
+
+- `score` reports the **identity-partitioned** typed boundary P/R/F1 as the primary metric plus the
+  pooled position-only `posF1` comparability column, at BOTH 120 s and 180 s tolerance (the D9
+  evidence pair); `--tolerance <s>` overrides with a single window. Labels are snapped to the nearest
+  captured frame (a disclosed policy for boundaries inside no-frame idle gaps).
+- `replay` prints each session's context key, kind, tool, host, frame count, close reason, and marks
+  overlapping sessions with `~` (the concurrency indicator).
+- `sweep` runs the Stage-A `merge_gap x absorb_max` grid plus Stage-B 1-D knob sweeps (each FLAT ->
+  named constant, or SENSITIVE -> keep as a setting), with BOTH a `micro` and a serial-`grouped`
+  baseline line and predicted-session-count honesty columns.
+- `stability` re-proves the freeze-lookback window (identity-partitioned boundaries: an identity swap
+  at the same instant counts as drift).
 - Group flags (proposed `sessions.*` names; PR4 owns the finals): `--merge-gap` `--absorb-max`
   `--meeting-gap` `--focus-min-len` `--focus-density`. Seg flags: `--gap-close` `--min-len`.
-  Scoring: `--tolerance`.
+  Scoring: `--tolerance`. An unknown subcommand exits non-zero.
 
-The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding
-merge gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers
-only.
+The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding merge
+gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers only.

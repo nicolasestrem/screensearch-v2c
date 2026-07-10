@@ -22,6 +22,31 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2b: concurrent segmenter built + validated; D9 gate SET
+
+- **Change:** built the concurrent per-identity-track segmenter (`06` #28 / `07` #114) in the
+  dev-only harness and set the binding D9 gate (`06` #26). `labels.rs` v2 (per-identity non-overlap);
+  `group.rs` `group_concurrent` + `build_bands_concurrent` + `OpenTrack` + `flush_pending` (18 new
+  tests); `score.rs` identity-partitioned typed-boundary referee + `Algo` enum + `score_days` +
+  algo-aware sweep/stability (partitioned-boundary drift); `main.rs` 3-way `--algo
+  micro|grouped|concurrent` (concurrent now the default), partitioned + posF1 output, overlap-marked
+  replay, dual micro+grouped sweep baselines, non-zero exit on unknown subcommand. The serial `06`
+  #27 `group()`/`segment_grouped()` path is **byte-untouched** (the `--algo grouped` A/B baseline);
+  the 13 pinned `segment()` tests are unchanged.
+- **Why:** `07` #114 resolved concurrent — real usage runs parallel recognized tools, which the
+  serial model collapses. Sessions of different identities may overlap in wall-clock time while a
+  frame stays owned by exactly one session (so PR3's schema 11 is unchanged). The gate is
+  **recognition-primary with a boundary-F1 floor** because boundary F1 is structurally capped by
+  foreground-only capture (`07` #117) — recognition is the arc's payoff.
+- **Verification:** `cargo test -p harness` **116 passed**; fmt + clippy `-D warnings` + binding
+  guard clean. Evidence (harness binary, `--algo concurrent`, identity-partitioned, 120/180 s, frozen
+  `merge_gap 2700 s`/`absorb_max 1800 s`): tuning pooled F1 **0.452/0.581** (tool 0.714); **held-out
+  07-09** F1 **0.286**, tool **1.000**, beating grouped **0.167** and micro **0.068**; stability
+  6 h-stable (W = 24 h). Full numbers + gate → `05` Pass 3 final, `06` #26/#27/#28. Read-only export
+  verified (live DB byte-identical); `harness-data/` git-ignored (labels never committed).
+
+---
+
 ## 2026-07-10 - 0.4.0 PR2b: concurrent session model (`07` #114 resolved) - specs gate
 
 - **Change:** recorded the concurrency resolution in the spec channel **before any code** (the #27

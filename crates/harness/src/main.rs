@@ -8,9 +8,8 @@
 //!   harness replay | score | sweep | stability [--algo micro|grouped|concurrent] [--data ...] [...]
 //!
 //! `--algo` selects the segmenter: `micro` (ungrouped `§7b` baseline), `grouped` (the serial
-//! `06` #27 two-pass segmenter — the current default + A/B baseline), or `concurrent` (the
-//! per-identity-track segmenter, `06` #28 / `07` #114). The concurrent evidence runs pass
-//! `--algo concurrent` explicitly; PR2b's wrap-up flips the default after the D9 approval.
+//! `06` #27 two-pass segmenter — the A/B baseline), or `concurrent` (the per-identity-track
+//! segmenter, `06` #28 / `07` #114 — the **default**, validated + approved at PR2b Phase C).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -57,14 +56,14 @@ fn group_params(args: &[String]) -> Result<GroupParams> {
     })
 }
 
-/// The segmenter selected by `--algo micro|grouped|concurrent`. Default is `grouped` (the serial
-/// `06` #27 baseline) until the D9 numbers are approved (`06` #26), then PR2b's wrap-up flips it to
-/// `concurrent`; the evidence runs pass `--algo` explicitly regardless.
+/// The segmenter selected by `--algo micro|grouped|concurrent`. Default is `concurrent` (the
+/// `06` #28 / `07` #114 per-identity-track model, validated + maintainer-approved at PR2b Phase C);
+/// `grouped` is the serial `06` #27 A/B baseline and `micro` the ungrouped `§7b` baseline.
 fn algo_of(args: &[String]) -> Result<Algo> {
     match flag(args, "--algo") {
-        None | Some("grouped") => Ok(Algo::Grouped),
+        None | Some("concurrent") => Ok(Algo::Concurrent),
+        Some("grouped") => Ok(Algo::Grouped),
         Some("micro") => Ok(Algo::Micro),
-        Some("concurrent") => Ok(Algo::Concurrent),
         Some(other) => bail!("--algo must be micro|grouped|concurrent, got {other:?}"),
     }
 }
@@ -122,7 +121,7 @@ fn usage() -> &'static str {
      \x20 harness score  [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
      \x20 harness sweep | stability [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
      \n\
-     --algo default = grouped (serial 06 #27); concurrent = per-identity-track (06 #28, 07 #114).\n\
+     --algo default = concurrent (per-identity-track, 06 #28 / 07 #114); grouped = serial 06 #27 A/B baseline.\n\
      Group flags: --merge-gap <s> --absorb-max <s> --meeting-gap <s> --focus-min-len <s> --focus-density <fph>\n\
      Seg flags:   --gap-close <s> --min-len <s>   Scoring: --tolerance <s>\n\
      The live DB defaults to %APPDATA%\\app.screensearchv2c.desktop\\screensearch.db.\n"
