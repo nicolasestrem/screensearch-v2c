@@ -267,8 +267,13 @@ fn cmd_score(args: &[String]) -> Result<()> {
         gp.focus_min_len_ms / 1000,
         gp.focus_min_density_fph,
     );
-    // Report at both the primary (120 s) and the secondary (180 s) tolerance.
-    for tol in [120i64, 180] {
+    // Default to both the primary (120 s) and the secondary (180 s) tolerance (the D9 evidence
+    // pair); an explicit `--tolerance <s>` overrides that with a single ad-hoc window.
+    let tolerances: Vec<i64> = match flag(args, "--tolerance") {
+        Some(_) => vec![flag_i64(args, "--tolerance", 120)?],
+        None => vec![120, 180],
+    };
+    for tol in tolerances {
         let tol_ms = tol * 1000;
         println!("\n-- tolerance {tol}s --");
         println!(

@@ -507,8 +507,9 @@ close on a `merge_gap` gap, a sustained foreign identity, or a band edge; anchor
 pass a `focus_min_len` floor + a `focus_min_density_fph` gate). `--algo micro` selects the ungrouped
 baseline (the old app-context key) for the A/B comparison.
 
-- `score` reports pooled P/R/F1 at BOTH 120 s and 180 s tolerance; labels are snapped to the nearest
-  captured frame (a disclosed scoring policy for boundaries that fall inside no-frame idle gaps).
+- `score` reports pooled P/R/F1 at BOTH 120 s and 180 s tolerance by default (the D9 evidence pair);
+  an explicit `--tolerance <s>` overrides that with a single ad-hoc window. Labels are snapped to the
+  nearest captured frame (a disclosed scoring policy for boundaries that fall inside no-frame idle gaps).
 - `replay` prints each session's context key, kind, tool, host, frame count, and close reason.
 - `sweep` runs the Stage-A `merge_gap x absorb_max` grid plus Stage-B 1-D sweeps of the remaining
   knobs (each classified FLAT -> propose as a named constant, or SENSITIVE -> keep as a setting),

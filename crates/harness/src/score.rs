@@ -429,9 +429,11 @@ pub fn sweep_1d(
 pub struct StabilityPoint {
     pub lookback_secs: i64,
     /// Max distance (ms) a boundary older than the lookback moved between a truncated replay
-    /// and the full replay, across all cutoffs. `0` = every old boundary reproduced exactly.
+    /// and the full replay, across all cutoffs, in EITHER direction. `0` = every old boundary
+    /// reproduced exactly on both sides.
     pub max_drift_ms: i64,
-    /// How many old boundaries had no counterpart in a truncated replay (appeared only later).
+    /// How many old boundaries existed in one replay with no counterpart in the other (a full
+    /// boundary that appears only later, or a truncated boundary the final replay deletes).
     pub disappeared: usize,
     /// `true` iff no old boundary moved or disappeared for this lookback.
     pub stable: bool,
@@ -441,6 +443,34 @@ fn boundaries(spans: &[SessionSpan]) -> Vec<i64> {
     let mut v: Vec<i64> = spans.iter().flat_map(|s| [s.start_ms, s.end_ms]).collect();
     v.sort_unstable();
     v
+}
+
+/// Compare boundaries older than `old_cutoff` in BOTH directions and accumulate into
+/// `(max_drift_ms, vanished)`. A one-directional check (only old `full` boundaries against
+/// `trunc`) misses the reverse failure the freeze contract also forbids: a truncated replay
+/// emitting an old boundary that later disappears once more frames arrive (an early group the
+/// final segmentation absorbs/merges away). Freezing at that lookback would preserve a boundary
+/// the final result deletes, so it must count as instability.
+fn compare_old_boundaries(full: &[i64], trunc: &[i64], old_cutoff: i64) -> (i64, usize) {
+    fn one_way(
+        from: &[i64],
+        to: &[i64],
+        old_cutoff: i64,
+        max_drift: &mut i64,
+        vanished: &mut usize,
+    ) {
+        for &b in from.iter().filter(|&&x| x <= old_cutoff) {
+            match to.iter().map(|&x| (x - b).abs()).min() {
+                Some(dm) => *max_drift = (*max_drift).max(dm),
+                None => *vanished += 1,
+            }
+        }
+    }
+    let mut max_drift = 0i64;
+    let mut vanished = 0usize;
+    one_way(full, trunc, old_cutoff, &mut max_drift, &mut vanished);
+    one_way(trunc, full, old_cutoff, &mut max_drift, &mut vanished);
+    (max_drift, vanished)
 }
 
 /// Freeze-lookback stability (`03 §7e`): replay each day truncated at hourly cutoffs and, for
@@ -476,13 +506,9 @@ pub fn stability(
                         .cloned()
                         .collect();
                     let tb = boundaries(&segment_grouped(&trunc, tax, sp, gp));
-                    let old_cutoff = t - w_ms;
-                    for &fb in full.iter().filter(|&&b| b <= old_cutoff) {
-                        match tb.iter().map(|&x| (x - fb).abs()).min() {
-                            Some(dm) => max_drift = max_drift.max(dm),
-                            None => disappeared += 1,
-                        }
-                    }
+                    let (drift, vanished) = compare_old_boundaries(&full, &tb, t - w_ms);
+                    max_drift = max_drift.max(drift);
+                    disappeared += vanished;
                     t += cutoff_step_ms;
                 }
             }
@@ -522,6 +548,20 @@ mod tests {
             tool: tool.map(str::to_string),
             host: None,
         }
+    }
+
+    #[test]
+    fn old_boundary_comparison_is_symmetric() {
+        // Exact match both ways -> stable.
+        assert_eq!(compare_old_boundaries(&[100], &[100], 1000), (0, 0));
+        // Old full boundary moved in the truncated replay -> drift.
+        assert_eq!(compare_old_boundaries(&[100], &[130], 1000), (30, 0));
+        // The reverse failure a one-directional check misses: the truncated replay carries an
+        // OLD boundary (500) the full replay lacks. Forward-only would call this stable; the
+        // symmetric check must flag it (nearest full boundary is 100 -> 400 ms drift).
+        assert_eq!(compare_old_boundaries(&[100], &[100, 500], 1000), (400, 0));
+        // Boundaries newer than the cutoff are ignored on both sides.
+        assert_eq!(compare_old_boundaries(&[100], &[100, 5000], 1000), (0, 0));
     }
 
     #[test]
