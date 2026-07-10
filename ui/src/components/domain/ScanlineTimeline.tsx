@@ -34,7 +34,7 @@ export interface ScanlineTimelineProps {
   onOpen: (position: number) => void;
   /** Frames for the hover thumbnail preview (nearest to the cursor). */
   thumbnails?: FrameMeta[];
-  /** Ribbon height in CSS px. */
+  /** Minimum ribbon height in CSS px. The normal-flow session layer can expand it. */
   height?: number;
   /** Additive session-band layer. Kept outside the slider node so its native
    *  buttons do not become interactive descendants of an ARIA slider. */
@@ -206,7 +206,7 @@ export function ScanlineTimeline({
     <div
       ref={containerRef}
       className="relative w-full select-none overflow-hidden rounded-none bg-base"
-      style={{ height }}
+      style={{ minHeight: height }}
     >
       <div
         ref={sliderRef}

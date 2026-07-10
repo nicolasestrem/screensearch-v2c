@@ -17,14 +17,25 @@ export interface SessionRecapProgress {
   total: number;
 }
 
+type SessionRecapPhase = "idle" | "generating" | "done" | "error";
+
+interface SessionRecapView {
+  sessionId: number | null;
+  phase: SessionRecapPhase;
+}
+
 export function useSessionRecap(sessionId: number | null) {
   const activeRequest = useRef<string | null>(null);
   const [progress, setProgress] = useState<SessionRecapProgress | null>(null);
+  const [view, setView] = useState<SessionRecapView>({
+    sessionId,
+    phase: "idle",
+  });
   const recap = useMutation({
     mutationKey: queryKeys.sessionRecap(sessionId ?? -1),
     mutationFn: (request: SessionRecapRequest) => cmd.sessionRecap(request),
   });
-  const { mutate } = recap;
+  const { mutate, reset: resetMutation } = recap;
 
   useEffect(() => {
     let active = true;
@@ -51,14 +62,37 @@ export function useSessionRecap(sessionId: number | null) {
     };
   }, []);
 
+  // A route change or unmount must stop backend work, not merely detach the
+  // progress listener. Clearing the id first makes late events/callbacks inert.
+  useEffect(
+    () => () => {
+      const requestId = activeRequest.current;
+      activeRequest.current = null;
+      if (requestId) void cmd.cancelReport(requestId).catch(() => undefined);
+    },
+    [sessionId],
+  );
+
   const generate = useCallback(() => {
     if (sessionId == null) return;
     const requestId = `session-recap-${sessionId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     activeRequest.current = requestId;
     setProgress(null);
+    resetMutation();
+    setView({ sessionId, phase: "generating" });
     mutate(
       { session_id: sessionId, request_id: requestId },
       {
+        onSuccess: () => {
+          if (activeRequest.current === requestId) {
+            setView({ sessionId, phase: "done" });
+          }
+        },
+        onError: () => {
+          if (activeRequest.current === requestId) {
+            setView({ sessionId, phase: "error" });
+          }
+        },
         onSettled: () => {
           if (activeRequest.current === requestId) {
             activeRequest.current = null;
@@ -67,15 +101,28 @@ export function useSessionRecap(sessionId: number | null) {
         },
       },
     );
-  }, [mutate, sessionId]);
+  }, [mutate, resetMutation, sessionId]);
+
+  const cancel = useCallback(() => {
+    const requestId = activeRequest.current;
+    if (!requestId) return;
+    activeRequest.current = null;
+    setProgress(null);
+    setView({ sessionId, phase: "idle" });
+    resetMutation();
+    void cmd.cancelReport(requestId).catch(() => undefined);
+  }, [resetMutation, sessionId]);
+
+  const phase = view.sessionId === sessionId ? view.phase : "idle";
 
   return {
-    result: recap.data ?? null,
-    error: recap.error,
-    isGenerating: recap.isPending,
-    isError: recap.isError,
-    isSuccess: recap.isSuccess,
+    result: phase === "done" ? (recap.data ?? null) : null,
+    error: phase === "error" ? recap.error : null,
+    isGenerating: phase === "generating",
+    isError: phase === "error",
+    isSuccess: phase === "done",
     progress,
     generate,
+    cancel,
   };
 }

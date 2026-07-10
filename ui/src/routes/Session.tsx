@@ -245,6 +245,11 @@ export function Component() {
                 ? `${recap.progress.stage} · ${recap.progress.done}/${recap.progress.total}`
                 : "Preparing this session…"}
             </p>
+            <div>
+              <Button variant="secondary" size="sm" onClick={recap.cancel}>
+                Cancel
+              </Button>
+            </div>
           </div>
         ) : recap.isError ? (
           <ErrorState
