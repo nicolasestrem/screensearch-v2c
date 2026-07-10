@@ -994,8 +994,8 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   hydration into flattened Tauri-only `UiFrameDetail`/`UiResumeContext` responses; aligned the Recap
   evidence preflight with Rust `str::trim()` so tab/newline-only rows never acquire the provider; and
   enforced the 24-frame cap inside the store regardless of caller input. Each finding was reproduced
-  RED and passed focused GREEN tests; UI lint/build and focused clippy/fmt are clean. The controller
-  owns the final integrated broad suite.
+  RED and passed focused GREEN tests; UI lint/build and focused clippy/fmt are clean. The final
+  integrated broad suite is recorded in Pass 8 and native acceptance in Pass 9.
 
 ## Pass 7 — 2026-07-10 — 0.4.0 PR5 Task 2 (sessions UI surfaces)
 
@@ -1055,11 +1055,11 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   migration** (schema remains 11), opens **no new contradiction**, and requires **no new silent-spec
   gap**. It adds no API/MCP surface, taxonomy/segmenter change, audio, notification, score/streak, or
   NavRail route. Existing frame-level behavior remains additive per D10.
-- **Manual acceptance:** `docs/TESTING.md` now owns the exact native runbook for band → drill-in →
-  Moment → back, exact-session Recap citations and cancellation, Moment/Deck framing, keyboard
-  traversal, real open/low-confidence/no-exchange states, reduced motion, and the supported
-  size/DPI layout matrix. The controller owns the real WebView2 debug-port run. **Native evidence is
-  pending and was not claimed by this documentation/verifier task.**
+- **Manual acceptance:** `docs/TESTING.md` owns the exact native runbook for band → drill-in → Moment
+  → back, exact-session Recap citations and cancellation, Moment/Deck framing, keyboard traversal,
+  real open/low-confidence/no-exchange states, reduced motion, and the supported size/DPI layout
+  matrix. The real Tauri/WebView2 execution is recorded in Pass 9; this Pass 8 transcript remains
+  unchanged as the automated evidence.
 - **Integrated verification:** full raw output follows below in the required UI-first order.
 
 
@@ -2268,3 +2268,36 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```text
 
 ```
+
+## Pass 9 — 2026-07-10 — 0.4.0 PR5 native Tauri/WebView2 acceptance
+
+- **Runtime provenance:** Launched only through `npm run dev` against the live schema-11 database.
+  The actual process was this worktree's `target/debug/screensearch.exe`; the inspected WebView had
+  `window.__TAURI_INTERNALS__ === true`, proving native Tauri rather than a browser mock. Live status:
+  515 captures / 514 tagged. Screenshot evidence remains outside the repo at
+  `%TEMP%\screensearch-pr5-timeline.png`.
+- **Additive surfaces and navigation:** Deck showed `JUMP BACK ... until 17:08 session 16:44–17:14`.
+  Timeline rendered eight real overlapping sessions in two lanes. CDP native Enter
+  (`rawKeyDown`/`char`/`keyUp`) on the first focused band opened `/timeline/session/3`. The exact
+  round trip passed: AI band → session 3 → representative `/timeline/2651`; Moment showed `SESSION`
+  and `PART OF SESSION ScreenSearch Workflow`; SESSION returned to `/timeline/session/3`.
+- **Session truth:** Session 3 showed AI, codex/desktop, Confidence 78.5%, Jul 10 01:21–02:50, 41
+  frames / 24 representatives, and honest `No exchanges captured for this session.` Session 21
+  supplied the neutral low-confidence case at 47.2% with 50 frames and no invented exchanges.
+- **Recap:** Cancel was observed at `Summarizing 1 of 4 · 1/4`; CANCEL returned to GENERATE RECAP and
+  no stale result appeared. A clean run completed in 15 seconds: 5 passes, 1/1 periods, 39/39 frames
+  summarized, truthful trimmed footer. All 39 cited frame ids were individually resolved with the
+  live `get_frame` command; every returned frame had `session.id === 3`.
+- **Layout/accessibility:** At 1280×720 DPR 1, 1920×1080 DPR 1, and emulated 3440×1440 DPR 1.5,
+  document width equalled viewport width; every band was at least 32×32; band overlap, nested vertical
+  scroll contexts, and horizontal overflow were all zero. Session 3 and session 21 each had one
+  vertical scroller and no horizontal overflow. Band labels exposed kind, full date/time, tool/host.
+  Under CDP `prefers-reduced-motion: reduce`, the query matched and animated elements were `[]`.
+- **Settings/states:** Sessions settings were 120 (min 30 / max 3600) and 300 (min 60 / max 3600),
+  with copy explaining the next session pass. Live `list_sessions` returned 21 sessions and open ids
+  `[]`, so the open-session variant was **unavailable in this dataset**—neither pass nor failure, and
+  no live observation is claimed. Low-confidence and no-exchange variants were observed as above.
+- **Noise/contract audit:** Only the existing `favicon.ico` 404 and informational WebView lazy-image
+  intervention appeared; no app runtime errors. PR5 native acceptance **passes except for the
+  transparently unavailable open-session variant**. No new product ambiguity, contradiction, known
+  gap, schema/migration change, code change, or generated-binding change was introduced.

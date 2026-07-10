@@ -125,6 +125,9 @@ session-ribbon/single-scroll layout at supported sizes and DPI. API/MCP exposure
 
 No new silent-spec gap was opened. The final review fixes stay inside the existing session-UI and
 shell-layout contracts, and PR5 makes no schema/migration change. `docs/TESTING.md` now states the
-native/manual acceptance procedure precisely. The controller-owned real WebView2 debug-port run and
-its screenshots/recording are still **pending evidence** for the already-contracted `03 §13c-5`
-acceptance line; this is not reported as passed by the documentation/verifier task.
+native/manual acceptance procedure and observed evidence precisely. The real `npm run dev`
+Tauri/WebView2 run passed band navigation, exact Session↔Moment return, cited Recap ownership and
+cancellation, low-confidence/no-exchange honesty, keyboard operation, reduced motion, Settings
+clamps, and the supported layout matrix (`05` Pass 9). The live dataset contained 21 sessions and
+zero open rows, so the open-session variant is recorded as **unavailable**, not passed or failed.
+That absence creates no new product ambiguity or known gap; implementation/test coverage remains.

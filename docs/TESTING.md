@@ -625,8 +625,41 @@ the PR7 audit.
 
 ### PR5 evidence status
 
-The automated UI-first verification proves formatting, lint/Rules-of-Hooks, TypeScript/Vite build,
-Rust integration, tests, and generated-binding stability. It does **not** prove the native checks
-above. As of the PR5 documentation pass on 2026-07-10, the controller owns the real WebView2
-debug-port run and its screenshots/recording; that evidence is **pending**, so PR5 native acceptance
-must not be reported as passed yet.
+**Observed 2026-07-10 — native acceptance passed, with the open-session variant unavailable in the
+current live dataset.** The run used `npm run dev` against the live schema-11 database, with the
+worktree's `target/debug/screensearch.exe` process and a real Tauri WebView
+(`window.__TAURI_INTERNALS__ === true`), not browser mocks. The live status showed 515 captures / 514
+tagged. Evidence:
+
+- Deck rendered `JUMP BACK ... until 17:08 session 16:44–17:14`, preserving the existing action while
+  adding truthful session framing.
+- Timeline rendered eight real overlapping sessions in two lanes. At 1280×720 DPR 1, 1920×1080 DPR
+  1, and emulated 3440×1440 DPR 1.5, document width equalled viewport width; every band was at least
+  32×32; band overlaps, nested vertical scroll contexts, and horizontal overflow were all zero.
+  Accessible band labels included kind, full date/time, and tool/host.
+- Keyboard focus on the first band followed by CDP native `rawKeyDown` / `char` / `keyUp` Enter
+  opened `/timeline/session/3`. The real round trip was AI band → session 3 → representative frame
+  `/timeline/2651`; Moment showed back label `SESSION` and `PART OF SESSION ScreenSearch Workflow`,
+  and SESSION returned exactly to `/timeline/session/3`.
+- Session 3 showed AI · codex/desktop · Confidence 78.5% · Jul 10 01:21–02:50 · 41 frames / 24
+  representatives, plus the honest `No exchanges captured for this session.` state. It had one
+  vertical scroller and no horizontal overflow.
+- Recap cancellation was observed after `Summarizing 1 of 4 · 1/4`: clicking CANCEL returned to
+  GENERATE RECAP and no stale result appeared. A clean Recap completed in 15 seconds with 5 passes,
+  1/1 periods, 39/39 frames summarized, and the truthful trimmed footer. All 39
+  `report.cited_frame_ids` were read back through the live `get_frame` command; every frame resolved
+  with `session.id === 3`.
+- Live session 21 provided the low-confidence state: neutral Confidence 47.2%, 50 frames, no invented
+  exchanges, one scroll context, and no horizontal overflow. A live `list_sessions` query returned
+  21 sessions and open IDs `[]`; therefore the open-session visual variant was **unavailable in this
+  dataset**, not passed or failed. Its implementation/test coverage remains, but no live observation
+  is claimed.
+- With CDP emulating `prefers-reduced-motion: reduce`, the media query matched and computed animated
+  elements were `[]`. The Sessions expander showed Minimum session length 120 (min 30 / max 3600)
+  and Close gap 300 (min 60 / max 3600), with labels explaining the next session pass.
+- The only console/network noise was the existing `favicon.ico` 404 and an informational WebView
+  lazy-image intervention; no app runtime errors were observed. The screenshot remains outside the
+  repo at `%TEMP%\screensearch-pr5-timeline.png` and is not committed.
+
+The automated UI-first verification below this acceptance record remains the build/test evidence;
+the native observations above complete `03 §13c-5` without substituting mocks for the live app.

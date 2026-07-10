@@ -32,10 +32,13 @@
 - **Why:** `03 §13c-5`, `UI_REFERENCE §7`/`§8`, and the PR5 Task 3 brief require native acceptance to
   be reproducible and automated evidence to remain distinct from real WebView2 observation.
 - **Contract status:** no schema change or migration (schema remains 11), no new contradiction, and
-  no new silent-spec gap. API/MCP remains PR6-owned. The controller-owned native debug-port run is
-  pending and is not claimed as observed here.
+  no new silent-spec gap. API/MCP remains PR6-owned.
 - **Verification:** full UI-first command output is preserved verbatim in `specs/05_BUILD_REVIEW.md`;
-  the native/manual evidence remains pending.
+  the subsequent real `npm run dev` Tauri/WebView2 acceptance is recorded in `05` Pass 9 and
+  `docs/TESTING.md`. It passed the live band/drill-in/Moment round trip, exact ownership of all 39
+  Recap citations, Recap cancellation, keyboard entry, layout/DPI, reduced-motion, low-confidence,
+  no-exchange, and Settings checks. The current 21-session dataset had no open row, so that variant
+  is transparently unavailable rather than claimed. No app runtime errors were observed.
 
 ## 2026-07-10 — 0.4.0 PR5 Task 2: session recall surfaces
 
@@ -386,4 +389,4 @@
 - **Review follow-up:** Split the session-bearing frame/resume shapes into Tauri-only generated DTOs
   so the existing API/MCP JSON remains unchanged; made the preflight use Rust whitespace semantics;
   and clamped the store sampler itself to 24. Focused RED→GREEN tests, UI lint/build, fmt, and focused
-  clippy passed; broad integration verification remains controller-owned.
+  clippy passed; broad integration and native acceptance are now recorded in `05` Passes 8–9.
