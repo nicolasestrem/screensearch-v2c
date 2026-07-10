@@ -104,7 +104,7 @@ so cargo fails if the UI hasn't been built.
    `cargo build --workspace` · `cargo test --workspace`
 4. Binding guard: `cargo test` regenerates the ts-rs bindings —
    `git diff --exit-code -- ui/src/bindings` must be clean (commit regenerated bindings, or CI fails).
-- Run the app: `npm run tauri dev` (NOT `cargo tauri dev` — `cargo-tauri` is not installed).
+- Run the app: `npm run dev` (NOT a direct executable and NOT `cargo tauri dev`).
   Package: `npm run build`.
 - Toolchain: Rust 1.82, Node 22. Paste verbatim output when reporting status.
 

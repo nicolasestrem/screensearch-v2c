@@ -1117,7 +1117,7 @@ pub fn run() {
             let (store, db_readiness) = open_store(&db_path);
             app.manage(overlay::OverlayState::default());
             // Auto-update state (0.3.2 PR2, #69). Check on launch in **release builds
-            // only** — a debug build (`npm run tauri dev`) skips the check so development
+            // only** — a debug build (`npm run dev`) skips the check so development
             // never hits the live GitHub-Releases endpoint on every start. The manual
             // "Check for updates" command works in every build. Pull-based + quiet (D1):
             // a found update downloads in the background and installs only on a

@@ -167,11 +167,11 @@ fn segment_micro(
             {
                 break;
             }
-            for flag in consumed.iter_mut().take(next + 1).skip(last_segment + 1) {
-                *flag = true;
+            for index in last_segment + 1..=next {
+                consumed[index] = true;
+                frame_ids.extend_from_slice(&segments[index].frame_ids);
             }
             last_ts = segments[next].last_ts;
-            frame_ids.extend_from_slice(&segments[next].frame_ids);
             last_segment = next;
         }
 

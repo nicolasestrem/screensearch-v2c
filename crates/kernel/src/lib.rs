@@ -100,6 +100,49 @@ mod sessions_scheduler_contract_tests {
         }
     }
 
+    async fn seed_continuous_backfill_track(store: &dyn traits::Store) -> Vec<(i64, i64)> {
+        const HOUR: i64 = 3_600_000;
+        let mut inserted = Vec::new();
+        let mut index = 0_i64;
+        for at in (0..=6 * HOUR + 30 * 60_000).step_by(4 * 60_000) {
+            let id = store
+                .insert_frame(traits::NewFrame {
+                    captured_at: at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{at}.webp"),
+                    content_hash: format!("backfill-{index}"),
+                    app_hint: Some("codex".to_string()),
+                    window_title: Some("Codex".to_string()),
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+            inserted.push((id, at));
+            index += 1;
+        }
+        let after_gap = 7 * HOUR + 30 * 60_000;
+        let id = store
+            .insert_frame(traits::NewFrame {
+                captured_at: after_gap,
+                monitor_index: 0,
+                width: 1920,
+                height: 1080,
+                image_path: format!("frames/{after_gap}.webp"),
+                content_hash: format!("backfill-{index}"),
+                app_hint: Some("codex".to_string()),
+                window_title: Some("Codex".to_string()),
+                browser_url: None,
+                capture_trigger: None,
+            })
+            .await
+            .unwrap();
+        inserted.push((id, after_gap));
+        inserted
+    }
+
     #[test]
     fn frozen_guard_trims_only_the_same_identity_track() {
         let drafts = vec![
@@ -123,8 +166,8 @@ mod sessions_scheduler_contract_tests {
             .iter()
             .find(|draft| draft.kind == SessionKind::Focus)
             .unwrap();
-        assert_eq!(focus.started_at, 100);
-        assert_eq!(focus.frame_ids, vec![3, 4]);
+        assert_eq!(focus.started_at, 200);
+        assert_eq!(focus.frame_ids, vec![4]);
         let ai = got
             .iter()
             .find(|draft| draft.kind == SessionKind::Ai)
@@ -159,6 +202,165 @@ mod sessions_scheduler_contract_tests {
         assert_eq!(
             safe_backfill_cut(&[frame(1, 0), frame(2, 100)], 500, 100, 5_000),
             Some(500)
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_backfill_retries_past_a_fixed_target_cutting_a_live_track() {
+        const HOUR: i64 = 3_600_000;
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("backfill-restart.db");
+        let store = store::SqliteStore::open_path(&db).unwrap();
+        seed_continuous_backfill_track(&store).await;
+        let engine = sessions::SessionEngine::new().unwrap();
+        let settings = traits::Settings::default();
+        let lookback = traits::SESSION_FREEZE_LOOKBACK_MS;
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            lookback + 6 * HOUR,
+            &settings,
+        )
+        .await
+        .unwrap();
+        assert!(store
+            .sessions_in_range(SessionFilter {
+                now_ms: lookback + 6 * HOUR,
+                ..SessionFilter::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+
+        drop(store);
+        let store = store::SqliteStore::open_path(&db).unwrap();
+
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            lookback + 8 * HOUR,
+            &settings,
+        )
+        .await
+        .unwrap();
+        let sessions = store
+            .sessions_in_range(SessionFilter {
+                now_ms: lookback + 8 * HOUR,
+                ..SessionFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 1, "retry must finish without duplicates");
+        assert!(sessions[0].frozen);
+
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            lookback + 8 * HOUR,
+            &settings,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store
+                .sessions_in_range(SessionFilter {
+                    now_ms: lookback + 8 * HOUR,
+                    ..SessionFilter::default()
+                })
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "completed retry must be idempotent"
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_backfill_trims_before_frozen_incremental_overlap() {
+        const HOUR: i64 = 3_600_000;
+        let store = store::SqliteStore::open_in_memory().unwrap();
+        let inserted = seed_continuous_backfill_track(&store).await;
+        let engine = sessions::SessionEngine::new().unwrap();
+        let settings = traits::Settings::default();
+        let lookback = traits::SESSION_FREEZE_LOOKBACK_MS;
+
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            lookback + 6 * HOUR,
+            &settings,
+        )
+        .await
+        .unwrap();
+
+        let frozen_start = 6 * HOUR;
+        let frozen_ids: Vec<i64> = inserted
+            .iter()
+            .filter_map(|(id, at)| (*at >= frozen_start && *at < 7 * HOUR).then_some(*id))
+            .collect();
+        let frozen_end = inserted
+            .iter()
+            .filter_map(|(_, at)| (*at >= frozen_start && *at < 7 * HOUR).then_some(*at))
+            .max()
+            .unwrap();
+        let frozen_id = store
+            .insert_session(NewSession {
+                started_at: frozen_start,
+                ended_at: Some(frozen_end),
+                kind: SessionKind::Ai,
+                tool: Some("codex".to_string()),
+                host: Some(SessionHost::Desktop),
+                context_key: "ai:codex".to_string(),
+                confidence: 0.9,
+                frozen: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .assign_frames_session(&frozen_ids, Some(frozen_id))
+                .await
+                .unwrap(),
+            frozen_ids.len() as u64
+        );
+
+        crate::sessions_scheduler::run_backfill_chunk(
+            &store,
+            &engine,
+            lookback + 8 * HOUR,
+            &settings,
+        )
+        .await
+        .unwrap();
+        let rows = store
+            .sessions_in_range(SessionFilter {
+                now_ms: lookback + 8 * HOUR,
+                ..SessionFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "one prefix plus the immutable frozen tail");
+        let prefix = rows.iter().find(|row| row.id != frozen_id).unwrap();
+        assert!(prefix.frozen);
+        assert!(prefix.ended_at.unwrap() < frozen_start);
+
+        let mut owned = store
+            .session_frames_meta(prefix.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .chain(store.session_frames_meta(frozen_id).await.unwrap())
+            .map(|frame| frame.id)
+            .collect::<Vec<_>>();
+        owned.sort_unstable();
+        let mut expected = inserted
+            .iter()
+            .filter_map(|(id, at)| (*at < 7 * HOUR).then_some(*id))
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        assert_eq!(
+            owned, expected,
+            "every pre-gap frame has one assignable owner"
         );
     }
 

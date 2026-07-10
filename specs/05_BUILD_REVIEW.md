@@ -430,7 +430,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 
   3036 frames migrated in **~146 ms** (well under the test's 30 s bound), fk clean, sessions +
   artifacts empty, zero backfilled frames — structure-only confirmed on real, live-shaped data.
-  **`npm run tauri dev` was NOT run on this branch** (the dev build shares the live Roaming data dir;
+  **`npm run dev` was NOT run on this branch** (the dev build shares the live Roaming data dir;
   a v11-migrated live DB would brick the installed v0.3.3, which rejects newer schema versions).
 - **Full verification ladder (verbatim, all green):**
 
@@ -731,7 +731,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **Exact pause state:** app + `llama-server` + dev cargo processes are stopped (no orphans). Live DB
   is schema 11 with 3,114 source frames; corrected recomputation is safely resumable at
   `{"cursor_ms":1783473465286,"target_ms":1783600094929}` with 14 sessions, 5 frozen, 800 assigned
-  frames, and 116 artifacts. On resume, launching `npm run tauri dev` continues the checkpoint.
+  frames, and 116 artifacts. On resume, launching `npm run dev` continues the checkpoint.
 - **Remaining before PR:** (1) let corrected backfill reach cursor=target, then re-check exchange
   samples; (2) manually start capture (it was paused before launch; max frame stayed 3114) and prove
   frame growth during a pass; (3) maintainer foregrounds a meeting-titled window (browser AI already
@@ -800,8 +800,84 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 
 - **Launch-surface correction:** a direct `target/debug/screensearch.exe` launch was attempted for a
   read-only API spot-check; the maintainer corrected that this repository must always launch through
-  `npm run tauri dev`. The direct process was stopped immediately, its unauthorized API output is not
+  `npm run dev`. The direct process was stopped immediately, its unauthorized API output is not
   counted as evidence, and subsequent live work uses only the required npm/Tauri launch surface.
 - **Still manual before PR:** maintainer confirmation of search/Ask/Timeline/marks/where-was-i in the
   UI, plus a qualifying ten-minute meeting-title band if the meeting row is held as a hard PR gate.
   Automated/D9/backup/backfill/capture/recognition/exchange/full-suite gates are otherwise evidenced.
+
+### Pass 5 adversarial-review corrections — 2026-07-10
+
+- **Review verdict and fixes:** the reserved read-only adversarial pass found two critical and three
+  important correctness gaps. Publication paused. Red regressions proved that pass-1 short excursions
+  were marked consumed without transferring their frame ids; a frozen-boundary frame at exactly
+  `ended_at` was retained even though `ended_at` is the last owned-frame time; and a checkpoint whose
+  fixed historical target cut a continuous track could never scan far enough on later ticks to see
+  the closing gap. Production now transfers every consumed id exactly once, trims incremental tails
+  strictly after frozen `ended_at` using true min/max timestamps, and preserves the fixed checkpoint
+  target while allowing later scans through the current frozen horizon.
+- **Delayed/restarted backfill hardening:** a persisted on-disk checkpoint test now closes a track
+  beyond the initial target after reopening the store and proves the completed retry is idempotent.
+  A second real-store test seeds a frozen incremental overlap: backfill keeps only the historical
+  prefix, assigns every pre-gap frame exactly once, freezes only after successful assignment, and
+  emits no same-track overlap. Exact frozen retries count already-owned ids before validating the
+  assignment result; partial new rows remain deletable until assignment succeeds.
+- **Parity expansion:** the frozen harness implementation and scorer remain unchanged. The shipped
+  parity suite grew from one fixture to a table covering interleaved identities, None absorption,
+  meetings, merge-gap equality, density, qualification failure, and open projection. All referee
+  fields match; only the deliberate production ownership extension may have a larger frame count for
+  pass-1-consumed excursions because the harness stored counts but not owned ids.
+- **Post-fix D9 gate rerun (no retuning):** output remained exactly at the approved evidence line:
+
+  ```text
+  -- tolerance 120s --
+  2026-07-07        8    11     7   0.88  0.64  0.74    0.84     3/4
+  2026-07-08        7     5     0   0.00  0.00  0.00    0.17     2/3
+  2026-07-09        6     8     2   0.33  0.25  0.29    0.29     4/4
+  POOLED(part) P=0.429 R=0.375 F1=0.400 (matched 9/21 pred, 9/24 lab); posF1=0.489; tool 9/11 = 0.818
+  -- tolerance 180s --
+  POOLED(part) P=0.524 R=0.458 F1=0.489 (matched 11/21 pred, 11/24 lab); posF1=0.533; tool 9/11 = 0.818
+  ```
+
+- **Focused raw verification:** `sessions` 21/21, kernel scheduler-contract 8/8, shipped parity 3/3,
+  and clippy for `sessions`/`kernel`/`harness` passed with warnings denied.
+- **Fresh full post-review ladder (verbatim compact output):** the exact non-quiet
+  `cargo test --workspace` also exited 0 before the compact evidence rerun.
+
+  ```text
+  $ cd ui && npm ci
+  added 348 packages, and audited 349 packages in 4s
+  found 0 vulnerabilities
+  $ npm run lint
+  > eslint .
+  $ npm run build
+  ✓ 434 modules transformed.
+  ✓ built in 1.63s
+  $ node scripts/stage-mcp.mjs
+  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+      Finished `release` profile [optimized] target(s) in 0.26s
+  $ cargo fmt --all -- --check
+  (no output; exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.39s
+  $ cargo build --workspace
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.09s
+  $ cargo test --workspace --quiet
+  test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+  test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+  test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+  test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.57s
+  test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+  test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  $ git diff --exit-code -- ui/src/bindings
+  (no output; exit 0)
+  ```
+- **Meeting live note:** the maintainer held the meeting for eleven wall-clock minutes, but the DB
+  contains only a 17:12:28–17:14:05 title band (six frames, 1.62 minutes); the prior band ended at
+  16:54:21. The 18-minute gap exceeds `meeting_gap`, so no qualifying session row is expected. This
+  remains honest capture-limited evidence. All future app launches use only `npm run dev`; direct
+  executable launch is forbidden.

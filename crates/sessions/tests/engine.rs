@@ -118,12 +118,37 @@ fn exclusive_frame_ownership_survives_cross_track_overlap_and_none_absorption() 
             assert!(all.insert(*id), "frame {id} owned twice: {got:?}");
         }
     }
+    let expected: HashSet<i64> = frames.iter().map(|frame| frame.id).collect();
+    assert_eq!(all, expected, "every qualifying input frame has one owner");
     let claude = got
         .iter()
         .find(|s| s.tool.as_deref() == Some("claude-code"))
         .unwrap();
     assert!(claude.frame_ids.contains(&100));
     assert!(claude.frame_ids.contains(&102));
+}
+
+#[test]
+fn consolidated_short_excursion_frames_belong_to_the_surviving_micro() {
+    let mut frames = run(1, CLAUDE.0, CLAUDE.1, 0, 30, 30);
+    frames.push(frame(50, 60, Some(FOCUS.0), Some(FOCUS.1)));
+    frames.extend(run(100, CLAUDE.0, CLAUDE.1, 90, 180, 30));
+
+    let got = segment_concurrent(&frames, &compact(1_000));
+    let claude = got
+        .iter()
+        .find(|session| session.tool.as_deref() == Some("claude-code"))
+        .expect("surviving Claude track");
+    assert!(
+        claude.frame_ids.contains(&50),
+        "absorbed excursion frame lost from ownership: {got:?}"
+    );
+    let owned: HashSet<i64> = got
+        .iter()
+        .flat_map(|session| session.frame_ids.iter().copied())
+        .collect();
+    let expected: HashSet<i64> = frames.iter().map(|frame| frame.id).collect();
+    assert_eq!(owned, expected, "absorbed inputs must still be owned once");
 }
 
 #[test]

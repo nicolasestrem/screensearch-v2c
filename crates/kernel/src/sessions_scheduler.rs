@@ -108,7 +108,8 @@ fn partition(kind: SessionKind, context_key: &str) -> String {
 
 /// Drops/trims drafts that reach into an already-frozen span of the same identity track.
 /// Cross-track overlap remains untouched. The incremental window meets frozen history at its
-/// old edge, so the safe retained portion is the tail at/after the latest overlapping frozen end.
+/// old edge, so the safe retained portion is the tail strictly after the latest overlapping frozen
+/// end (session `ended_at` is the timestamp of its last owned frame, not an exclusive bound).
 pub(crate) fn trim_drafts_against_frozen(
     drafts: Vec<SessionDraft>,
     frozen: &[Session],
@@ -135,21 +136,18 @@ pub(crate) fn trim_drafts_against_frozen(
                 draft.frame_ids.retain(|id| {
                     frame_times
                         .get(id)
-                        .is_some_and(|captured_at| *captured_at >= cut)
+                        .is_some_and(|captured_at| *captured_at > cut)
                 });
                 if draft.frame_ids.is_empty() {
                     return None;
                 }
-                let mut times = draft
-                    .frame_ids
-                    .iter()
-                    .filter_map(|id| frame_times.get(id).copied());
-                draft.started_at = times.next()?;
-                draft.ended_at = draft
+                let times: Vec<i64> = draft
                     .frame_ids
                     .iter()
                     .filter_map(|id| frame_times.get(id).copied())
-                    .max()?;
+                    .collect();
+                draft.started_at = *times.iter().min()?;
+                draft.ended_at = *times.iter().max()?;
             }
             Some(draft)
         })
@@ -301,27 +299,68 @@ async fn refresh_exchanges(
 
 /// Returns the timestamp at which a chunk can safely stop: the first frame after a global
 /// inactivity gap >= merge_gap, at/after the desired six-hour boundary. If the fixed target
-/// itself is safely beyond the final frame, the target is the cut. Otherwise the tail waits.
+/// itself is safely beyond the final frame, the desired boundary is the cut. `scan_limit_ms` may
+/// advance beyond the checkpoint's fixed historical target on later ticks so a closing gap after a
+/// target-cut continuous track can eventually be observed.
 pub(crate) fn safe_backfill_cut(
     frames: &[SegmenterFrame],
     desired_end_ms: i64,
     merge_gap_ms: i64,
-    target_ms: i64,
+    scan_limit_ms: i64,
 ) -> Option<i64> {
     if frames.is_empty() {
         // Only the range through `desired_end_ms` is known empty. Advancing all the way to the
         // final target would silently skip frames that have not been scanned yet.
-        return Some(desired_end_ms.min(target_ms));
+        return Some(desired_end_ms.min(scan_limit_ms));
     }
     for pair in frames.windows(2) {
         if pair[1].captured_at >= desired_end_ms
             && pair[1].captured_at - pair[0].captured_at >= merge_gap_ms
         {
-            return Some(pair[1].captured_at.min(target_ms));
+            return Some(pair[1].captured_at.min(scan_limit_ms));
         }
     }
     let last = frames.last()?.captured_at;
-    (desired_end_ms.saturating_sub(last) >= merge_gap_ms).then_some(desired_end_ms.min(target_ms))
+    (desired_end_ms.saturating_sub(last) >= merge_gap_ms)
+        .then_some(desired_end_ms.min(scan_limit_ms))
+}
+
+/// Historical backfill approaches frozen incremental history from the left. When a delayed retry
+/// meets an already-frozen row on the same identity track, retain only the prefix strictly before
+/// that row. This preserves frozen immutability, avoids duplicate overlapping rows, and keeps every
+/// retained draft id assignable.
+fn trim_backfill_draft_against_frozen(
+    mut draft: SessionDraft,
+    frozen: &[Session],
+    frame_times: &HashMap<i64, i64>,
+) -> Option<SessionDraft> {
+    let own_partition = partition(draft.kind, &draft.context_key);
+    let cut = frozen
+        .iter()
+        .filter(|session| session.frozen)
+        .filter(|session| partition(session.kind, &session.context_key) == own_partition)
+        .filter(|session| {
+            let end = session.ended_at.unwrap_or(session.started_at);
+            draft.started_at <= end && draft.ended_at >= session.started_at
+        })
+        .map(|session| session.started_at)
+        .min()?;
+    draft.frame_ids.retain(|id| {
+        frame_times
+            .get(id)
+            .is_some_and(|captured_at| *captured_at < cut)
+    });
+    if draft.frame_ids.is_empty() {
+        return None;
+    }
+    let times: Vec<i64> = draft
+        .frame_ids
+        .iter()
+        .filter_map(|id| frame_times.get(id).copied())
+        .collect();
+    draft.started_at = *times.iter().min()?;
+    draft.ended_at = *times.iter().max()?;
+    Some(draft)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -357,16 +396,18 @@ async fn save_checkpoint(store: &dyn Store, checkpoint: BackfillCheckpoint) -> a
         .await
 }
 
-async fn run_backfill_chunk(
+pub(crate) async fn run_backfill_chunk(
     store: &dyn Store,
     segmenter: &dyn SessionSegmenter,
     now_ms: i64,
     current: &Settings,
 ) -> anyhow::Result<()> {
     let params = params_from_settings(now_ms, current);
-    let target = now_ms.saturating_sub(params.freeze_lookback_ms);
-    let mut checkpoint = load_or_initialize_checkpoint(store, target).await?;
-    if checkpoint.cursor_ms >= checkpoint.target_ms {
+    let current_frozen_horizon = now_ms.saturating_sub(params.freeze_lookback_ms);
+    let mut checkpoint = load_or_initialize_checkpoint(store, current_frozen_horizon).await?;
+    if checkpoint.cursor_ms >= checkpoint.target_ms
+        || current_frozen_horizon <= checkpoint.cursor_ms
+    {
         return Ok(());
     }
 
@@ -376,22 +417,32 @@ async fn run_backfill_chunk(
         .min(checkpoint.target_ms);
     let mut scan_end = desired
         .saturating_add(params.merge_gap_ms)
-        .min(checkpoint.target_ms);
+        .min(current_frozen_horizon);
     let frames = loop {
         let frames = store
             .frames_meta_in_range(checkpoint.cursor_ms, scan_end)
             .await?;
-        if safe_backfill_cut(&frames, desired, params.merge_gap_ms, checkpoint.target_ms).is_some()
-            || scan_end >= checkpoint.target_ms
+        if safe_backfill_cut(
+            &frames,
+            desired,
+            params.merge_gap_ms,
+            current_frozen_horizon,
+        )
+        .is_some()
+            || scan_end >= current_frozen_horizon
         {
             break frames;
         }
         scan_end = scan_end
             .saturating_add(BACKFILL_CHUNK_MS)
-            .min(checkpoint.target_ms);
+            .min(current_frozen_horizon);
     };
-    let Some(cut) = safe_backfill_cut(&frames, desired, params.merge_gap_ms, checkpoint.target_ms)
-    else {
+    let Some(cut) = safe_backfill_cut(
+        &frames,
+        desired,
+        params.merge_gap_ms,
+        current_frozen_horizon,
+    ) else {
         // The fixed historical target cuts through a still-continuous track. Leave the cursor
         // untouched; the incremental tail owns current work and a later pass can close safely.
         return Ok(());
@@ -401,6 +452,10 @@ async fn run_backfill_chunk(
         .filter(|frame| frame.captured_at < cut)
         .collect();
     if !chunk.is_empty() {
+        let frame_times: HashMap<i64, i64> = chunk
+            .iter()
+            .map(|frame| (frame.id, frame.captured_at))
+            .collect();
         let closed_params = SegmentationParams {
             now_ms: cut.saturating_add(params.merge_gap_ms),
             ..params
@@ -424,13 +479,66 @@ async fn run_backfill_chunk(
                         && session.ended_at == Some(draft.ended_at)
                 })
                 .map(|session| session.id);
-            let session_id = match existing_id {
-                Some(id) => id,
-                None => store.insert_session(draft.as_new_session(true)).await?,
+            let (session_id, draft, inserted_unfrozen) = match existing_id {
+                Some(id) => (id, draft, false),
+                None => {
+                    let overlapping_frozen = existing.iter().any(|session| {
+                        session.frozen
+                            && partition(session.kind, &session.context_key)
+                                == partition(draft.kind, &draft.context_key)
+                            && session.ended_at.is_some_and(|end| {
+                                draft.started_at <= end && draft.ended_at >= session.started_at
+                            })
+                    });
+                    let draft = if overlapping_frozen {
+                        trim_backfill_draft_against_frozen(draft, &existing, &frame_times)
+                    } else {
+                        Some(draft)
+                    };
+                    let Some(draft) = draft else {
+                        continue;
+                    };
+                    // Assign before freezing so a partial assignment can be rolled back without
+                    // violating the immutable-frozen-row contract.
+                    let id = store.insert_session(draft.as_new_session(false)).await?;
+                    (id, draft, true)
+                }
             };
-            store
+            let already_owned: HashSet<i64> = store
+                .session_frames_meta(session_id)
+                .await?
+                .into_iter()
+                .map(|frame| frame.id)
+                .collect();
+            let expected_changes = draft
+                .frame_ids
+                .iter()
+                .filter(|id| !already_owned.contains(id))
+                .count() as u64;
+            let changed = store
                 .assign_frames_session(&draft.frame_ids, Some(session_id))
                 .await?;
+            if changed != expected_changes {
+                if inserted_unfrozen {
+                    store.delete_unfrozen_session(session_id).await?;
+                }
+                anyhow::bail!(
+                    "historical session {session_id} assigned {changed}/{expected_changes} new frames"
+                );
+            }
+            if inserted_unfrozen {
+                store.freeze_sessions(current_frozen_horizon).await?;
+                if !store
+                    .get_session(session_id)
+                    .await?
+                    .is_some_and(|session| session.frozen)
+                {
+                    store.delete_unfrozen_session(session_id).await?;
+                    anyhow::bail!(
+                        "historical session {session_id} did not freeze after assignment"
+                    );
+                }
+            }
             if draft.kind == SessionKind::Ai {
                 refresh_exchanges(store, segmenter, session_id, &draft).await?;
             }

@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,000-frame database in testing.
 
 ### Changed
+- Session backfill now safely resumes when its original historical cutoff lands inside a continuous
+  activity track, reconciles delayed work before immutable frozen tails, and preserves exact frame
+  ownership across absorbed short excursions and frozen boundaries.
 - Specs only (no app changes): the 0.4.0 "sessions" arc contract is now written into the project
   specs, so the next stages of work can be built straight from them. Sessions group your captured
   frames into meaningful stretches (a meeting, a Claude Code run, an afternoon in one repo), and

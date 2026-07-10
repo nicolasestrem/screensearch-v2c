@@ -313,3 +313,11 @@
   an overlap query (`started_at < to AND COALESCE(ended_at, now) > from`, with half-open single-bound
   variants) so Timeline/MCP callers do not drop long or open sessions that started before the
   requested window. Still `.md`-only.
+- **Adversarial-review follow-up:** fixed complete ownership of pass-1-consumed excursion frames;
+  strict frozen-tail boundary trimming; a resumable fixed-target backfill stall; and delayed overlap
+  against already-frozen incremental rows. Backfill now scans later frozen horizons for a safe gap,
+  persists/reopens cleanly, trims historical prefixes before immutable frozen tails, verifies frame
+  assignment before freezing new rows, and remains idempotent. Expanded shipped parity across None,
+  meetings, gap equality, density, qualification, and open projection without changing the frozen
+  harness baseline. The post-fix D9 rerun remained F1 0.400/tool 0.818. Active run instructions now
+  use only `npm run dev`; never a direct executable.
