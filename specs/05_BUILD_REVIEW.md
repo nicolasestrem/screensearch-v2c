@@ -240,3 +240,126 @@ pinned tests unchanged** as the A/B baseline.
 - **Still risky:** the serial-vs-concurrent decision (`#114`) is the real gate now; do NOT freeze PR3
   / schema 11 until it is made. PR opened for review of the built work, **not** to claim final
   acceptance numbers.
+
+## Pass 3 — 2026-07-10 — PR2b: concurrency resolved, specs gate first
+
+The serial-vs-concurrent decision (`07` #114) is made: **concurrent** (maintainer, 2026-07-10, via
+the resume-PR2 kickoff). Real usage runs parallel recognized tools, so the serial model of `06` #27
+collapses ground truth into single precedence-attributed bands. PR2b builds the concurrent model in
+the harness, keeps the serial redesign as the `--algo grouped` A/B baseline, and sets the D9 gate on
+the concurrent metric against the held-out fresh days. Branch `feat/0.4.0-pr2b-concurrent-sessions`
+(off `main` @ `6530288`, PR #100 merged); baseline `cargo test -p harness` **91 passed** before any
+change.
+
+- **Specs gate (this commit, `.md`-only, the #27 procedure repeated):** `07` **#114 → resolved
+  (concurrent)** with the load-bearing finding recorded — **exclusive frame ownership** (one
+  `app_hint` → one micro-span → one track → one session) means overlapping sessions fit **schema 11
+  with zero DDL change** (verified against `03 §4`: no non-overlap constraint, overlap-agnostic time
+  index, single nullable `frames.session_id` FK), so **PR3 is not affected** by concurrency. `06`
+  **#28** records the per-identity-track amendment layered on #27 (track map replacing the single
+  open group; anchor selection + `HOST_PRECEDENCE` inert on the shipped path but kept in the serial
+  baseline; anchor **qualification** survives via `IDENTITY_QUALIFY_MS`; `SustainedForeignIdentity`
+  close removed; per-track None-budget absorption into the last-touched AI track; meeting bands no
+  longer barriers; `labels.toml` v2 per-identity non-overlap; identity-partitioned referee). `06`
+  **#26** (D9 gate) flips from DEFERRED to **unblocked → lands at PR2b Phase C** on the partitioned
+  metric with the fresh-day gate. `07` **#116** records the accepted concurrency limitations
+  (same-tool instances and `browser-ai` fold into one track; thin overlap evidence → re-verify on
+  every new labeled day). Concurrency **structurally removes** the #112(b) host-precedence pathology
+  from the shipped path.
+- **Amendment procedure honored:** the contract change goes through `06`/`07` **before** the code
+  that depends on it (stop-at-ambiguity). No code touched in this commit.
+- **Next:** `labels.rs` v2 (per-identity non-overlap, TDD) + export 07-10 + digest-first label drafts
+  → **STOP 1** (maintainer sanity-checks the four label files) → `group.rs` concurrent per-track walk
+  + `score.rs` partitioned referee (serial path byte-untouched; the 13 pinned `segment()` tests
+  unchanged) → tune on 07-07/08 only and freeze params → fresh-day eval on 07-09/10 + stability +
+  draft D9 (`06` #26) → **STOP 2** (maintainer approves the numbers; never tune-until-green). Every
+  recorded number comes from the harness binary; design-doc estimates are never transcribed.
+  Verification for this `.md`-only commit: `git diff --name-only` shows specs only; no code touched.
+
+### Pass 3 continued - 2026-07-10 - labels.toml v2 + digest-first drafts + STOP 1 resolved
+
+- **`labels.toml` v2 (code, TDD):** `resolve_day` relaxed from one global non-overlap chain to
+  **per-identity-track** non-overlap (`ai` by tool, `focus`/`other` pooled per kind, `meeting`
+  exempt), keeping a global sort-by-start requirement; serial files stay valid. New `track_key`
+  helper. `cargo test -p harness labels::` = **14 passed** (4 new: cross-identity-overlap accepted,
+  same-tool/focus overlap rejected, serial files still valid, out-of-start-order rejected); fmt +
+  clippy clean.
+- **Fresh data:** 07-10 exported read-only (DB size+mtime byte-identical before/after, verbatim);
+  `harness-data/` confirmed git-ignored. 07-10 is a **partial** overnight capture (00:22-06:49).
+- **Digest-first label drafts (gap #115) + STOP 1 (maintainer, 2026-07-10):** four concurrent label
+  files drafted from the digests and reviewed. Tuning days 07-07/08 **revised for concurrency and
+  approved**: 07-07 splits the old single 15:15 session into concurrent `claude-code ∥ claude-desktop`
+  (the serial label already noted the desktop app "open alongside"); 07-08 is the concurrency source -
+  `codex` runs continuously 16:59-22:53 **under** two `claude-code` terminal stints (17:02-17:11,
+  20:13-21:39), correcting the recalled serial `claude-code 19:00-22:54`. Held-out 07-09 (primary
+  fresh day): the leisure-heavy 19:01-20:23 block **unlabeled** per maintainer (Telegram chatting,
+  not focus); the 12:05-13:24 analytics block kept as focus. Parser-validated (per-identity
+  non-overlap holds on all four); the serial `--algo grouped` scores the new concurrent 07-07/08
+  labels at pooled F1 0.44/0.50 - lower than the old serial-label 0.50/0.57 precisely because the
+  serial algo cannot represent the concurrency the labels now encode (the gap the concurrent
+  segmenter must close).
+- **Two held-out findings recorded (`07` #117):** the 07-10 4-agent day exposed that (a) capture is
+  **foreground-only + diff-gated**, so a background agent (codex-desktop) is nearly uncaptured; (b)
+  spinner ambiguity (`#112c`) makes codex-CLI look like `claude-code`; (c) OpenAI **renamed the Codex
+  desktop app to "ChatGPT"** ~4 h before the capture, so it lands under `app_hint "chatgpt"` and the
+  `codex` entry misses it (scored days 07-07/08/09 predate the rename, so the taxonomy is left
+  unchanged). Net: 07-10's recoverable tool-accuracy/recall are structurally capped by capture +
+  taxonomy, so **07-10 is the capture-limit demonstrator, not a D9 scoring day** (07-09 is the primary
+  held-out day) - maintainer decision.
+- **Next:** freeze params on 07-07/08 only, then build `group.rs` concurrent per-track walk +
+  `score.rs` partitioned referee (serial path byte-untouched; the 13 pinned `segment()` tests
+  unchanged), evaluate 07-09 (+ 07-10 as demonstrator), draft the D9 gate, **STOP 2** for approval.
+
+### Pass 3 final - 2026-07-10 - concurrent segmenter built + validated; D9 gate SET (STOP 2 approved)
+
+The concurrent per-identity-track model is **built, tested, and validated**; the D9 gate is **set
+with maintainer approval** (`06` #26). Commits on `feat/0.4.0-pr2b-concurrent-sessions`: specs gate,
+`labels.rs` v2, `group.rs` `group_concurrent` (18 tests), `score.rs` identity-partitioned referee +
+3-way `--algo` CLI, records. `cargo test -p harness` **116 passed**; fmt + clippy `-D warnings` +
+binding guard clean; the 13 pinned `segment()` tests + 20 serial `group.rs` tests **unchanged** (the
+serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
+
+- **Every number below is from the harness binary** (`--algo concurrent`, identity-partitioned metric,
+  labels snapped, keep_interior ON, 120 s + 180 s). Design-doc estimates are never transcribed.
+- **Freeze (tuning days 07-07/08 ONLY, pre-stated pick rule = max pooled partitioned F1 @120 s, then
+  @180 s, then fewer sessions):** `merge_gap = 2700 s`, `absorb_max = 1800 s`, all other knobs at
+  defaults. `merge_gap` is a **clear local F1 peak** (2400→0.400, **2700→0.452**, 3000→0.387;
+  monotone-drop past 2700); `absorb_max` plateaus at ≥1800. Stage-B verdicts at the frozen base:
+  `meeting_gap` + `focus_min_density` FLAT → named constants (density stays 90 per `07` #113 for the
+  fresh sparse-session check); `focus_min_len`/`gap_close`/`min_len`/`IDENTITY_QUALIFY` are sensitive
+  but their 1-D optima diverge from defaults — **kept at defaults** (greedy combination on n=2 = the
+  tune-until-green D9 forbids). **A key finding:** the concurrent model's `merge_gap` governs
+  **per-tool idle tolerance** (a background agent stays one session across foreground gaps), so it is
+  necessarily larger than the serial `merge_gap` (which governed overall-activity idle).
+- **Evidence (partitioned typed boundary F1 @120 s / @180 s; posF1 = pooled position-only, the
+  0.128/0.50 comparability line):**
+
+  | day | role | F1 @120/180 | posF1 | tool acc | pred/lab sessions |
+  |---|---|---|---|---|---|
+  | 07-07 | tune | 0.74 / 0.74 | 0.84 | 3/4 | 5 / 6 |
+  | 07-08 | tune | 0.00 / 0.33 | 0.17 / 0.33 | 2/3 | 4 / 3 |
+  | **tuning pooled** | | **0.452 / 0.581** | 0.581 / 0.645 | **0.714** | |
+  | **07-09** | **held-out (gate)** | **0.286 / 0.286** | 0.286 | **1.000** | 4 / 5 |
+  | 07-10 | demonstrator (NOT gated) | 0.00 / 0.00 | 0.20 | 0.50 | 3 / 4 |
+
+  **A/B on the held-out 07-09:** concurrent **0.286** vs serial-grouped **0.167** vs micro **0.068** —
+  the concurrent model wins **2–4×** with **perfect tool recognition (4/4)**. Stability re-proven
+  through the concurrent pipeline: **6 h-stable on the tuning days**, so the **24 h** freeze window
+  holds with wide margin (`W = 24 h`).
+- **D9 gate SET (`06` #26; recognition-primary, maintainer-approved 2026-07-10):** PRIMARY — tool
+  accuracy ≥ 0.65 AND predicted session count within 2× of labeled AND beats both baselines; FLOOR —
+  partitioned F1 ≥ 0.20 @120 s; W = 24 h. Boundary F1 is a **floor, not the target**, because it is
+  structurally capped by foreground-only capture (`07` #117): on 07-08 the labeled claude-code
+  20:13-21:39 is largely unrecoverable (thin foreground presence under dominant codex fails
+  `IDENTITY_QUALIFY`); the absorb rule over-merges fragmented unrecognized work into the last-touched
+  AI track (07-09's analytics into claude-code); browser-ai over-recognizes (title-only, `#109`). The
+  **recognition** signal (the arc's payoff) is strong; the **boundary** signal is capture-capped.
+- **Method disclosures:** labels are digest-first (`07` #115), concurrent v2 (`06` #28); labeled
+  boundaries snapped to the nearest captured frame; 07-08's tuning labels were revised from the
+  earlier serial recollection to the digest-grounded concurrent shape; 07-10 is a partial (overnight)
+  capture and the capture-limit demonstrator (`07` #117), excluded from the gate.
+- **Broke / regressed:** nothing (additive dev-only crate; serial + micro paths unchanged). PR3 is
+  **unaffected** — exclusive frame ownership keeps concurrency inside schema 11 with zero DDL change.
+- **Resolved:** `06` #26 (gate SET), #27 (serial baseline), #28 (concurrent, shipped); `07` #110
+  (over-segmentation), #114 (concurrency). Open follow-ups: `07` #116 (identity-granularity limits),
+  #117 (capture/taxonomy ceiling → PR4 taxonomy re-tune + a later capture change).

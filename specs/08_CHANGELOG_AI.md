@@ -22,6 +22,72 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2b: PR review fixes (3 harness correctness findings)
+
+- **Change:** addressed three automated-review findings on the open PR, all dev-only harness code.
+  (1) `main.rs` `overlaps_any` (the replay `~` concurrency marker) compared spans by pointer, but
+  the detailed session list and the `spans_for` pass are separate allocations, so the self-copy was
+  never excluded and every overlapping session was marked concurrent; now excluded by value (frame
+  range). (2) `group.rs` `group_concurrent` re-sorts after `enforce_non_overlap_per_track`, whose
+  same-track start-forward clamp could push a start past a different-track session and trip the
+  global-sort `debug_assert!`. (3) `score.rs` `tool_accuracy` now restricts the max-overlap candidate
+  set to predicted `Kind::Ai` spans, so a labeled AI session that overlaps a longer meeting/focus span
+  is no longer stolen by it (which would underreport the D9 primary tool-accuracy gate).
+- **Verification:** `cargo test -p harness` **119 passed** (+3 regression tests); fmt + clippy
+  `-D warnings` clean. Re-scored at frozen params (`merge_gap 2700`/`absorb_max 1800`, 120 s): the
+  recorded evidence is unchanged — held-out **07-09** still partitioned F1 **0.29**, tool **4/4 =
+  1.000**; the fixes prevent underreporting on shapes the scored days did not happen to hit.
+
+---
+
+## 2026-07-10 - 0.4.0 PR2b: concurrent segmenter built + validated; D9 gate SET
+
+- **Change:** built the concurrent per-identity-track segmenter (`06` #28 / `07` #114) in the
+  dev-only harness and set the binding D9 gate (`06` #26). `labels.rs` v2 (per-identity non-overlap);
+  `group.rs` `group_concurrent` + `build_bands_concurrent` + `OpenTrack` + `flush_pending` (18 new
+  tests); `score.rs` identity-partitioned typed-boundary referee + `Algo` enum + `score_days` +
+  algo-aware sweep/stability (partitioned-boundary drift); `main.rs` 3-way `--algo
+  micro|grouped|concurrent` (concurrent now the default), partitioned + posF1 output, overlap-marked
+  replay, dual micro+grouped sweep baselines, non-zero exit on unknown subcommand. The serial `06`
+  #27 `group()`/`segment_grouped()` path is **byte-untouched** (the `--algo grouped` A/B baseline);
+  the 13 pinned `segment()` tests are unchanged.
+- **Why:** `07` #114 resolved concurrent — real usage runs parallel recognized tools, which the
+  serial model collapses. Sessions of different identities may overlap in wall-clock time while a
+  frame stays owned by exactly one session (so PR3's schema 11 is unchanged). The gate is
+  **recognition-primary with a boundary-F1 floor** because boundary F1 is structurally capped by
+  foreground-only capture (`07` #117) — recognition is the arc's payoff.
+- **Verification:** `cargo test -p harness` **116 passed**; fmt + clippy `-D warnings` + binding
+  guard clean. Evidence (harness binary, `--algo concurrent`, identity-partitioned, 120/180 s, frozen
+  `merge_gap 2700 s`/`absorb_max 1800 s`): tuning pooled F1 **0.452/0.581** (tool 0.714); **held-out
+  07-09** F1 **0.286**, tool **1.000**, beating grouped **0.167** and micro **0.068**; stability
+  6 h-stable (W = 24 h). Full numbers + gate → `05` Pass 3 final, `06` #26/#27/#28. Read-only export
+  verified (live DB byte-identical); `harness-data/` git-ignored (labels never committed).
+
+---
+
+## 2026-07-10 - 0.4.0 PR2b: concurrent session model (`07` #114 resolved) - specs gate
+
+- **Change:** recorded the concurrency resolution in the spec channel **before any code** (the #27
+  procedure). `07` #114 → **resolved: concurrent** (option b), with the finding that **exclusive
+  frame ownership** keeps overlapping sessions inside **schema 11 with zero DDL change** (PR3
+  unaffected). `06` #28 added — the per-identity-track amendment layered on #27 (track map replaces
+  the single open group; anchor selection + `HOST_PRECEDENCE` inert on the shipped path, kept in the
+  `--algo grouped` serial baseline; anchor **qualification** survives via `IDENTITY_QUALIFY_MS`;
+  `SustainedForeignIdentity` close removed; per-track None-budget absorption into the last-touched AI
+  track; meeting bands no longer barriers; `labels.toml` v2 per-identity non-overlap;
+  identity-partitioned referee metric). `06` #26 (D9 gate) flipped DEFERRED → **unblocked, lands at
+  PR2b Phase C** on the partitioned metric with the held-out fresh-day gate. `07` #116 added (accepted
+  concurrency limitations: same-tool instances and `browser-ai` fold to one track; thin overlap
+  evidence → re-verify per new labeled day). `05` Pass 3 opened.
+- **Why:** the serial `§7e`/#27 model collapses parallel recognized tools into one band; PR2's
+  fresh-day labeling proved real usage is concurrent. The contract must change (through `06`/`07`)
+  before the harness code that depends on it (stop-at-ambiguity, `04 §5`). Keeping the serial
+  redesign as the A/B baseline preserves the validated 0.50/0.57 anchor.
+- **Verification:** `git diff --name-only` shows specs only (`05`/`06`/`07`/`08`); no code touched in
+  this commit. Baseline `cargo test -p harness` = 91 passed on the branch before edits.
+
+---
+
 ## 2026-07-10 - 0.4.0 PR2: task-level grouping redesign landed + validated; D9 deferred (concurrency)
 
 - **Change:** implemented the `§7e` task-level grouping redesign in the harness (taxonomy v3 spinner

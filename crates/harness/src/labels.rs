@@ -2,18 +2,41 @@
 //!
 //! The maintainer writes local `"HH:MM"` times; [`resolve_day`] validates each `[[session]]`
 //! and converts it to an epoch-ms span against the day's `local_midnight_ms`. Validation
-//! rules (`docs/0.4.0.md` §3 PR2, plan Task 3):
+//! rules (`docs/0.4.0.md` §3 PR2; `06` #28 / `07` #114 concurrent labels **v2**):
 //! - `end > start`; times are `HH:MM` 24-hour, `end` may be `"24:00"` (local midnight next day).
-//! - sessions are chronological and non-overlapping, but **touching is allowed**
-//!   (`end == next start` — meetings frequently butt against the next block).
+//! - the file is **globally sorted by start time** (readability; each session's start is
+//!   `>=` the previous session's start).
+//! - **non-overlap is enforced per identity track, not globally** (`07` #114 concurrent model):
+//!   `kind = "ai"` sessions may not overlap another `ai` session *with the same `tool`*;
+//!   `focus`/`other` may not overlap another session of the *same kind*; **`meeting` sessions
+//!   are exempt** (labels carry no meeting id, so concurrent meetings may overlap). Different
+//!   identities (e.g. `claude-code` vs `codex`, or any `ai` vs a `meeting`) **may** overlap.
+//!   **Touching** (`end == next start`) is always allowed. Serial (non-overlapping) label files
+//!   from before v2 stay valid unchanged.
 //! - `kind = "ai"` requires a non-empty `tool`; any other kind must omit `tool`.
 //! - enum membership (`kind`/`host`) is enforced by the TOML deserializer.
 //!
-//! Errors name the offending 1-based `[[session]]` index.
+//! Errors name the offending 1-based `[[session]]` index (and its identity track on overlaps).
+
+use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 
 use crate::model::{DayLabels, Host, Kind};
+
+/// The non-overlap **identity track** key for a labeled session, or `None` when the kind is
+/// exempt from non-overlap. Under the concurrent model (`07` #114 / `06` #28) only *same-identity*
+/// sessions must stay non-overlapping: `ai` per `tool`, `focus`/`other` pooled per kind. `meeting`
+/// labels carry no id and so may overlap each other — they are exempt (`None`). `ai` always has a
+/// tool here (the kind/tool check runs first), but `unwrap_or("")` keeps this total.
+fn track_key(kind: Kind, tool: Option<&str>) -> Option<String> {
+    match kind {
+        Kind::Ai => Some(format!("ai:{}", tool.unwrap_or(""))),
+        Kind::Focus => Some("focus".to_string()),
+        Kind::Other => Some("other".to_string()),
+        Kind::Meeting => None,
+    }
+}
 
 /// A validated, time-resolved label. `start_ms`/`end_ms` are unix epoch ms.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +77,10 @@ fn parse_hhmm(s: &str) -> Result<i64> {
 /// comes from the day's `day.json` header.
 pub fn resolve_day(labels: &DayLabels, local_midnight_ms: i64) -> Result<Vec<ResolvedLabel>> {
     let mut out: Vec<ResolvedLabel> = Vec::with_capacity(labels.sessions.len());
-    let mut prev_end_min: Option<i64> = None;
+    // Global chronological ordering (by start), for readability. NOT the non-overlap check.
+    let mut prev_start_min: Option<i64> = None;
+    // Per-identity-track last end-minute, for non-overlap within a track (`07` #114 / `06` #28).
+    let mut track_end: HashMap<String, i64> = HashMap::new();
 
     for (i, s) in labels.sessions.iter().enumerate() {
         let idx = i + 1; // 1-based, matches how the file reads
@@ -89,16 +115,32 @@ pub fn resolve_day(labels: &DayLabels, local_midnight_ms: i64) -> Result<Vec<Res
                 }
             }
         }
-        if let Some(pe) = prev_end_min {
-            if start_min < pe {
+        // Global ordering: the file must be written sorted by start time.
+        if let Some(ps) = prev_start_min {
+            if start_min < ps {
                 bail!(
-                    "session #{idx}: starts at {} before the previous session ends ({} min) \u{2014} sessions must be chronological and non-overlapping (touching is allowed)",
+                    "session #{idx}: starts at {} out of order \u{2014} labels.toml must be sorted by start time ({} min precedes it); concurrent sessions are still listed in start order",
                     s.start,
-                    pe
+                    ps
                 );
             }
         }
-        prev_end_min = Some(end_min);
+        prev_start_min = Some(start_min);
+
+        // Per-identity non-overlap: only same-identity sessions must not overlap (meetings exempt).
+        if let Some(key) = track_key(s.kind, s.tool.as_deref()) {
+            if let Some(&pe) = track_end.get(&key) {
+                if start_min < pe {
+                    bail!(
+                        "session #{idx}: starts at {} but overlaps the previous \"{}\" session (ends {} min) \u{2014} same-identity sessions cannot overlap; only different identities may run concurrently (`07` #114)",
+                        s.start,
+                        key,
+                        pe
+                    );
+                }
+            }
+            track_end.insert(key, end_min);
+        }
 
         out.push(ResolvedLabel {
             start_ms: local_midnight_ms + start_min * 60_000,
@@ -193,6 +235,154 @@ kind  = "focus"
         );
         let r = resolve_day(&d, MIDNIGHT).expect("touching sessions are allowed");
         assert_eq!(r[0].end_ms, r[1].start_ms);
+    }
+
+    #[test]
+    fn accepts_cross_identity_overlap() {
+        // v2 (`07` #114): different identities may overlap. Here: codex over claude-code,
+        // an AI session over a meeting, and two meetings over each other. All must pass.
+        let d = day_of(
+            r#"
+[[session]]
+start = "09:00"
+end   = "11:00"
+kind  = "ai"
+tool  = "claude-code"
+host  = "terminal"
+
+[[session]]
+start = "09:30"
+end   = "10:30"
+kind  = "meeting"
+
+[[session]]
+start = "10:00"
+end   = "12:00"
+kind  = "ai"
+tool  = "codex"
+host  = "terminal"
+
+[[session]]
+start = "10:15"
+end   = "11:15"
+kind  = "meeting"
+"#,
+        );
+        let r = resolve_day(&d, MIDNIGHT).expect("cross-identity overlap is allowed under v2");
+        assert_eq!(r.len(), 4);
+        // claude-code (0) and codex (2) overlap in wall-clock but are distinct tracks.
+        assert!(r[2].start_ms < r[0].end_ms, "the two AI tracks overlap");
+        assert_eq!(r[0].tool.as_deref(), Some("claude-code"));
+        assert_eq!(r[2].tool.as_deref(), Some("codex"));
+        // The two meetings (1, 3) overlap each other and are exempt.
+        assert!(r[3].start_ms < r[1].end_ms, "the two meetings overlap");
+    }
+
+    #[test]
+    fn rejects_same_tool_and_focus_overlap() {
+        // Same tool overlapping itself is still rejected (one track cannot overlap itself).
+        let same_ai = day_of(
+            r#"
+[[session]]
+start = "09:00"
+end   = "11:00"
+kind  = "ai"
+tool  = "claude-code"
+host  = "terminal"
+
+[[session]]
+start = "10:00"
+end   = "12:00"
+kind  = "ai"
+tool  = "claude-code"
+host  = "terminal"
+"#,
+        );
+        let err = resolve_day(&same_ai, MIDNIGHT).unwrap_err().to_string();
+        assert!(err.contains("#2"), "error should name session #2: {err}");
+        assert!(
+            err.contains("ai:claude-code"),
+            "error should name the overlapping identity track: {err}"
+        );
+
+        // Two focus sessions of the same (pooled) kind overlapping is also rejected.
+        let same_focus = day_of(
+            r#"
+[[session]]
+start = "09:00"
+end   = "10:00"
+kind  = "focus"
+
+[[session]]
+start = "09:30"
+end   = "10:30"
+kind  = "focus"
+"#,
+        );
+        let err = resolve_day(&same_focus, MIDNIGHT).unwrap_err().to_string();
+        assert!(err.contains("#2") && err.contains("focus"), "{err}");
+    }
+
+    #[test]
+    fn serial_label_files_still_validate() {
+        // A pre-v2 serial (non-overlapping, mixed-kind) file must parse + resolve unchanged.
+        let d = day_of(
+            r#"
+[[session]]
+start = "09:14"
+end   = "11:32"
+kind  = "ai"
+tool  = "claude-code"
+host  = "terminal"
+
+[[session]]
+start = "11:32"
+end   = "12:05"
+kind  = "meeting"
+
+[[session]]
+start = "13:05"
+end   = "14:40"
+kind  = "ai"
+tool  = "codex"
+host  = "terminal"
+
+[[session]]
+start = "15:00"
+end   = "16:20"
+kind  = "focus"
+"#,
+        );
+        let r = resolve_day(&d, MIDNIGHT).expect("serial files stay valid under v2");
+        assert_eq!(r.len(), 4);
+        assert_eq!(
+            r[0].end_ms, r[1].start_ms,
+            "touching AI->meeting still allowed"
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_start_order() {
+        // The file must be globally sorted by start, even for concurrent labels.
+        let d = day_of(
+            r#"
+[[session]]
+start = "10:00"
+end   = "11:00"
+kind  = "ai"
+tool  = "codex"
+host  = "terminal"
+
+[[session]]
+start = "09:00"
+end   = "12:00"
+kind  = "ai"
+tool  = "claude-code"
+host  = "terminal"
+"#,
+        );
+        let err = resolve_day(&d, MIDNIGHT).unwrap_err().to_string();
+        assert!(err.contains("#2") && err.contains("out of order"), "{err}");
     }
 
     #[test]

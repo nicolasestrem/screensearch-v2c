@@ -5,24 +5,26 @@
 //!   harness backup --to <dir> [--db <path>]      (D5 pre-migration snapshot; run FIRST)
 //!   harness export --days <d1,d2,...> [--db <path>] [--out harness-data]
 //! Phase B/C (score.rs, group.rs):
-//!   harness replay | score [--algo grouped|micro] [--data harness-data] [--merge-gap ...] [...]
-//!   harness sweep | stability [--data harness-data] [...]
+//!   harness replay | score | sweep | stability [--algo micro|grouped|concurrent] [--data ...] [...]
 //!
-//! The default algorithm is the task-level GROUPED segmenter (`03 §7e` amendment `06` #27);
-//! `--algo micro` selects the ungrouped baseline for the A/B comparison.
+//! `--algo` selects the segmenter: `micro` (ungrouped `§7b` baseline), `grouped` (the serial
+//! `06` #27 two-pass segmenter — the A/B baseline), or `concurrent` (the per-identity-track
+//! segmenter, `06` #28 / `07` #114 — the **default**, validated + approved at PR2b Phase C).
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 
-use harness::group::{segment_grouped, segment_grouped_detailed, CloseReason};
+use harness::group::{
+    segment_concurrent_detailed, segment_grouped_detailed, CloseReason, IDENTITY_QUALIFY_MS,
+};
 use harness::model::{GroupParams, SegParams, SessionSpan};
 use harness::score::{
-    pool, score_day, snap_label_boundaries, stability, sweep_1d, sweep_grid, Knob, OneDimPoint,
-    SweepCell,
+    pool, score_day, score_day_partitioned, score_days, snap_label_boundaries, spans_for_algo,
+    stability, sweep_1d, sweep_grid, Algo, DayScore, Knob, LoadedDay, OneDimPoint, SweepCell,
 };
-use harness::segmenter::{segment, FrameRow};
+use harness::segmenter::FrameRow;
 use harness::taxonomy::Taxonomy;
 use harness::{data, export};
 
@@ -54,28 +56,53 @@ fn group_params(args: &[String]) -> Result<GroupParams> {
     })
 }
 
-/// Whether to use the GROUPED segmenter (default) or the ungrouped `micro` baseline (`--algo`).
-fn algo_grouped(args: &[String]) -> bool {
-    !matches!(flag(args, "--algo"), Some("micro"))
+/// The segmenter selected by `--algo micro|grouped|concurrent`. Default is `concurrent` (the
+/// `06` #28 / `07` #114 per-identity-track model, validated + maintainer-approved at PR2b Phase C);
+/// `grouped` is the serial `06` #27 A/B baseline and `micro` the ungrouped `§7b` baseline.
+fn algo_of(args: &[String]) -> Result<Algo> {
+    match flag(args, "--algo") {
+        None | Some("concurrent") => Ok(Algo::Concurrent),
+        Some("grouped") => Ok(Algo::Grouped),
+        Some("micro") => Ok(Algo::Micro),
+        Some(other) => bail!("--algo must be micro|grouped|concurrent, got {other:?}"),
+    }
 }
 
-/// Spans for the selected algorithm.
+fn algo_label(a: Algo) -> &'static str {
+    match a {
+        Algo::Micro => "micro",
+        Algo::Grouped => "grouped",
+        Algo::Concurrent => "concurrent",
+    }
+}
+
+/// Spans for the selected algorithm (at the default anchor-qualification threshold).
 fn spans_for(
-    grouped: bool,
+    algo: Algo,
     frames: &[FrameRow],
     tax: &Taxonomy,
     sp: &SegParams,
     gp: &GroupParams,
 ) -> Vec<SessionSpan> {
-    if grouped {
-        segment_grouped(frames, tax, sp, gp)
-    } else {
-        segment(frames, tax, sp)
-    }
+    spans_for_algo(frames, tax, sp, gp, IDENTITY_QUALIFY_MS, algo)
 }
 
 fn frame_times(frames: &[FrameRow]) -> Vec<i64> {
     frames.iter().map(|f| f.captured_at).collect()
+}
+
+/// Whether `s` overlaps any other span in `all` (the concurrency marker in replay output).
+/// `s` comes from the detailed session list, `all` from a separate `spans_for` pass, so the two
+/// live in different allocations: exclude the self-copy by value (frame range is the natural key),
+/// never by pointer identity.
+fn overlaps_any(s: &SessionSpan, all: &[SessionSpan]) -> bool {
+    all.iter().any(|o| {
+        let is_self = o.start_ms == s.start_ms
+            && o.end_ms == s.end_ms
+            && o.first_frame_id == s.first_frame_id
+            && o.last_frame_id == s.last_frame_id;
+        !is_self && s.start_ms < o.end_ms && o.start_ms < s.end_ms
+    })
 }
 
 fn close_label(r: CloseReason) -> &'static str {
@@ -98,10 +125,11 @@ fn usage() -> &'static str {
      \x20 harness suggest-days [--db <path>]\n\
      \x20 harness backup --to <dir> [--db <path>]        (D5 snapshot; run before any other live-DB command)\n\
      \x20 harness export --days <d1,d2,...> [--db <path>] [--out harness-data]\n\
-     \x20 harness replay [--algo grouped|micro] [--data harness-data] [seg/group flags]\n\
-     \x20 harness score  [--algo grouped|micro] [--data harness-data] [seg/group flags]\n\
-     \x20 harness sweep | stability [--data harness-data] [seg/group flags]\n\
+     \x20 harness replay [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
+     \x20 harness score  [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
+     \x20 harness sweep | stability [--algo micro|grouped|concurrent] [--data harness-data] [seg/group flags]\n\
      \n\
+     --algo default = concurrent (per-identity-track, 06 #28 / 07 #114); grouped = serial 06 #27 A/B baseline.\n\
      Group flags: --merge-gap <s> --absorb-max <s> --meeting-gap <s> --focus-min-len <s> --focus-density <fph>\n\
      Seg flags:   --gap-close <s> --min-len <s>   Scoring: --tolerance <s>\n\
      The live DB defaults to %APPDATA%\\app.screensearchv2c.desktop\\screensearch.db.\n"
@@ -203,41 +231,50 @@ fn cmd_replay(args: &[String]) -> Result<()> {
     let tax = Taxonomy::seed();
     let sp = seg_params(args)?;
     let gp = group_params(args)?;
-    let grouped = algo_grouped(args);
+    let algo = algo_of(args)?;
     for d in &days {
-        if grouped {
-            let sessions = segment_grouped_detailed(&d.frames, &tax, &sp, &gp);
-            println!(
-                "{}: {} candidate session(s) [grouped]",
-                d.date,
-                sessions.len()
-            );
-            for gs in &sessions {
-                let s = &gs.span;
-                println!(
-                    "  [{:>6}s] {:<22} kind={:?} tool={} host={:?} frames={} close={}",
-                    (s.end_ms - s.start_ms) / 1000,
-                    s.context_key,
-                    s.kind,
-                    s.tool.as_deref().unwrap_or("-"),
-                    s.host,
-                    s.frame_count,
-                    close_label(gs.close_reason)
-                );
+        // Detailed (grouped/concurrent) output carries the close reason; micro has none.
+        let detailed = match algo {
+            Algo::Grouped => Some(segment_grouped_detailed(&d.frames, &tax, &sp, &gp)),
+            Algo::Concurrent => Some(segment_concurrent_detailed(&d.frames, &tax, &sp, &gp)),
+            Algo::Micro => None,
+        };
+        let spans = spans_for(algo, &d.frames, &tax, &sp, &gp);
+        println!(
+            "{}: {} candidate session(s) [{}]",
+            d.date,
+            spans.len(),
+            algo_label(algo)
+        );
+        match &detailed {
+            Some(sessions) => {
+                for gs in sessions {
+                    let s = &gs.span;
+                    println!(
+                        "  {} [{:>6}s] {:<22} kind={:?} tool={} host={:?} frames={} close={}",
+                        if overlaps_any(s, &spans) { "~" } else { " " },
+                        (s.end_ms - s.start_ms) / 1000,
+                        s.context_key,
+                        s.kind,
+                        s.tool.as_deref().unwrap_or("-"),
+                        s.host,
+                        s.frame_count,
+                        close_label(gs.close_reason)
+                    );
+                }
             }
-        } else {
-            let spans = segment(&d.frames, &tax, &sp);
-            println!("{}: {} candidate session(s) [micro]", d.date, spans.len());
-            for s in &spans {
-                println!(
-                    "  [{:>6}s] {:<24} kind={:?} tool={} host={:?} frames={}",
-                    (s.end_ms - s.start_ms) / 1000,
-                    s.context_key,
-                    s.kind,
-                    s.tool.as_deref().unwrap_or("-"),
-                    s.host,
-                    s.frame_count
-                );
+            None => {
+                for s in &spans {
+                    println!(
+                        "    [{:>6}s] {:<24} kind={:?} tool={} host={:?} frames={}",
+                        (s.end_ms - s.start_ms) / 1000,
+                        s.context_key,
+                        s.kind,
+                        s.tool.as_deref().unwrap_or("-"),
+                        s.host,
+                        s.frame_count
+                    );
+                }
             }
         }
     }
@@ -249,7 +286,7 @@ fn cmd_score(args: &[String]) -> Result<()> {
     let tax = Taxonomy::seed();
     let sp = seg_params(args)?;
     let gp = group_params(args)?;
-    let grouped = algo_grouped(args);
+    let algo = algo_of(args)?;
     let labeled: Vec<_> = days.iter().filter(|d| !d.labels.is_empty()).collect();
     if labeled.is_empty() {
         bail!(
@@ -261,11 +298,15 @@ fn cmd_score(args: &[String]) -> Result<()> {
         "Scoring {} labeled day(s), algo={}, merge_gap {}s, absorb_max {}s, focus_min_len {}s, \
          density {}fph. Labels snapped to the nearest frame.",
         labeled.len(),
-        if grouped { "grouped" } else { "micro" },
+        algo_label(algo),
         gp.merge_gap_ms / 1000,
         gp.absorb_max_ms / 1000,
         gp.focus_min_len_ms / 1000,
         gp.focus_min_density_fph,
+    );
+    println!(
+        "PRIMARY metric = identity-PARTITIONED typed boundary F1 (`07` #114); the pooled \
+         position-only F1 (the 0.128/0.50 history) is shown beside it as `posF1`."
     );
     // Default to both the primary (120 s) and the secondary (180 s) tolerance (the D9 evidence
     // pair); an explicit `--tolerance <s>` overrides that with a single ad-hoc window.
@@ -277,14 +318,23 @@ fn cmd_score(args: &[String]) -> Result<()> {
         let tol_ms = tol * 1000;
         println!("\n-- tolerance {tol}s --");
         println!(
-            "{:<12}  {:>5} {:>5} {:>5}  {:>5} {:>5} {:>5}  {:>9}",
-            "day", "pred", "lab", "match", "P", "R", "F1", "tool"
+            "{:<12}  {:>5} {:>5} {:>5}  {:>5} {:>5} {:>5}  {:>6}  {:>9}",
+            "day", "pred", "lab", "match", "P", "R", "F1", "posF1", "tool"
         );
-        let mut day_scores = Vec::new();
+        let mut part_scores: Vec<DayScore> = Vec::new();
+        let mut pooled_scores: Vec<DayScore> = Vec::new();
         for d in &labeled {
-            let spans = spans_for(grouped, &d.frames, &tax, &sp, &gp);
+            let spans = spans_for(algo, &d.frames, &tax, &sp, &gp);
             let labels = snap_label_boundaries(&d.labels, &frame_times(&d.frames));
-            let s = score_day(
+            let p = score_day_partitioned(
+                &d.date,
+                &spans,
+                &labels,
+                d.day_start_ms,
+                d.day_end_ms,
+                tol_ms,
+            );
+            let pos = score_day(
                 &d.date,
                 &spans,
                 &labels,
@@ -293,22 +343,26 @@ fn cmd_score(args: &[String]) -> Result<()> {
                 tol_ms,
             );
             println!(
-                "{:<12}  {:>5} {:>5} {:>5}  {:>5.2} {:>5.2} {:>5.2}  {:>4}/{:<4}",
-                s.date,
-                s.boundaries.predicted,
-                s.boundaries.labeled,
-                s.boundaries.matched,
-                s.boundaries.precision(),
-                s.boundaries.recall(),
-                s.boundaries.f1(),
-                s.tool_correct,
-                s.tool_total
+                "{:<12}  {:>5} {:>5} {:>5}  {:>5.2} {:>5.2} {:>5.2}  {:>6.2}  {:>4}/{:<4}",
+                p.date,
+                p.boundaries.predicted,
+                p.boundaries.labeled,
+                p.boundaries.matched,
+                p.boundaries.precision(),
+                p.boundaries.recall(),
+                p.boundaries.f1(),
+                pos.boundaries.f1(),
+                p.tool_correct,
+                p.tool_total
             );
-            day_scores.push(s);
+            part_scores.push(p);
+            pooled_scores.push(pos);
         }
-        let (b, tc, tt) = pool(&day_scores);
+        let (b, tc, tt) = pool(&part_scores);
+        let (pb, _, _) = pool(&pooled_scores);
         println!(
-            "POOLED  P={:.3} R={:.3} F1={:.3} (matched {}/{} pred, {}/{} lab); tool {}/{} = {:.3}",
+            "POOLED(part) P={:.3} R={:.3} F1={:.3} (matched {}/{} pred, {}/{} lab); \
+             posF1={:.3}; tool {}/{} = {:.3}",
             b.precision(),
             b.recall(),
             b.f1(),
@@ -316,6 +370,7 @@ fn cmd_score(args: &[String]) -> Result<()> {
             b.predicted,
             b.matched,
             b.labeled,
+            pb.f1(),
             tc,
             tt,
             if tt == 0 { 1.0 } else { tc as f64 / tt as f64 }
@@ -324,24 +379,51 @@ fn cmd_score(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Markdown row for one pooled `BoundaryScore` + pred count.
+/// Markdown row for one sweep cell: partitioned (primary) P/R/F1 + pooled posF1 + tool + pred.
 fn cell_row(mg: i64, am: i64, c: &SweepCell) -> String {
     format!(
-        "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {} |\n",
+        "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} |\n",
         mg,
         am,
         c.boundary.precision(),
         c.boundary.recall(),
         c.boundary.f1(),
+        c.pooled.f1(),
         c.tool_accuracy(),
         c.pred_sessions
+    )
+}
+
+/// A pooled baseline reference line for `algo` through the referee (both partitioned + posF1).
+fn baseline_line(
+    name: &str,
+    days: &[LoadedDay],
+    tax: &Taxonomy,
+    sp: &SegParams,
+    gp: &GroupParams,
+    tol_ms: i64,
+    algo: Algo,
+) -> String {
+    let (part, pooled, pred) = score_days(days, tax, sp, gp, IDENTITY_QUALIFY_MS, tol_ms, algo);
+    let (b, tc, tt) = pool(&part);
+    let (pb, _, _) = pool(&pooled);
+    let acc = if tt == 0 { 1.0 } else { tc as f64 / tt as f64 };
+    format!(
+        "BASELINE {name}: partitioned F1 {:.3} (P {:.3} R {:.3}), posF1 {:.3}, tool acc {:.3}, \
+         {} predicted sessions.",
+        b.f1(),
+        b.precision(),
+        b.recall(),
+        pb.f1(),
+        acc,
+        pred
     )
 }
 
 fn cmd_sweep(args: &[String]) -> Result<()> {
     let dir = data_dir(args);
     let days = data::load_all(&dir)?;
-    let labeled: Vec<_> = days.into_iter().filter(|d| !d.labels.is_empty()).collect();
+    let labeled: Vec<LoadedDay> = days.into_iter().filter(|d| !d.labels.is_empty()).collect();
     if labeled.is_empty() {
         bail!(
             "no labeled days under {} \u{2014} fill in labels.toml first",
@@ -352,58 +434,45 @@ fn cmd_sweep(args: &[String]) -> Result<()> {
     let tol_ms = flag_i64(args, "--tolerance", 120)? * 1000;
     let sp = seg_params(args)?;
     let gp = group_params(args)?;
+    let algo = algo_of(args)?;
 
-    // Baseline: today's ungrouped segmenter through the same referee (the A/B reference).
-    let base: Vec<_> = labeled
-        .iter()
-        .map(|d| {
-            let spans = segment(&d.frames, &tax, &sp);
-            let labels = snap_label_boundaries(&d.labels, &frame_times(&d.frames));
-            (
-                score_day(
-                    &d.date,
-                    &spans,
-                    &labels,
-                    d.day_start_ms,
-                    d.day_end_ms,
-                    tol_ms,
-                ),
-                spans.len(),
-            )
-        })
-        .collect();
-    let (bb, btc, btt) = pool(&base.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>());
-    let base_pred: usize = base.iter().map(|(_, n)| n).sum();
-    let base_acc = if btt == 0 {
-        1.0
-    } else {
-        btc as f64 / btt as f64
-    };
+    // Two fixed A/B baselines through the same referee: the ungrouped micro segmenter and the
+    // serial grouped one. Stage A/B sweep the SELECTED algo (pass `--algo concurrent`).
+    let base_micro = baseline_line("micro", &labeled, &tax, &sp, &gp, tol_ms, Algo::Micro);
+    let base_grouped = baseline_line("grouped", &labeled, &tax, &sp, &gp, tol_ms, Algo::Grouped);
 
-    // Stage A: the merge_gap x absorb_max grid through the grouped pipeline.
+    // Stage A: the merge_gap x absorb_max grid.
     let merge_gaps = [600, 900, 1200, 1500, 1800, 2700];
     let absorb_maxes = [300, 600, 900, 1200, 1800];
-    let cells = sweep_grid(&labeled, &tax, &sp, &gp, &merge_gaps, &absorb_maxes, tol_ms);
+    let cells = sweep_grid(
+        &labeled,
+        &tax,
+        &sp,
+        &gp,
+        &merge_gaps,
+        &absorb_maxes,
+        tol_ms,
+        algo,
+    );
 
     let mut md = String::new();
     md.push_str(&format!(
-        "# Parameter sweep ({} labeled day(s), tolerance {}s)\n\n\
-         Everything runs through the GROUPED pipeline (`03 section 7e` amendment). Columns: pooled \
-         typed boundary P/R/F1, tool-recognition accuracy, and total predicted session count \
-         (the mega-merge honesty column).\n\n\
-         BASELINE (ungrouped `--algo micro`, same referee): F1 {:.3} (P {:.3} R {:.3}), tool acc \
-         {:.3}, {} predicted sessions.\n\n",
+        "# Parameter sweep ({} labeled day(s), tolerance {}s, algo={})\n\n\
+         Primary metric = identity-PARTITIONED typed boundary F1 (`07` #114); the pooled \
+         position-only F1 is the `posF1` column (the 0.128/0.50 history). `pred sessions` is the \
+         mega-merge honesty column.\n\n\
+         {}\n{}\n\n",
         labeled.len(),
         tol_ms / 1000,
-        bb.f1(),
-        bb.precision(),
-        bb.recall(),
-        base_acc,
-        base_pred,
+        algo_label(algo),
+        base_micro,
+        base_grouped,
     ));
     md.push_str("## Stage A: merge_gap x absorb_max\n\n");
-    md.push_str("| merge_gap (s) | absorb_max (s) | P | R | F1 | tool acc | pred sessions |\n");
-    md.push_str("|---|---|---|---|---|---|---|\n");
+    md.push_str(
+        "| merge_gap (s) | absorb_max (s) | P | R | F1 | posF1 | tool acc | pred sessions |\n",
+    );
+    md.push_str("|---|---|---|---|---|---|---|---|\n");
     for c in &cells {
         md.push_str(&cell_row(c.merge_gap_secs, c.absorb_max_secs, c));
     }
@@ -412,10 +481,12 @@ fn cmd_sweep(args: &[String]) -> Result<()> {
         .max_by(|a, b| a.boundary.f1().partial_cmp(&b.boundary.f1()).unwrap())
     {
         md.push_str(&format!(
-            "\nBest cell: merge_gap={}s absorb_max={}s -> F1 {:.3}, tool acc {:.3}, {} sessions.\n",
+            "\nBest cell: merge_gap={}s absorb_max={}s -> F1 {:.3} (posF1 {:.3}), tool acc {:.3}, \
+             {} sessions.\n",
             best.merge_gap_secs,
             best.absorb_max_secs,
             best.boundary.f1(),
+            best.pooled.f1(),
             best.tool_accuracy(),
             best.pred_sessions
         ));
@@ -432,10 +503,10 @@ fn cmd_sweep(args: &[String]) -> Result<()> {
         (Knob::IdentityQualify, &[60, 120, 300, 600]),
     ];
     for (knob, values) in dims {
-        let pts = sweep_1d(&labeled, &tax, &sp, &gp, *knob, values, tol_ms);
+        let pts = sweep_1d(&labeled, &tax, &sp, &gp, *knob, values, tol_ms, algo);
         md.push_str(&format!(
             "\n### {} (flat -> propose as a named constant, not a setting)\n\n\
-             | value | P | R | F1 | tool acc | pred |\n|---|---|---|---|---|---|\n",
+             | value | P | R | F1 | posF1 | tool acc | pred |\n|---|---|---|---|---|---|---|\n",
             knob.label()
         ));
         for p in &pts {
@@ -452,11 +523,12 @@ fn cmd_sweep(args: &[String]) -> Result<()> {
 
 fn one_dim_row(p: &OneDimPoint) -> String {
     format!(
-        "| {} | {:.3} | {:.3} | {:.3} | {:.3} | {} |\n",
+        "| {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {} |\n",
         p.value,
         p.boundary.precision(),
         p.boundary.recall(),
         p.boundary.f1(),
+        p.pooled.f1(),
         p.tool_accuracy(),
         p.pred_sessions
     )
@@ -491,19 +563,29 @@ fn cmd_stability(args: &[String]) -> Result<()> {
     }
     let sp = seg_params(args)?;
     let gp = group_params(args)?;
+    let algo = algo_of(args)?;
     let lookbacks = [6 * 3600, 12 * 3600, 24 * 3600, 48 * 3600];
     let step_ms = flag_i64(args, "--cutoff-step", 3600)? * 1000;
-    let pts = stability(&days, &Taxonomy::seed(), &sp, &gp, &lookbacks, step_ms);
+    let pts = stability(
+        &days,
+        &Taxonomy::seed(),
+        &sp,
+        &gp,
+        &lookbacks,
+        step_ms,
+        algo,
+    );
 
     let mut md = String::new();
     md.push_str(&format!(
-        "# Freeze-lookback stability ({} day(s), GROUPED pipeline, merge_gap {}s, absorb_max {}s, \
-         cutoff step {}s)\n\n\
+        "# Freeze-lookback stability ({} day(s), algo={}, merge_gap {}s, absorb_max {}s, \
+         cutoff step {}s; identity-partitioned boundaries)\n\n\
          For each candidate lookback, the max distance an older boundary moved (or how many \
          disappeared) between a truncated replay and the full replay. `stable` = boundaries \
          older than the lookback stop moving.\n\n\
          | lookback | max drift (s) | disappeared | stable |\n|---|---|---|---|\n",
         days.len(),
+        algo_label(algo),
         gp.merge_gap_ms / 1000,
         gp.absorb_max_ms / 1000,
         step_ms / 1000
@@ -569,5 +651,50 @@ fn main() -> ExitCode {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness::model::Kind;
+
+    fn span(start_ms: i64, end_ms: i64, first: i64, last: i64) -> SessionSpan {
+        SessionSpan {
+            start_ms,
+            end_ms,
+            context_key: "ai:codex".into(),
+            kind: Kind::Ai,
+            tool: Some("codex".into()),
+            host: None,
+            frame_count: 1,
+            first_frame_id: first,
+            last_frame_id: last,
+        }
+    }
+
+    #[test]
+    fn overlaps_any_excludes_self_copy_by_value() {
+        // `s` and its twin in `all` are separate allocations (detailed list vs spans_for pass), so
+        // the self-exclusion must be by value, not pointer identity.
+        let a = span(0, 100_000, 0, 100);
+        let all = vec![a.clone()];
+        assert!(
+            !overlaps_any(&a, &all),
+            "a lone span must not overlap itself"
+        );
+
+        // A genuine second span overlapping it is detected.
+        let b = span(50_000, 150_000, 200, 300);
+        let all2 = vec![a.clone(), b];
+        assert!(
+            overlaps_any(&a, &all2),
+            "a truly overlapping span is flagged"
+        );
+
+        // A disjoint neighbour is not.
+        let c = span(200_000, 300_000, 400, 500);
+        let all3 = vec![a.clone(), c];
+        assert!(!overlaps_any(&a, &all3), "a disjoint span is not flagged");
     }
 }
