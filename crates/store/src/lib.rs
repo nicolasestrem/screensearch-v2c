@@ -27,7 +27,7 @@ use traits::{
     FrameEnrichmentInput, FrameMeta, InsightsSummary, Job, JobKind, JobStats, Mark, NewFrame,
     NewJob, NewSession, NewSessionArtifact, OcrResult, Result, SearchHit, SearchQuery,
     SegmenterFrame, Session, SessionArtifact, SessionArtifactKind, SessionContent, SessionFilter,
-    TextFilterContext, TimelineBucket, VisionAnalysis,
+    SessionFrameSample, SessionReference, TextFilterContext, TimelineBucket, VisionAnalysis,
 };
 
 mod embeddings;
@@ -392,6 +392,21 @@ impl Store for SqliteStore {
     }
     async fn get_session(&self, id: i64) -> Result<Option<Session>> {
         SqliteStore::get_session(self, id).await
+    }
+
+    async fn session_frame_sample(
+        &self,
+        session_id: i64,
+        limit: u32,
+    ) -> Result<SessionFrameSample> {
+        SqliteStore::session_frame_sample(self, session_id, limit).await
+    }
+
+    async fn session_reference_for_frame(&self, frame_id: i64) -> Result<Option<SessionReference>> {
+        SqliteStore::session_reference_for_frame(self, frame_id).await
+    }
+    async fn session_has_usable_content(&self, session_id: i64) -> Result<bool> {
+        SqliteStore::session_has_usable_content(self, session_id).await
     }
     async fn session_frames_meta(&self, session_id: i64) -> Result<Vec<SegmenterFrame>> {
         SqliteStore::session_frames_meta(self, session_id).await

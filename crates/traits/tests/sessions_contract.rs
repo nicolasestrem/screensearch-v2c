@@ -1,9 +1,11 @@
 use traits::{
-    SegmentationParams, SessionArtifactKind, SessionArtifactRole, SessionHost, SessionKind,
+    SegmentationParams, Session, SessionArtifact, SessionArtifactKind, SessionArtifactRole,
+    SessionDetail, SessionHost, SessionKind, SessionQuery, SessionRecapRequest, SessionReference,
     SESSION_ABSORB_MAX_MS, SESSION_FOCUS_MIN_DENSITY_FPH, SESSION_FOCUS_MIN_LEN_MS,
     SESSION_FREEZE_LOOKBACK_MS, SESSION_IDENTITY_QUALIFY_MS, SESSION_MEETING_GAP_MS,
     SESSION_MERGE_GAP_MS,
 };
+use ts_rs::TS;
 
 #[test]
 fn shipped_segmentation_params_pin_the_pr2_gate_values() {
@@ -34,4 +36,27 @@ fn session_database_tokens_match_schema_eleven() {
     assert_eq!(SessionArtifactKind::Exchange.as_str(), "exchange");
     assert_eq!(SessionArtifactRole::User.as_str(), "user");
     assert_eq!(SessionArtifactRole::Agent.as_str(), "agent");
+}
+
+#[test]
+fn session_ui_contract_exports_without_bigint() {
+    let declarations = [
+        ("SessionKind", SessionKind::inline()),
+        ("SessionHost", SessionHost::inline()),
+        ("SessionArtifactKind", SessionArtifactKind::inline()),
+        ("SessionArtifactRole", SessionArtifactRole::inline()),
+        ("Session", Session::inline()),
+        ("SessionArtifact", SessionArtifact::inline()),
+        ("SessionQuery", SessionQuery::inline()),
+        ("SessionReference", SessionReference::inline()),
+        ("SessionDetail", SessionDetail::inline()),
+        ("SessionRecapRequest", SessionRecapRequest::inline()),
+    ];
+
+    for (name, declaration) in declarations {
+        assert!(
+            !declaration.contains("bigint"),
+            "{name} exported bigint: {declaration}"
+        );
+    }
 }

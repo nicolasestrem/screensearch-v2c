@@ -961,3 +961,32 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   $ git diff --check
   (no output; exit 0)
   ```
+
+## Pass 6 — 2026-07-10 — 0.4.0 PR5 Task 1 (typed session IPC + exact Recap)
+
+- **Implemented:** Exported the existing session domain rows/enums and the new `SessionQuery`,
+  `SessionReference`, `SessionDetail`, and `SessionRecapRequest` IPC models through `ts-rs`, with
+  explicit JavaScript `number` mappings for every 64-bit field. Added `list_sessions`, `get_session`,
+  and `session_recap` to the Tauri invoke surface. `FrameDetail` and `ResumeContext` now carry an
+  optional session reference without changing their no-session behavior.
+- **Persistence:** Added a truthful session-frame total and an at-most-24 chronological/even sample
+  that includes the first and last frames and filters by `frames.session_id`. Session detail returns
+  only `exchange` artifacts. A deleted derived session is omitted from frame/resume payloads while
+  the frame survives.
+- **Report reuse:** Refactored `kernel::reports` behind a scoped internal source. Existing reports
+  continue through the time-range source unchanged; session Recap feeds the same depth planning,
+  context budgeting, map/reduce, progress, cancellation, citation, and truncation code from an exact
+  `frames.session_id` source. Overlapping session spans cannot leak frames. Missing filtered evidence
+  returns the existing honest empty response before the shell acquires an answer provider.
+- **TDD evidence:** RED failures were captured for missing IPC exports, store sampling/reference
+  support, resume hydration, session command helpers, scoped Recap generation, and the shell evidence
+  preflight. Each then passed focused GREEN tests. The combined task-relevant suite passed with zero
+  failures, and task-relevant clippy completed under `-D warnings`.
+- **Skipped / deferred:** Frontend components/routes are the next PR5 task. API/MCP session endpoints
+  remain PR6-owned. No schema, migration, taxonomy, segmentation, settings, audio, notification, or
+  NavRail changes were made.
+- **Hallucinated / corrected:** None. The only intermediate defect was a derive edit landing on the
+  adjacent `AnswerDelta`; the compiler caught it before GREEN and the intended `ResumeContext` derive
+  was corrected.
+- **Still risky:** Live Tauri/UI round-trip and Recap sidecar behavior require the PR5 integrated UI
+  and real-app acceptance pass. Rust coverage proves exact frame ownership and no-model empty evidence.

@@ -107,3 +107,9 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
     `latest.json` count, so read it against a known personal baseline. An optional convenience script
     in `scripts/` is a later follow-up — it runs on the maintainer's machine, **never** in the app
     (not built in PR1, which is specs-only).
+
+### 0.4.0 PR5 Task 1 gap audit — 2026-07-10
+
+No new silent-spec gaps were opened. The remaining live acceptance work is already contracted in
+`03 §13c-5`: the integrated frontend/live-app drill-in and real-frame Recap check belong to the rest
+of PR5, while API/MCP session exposure remains PR6-owned.

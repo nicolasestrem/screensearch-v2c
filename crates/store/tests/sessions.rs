@@ -276,3 +276,94 @@ async fn title_summary_cache_updates_the_row_without_touching_boundaries() {
     assert_eq!(got.summary_model.as_deref(), Some("model.gguf"));
     assert_eq!((got.started_at, got.ended_at), (100, Some(200)));
 }
+
+#[tokio::test]
+async fn session_frame_sample_reports_total_and_even_chronological_endpoints_without_leakage() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let wanted = store
+        .insert_session(session(0, Some(10_000), "ai:claude-code"))
+        .await
+        .unwrap();
+    let other = store
+        .insert_session(session(0, Some(10_000), "ai:other"))
+        .await
+        .unwrap();
+
+    let mut wanted_ids = Vec::new();
+    let mut other_ids = Vec::new();
+    for index in 0..30_i64 {
+        wanted_ids.push(seed_frame(&store, index * 100, "wanted").await);
+        other_ids.push(seed_frame(&store, index * 100 + 50, "other").await);
+    }
+    store
+        .assign_frames_session(&wanted_ids, Some(wanted))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&other_ids, Some(other))
+        .await
+        .unwrap();
+
+    let sample = store.session_frame_sample(wanted, 24).await.unwrap();
+    assert_eq!(sample.total_count, 30);
+    assert_eq!(sample.frames.len(), 24);
+    assert_eq!(
+        sample.frames.first().map(|frame| frame.frame_id),
+        wanted_ids.first().copied()
+    );
+    assert_eq!(
+        sample.frames.last().map(|frame| frame.frame_id),
+        wanted_ids.last().copied()
+    );
+    assert!(sample
+        .frames
+        .windows(2)
+        .all(|pair| pair[0].captured_at < pair[1].captured_at));
+    assert!(sample
+        .frames
+        .iter()
+        .all(|frame| wanted_ids.contains(&frame.frame_id)));
+    let expected_ids: Vec<i64> = (0..24)
+        .map(|index| wanted_ids[index * (wanted_ids.len() - 1) / 23])
+        .collect();
+    assert_eq!(
+        sample
+            .frames
+            .iter()
+            .map(|frame| frame.frame_id)
+            .collect::<Vec<_>>(),
+        expected_ids,
+        "sample is evenly rank-spaced across the complete session"
+    );
+}
+
+#[tokio::test]
+async fn frame_detail_joins_session_reference_and_omits_deleted_session() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let frame_id = seed_frame(&store, 100, "content").await;
+    let session_id = store
+        .insert_session(session(100, Some(200), "ai:claude-code"))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[frame_id], Some(session_id))
+        .await
+        .unwrap();
+
+    let joined = store.get_frame(frame_id).await.unwrap().unwrap();
+    assert_eq!(
+        joined.session.as_ref().map(|session| session.id),
+        Some(session_id)
+    );
+    assert_eq!(
+        joined
+            .session
+            .as_ref()
+            .and_then(|session| session.tool.as_deref()),
+        Some("claude-code")
+    );
+
+    assert!(store.delete_unfrozen_session(session_id).await.unwrap());
+    let deleted = store.get_frame(frame_id).await.unwrap().unwrap();
+    assert!(deleted.session.is_none());
+}

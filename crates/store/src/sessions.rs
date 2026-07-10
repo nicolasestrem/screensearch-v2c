@@ -4,9 +4,9 @@
 
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use traits::{
-    NewSession, NewSessionArtifact, Result, SegmenterFrame, Session, SessionArtifact,
-    SessionArtifactKind, SessionArtifactRole, SessionContent, SessionFilter, SessionHost,
-    SessionKind,
+    FrameMeta, NewSession, NewSessionArtifact, Result, SegmenterFrame, Session, SessionArtifact,
+    SessionArtifactKind, SessionArtifactRole, SessionContent, SessionFilter, SessionFrameSample,
+    SessionHost, SessionKind, SessionReference,
 };
 
 use crate::SqliteStore;
@@ -110,6 +110,30 @@ fn row_to_artifact(row: &Row<'_>) -> rusqlite::Result<SessionArtifact> {
         frame_id: row.get(4)?,
         content: row.get(5)?,
         created_at: row.get(6)?,
+    })
+}
+
+fn row_to_frame_meta(row: &Row<'_>) -> rusqlite::Result<FrameMeta> {
+    Ok(FrameMeta {
+        frame_id: row.get(0)?,
+        captured_at: row.get(1)?,
+        image_path: row.get(2)?,
+        image_purged: row.get::<_, i64>(3)? != 0,
+        app_hint: row.get(4)?,
+    })
+}
+
+pub(crate) fn row_to_session_reference(row: &Row<'_>) -> rusqlite::Result<SessionReference> {
+    let kind: String = row.get(3)?;
+    Ok(SessionReference {
+        id: row.get(0)?,
+        started_at: row.get(1)?,
+        ended_at: row.get(2)?,
+        kind: kind_from_db(&kind)?,
+        tool: row.get(4)?,
+        host: host_from_db(row.get(5)?)?,
+        title: row.get(6)?,
+        confidence: row.get(7)?,
     })
 }
 
@@ -270,6 +294,104 @@ impl SqliteStore {
         self.with_conn(move |conn| {
             let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id=?1");
             Ok(conn.query_row(&sql, [id], row_to_session).optional()?)
+        })
+        .await
+    }
+
+    pub async fn session_frame_sample(
+        &self,
+        session_id: i64,
+        limit: u32,
+    ) -> Result<SessionFrameSample> {
+        self.with_conn(move |conn| {
+            let total: i64 = conn.query_row(
+                "SELECT count(*) FROM frames WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )?;
+            let total_count = u32::try_from(total).unwrap_or(u32::MAX);
+            if total == 0 || limit == 0 {
+                return Ok(SessionFrameSample {
+                    total_count,
+                    frames: Vec::new(),
+                });
+            }
+
+            let frames = if limit == 1 {
+                let mut stmt = conn.prepare(
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
+                     FROM frames WHERE session_id=?1
+                     ORDER BY captured_at, id LIMIT 1",
+                )?;
+                let rows = stmt
+                    .query_map([session_id], row_to_frame_meta)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            } else {
+                let mut stmt = conn.prepare(
+                    "WITH RECURSIVE
+                     ranked AS (
+                         SELECT id, captured_at, image_path, image_purged, app_hint,
+                                row_number() OVER (ORDER BY captured_at, id) - 1 AS rn,
+                                count(*) OVER () AS total
+                         FROM frames WHERE session_id=?1
+                     ),
+                     slots(k) AS (
+                         SELECT 0
+                         UNION ALL SELECT k + 1 FROM slots WHERE k + 1 < ?2
+                     )
+                     SELECT r.id, r.captured_at, r.image_path, r.image_purged, r.app_hint
+                     FROM ranked r JOIN slots s
+                       ON r.rn = CASE
+                           WHEN r.total <= ?2 THEN s.k
+                           ELSE (s.k * (r.total - 1)) / (?2 - 1)
+                       END
+                     WHERE s.k < min(r.total, ?2)
+                     ORDER BY r.captured_at, r.id",
+                )?;
+                let rows = stmt
+                    .query_map(params![session_id, i64::from(limit)], row_to_frame_meta)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            Ok(SessionFrameSample {
+                total_count,
+                frames,
+            })
+        })
+        .await
+    }
+
+    pub async fn session_reference_for_frame(
+        &self,
+        frame_id: i64,
+    ) -> Result<Option<SessionReference>> {
+        self.with_conn(move |conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT s.id, s.started_at, s.ended_at, s.kind, s.tool, s.host,
+                            s.title, s.confidence
+                     FROM frames f JOIN sessions s ON s.id=f.session_id
+                     WHERE f.id=?1",
+                    [frame_id],
+                    row_to_session_reference,
+                )
+                .optional()?)
+        })
+        .await
+    }
+
+    pub async fn session_has_usable_content(&self, session_id: i64) -> Result<bool> {
+        self.with_conn(move |conn| {
+            Ok(conn.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM frames f
+                     JOIN frame_text ft ON ft.frame_id=f.id
+                     WHERE f.session_id=?1 AND trim(ft.content_text)<>''
+                 )",
+                [session_id],
+                |row| row.get::<_, i64>(0),
+            )? != 0)
         })
         .await
     }

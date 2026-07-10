@@ -783,6 +783,7 @@ impl SqliteStore {
                             suppressed_text_count: 0,
                             vision: None,
                             tags: Vec::new(),
+                            session: None,
                         })
                     },
                 )
@@ -791,6 +792,17 @@ impl SqliteStore {
             let Some(mut detail) = base else {
                 return Ok(None);
             };
+
+            detail.session = conn
+                .query_row(
+                    "SELECT s.id, s.started_at, s.ended_at, s.kind, s.tool, s.host,
+                            s.title, s.confidence
+                     FROM frames f JOIN sessions s ON s.id=f.session_id
+                     WHERE f.id=?1",
+                    params![frame_id],
+                    crate::sessions::row_to_session_reference,
+                )
+                .optional()?;
 
             if let Some((raw, content, source, suppressed)) = conn
                 .query_row(

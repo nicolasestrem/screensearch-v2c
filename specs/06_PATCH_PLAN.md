@@ -22,3 +22,8 @@
 > Live rows: #15 (upstream llama.cpp leak), #23 (PDH blind to Vulkan), #26 (**D9 gate SET** at PR2b Phase C — the binding PR4 merge gate), #27 (serial §7e grouping — **resolved** PR2b Phase C, retained as the A/B baseline), #28 (concurrent session model — **resolved** PR2b Phase C, the shipped/default path), #29 (03-vs-0.4.0.md sessions-DDL divergence — **logged** at PR3, 03 wins by-design), #30 (`session_artifacts.frame_id` unindexed FK — **resolved** at PR3, `idx_artifacts_frame` added).
 
 When the spec contradicts itself, stop, ask the user, and log the resolution here before coding.
+
+## 2026-07-10 — 0.4.0 PR5 Task 1 audit
+
+No new patch rows: the typed IPC, detail sampling, and exact session Recap requirements were
+internally consistent with `03 §7`/`§7e`/`§8b`; no schema or contract amendment was required.

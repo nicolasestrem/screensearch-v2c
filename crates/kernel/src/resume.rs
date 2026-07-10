@@ -213,6 +213,7 @@ pub fn last_sustained_context(
             span_end: run.last_ts,
             image_path: rep.image_path.clone(),
             image_purged: rep.image_purged,
+            session: None,
         }
     })
 }
@@ -226,7 +227,11 @@ pub async fn where_was_i(store: &dyn Store, settings: &Settings) -> Result<Optio
         min_dwell_ms: i64::from(settings.resume_min_dwell_secs) * 1000,
         excluded_apps: settings.privacy_excluded_apps.clone(),
     };
-    Ok(last_sustained_context(&rows, &params))
+    let mut context = last_sustained_context(&rows, &params);
+    if let Some(context) = context.as_mut() {
+        context.session = store.session_reference_for_frame(context.frame_id).await?;
+    }
+    Ok(context)
 }
 
 #[cfg(test)]

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The in-app sessions surface now has typed core commands to list overlapping sessions, load a
+  bounded drill-in with representative frames and extracted exchanges, connect Moment and
+  where-was-i frames back to their session, lazily cache session title/summary intelligence, and
+  generate a cancellable Recap through the existing coverage-first report engine. Session Recaps
+  are scoped by exact frame ownership, so overlapping tracks cannot leak citations.
 - The sessions engine now groups captured frames in the background into stable focus, meeting, and
   recognized AI-tool sessions. It supports overlapping tools while keeping each frame owned by one
   session, incrementally updates the recent tail, and resumably backfills existing history without

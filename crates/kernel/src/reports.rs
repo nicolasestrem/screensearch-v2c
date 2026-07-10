@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{anyhow, Result};
 use traits::{
     AnswerOpts, AnswerProvider, ReportConfig, ReportMode, ReportOutput, ReportRange,
-    RetrievedChunk, SearchHit, SearchQuery, Store, TimeRange,
+    RetrievedChunk, SearchHit, SearchQuery, SegmenterFrame, Store, TimeRange, TimelineBucket,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -95,6 +95,17 @@ struct Group {
     chunks: Vec<RetrievedChunk>,
 }
 
+enum CoverageScope {
+    TimeRange,
+    Session(Vec<SegmenterFrame>),
+}
+
+#[derive(Clone, Copy)]
+struct EvidenceFrame {
+    frame_id: i64,
+    captured_at: i64,
+}
+
 /// Generates a recall report over `[start, end)` (`03 §8b`). `range`/`prompt` select
 /// the retrieval path and framing; `cfg` carries the settings-derived knobs. Emits
 /// progress via `progress` and cooperatively cancels (between passes) when `cancel`
@@ -112,6 +123,74 @@ pub async fn generate_report(
     cfg: ReportConfig,
     progress: Option<&ReportProgress<'_>>,
     cancel: &AtomicBool,
+) -> Result<ReportOutput> {
+    generate_report_scoped(
+        store,
+        answer,
+        range,
+        start,
+        end,
+        prompt,
+        cfg,
+        progress,
+        cancel,
+        CoverageScope::TimeRange,
+    )
+    .await
+}
+
+/// Runs the existing coverage-first report pipeline over exactly one persisted
+/// session's owned frames. Different session tracks may overlap in time, so the
+/// source is `frames.session_id`, never a time-range fallback.
+pub async fn generate_session_recap(
+    store: &dyn Store,
+    answer: &dyn AnswerProvider,
+    session_id: i64,
+    cfg: ReportConfig,
+    progress: Option<&ReportProgress<'_>>,
+    cancel: &AtomicBool,
+) -> Result<ReportOutput> {
+    let session = store
+        .get_session(session_id)
+        .await?
+        .ok_or_else(|| anyhow!("session {session_id} not found"))?;
+    let frames = store.session_frames_meta(session_id).await?;
+    let start = frames
+        .first()
+        .map_or(session.started_at, |frame| frame.captured_at);
+    let end = frames
+        .last()
+        .map(|frame| frame.captured_at.saturating_add(1))
+        .or_else(|| session.ended_at.map(|ended| ended.saturating_add(1)))
+        .unwrap_or_else(|| session.started_at.saturating_add(1))
+        .max(start.saturating_add(1));
+    generate_report_scoped(
+        store,
+        answer,
+        ReportRange::Custom,
+        start,
+        end,
+        None,
+        cfg,
+        progress,
+        cancel,
+        CoverageScope::Session(frames),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn generate_report_scoped(
+    store: &dyn Store,
+    answer: &dyn AnswerProvider,
+    range: ReportRange,
+    start: i64,
+    end: i64,
+    prompt: Option<&str>,
+    cfg: ReportConfig,
+    progress: Option<&ReportProgress<'_>>,
+    cancel: &AtomicBool,
+    scope: CoverageScope,
 ) -> Result<ReportOutput> {
     let prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
     let opts = AnswerOpts {
@@ -152,16 +231,33 @@ pub async fn generate_report(
         (groups, periods_total, retrieved)
     } else {
         let grid = grid_size(start, end, MAX_PERIODS);
-        let buckets = store.timeline_buckets(start, end, grid).await?;
+        let buckets = match &scope {
+            CoverageScope::TimeRange => store.timeline_buckets(start, end, grid).await?,
+            CoverageScope::Session(frames) => session_buckets(frames, start, end, grid),
+        };
         let total_in_range: u64 = buckets.iter().map(|b| u64::from(b.count)).sum();
         let counts: Vec<u32> = buckets.iter().map(|b| b.count).collect();
         let quotas = plan_depth(&counts, cfg.daily_top_k, cfg.weekly_top_k);
         // Sample each active period's frames (one windowed query per period — inherent to
         // per-period coverage), then hydrate **all** of them with a single bulk `ocr_texts`
         // read rather than one query per period (avoids an N+1 over the grid).
-        let mut periods_frames = Vec::with_capacity(buckets.len());
+        let mut periods_frames: Vec<Vec<EvidenceFrame>> = Vec::with_capacity(buckets.len());
         for (b, quota) in buckets.iter().zip(quotas) {
-            periods_frames.push(store.sample_frames_in_range(b.start, b.end, quota).await?);
+            let frames = match &scope {
+                CoverageScope::TimeRange => store
+                    .sample_frames_in_range(b.start, b.end, quota)
+                    .await?
+                    .into_iter()
+                    .map(|frame| EvidenceFrame {
+                        frame_id: frame.frame_id,
+                        captured_at: frame.captured_at,
+                    })
+                    .collect(),
+                CoverageScope::Session(frames) => {
+                    sample_session_bucket(frames, b.start, b.end, quota)
+                }
+            };
+            periods_frames.push(frames);
         }
         let all_ids: Vec<i64> = periods_frames
             .iter()
@@ -385,6 +481,77 @@ async fn hydrate_hits(store: &dyn Store, hits: Vec<SearchHit>) -> Result<Vec<Ret
         .collect())
 }
 
+fn session_buckets(
+    frames: &[SegmenterFrame],
+    start: i64,
+    end: i64,
+    bucket_count: u32,
+) -> Vec<TimelineBucket> {
+    if frames.is_empty() || end <= start || bucket_count == 0 {
+        return Vec::new();
+    }
+    let Some(span) = end.checked_sub(start) else {
+        return Vec::new();
+    };
+    let count = i64::from(bucket_count);
+    let width = (span / count + i64::from(span % count != 0)).max(1);
+    let mut counts = std::collections::BTreeMap::<i64, u32>::new();
+    for frame in frames {
+        let bucket =
+            (frame.captured_at.saturating_sub(start) / width).clamp(0, count.saturating_sub(1));
+        let entry = counts.entry(bucket).or_default();
+        *entry = entry.saturating_add(1);
+    }
+    counts
+        .into_iter()
+        .map(|(bucket, count)| {
+            let bucket_start = start.saturating_add(bucket.saturating_mul(width));
+            TimelineBucket {
+                start: bucket_start,
+                end: bucket_start.saturating_add(width).min(end),
+                count,
+            }
+        })
+        .collect()
+}
+
+fn sample_session_bucket(
+    frames: &[SegmenterFrame],
+    start: i64,
+    end: i64,
+    limit: u32,
+) -> Vec<EvidenceFrame> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let in_bucket: Vec<_> = frames
+        .iter()
+        .filter(|frame| frame.captured_at >= start && frame.captured_at < end)
+        .collect();
+    let wanted = usize::try_from(limit)
+        .unwrap_or(usize::MAX)
+        .min(in_bucket.len());
+    if wanted == 0 {
+        return Vec::new();
+    }
+    if wanted == 1 {
+        let frame = in_bucket[0];
+        return vec![EvidenceFrame {
+            frame_id: frame.id,
+            captured_at: frame.captured_at,
+        }];
+    }
+    (0..wanted)
+        .map(|index| {
+            let frame = in_bucket[index * (in_bucket.len() - 1) / (wanted - 1)];
+            EvidenceFrame {
+                frame_id: frame.id,
+                captured_at: frame.captured_at,
+            }
+        })
+        .collect()
+}
+
 /// Per-active-period frame quota (pure — the coverage guarantee lives here). Aims for
 /// `daily_top_k` frames per period, scaling down to fit the global `weekly_top_k` cap
 /// when there are many periods, but never below [`MIN_FRAMES_PER_PERIOD`] (the floor
@@ -583,7 +750,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use store::SqliteStore;
-    use traits::{AnswerDelta, NewFrame, OcrResult};
+    use traits::{AnswerDelta, NewFrame, NewSession, OcrResult, SessionHost, SessionKind};
 
     // ---- Pure-function tests (no store / no sidecar) ----
 
@@ -1014,5 +1181,110 @@ mod tests {
         )
         .await;
         assert!(out.is_err(), "a set cancel flag aborts before the pass");
+    }
+
+    #[tokio::test]
+    async fn session_recap_with_overlapping_spans_cites_only_the_named_session() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let wanted_session = store
+            .insert_session(NewSession {
+                started_at: 0,
+                ended_at: Some(10_000),
+                kind: SessionKind::Ai,
+                tool: Some("codex".to_string()),
+                host: Some(SessionHost::Desktop),
+                context_key: "ai:codex".to_string(),
+                confidence: 0.9,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let other_session = store
+            .insert_session(NewSession {
+                started_at: 0,
+                ended_at: Some(10_000),
+                kind: SessionKind::Meeting,
+                tool: None,
+                host: Some(SessionHost::Desktop),
+                context_key: "meeting:teams".to_string(),
+                confidence: 0.9,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let wanted_ids = seed_day(&store, 0, 4).await;
+        let other_ids = seed_day(&store, 500, 4).await;
+        store
+            .assign_frames_session(&wanted_ids, Some(wanted_session))
+            .await
+            .unwrap();
+        store
+            .assign_frames_session(&other_ids, Some(other_session))
+            .await
+            .unwrap();
+        let answer = FakeAnswer {
+            calls: Arc::new(AtomicUsize::new(0)),
+            big: false,
+        };
+        let cancel = AtomicBool::new(false);
+
+        let out = generate_session_recap(&store, &answer, wanted_session, cfg(), None, &cancel)
+            .await
+            .unwrap();
+
+        assert!(!out.cited_frame_ids.is_empty());
+        assert!(out.cited_frame_ids.iter().all(|id| wanted_ids.contains(id)));
+        assert!(out.cited_frame_ids.iter().all(|id| !other_ids.contains(id)));
+    }
+
+    #[tokio::test]
+    async fn session_recap_without_usable_content_makes_zero_model_calls() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let session_id = store
+            .insert_session(NewSession {
+                started_at: 0,
+                ended_at: Some(1_000),
+                kind: SessionKind::Focus,
+                tool: None,
+                host: Some(SessionHost::Ide),
+                context_key: "focus:code".to_string(),
+                confidence: 0.7,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let frame_id = store
+            .insert_frame(NewFrame {
+                captured_at: 100,
+                monitor_index: 0,
+                width: 1920,
+                height: 1080,
+                image_path: "frames/empty.webp".to_string(),
+                content_hash: "empty".to_string(),
+                app_hint: Some("Code".to_string()),
+                window_title: Some("Code".to_string()),
+                browser_url: None,
+                capture_trigger: None,
+            })
+            .await
+            .unwrap();
+        store
+            .assign_frames_session(&[frame_id], Some(session_id))
+            .await
+            .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let answer = FakeAnswer {
+            calls: calls.clone(),
+            big: false,
+        };
+        let cancel = AtomicBool::new(false);
+
+        let out = generate_session_recap(&store, &answer, session_id, cfg(), None, &cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(out.mode, ReportMode::Empty);
+        assert_eq!(out.passes, 0);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 }

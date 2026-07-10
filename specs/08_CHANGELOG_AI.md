@@ -335,3 +335,17 @@
   meetings, gap equality, density, qualification, and open projection without changing the frozen
   harness baseline. The post-fix D9 rerun remained F1 0.400/tool 0.818. Active run instructions now
   use only `npm run dev`; never a direct executable.
+
+## 2026-07-10 — 0.4.0 PR5 Task 1: typed session UI commands and exact Recap
+
+- **Change:** Added `ts-rs` exports for the schema-11 session domain and four new IPC models; session
+  references on frame/resume payloads; exact overlap-query normalization; bounded session detail;
+  lazy cached title/summary generation; and a cancellable session Recap that reuses the existing
+  report engine over only the requested session's frame ownership.
+- **Why:** `03 §7`/`§7e`, `§8b`, `UI_REFERENCE §3`/`§6`, and the PR5 Task 1 brief require a typed Rust
+  boundary for the Timeline drill-in, Moment/Deck links, and a Recap with no cross-track leakage or
+  new summarization machinery.
+- **Verification:** TDD RED→GREEN focused tests covered exports/no-bigint, store sample totals and
+  endpoints, no cross-session leakage, missing/deleted references, query normalization, detail
+  filtering, cached intelligence, scoped Recap citations, and no-evidence zero calls. The combined
+  `cargo test -p traits -p store -p kernel -p screensearch` and task-relevant clippy passed.

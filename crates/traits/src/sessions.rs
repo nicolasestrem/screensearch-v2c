@@ -2,6 +2,9 @@
 //! These are internal Rust contracts in PR4; PR5 owns the `ts-rs` IPC surface.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::FrameMeta;
 
 /// Frozen concurrent-model parameters approved by the D9 gate (`06` #26/#28).
 pub const SESSION_MERGE_GAP_MS: i64 = 2_700_000;
@@ -13,8 +16,9 @@ pub const SESSION_IDENTITY_QUALIFY_MS: i64 = 120_000;
 /// Stable-id freeze lookback W: 24 hours. Correctness parameter, never a setting.
 pub const SESSION_FREEZE_LOOKBACK_MS: i64 = 86_400_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum SessionKind {
     Focus,
     Meeting,
@@ -33,8 +37,9 @@ impl SessionKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum SessionHost {
     Terminal,
     Desktop,
@@ -53,8 +58,9 @@ impl SessionHost {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum SessionArtifactKind {
     Exchange,
     Transcript,
@@ -71,8 +77,9 @@ impl SessionArtifactKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub enum SessionArtifactRole {
     User,
     Agent,
@@ -87,10 +94,14 @@ impl SessionArtifactRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct Session {
+    #[ts(type = "number")]
     pub id: i64,
+    #[ts(type = "number")]
     pub started_at: i64,
+    #[ts(type = "number | null")]
     pub ended_at: Option<i64>,
     pub kind: SessionKind,
     pub tool: Option<String>,
@@ -101,7 +112,9 @@ pub struct Session {
     pub summary_model: Option<String>,
     pub confidence: f64,
     pub frozen: bool,
+    #[ts(type = "number")]
     pub created_at: i64,
+    #[ts(type = "number")]
     pub updated_at: i64,
 }
 
@@ -117,15 +130,28 @@ pub struct NewSession {
     pub frozen: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct SessionArtifact {
+    #[ts(type = "number")]
     pub id: i64,
+    #[ts(type = "number")]
     pub session_id: i64,
     pub kind: SessionArtifactKind,
     pub role: Option<SessionArtifactRole>,
+    #[ts(type = "number | null")]
     pub frame_id: Option<i64>,
     pub content: String,
+    #[ts(type = "number")]
     pub created_at: i64,
+}
+
+/// Truthful total plus a bounded chronological representative sample for the
+/// in-app session drill-in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionFrameSample {
+    pub total_count: u32,
+    pub frames: Vec<FrameMeta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
