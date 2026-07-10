@@ -363,3 +363,109 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **Resolved:** `06` #26 (gate SET), #27 (serial baseline), #28 (concurrent, shipped); `07` #110
   (over-segmentation), #114 (concurrency). Open follow-ups: `07` #116 (identity-granularity limits),
   #117 (capture/taxonomy ceiling → PR4 taxonomy re-tune + a later capture change).
+
+## Pass 4 — 2026-07-10 — 0.4.0 PR3 (sessions schema + migration 10 → 11)
+
+- **Implemented:** `MIGRATION_V11` (`crates/store/src/schema.rs`) — the sessions arc's **only**
+  schema change (D4). Creates `sessions`, `session_artifacts`, `frames.session_id`, and the four
+  indexes (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`, `idx_artifacts_frame`
+  — the last added by the review amendment `06` #30, see below), transcribed verbatim
+  from the authoritative DDL in `03 §4:328–368` (both hardened CHECKs included:
+  `sessions.tool CHECK (tool IS NULL OR kind = 'ai')` and the compound `session_artifacts.role`
+  CHECK with the load-bearing `role IS NOT NULL` guard). **Structure only, no backfill** — plain
+  `CREATE TABLE` + `ALTER TABLE ... ADD COLUMN` + `CREATE INDEX`, no table rebuild, so the runner's
+  FK-off recipe is untouched and the migration is fast. `LATEST_SCHEMA_VERSION` 10 → 11 (the runner
+  confirms +1 against the constant via its `debug_assert_eq!`, never hardcoded). The 03 §4
+  `context_key` column comment was re-normalized to the `06` #27/#28 closed grammar (the sanctioned
+  escape hatch). §7e prose deltas [a]–[f] were **not** touched — they are PR4's obligation (`06` #27
+  scopes PR3 to the §4 comment).
+- **Tests (all green):** five new inline `migration_tests` in `crates/store/src/lib.rs` on a
+  populated schema-10 fixture (`seed_v10_fixture`: three frames with
+  `app_hint`/`window_title`/`browser_url`/`capture_trigger` incl. one image-purged, `frame_text` +
+  FTS mirrors, `text_spans`, two marks open+resolved, two text embeddings with vec0 vectors, a mixed
+  jobs queue): `migration_v11_adds_sessions_structure_only` (version +1, six new objects,
+  sessions/artifacts empty, every frame `session_id IS NULL`, all pre-existing rows survive incl. FTS
+  match, fk clean); `migration_v11_sessions_check_constraints`; `migration_v11_artifact_role_kind_coupling`
+  (incl. the NULL-role-on-exchange rejection — the load-bearing guard case);
+  `migration_v11_fk_set_null_and_cascade` (adds an `EXPLAIN QUERY PLAN` assertion that the frame-delete
+  FK lookup rides `idx_artifacts_frame`); and the **D10 additivity proof**
+  `migration_v11_preserves_frame_surfaces` — seven store surfaces (`hybrid_search` FTS+vector arms,
+  `ocr_texts`, `list_marks`, `recent_frame_contexts`, `timeline_buckets`, `sample_frames_in_range`,
+  `insights_summary`) are `assert_eq!`-identical before and after the migration on the same fixture,
+  with vacuity guards so no surface is silently empty. The existing
+  `fresh_and_migrated_schemas_agree_at_latest` parity acceptance now spans v11 unchanged. Verbatim:
+
+  ```
+  $ cargo test -p store --lib migration
+  running 11 tests
+  test migration_tests::migration_v8_indexes_image_retention_sweep ... ok
+  test migration_tests::migration_v11_artifact_role_kind_coupling ... ok
+  test migration_tests::migration_v10_adds_marks_with_cascade ... ok
+  test migration_tests::migration_v7_adds_image_purged_present_by_default ... ok
+  test migration_tests::migration_v6_widens_capture_trigger_check_without_dropping_children ... ok
+  test migration_tests::migration_v11_sessions_check_constraints ... ok
+  test migration_tests::migration_v9_drops_image_lane_and_embed_image_jobs ... ok
+  test migration_tests::migration_v11_fk_set_null_and_cascade ... ok
+  test migration_tests::migration_v11_adds_sessions_structure_only ... ok
+  test migration_tests::migration_v11_preserves_frame_surfaces ... ok
+  test migration_tests::fresh_and_migrated_schemas_agree_at_latest ... ok
+  test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.09s
+  ```
+
+- **Gate 0 / D5 backup record (release-blocker-class manual step, `07` manual-steps):** the maintainer
+  confirmed a dated pristine copy of the live `screensearch.db` exists **outside** the app data dir
+  (attested in-session 2026-07-10; the live DB doubles as the PR2 ground-truth dataset). The live DB
+  was **never opened by this branch's build** — its mtime is unchanged (`07/10/2026 10:55:06`,
+  183,693,312 bytes) throughout PR3; the app was not running. A separate **throwaway** copy (the live
+  `.db` + `-wal` + `-shm`, copied to an isolated scratchpad) was migrated 10 → 11 by the env-gated
+  `live_db_copy_migrates_to_v11_fast_and_clean` integration test and then deleted. Verbatim:
+
+  ```
+  $ SCREENSEARCH_MIGRATION_CHECK_DB=<throwaway copy>  cargo test -p store --test store live_db_copy -- --ignored --nocapture
+  running 1 test
+  Gate 0: migrated 3036 frames 10 -> 11 in 145.678ms (fk clean, sessions empty)
+  test live_db_copy_migrates_to_v11_fast_and_clean ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 63 filtered out; finished in 0.36s
+  ```
+
+  3036 frames migrated in **~146 ms** (well under the test's 30 s bound), fk clean, sessions +
+  artifacts empty, zero backfilled frames — structure-only confirmed on real, live-shaped data.
+  **`npm run tauri dev` was NOT run on this branch** (the dev build shares the live Roaming data dir;
+  a v11-migrated live DB would brick the installed v0.3.3, which rejects newer schema versions).
+- **Full verification ladder (verbatim, all green):**
+
+  ```
+  $ cd ui && npm run lint          → > eslint .            (no errors)
+  $ cd ui && npm run build         → ✓ built in 2.02s
+  $ node scripts/stage-mcp.mjs     → [stage-mcp] up to date: ...screensearch-mcp-x86_64-pc-windows-msvc.exe
+  $ cargo fmt --all -- --check     → (clean, exit 0)
+  $ cargo clippy --workspace --all-targets -- -D warnings → Finished `dev` in 6.68s (no warnings)
+  $ cargo build --workspace        → Finished `dev` in 16.56s
+  $ cargo test --workspace         → all suites ok; store lib 38 passed; store.rs 63 passed + 1 ignored (Gate 0)
+  $ git diff --exit-code -- ui/src/bindings → clean (PR3 adds no ts-rs types)
+  ```
+
+- **Skipped / deferred:** the segmenter + the historical backfill job (PR4); the IPC/UI/API/MCP session
+  surfaces (PR5/PR6). PR3 adds **no** ts-rs-exported types, so `ui/src/bindings` is byte-identical
+  (the guard is clean above). No new settings, no new NavRail route (D13).
+- **Hallucinated / corrected:** none. The `docs/0.4.0.md` §3 PR3 proposal DDL differs from `03 §4` in
+  two CHECK constraints; this was already an intended PR1 normalization (the proposal block is labeled
+  "Proposal-level DDL — PR1 normalizes the final form into `03 §4`"), logged for the record as `06`
+  #29 with disposition **03 wins**. The migration transcribes `03 §4` verbatim; both hardened CHECKs
+  are exercised by the tests.
+- **Broke / regressed:** nothing. Additive migration; every pre-existing frame-level feature is proven
+  identical pre/post on the fixture (D10) and the full workspace suite is green.
+- **Still risky:** the `sessions.host` CHECK admits NULL by design (an un-guarded `host IN (…)`
+  evaluates to NULL and SQLite passes a NULL CHECK) — intentional (host is optional), and covered by
+  the constraint test's focus-session-with-NULL-host case. The `session_artifacts.role` CHECK relies
+  on the `role IS NOT NULL` guard for the same NULL-CHECK reason; the guard case is tested explicitly.
+- **Review amendment (2026-07-10, PR #102, `06` #30):** the PR review (gemini-code-assist) flagged that
+  `session_artifacts.frame_id` (an `ON DELETE SET NULL` FK) had no covering index, so a routine
+  frame-retention delete (`03 §5`) would full-scan `session_artifacts` to null matching rows — the one
+  FK delete-path in v11 that was unindexed (session→frames and session→artifacts were already covered).
+  With maintainer approval, `CREATE INDEX idx_artifacts_frame ON session_artifacts(frame_id)` was added
+  to **both** `MIGRATION_V11` and the authoritative `03 §4` DDL in lockstep, preserving the verbatim
+  transcription (the DDL block is `03 §4:328–368`; the claude-review "character-for-character identical"
+  property holds). Pure performance, additive, no behavior change (D10). Tests updated: the structure
+  test asserts **six** new objects (2 tables + 4 indexes); the FK test adds an `EXPLAIN QUERY PLAN`
+  assertion that the frame-delete lookup uses the new index. Full ladder re-run green after the change.

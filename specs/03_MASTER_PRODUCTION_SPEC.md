@@ -332,7 +332,9 @@ CREATE TABLE sessions (
   kind          TEXT NOT NULL CHECK (kind IN ('focus','meeting','ai','other')),
   tool          TEXT CHECK (tool IS NULL OR kind = 'ai'),  -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai' (D7)
   host          TEXT CHECK (host IN ('terminal','desktop','browser','ide')),
-  context_key   TEXT NOT NULL,                    -- the segmenter's key (§7e; the §7b key generalized)
+  context_key   TEXT NOT NULL,                    -- closed task-level grammar (06 #27/#28): 'ai:<tool-id>' |
+                                                  --   'meeting:<taxonomy-id>' | 'focus:<dominant-app-stem>'
+                                                  --   (bare 'focus' when no stem qualifies); the §7b key generalized (§7e)
   title         TEXT,                             -- lazily generated + cached (D3); NULL until first asked
   summary       TEXT,                             -- lazily generated + cached (D3); NULL until first asked
   summary_model TEXT,                             -- model id that produced `summary` (provenance)
@@ -361,6 +363,9 @@ CREATE TABLE session_artifacts (
   created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
 );
 CREATE INDEX idx_artifacts_session ON session_artifacts(session_id, created_at);
+-- index the `frame_id` FK: SQLite does not auto-index FKs, and `frame_id` is ON DELETE SET NULL,
+-- so a frame retention delete would otherwise full-scan session_artifacts to null matching rows.
+CREATE INDEX idx_artifacts_frame ON session_artifacts(frame_id);
 
 -- durable job queue (the heart of enrich-deferred) — see §5
 CREATE TABLE jobs (

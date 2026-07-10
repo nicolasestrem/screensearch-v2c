@@ -7,7 +7,7 @@
 //! edit a shipped one (no schema drift).
 
 /// The highest migration version this build knows how to reach.
-pub const LATEST_SCHEMA_VERSION: i32 = 10;
+pub const LATEST_SCHEMA_VERSION: i32 = 11;
 
 /// Vector dimensionality for every embedding lane (`03 §3/§4`,
 /// [`traits::EmbeddingProvider::dim`]).
@@ -42,6 +42,7 @@ pub const MIGRATIONS: &[(i32, &str)] = &[
     (8, MIGRATION_V8),
     (9, MIGRATION_V9),
     (10, MIGRATION_V10),
+    (11, MIGRATION_V11),
 ];
 
 /// v1 — the full data spine (`03 §4`, transcribed verbatim, plus the FTS5 and
@@ -386,4 +387,65 @@ CREATE TABLE marks (
   resolved_at INTEGER
 );
 CREATE INDEX idx_marks_open ON marks(resolved_at, created_at DESC);
+"#;
+
+/// v11 — 0.4.0 PR3: sessions (`03 §4` "0.4.0 migration", `docs/0.4.0.md` §3 PR3 — the arc's
+/// **only** schema change, D4). **Structure only, no backfill**: plain `CREATE TABLE` +
+/// `ALTER TABLE ADD COLUMN` + `CREATE INDEX`, no table rebuild — fast on a large DB, and it
+/// creates **zero** session rows (PR4's segmenter assigns `frames.session_id` over history as a
+/// resumable background job, never the migration). Sessions are derived-but-persisted (D1): a
+/// wiped `sessions` table is fully recomputable from frames, so `frames.session_id` is
+/// `ON DELETE SET NULL` (a frame outlives its session) while `session_artifacts` CASCADE with
+/// their session. `session_artifacts` is the artifact extension point (D8): 'exchange' is the
+/// only kind used this arc; 'transcript' (the audio arc, D14) and 'note' are reserved — made
+/// concrete by the schema, not built. The compound `role` CHECK requires a non-NULL
+/// 'user'/'agent' role on exchanges and forbids one on reserved kinds; the `role IS NOT NULL`
+/// guard is load-bearing — `NULL IN (…)` is NULL, and SQLite passes a CHECK that evaluates to
+/// NULL (the same reason the bare `host` CHECK admits NULL by design). Additive (D10): nothing
+/// existing is touched beyond the new nullable `frames.session_id` column.
+const MIGRATION_V11: &str = r#"
+-- 0.4.0 sessions (added by the PR3 migration, schema 10 → 11; contract §7e). Derived-but-persisted:
+-- a wiped `sessions` table is fully recomputable from frames (D1). Segmentation is pure heuristic —
+-- zero model calls (D3); titles/summaries are lazily generated + cached on the row.
+CREATE TABLE sessions (
+  id            INTEGER PRIMARY KEY,
+  started_at    INTEGER NOT NULL,                 -- unix ms (first frame in the run)
+  ended_at      INTEGER,                          -- NULL = open (still accreting)
+  kind          TEXT NOT NULL CHECK (kind IN ('focus','meeting','ai','other')),
+  tool          TEXT CHECK (tool IS NULL OR kind = 'ai'),  -- taxonomy id ('claude-code','codex',…); NULL unless kind='ai' (D7)
+  host          TEXT CHECK (host IN ('terminal','desktop','browser','ide')),
+  context_key   TEXT NOT NULL,                    -- closed task-level grammar (06 #27/#28): 'ai:<tool-id>' |
+                                                  --   'meeting:<taxonomy-id>' | 'focus:<dominant-app-stem>'
+                                                  --   (bare 'focus' when no stem qualifies); the §7b key generalized (§7e)
+  title         TEXT,                             -- lazily generated + cached (D3); NULL until first asked
+  summary       TEXT,                             -- lazily generated + cached (D3); NULL until first asked
+  summary_model TEXT,                             -- model id that produced `summary` (provenance)
+  confidence    REAL NOT NULL,                    -- segmenter confidence; surfaced honestly in the UI (D11)
+  frozen        INTEGER NOT NULL DEFAULT 0 CHECK (frozen IN (0,1)),  -- D2 freeze rule: 1 = id + boundaries immutable
+  created_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000),
+  updated_at    INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+CREATE INDEX idx_sessions_time ON sessions(started_at, ended_at);
+
+-- frames link to their session (nullable; ON DELETE SET NULL — frames SURVIVE session deletion, D1).
+-- Assigned by PR4's segmenter (incremental + a one-shot historical pass), never by the migration.
+ALTER TABLE frames ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
+CREATE INDEX idx_frames_session ON frames(session_id);
+
+-- the artifact extension point (D8). 'exchange' (user-vs-agent turns) is the only kind USED this arc;
+-- 'transcript' is RESERVED for the audio arc (D14 — made concrete now, not built); 'note' reserved for
+-- future annotation. Roles live here, not on spans — the §3b TextRole (chrome/content) axis is untouched.
+CREATE TABLE session_artifacts (
+  id         INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('exchange','transcript','note')),
+  role       TEXT CHECK ((kind = 'exchange' AND role IS NOT NULL AND role IN ('user','agent')) OR (kind IN ('transcript','note') AND role IS NULL)),  -- exchanges REQUIRE a non-null role, reserved kinds forbid one (D8; §7e "roles never invented"). The IS NOT NULL guard is load-bearing: NULL IN (…) is NULL, and SQLite passes a CHECK that evaluates to NULL.
+  frame_id   INTEGER REFERENCES frames(id) ON DELETE SET NULL,
+  content    TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
+);
+CREATE INDEX idx_artifacts_session ON session_artifacts(session_id, created_at);
+-- index the `frame_id` FK: SQLite does not auto-index FKs, and `frame_id` is ON DELETE SET NULL,
+-- so a frame retention delete would otherwise full-scan session_artifacts to null matching rows.
+CREATE INDEX idx_artifacts_frame ON session_artifacts(frame_id);
 "#;
