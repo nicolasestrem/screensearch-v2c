@@ -11,14 +11,72 @@
 //!   matched to the predicted span of maximum temporal overlap; correct iff the predicted
 //!   `tool` equals the label's.
 //!
+//! **Identity partitioning (`07` #114 concurrent model).** The primary metric partitions predicted
+//! and labeled boundaries by identity (`ai:<tool>` per tool, `meeting` pooled — labels carry no
+//! meeting id, `focus`, `other`) and runs the same typed optimal match *within* each partition,
+//! then sums. Predicted/labeled boundary totals are identical to the pooled position-only metric
+//! (the partition is a disjoint cover), only `matched` can drop, so the partitioned F1 is always
+//! `<=` the pooled F1 — the cross-identity penalty is built in (a codex prediction near a
+//! claude-code label matches neither in its own partition). The pooled position-only [`score_day`]
+//! stays as the comparability line against the 0.128 / 0.50 history.
+//!
 //! All functions are pure over in-memory spans + labels — no file IO — so PR4 can drive the
 //! same scoring with its shipped segmenter's spans (the D9 referee contract).
 
-use crate::group::{group_with, segment_grouped};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::group::{group_concurrent, group_with, IDENTITY_QUALIFY_MS};
 use crate::labels::ResolvedLabel;
 use crate::model::{GroupParams, Kind, SegParams, SessionSpan};
-use crate::segmenter::{segment_micro, FrameRow};
+use crate::segmenter::{segment, segment_micro, FrameRow};
 use crate::taxonomy::Taxonomy;
+
+/// The candidate segmenter the referee scores a day through. `Micro` is the ungrouped `§7b`
+/// baseline (reproduces the ~0.13 pooled history); `Grouped` is the serial `06` #27 two-pass
+/// segmenter (the A/B baseline); `Concurrent` is the `06` #28 per-identity-track segmenter (the
+/// default for the D9 evidence).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Algo {
+    Micro,
+    Grouped,
+    Concurrent,
+}
+
+/// The predicted spans for one day at the given params, algorithm, and anchor-qualification
+/// threshold (`qualify_ms` is inert for `Micro`).
+pub fn spans_for_algo(
+    frames: &[FrameRow],
+    tax: &Taxonomy,
+    sp: &SegParams,
+    gp: &GroupParams,
+    qualify_ms: i64,
+    algo: Algo,
+) -> Vec<SessionSpan> {
+    match algo {
+        Algo::Micro => segment(frames, tax, sp),
+        Algo::Grouped => group_with(&segment_micro(frames, tax, sp), tax, sp, gp, qualify_ms)
+            .into_iter()
+            .map(|g| g.span)
+            .collect(),
+        Algo::Concurrent => {
+            group_concurrent(&segment_micro(frames, tax, sp), tax, sp, gp, qualify_ms)
+                .into_iter()
+                .map(|g| g.span)
+                .collect()
+        }
+    }
+}
+
+/// The identity-track partition key for boundary scoring: `ai:<tool>` per tool, `meeting` pooled
+/// (labels carry no meeting id), `focus`, `other`. Used for both predicted spans and labels.
+fn partition_key(kind: Kind, tool: &Option<String>) -> String {
+    match kind {
+        Kind::Ai => format!("ai:{}", tool.as_deref().unwrap_or("")),
+        Kind::Meeting => "meeting".to_string(),
+        Kind::Focus => "focus".to_string(),
+        Kind::Other => "other".to_string(),
+    }
+}
 
 /// Snap each labeled boundary to the nearest captured frame time. Minute-granular labels that fall
 /// inside a no-frame idle gap otherwise miss the tolerance by the gap size (the observed ~2.3 min
@@ -186,6 +244,60 @@ pub fn score_day(
     }
 }
 
+/// Score one day with **identity-partitioned** typed boundary matching (`07` #114). Boundaries are
+/// grouped by [`partition_key`] and matched within each partition (starts to starts, ends to ends),
+/// then summed. Predicted/labeled totals equal [`score_day`]'s; only `matched` can be lower, so the
+/// partitioned F1 is always `<=` the pooled F1. Tool accuracy is identical to [`score_day`].
+pub fn score_day_partitioned(
+    date: &str,
+    spans: &[SessionSpan],
+    labels: &[ResolvedLabel],
+    day_start_ms: i64,
+    day_end_ms: i64,
+    tol_ms: i64,
+) -> DayScore {
+    let mut pred_starts: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    let mut pred_ends: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    let mut lab_starts: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    let mut lab_ends: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for s in spans {
+        let k = partition_key(s.kind, &s.tool);
+        pred_starts.entry(k.clone()).or_default().push(s.start_ms);
+        pred_ends.entry(k).or_default().push(s.end_ms);
+    }
+    for l in labels {
+        let k = partition_key(l.kind, &l.tool);
+        lab_starts.entry(k.clone()).or_default().push(l.start_ms);
+        lab_ends.entry(k).or_default().push(l.end_ms);
+    }
+    let keys: BTreeSet<&String> = pred_starts
+        .keys()
+        .chain(lab_starts.keys())
+        .chain(pred_ends.keys())
+        .chain(lab_ends.keys())
+        .collect();
+    let empty: Vec<i64> = Vec::new();
+    let ki =
+        |v: Option<&Vec<i64>>| keep_interior(v.unwrap_or(&empty), day_start_ms, day_end_ms, tol_ms);
+    let mut boundaries = BoundaryScore::default();
+    for k in keys {
+        let ps = ki(pred_starts.get(k));
+        let pe = ki(pred_ends.get(k));
+        let ls = ki(lab_starts.get(k));
+        let le = ki(lab_ends.get(k));
+        boundaries.predicted += ps.len() + pe.len();
+        boundaries.labeled += ls.len() + le.len();
+        boundaries.matched += optimal_match(&ps, &ls, tol_ms) + optimal_match(&pe, &le, tol_ms);
+    }
+    let (tool_correct, tool_total) = tool_accuracy(spans, labels);
+    DayScore {
+        date: date.to_string(),
+        boundaries,
+        tool_correct,
+        tool_total,
+    }
+}
+
 /// Tool-recognition accuracy on labeled AI sessions: match each labeled `ai` session to the
 /// predicted span of maximum temporal overlap; correct iff `tool` matches.
 pub fn tool_accuracy(spans: &[SessionSpan], labels: &[ResolvedLabel]) -> (usize, usize) {
@@ -244,13 +356,15 @@ impl LoadedDay {
     }
 }
 
-/// One Stage-A sweep cell: a `(merge_gap, absorb_max)` combination scored (pooled) through the
-/// GROUPED pipeline, plus the predicted session count (the mega-merge honesty column).
+/// One Stage-A sweep cell: a `(merge_gap, absorb_max)` combination scored over all days, plus the
+/// predicted session count (the mega-merge honesty column). `boundary` is the **identity-partitioned**
+/// primary metric; `pooled` is the position-only comparability line (the 0.128/0.50 history).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SweepCell {
     pub merge_gap_secs: i64,
     pub absorb_max_secs: i64,
     pub boundary: BoundaryScore,
+    pub pooled: BoundaryScore,
     pub tool_correct: usize,
     pub tool_total: usize,
     pub pred_sessions: usize,
@@ -266,27 +380,34 @@ impl SweepCell {
     }
 }
 
-/// Score all days through the grouped pipeline at the given params, returning the day scores and
-/// the total predicted session count. Labels are snapped to the nearest frame first (disclosed).
-fn score_days_grouped(
+/// Score all days through `algo` at the given params, returning the **partitioned** day scores,
+/// the **pooled** (position-only) day scores, and the total predicted session count. Labels are
+/// snapped to the nearest frame first (disclosed policy).
+pub fn score_days(
     days: &[LoadedDay],
     tax: &Taxonomy,
     sp: &SegParams,
     gp: &GroupParams,
     qualify_ms: i64,
     tol_ms: i64,
-) -> (Vec<DayScore>, usize) {
-    let mut day_scores = Vec::new();
+    algo: Algo,
+) -> (Vec<DayScore>, Vec<DayScore>, usize) {
+    let mut partitioned = Vec::new();
+    let mut pooled = Vec::new();
     let mut pred = 0usize;
     for d in days {
-        let micros = segment_micro(&d.frames, tax, sp);
-        let spans: Vec<SessionSpan> = group_with(&micros, tax, sp, gp, qualify_ms)
-            .into_iter()
-            .map(|g| g.span)
-            .collect();
+        let spans = spans_for_algo(&d.frames, tax, sp, gp, qualify_ms, algo);
         pred += spans.len();
         let labels = snap_label_boundaries(&d.labels, &day_frame_times(d));
-        day_scores.push(score_day(
+        partitioned.push(score_day_partitioned(
+            &d.date,
+            &spans,
+            &labels,
+            d.day_start_ms,
+            d.day_end_ms,
+            tol_ms,
+        ));
+        pooled.push(score_day(
             &d.date,
             &spans,
             &labels,
@@ -295,11 +416,12 @@ fn score_days_grouped(
             tol_ms,
         ));
     }
-    (day_scores, pred)
+    (partitioned, pooled, pred)
 }
 
 /// Stage A: sweep the `(merge_gap, absorb_max)` grid through the grouped pipeline (all other knobs
 /// at `gp_base` / the default `IDENTITY_QUALIFY_MS`), scoring each cell pooled over all days.
+#[allow(clippy::too_many_arguments)]
 pub fn sweep_grid(
     days: &[LoadedDay],
     tax: &Taxonomy,
@@ -308,8 +430,9 @@ pub fn sweep_grid(
     merge_gaps_secs: &[i64],
     absorb_maxes_secs: &[i64],
     tol_ms: i64,
+    algo: Algo,
 ) -> Vec<SweepCell> {
-    let qualify = crate::group::IDENTITY_QUALIFY_MS;
+    let qualify = IDENTITY_QUALIFY_MS;
     let mut cells = Vec::new();
     for &mg in merge_gaps_secs {
         for &am in absorb_maxes_secs {
@@ -318,12 +441,14 @@ pub fn sweep_grid(
                 absorb_max_ms: am * 1000,
                 ..*gp_base
             };
-            let (ds, pred) = score_days_grouped(days, tax, sp, &gp, qualify, tol_ms);
-            let (boundary, tc, tt) = pool(&ds);
+            let (part, pooled, pred) = score_days(days, tax, sp, &gp, qualify, tol_ms, algo);
+            let (boundary, tc, tt) = pool(&part);
+            let (pooled_b, _, _) = pool(&pooled);
             cells.push(SweepCell {
                 merge_gap_secs: mg,
                 absorb_max_secs: am,
                 boundary,
+                pooled: pooled_b,
                 tool_correct: tc,
                 tool_total: tt,
                 pred_sessions: pred,
@@ -367,6 +492,7 @@ pub struct OneDimPoint {
     pub knob: &'static str,
     pub value: i64,
     pub boundary: BoundaryScore,
+    pub pooled: BoundaryScore,
     pub tool_correct: usize,
     pub tool_total: usize,
     pub pred_sessions: usize,
@@ -385,6 +511,7 @@ impl OneDimPoint {
 /// Stage B: vary one `knob` over `values`, holding everything else at the base params, scoring
 /// each through the grouped pipeline. A knob whose response is flat across its range is proposed
 /// to PR4 as a named constant rather than a settings key (the parsimony discipline).
+#[allow(clippy::too_many_arguments)]
 pub fn sweep_1d(
     days: &[LoadedDay],
     tax: &Taxonomy,
@@ -393,13 +520,14 @@ pub fn sweep_1d(
     knob: Knob,
     values: &[i64],
     tol_ms: i64,
+    algo: Algo,
 ) -> Vec<OneDimPoint> {
     values
         .iter()
         .map(|&v| {
             let mut sp = *sp_base;
             let mut gp = *gp_base;
-            let mut qualify = crate::group::IDENTITY_QUALIFY_MS;
+            let mut qualify = IDENTITY_QUALIFY_MS;
             match knob {
                 Knob::MergeGap => gp.merge_gap_ms = v * 1000,
                 Knob::AbsorbMax => gp.absorb_max_ms = v * 1000,
@@ -410,12 +538,14 @@ pub fn sweep_1d(
                 Knob::MinLen => sp.min_len_ms = v * 1000,
                 Knob::IdentityQualify => qualify = v * 1000,
             }
-            let (ds, pred) = score_days_grouped(days, tax, &sp, &gp, qualify, tol_ms);
-            let (boundary, tc, tt) = pool(&ds);
+            let (part, pooled, pred) = score_days(days, tax, &sp, &gp, qualify, tol_ms, algo);
+            let (boundary, tc, tt) = pool(&part);
+            let (pooled_b, _, _) = pool(&pooled);
             OneDimPoint {
                 knob: knob.label(),
                 value: v,
                 boundary,
+                pooled: pooled_b,
                 tool_correct: tc,
                 tool_total: tt,
                 pred_sessions: pred,
@@ -439,28 +569,45 @@ pub struct StabilityPoint {
     pub stable: bool,
 }
 
-fn boundaries(spans: &[SessionSpan]) -> Vec<i64> {
-    let mut v: Vec<i64> = spans.iter().flat_map(|s| [s.start_ms, s.end_ms]).collect();
-    v.sort_unstable();
+/// Boundaries tagged with their identity partition (`07` #114): a boundary that reappears at the
+/// same instant but under a **different** identity between the truncated and full replay is drift,
+/// not stability — under concurrency the position alone no longer identifies a boundary.
+fn partitioned_boundaries(spans: &[SessionSpan]) -> Vec<(String, i64)> {
+    let mut v: Vec<(String, i64)> = spans
+        .iter()
+        .flat_map(|s| {
+            let k = partition_key(s.kind, &s.tool);
+            [(k.clone(), s.start_ms), (k, s.end_ms)]
+        })
+        .collect();
+    v.sort();
     v
 }
 
-/// Compare boundaries older than `old_cutoff` in BOTH directions and accumulate into
-/// `(max_drift_ms, vanished)`. A one-directional check (only old `full` boundaries against
-/// `trunc`) misses the reverse failure the freeze contract also forbids: a truncated replay
-/// emitting an old boundary that later disappears once more frames arrive (an early group the
-/// final segmentation absorbs/merges away). Freezing at that lookback would preserve a boundary
-/// the final result deletes, so it must count as instability.
-fn compare_old_boundaries(full: &[i64], trunc: &[i64], old_cutoff: i64) -> (i64, usize) {
+/// Compare identity-partitioned boundaries older than `old_cutoff` in BOTH directions (`07` #114):
+/// an old boundary must find a **same-partition** counterpart on the other side within drift, else
+/// it disappeared (an identity swap counts as disappearance). Bidirectional because the freeze
+/// contract also forbids the reverse failure — a truncated replay emitting an old boundary that
+/// the final replay later deletes (an early group the final segmentation absorbs/merges away).
+fn compare_old_boundaries_part(
+    full: &[(String, i64)],
+    trunc: &[(String, i64)],
+    old_cutoff: i64,
+) -> (i64, usize) {
     fn one_way(
-        from: &[i64],
-        to: &[i64],
+        from: &[(String, i64)],
+        to: &[(String, i64)],
         old_cutoff: i64,
         max_drift: &mut i64,
         vanished: &mut usize,
     ) {
-        for &b in from.iter().filter(|&&x| x <= old_cutoff) {
-            match to.iter().map(|&x| (x - b).abs()).min() {
+        for (pk, b) in from.iter().filter(|(_, x)| *x <= old_cutoff) {
+            match to
+                .iter()
+                .filter(|(k, _)| k == pk)
+                .map(|(_, x)| (x - b).abs())
+                .min()
+            {
                 Some(dm) => *max_drift = (*max_drift).max(dm),
                 None => *vanished += 1,
             }
@@ -484,7 +631,9 @@ pub fn stability(
     gp: &GroupParams,
     lookbacks_secs: &[i64],
     cutoff_step_ms: i64,
+    algo: Algo,
 ) -> Vec<StabilityPoint> {
+    let q = IDENTITY_QUALIFY_MS;
     lookbacks_secs
         .iter()
         .map(|&w_secs| {
@@ -495,7 +644,7 @@ pub fn stability(
                 if d.frames.is_empty() {
                     continue;
                 }
-                let full = boundaries(&segment_grouped(&d.frames, tax, sp, gp));
+                let full = partitioned_boundaries(&spans_for_algo(&d.frames, tax, sp, gp, q, algo));
                 let (first, last) = d.bounds();
                 let mut t = first + cutoff_step_ms;
                 while t <= last {
@@ -505,8 +654,8 @@ pub fn stability(
                         .filter(|f| f.captured_at <= t)
                         .cloned()
                         .collect();
-                    let tb = boundaries(&segment_grouped(&trunc, tax, sp, gp));
-                    let (drift, vanished) = compare_old_boundaries(&full, &tb, t - w_ms);
+                    let tb = partitioned_boundaries(&spans_for_algo(&trunc, tax, sp, gp, q, algo));
+                    let (drift, vanished) = compare_old_boundaries_part(&full, &tb, t - w_ms);
                     max_drift = max_drift.max(drift);
                     disappeared += vanished;
                     t += cutoff_step_ms;
@@ -552,16 +701,30 @@ mod tests {
 
     #[test]
     fn old_boundary_comparison_is_symmetric() {
+        // Same partition for every boundary isolates the drift/vanish logic from partitioning.
+        let p = |xs: &[i64]| xs.iter().map(|&x| ("k".to_string(), x)).collect::<Vec<_>>();
         // Exact match both ways -> stable.
-        assert_eq!(compare_old_boundaries(&[100], &[100], 1000), (0, 0));
+        assert_eq!(
+            compare_old_boundaries_part(&p(&[100]), &p(&[100]), 1000),
+            (0, 0)
+        );
         // Old full boundary moved in the truncated replay -> drift.
-        assert_eq!(compare_old_boundaries(&[100], &[130], 1000), (30, 0));
+        assert_eq!(
+            compare_old_boundaries_part(&p(&[100]), &p(&[130]), 1000),
+            (30, 0)
+        );
         // The reverse failure a one-directional check misses: the truncated replay carries an
         // OLD boundary (500) the full replay lacks. Forward-only would call this stable; the
         // symmetric check must flag it (nearest full boundary is 100 -> 400 ms drift).
-        assert_eq!(compare_old_boundaries(&[100], &[100, 500], 1000), (400, 0));
+        assert_eq!(
+            compare_old_boundaries_part(&p(&[100]), &p(&[100, 500]), 1000),
+            (400, 0)
+        );
         // Boundaries newer than the cutoff are ignored on both sides.
-        assert_eq!(compare_old_boundaries(&[100], &[100, 5000], 1000), (0, 0));
+        assert_eq!(
+            compare_old_boundaries_part(&p(&[100]), &p(&[100, 5000]), 1000),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -714,6 +877,7 @@ mod tests {
             &[600, 1500],
             &[600, 1200],
             120_000,
+            Algo::Grouped,
         );
         assert_eq!(cells.len(), 4, "2 merge_gaps x 2 absorb_maxes");
         assert!(cells.iter().all(|c| c.pred_sessions >= 1));
@@ -740,6 +904,7 @@ mod tests {
             Knob::MergeGap,
             &[600, 900, 1500],
             120_000,
+            Algo::Grouped,
         );
         assert_eq!(pts.len(), 3);
         assert!(pts.iter().all(|p| p.knob == "merge_gap_secs"));
@@ -780,7 +945,15 @@ mod tests {
             min_len_ms: 120_000,
         };
         let gp = GroupParams::default();
-        let pts = stability(&[day], &Taxonomy::seed(), &sp, &gp, &[0, 600], 50_000);
+        let pts = stability(
+            &[day],
+            &Taxonomy::seed(),
+            &sp,
+            &gp,
+            &[0, 600],
+            50_000,
+            Algo::Grouped,
+        );
         let w0 = pts.iter().find(|p| p.lookback_secs == 0).unwrap();
         let w600 = pts.iter().find(|p| p.lookback_secs == 600).unwrap();
         assert!(
@@ -816,5 +989,65 @@ mod tests {
         assert_eq!((b.predicted, b.labeled, b.matched), (8, 8, 6));
         assert_eq!((tc, tt), (1, 3));
         assert!((b.precision() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn partitioned_match_never_exceeds_pooled() {
+        // A codex prediction whose START sits within tolerance of a claude-code labeled start:
+        // the pooled (position-only) metric matches it; the partitioned metric does NOT (different
+        // identity partitions), so partitioned matched < pooled matched and F1 is strictly lower.
+        let spans = vec![span(200, 800, Kind::Ai, Some("codex"))];
+        let labels = vec![label(210, 800, Kind::Ai, Some("claude-code"))];
+        let pooled = score_day("d", &spans, &labels, 0, 2_000_000, 120_000);
+        let part = score_day_partitioned("d", &spans, &labels, 0, 2_000_000, 120_000);
+        assert_eq!(
+            pooled.boundaries.predicted, part.boundaries.predicted,
+            "same totals"
+        );
+        assert_eq!(
+            pooled.boundaries.labeled, part.boundaries.labeled,
+            "same totals"
+        );
+        assert!(
+            part.boundaries.matched < pooled.boundaries.matched,
+            "partitioned matches fewer"
+        );
+        assert!(
+            part.boundaries.f1() < pooled.boundaries.f1(),
+            "partitioned F1 <= pooled"
+        );
+    }
+
+    #[test]
+    fn partitioned_perfect_concurrent_day_scores_one() {
+        // Overlapping predictions exactly matching overlapping labels of the SAME identities.
+        let spans = vec![
+            span(0, 1200, Kind::Ai, Some("claude-code")),
+            span(300, 900, Kind::Ai, Some("codex")),
+        ];
+        let labels = vec![
+            label(0, 1200, Kind::Ai, Some("claude-code")),
+            label(300, 900, Kind::Ai, Some("codex")),
+        ];
+        let s = score_day_partitioned("d", &spans, &labels, -1_000_000, 3_000_000, 120_000);
+        assert_eq!(s.boundaries.matched, 4);
+        assert_eq!(s.boundaries.f1(), 1.0);
+    }
+
+    #[test]
+    fn stability_counts_identity_swaps_as_drift() {
+        // Same boundary position, different identity between the two replays -> not stable.
+        let full = vec![("ai:claude-code".to_string(), 100i64)];
+        let swapped = vec![("ai:codex".to_string(), 100i64)];
+        let (drift, vanished) = compare_old_boundaries_part(&full, &swapped, 1000);
+        assert!(
+            drift == 0 && vanished == 2,
+            "identity swap disappears both ways: {drift} {vanished}"
+        );
+        // Same identity + position -> stable.
+        assert_eq!(
+            compare_old_boundaries_part(&full, &full.clone(), 1000),
+            (0, 0)
+        );
     }
 }
