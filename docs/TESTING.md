@@ -460,3 +460,65 @@ left claiming a version that isn't released), and restore the DB backup if desir
 `releases/latest/download/latest.json`, which GitHub resolves **only for a published,
 non-prerelease release**. Every historical release (v0.1.0..v0.3.1) was a *prerelease*; from v0.3.2
 on, releases must be **published as full releases** or installed copies never see the update.
+
+## Dev-only harness — segmentation ground truth + validation (0.4.0 PR2)
+
+The `crates/harness` binary is a **dev-only, read-only** referee for the sessions arc. It is a
+workspace crate, so it is built and tested by the normal `cargo` gates above, but it is **never
+bundled** by the NSIS installer (only `src-tauri` + the `screensearch-mcp.exe` externalBin ship).
+Run it with `cargo run -p harness -- <subcommand>`.
+
+**Read-only guarantee.** Every query path opens the DB with `SQLITE_OPEN_READ_ONLY` + `PRAGMA
+query_only`; the harness's unit tests assert a write is rejected on that connection. The only file
+it writes to the DB side is the `backup` target (a `VACUUM INTO` snapshot to a fresh file). Exports
+and hand labels are personal screen history and live under the **git-ignored** `harness-data/`.
+
+**Automated tests (CI-safe, no real data).** `cargo test -p harness` runs the pure segmenter,
+taxonomy, label-parsing, scoring (typed DP-optimal boundary matching), digest, and read-only export
+tests against synthetic fixtures + a tempfile SQLite DB. No test touches `%APPDATA%` or a real path.
+
+**Manual end-to-end (Phase A/B/C, maintainer-in-the-loop).**
+1. **D5 backup FIRST** (release-blocker-class; before any other live-DB command):
+   `cargo run -p harness -- backup --to <a dir OUTSIDE the repo and OUTSIDE %APPDATA%\app.screensearchv2c.desktop\>`.
+   It writes `screensearch-YYYY-MM-DD.db`, refuses to overwrite, refuses a destination inside the
+   repo tree or the app data dir, and prints `PRAGMA integrity_check` + source/copy row counts as
+   the attestation. WAL note: if the app was force-killed and left an unrecovered `-wal`, a
+   read-only open fails with an actionable message; start the app once (or point `--db` at the
+   backup) and retry.
+2. `cargo run -p harness -- suggest-days` prints a per-day survey (frames, distinct apps, coarse
+   AI/meeting window-title signals, marks). Pick 5-10 representative days (a meeting-heavy day, a
+   Claude Code day, a Codex day, a browser-AI day, a mixed/fragmented day, plus one contiguous
+   2-3-day stretch for the stability check). June-July days avoid the DST-transition guard.
+3. `cargo run -p harness -- export --days 2026-06-15,2026-06-16,...` writes each day to
+   `harness-data/<day>/` (`day.json`, `frames.jsonl`, `marks.jsonl`, `digest.md`, `labels.toml`).
+   Re-exporting a day refreshes the data files but preserves an existing hand-edited
+   `labels.toml` (it prints `(kept existing labels.toml)`), so it is safe to re-run.
+4. Hand-label each day's `labels.toml` from its `digest.md` (the readable context-run timeline;
+   marks appear as anchors). Under an evening for the whole sample.
+5. `cargo run -p harness -- score` (optionally `replay`, `sweep`, `stability`) scores boundary
+   precision/recall/F1 (+/- tolerance) and tool-recognition accuracy against the labels.
+   `sweep`/`stability` write markdown to `harness-data/reports/`.
+
+**The two-pass grouped segmenter (`03 section 7e` amendment, `06` #27).** The default algorithm is
+the task-level GROUPED segmenter: pass 1 (`segment_micro`) produces unfloored app-run micro-spans;
+pass 2 (`group.rs`) accretes them into task-level sessions anchored by recognized tool/meeting
+identity (meeting bands are hard barriers; foreign runs up to `absorb_max` are absorbed; sessions
+close on a `merge_gap` gap, a sustained foreign identity, or a band edge; anchorless focus sessions
+pass a `focus_min_len` floor + a `focus_min_density_fph` gate). `--algo micro` selects the ungrouped
+baseline (the old app-context key) for the A/B comparison.
+
+- `score` reports pooled P/R/F1 at BOTH 120 s and 180 s tolerance by default (the D9 evidence pair);
+  an explicit `--tolerance <s>` overrides that with a single ad-hoc window. Labels are snapped to the
+  nearest captured frame (a disclosed scoring policy for boundaries that fall inside no-frame idle gaps).
+- `replay` prints each session's context key, kind, tool, host, frame count, and close reason.
+- `sweep` runs the Stage-A `merge_gap x absorb_max` grid plus Stage-B 1-D sweeps of the remaining
+  knobs (each classified FLAT -> propose as a named constant, or SENSITIVE -> keep as a setting),
+  with a baseline `--algo micro` row and predicted-session-count honesty columns.
+- `stability` re-proves the freeze-lookback window through the grouped pipeline.
+- Group flags (proposed `sessions.*` names; PR4 owns the finals): `--merge-gap` `--absorb-max`
+  `--meeting-gap` `--focus-min-len` `--focus-density`. Seg flags: `--gap-close` `--min-len`.
+  Scoring: `--tolerance`.
+
+The approved D9 thresholds + chosen parameters land in `specs/05`/`06` (they are PR4's binding
+merge gate). The exported sample and labels are never committed; specs/PR carry aggregate numbers
+only.

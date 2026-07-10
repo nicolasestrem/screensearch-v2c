@@ -20,6 +20,7 @@ members = [
     "crates/doctor",
     "crates/api",
     "crates/mcp",
+    "crates/harness",
 ]
 
 [workspace.package]
@@ -44,6 +45,10 @@ futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ts-rs = "10"
+# TOML for the dev-only segmentation harness (0.4.0 PR2): the hand-label files and the
+# D7 recognition-taxonomy data file (the format 03 §7e proposes the shipped taxonomy will
+# use in PR4). Compiled only into crates/harness, never the app or the MCP binary.
+toml = "0.9"
 
 # local HTTP API (0.3.0 PR7, opt-in, 127.0.0.1 only — 03 §7c). axum is the one new
 # dependency in this arc; it reuses the hyper 1.x / tower 0.5 / http 1.x stack already

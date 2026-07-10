@@ -1,0 +1,31 @@
+[package]
+name = "harness"
+description = "Dev-only, read-only segmentation validation harness (0.4.0 PR2). Not shipped: workspace crates are never bundled by the NSIS installer. See docs/0.4.0.md §3 PR2, specs/03 §7e."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "harness"
+path = "src/lib.rs"
+
+[[bin]]
+name = "harness"
+path = "src/main.rs"
+
+# Standalone referee by design: NO internal-crate dependencies (traits/store/kernel).
+# The harness embeds the frames+marks DDL it needs for its fixture and re-implements the
+# candidate segmenter, so PR4 can adapt its shipped segmenter's output to this harness's
+# SessionSpan for the binding D9 re-run without the harness pinning shipped internals.
+[dependencies]
+anyhow.workspace = true
+rusqlite.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
