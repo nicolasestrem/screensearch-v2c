@@ -22,6 +22,21 @@
 
 ---
 
+## 2026-07-10 — 0.4.0 PR5 Task 3: native runbook and integrated verification record
+
+- **Change:** Added the PR5 native/WebView2 acceptance runbook to `docs/TESTING.md`; reconciled the
+  final review behavior (measured token-aware session-band packing, normal-flow lane expansion,
+  absolute band labels, Recap backend cancellation, and separate lazy-summary failure) across the
+  human changelog and live build-loop records; and recorded the integrated UI-first verification in
+  `05` with raw command output.
+- **Why:** `03 §13c-5`, `UI_REFERENCE §7`/`§8`, and the PR5 Task 3 brief require native acceptance to
+  be reproducible and automated evidence to remain distinct from real WebView2 observation.
+- **Contract status:** no schema change or migration (schema remains 11), no new contradiction, and
+  no new silent-spec gap. API/MCP remains PR6-owned. The controller-owned native debug-port run is
+  pending and is not claimed as observed here.
+- **Verification:** full UI-first command output is preserved verbatim in `specs/05_BUILD_REVIEW.md`;
+  the native/manual evidence remains pending.
+
 ## 2026-07-10 — 0.4.0 PR5 Task 2: session recall surfaces
 
 - **Change:** Added generated-type IPC/TanStack Query integration for session lists, base/lazy detail,

@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,000-frame database in testing.
 
 ### Changed
+- PR5 review hardening makes Timeline session-band packing use measured token-sized hit targets,
+  expands dense lanes in normal flow without hidden bands or nested/horizontal scrolling, and makes
+  Recap cancellation stop backend work on cancel, route change, or unmount. The native WebView2
+  acceptance walkthrough remains pending; automated verification does not substitute for it.
 - Review hardening now includes the final frame when sampling session intelligence, parses taxonomy
   match strings once instead of allocating per frame, treats frozen boundary timestamps as
   inclusive, refuses to match merely touching mutable sessions, and resumes a crash-interrupted

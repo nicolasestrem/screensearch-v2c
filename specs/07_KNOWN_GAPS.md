@@ -118,5 +118,13 @@ of PR5, while API/MCP session exposure remains PR6-owned.
 
 No new silent-spec gaps were opened. Static UI gates cover Hooks, typing, code splitting, and the
 production bundle; the already-contracted `03 §13c-5` live acceptance remains: run the native app on
-real session data and verify band → drill-in → Moment → back, cited Recap, and the fixed-height/
-single-scroll layout at supported sizes and DPI. API/MCP exposure remains PR6-owned.
+real session data and verify band → drill-in → Moment → back, cited Recap, and the expandable
+session-ribbon/single-scroll layout at supported sizes and DPI. API/MCP exposure remains PR6-owned.
+
+### 0.4.0 PR5 final gap audit — 2026-07-10
+
+No new silent-spec gap was opened. The final review fixes stay inside the existing session-UI and
+shell-layout contracts, and PR5 makes no schema/migration change. `docs/TESTING.md` now states the
+native/manual acceptance procedure precisely. The controller-owned real WebView2 debug-port run and
+its screenshots/recording are still **pending evidence** for the already-contracted `03 §13c-5`
+acceptance line; this is not reported as passed by the documentation/verifier task.

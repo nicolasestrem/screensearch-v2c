@@ -568,3 +568,65 @@ gate). The exported sample and labels are never committed; specs/PR carry aggreg
    invented role.
 6. **D10 regression spot-check:** exercise where-was-i, frame search, Ask, Timeline, and marks while
    capture continues. PR4 adds no commands, no NavRail route, no audio, and no notification surface.
+
+## Native acceptance — sessions UI (0.4.0 PR5)
+
+This is a **real Tauri/WebView2 acceptance run**, not a Vite-browser substitute. Start only from the
+repo root with `npm run dev`; never launch the debug executable or use `cargo tauri dev`. Before
+opening the PR5 build against the live database, confirm the D5 backup described above still exists
+outside both the repo and the app-data directory. Use real schema-11 session data. A local answer
+model must be ready for the Recap checks.
+
+Record the date, Windows build, WebView2 version, monitor resolution/DPI, database frame/session
+counts, and screenshots or screen recording for every observed result. Do not mark a row accepted
+when the required real-data state is absent; record that state as **not available** and carry it to
+the PR7 audit.
+
+### Navigation and data truth
+
+1. Open Timeline on a range containing multiple session kinds and overlapping sessions. Confirm the
+   density ribbon remains visible, session bands use the existing neutral/ok/warn token vocabulary,
+   every visible band has a usable native-button hit target, and dense overlaps create additional
+   normal-flow lanes without clipping, hidden lanes, nested scrolling, or horizontal scrolling.
+2. With pointer input, follow **band → session drill-in → representative Moment → back**. Confirm
+   Back returns to the same session drill-in and the drill-in remains on the same Timeline context.
+   Open a Moment directly and use **Part of session**; confirm the link is omitted for a frame with
+   no session. Also open the session URL directly and confirm its back action returns to Timeline.
+3. In the drill-in, compare the displayed absolute span, kind/tool/host, confidence, frame total,
+   representative first/last frames, and exchanges against the real session row/artifacts. Confirm
+   exchange links open the cited Moment and no exchange roles are invented when artifacts are absent.
+4. Generate **Recap** with the answer model ready. Confirm progress is visible, the result uses the
+   existing report rendering/footer, every citation opens a Moment owned by this exact session, and
+   no frame from an overlapping session leaks into the citations. Run it again and press **Cancel**;
+   confirm generation stops and no late result replaces the idle state. Repeat once while navigating
+   away mid-generation to confirm route teardown also cancels backend work.
+5. Open Deck and confirm the existing Jump back action still opens its Moment while the optional
+   session span truthfully frames it. In Advanced Settings, confirm the collapsed **Sessions** group
+   contains only `sessions.min_len_secs` (30–3600) and `sessions.gap_close_secs` (60–3600), saves
+   normally, and adds no NavRail item.
+
+### Keyboard, state, and layout matrix
+
+6. Keyboard-only: focus the Timeline slider and use its existing arrow/Enter behavior; then Tab to
+   session bands, move through every band in DOM order, press Enter/Space to open one, traverse every
+   drill-in action/link, open a Moment, and return. Confirm visible focus throughout and no interactive
+   button is nested inside the ARIA slider.
+7. Observe each real-data state that is available: loading skeletons; list/detail error + Retry;
+   frames with **no sessions** (density ribbon remains usable); session with **no exchanges**; **open**
+   session (still running/non-final boundary); **low-confidence** session (numeric confidence shown);
+   missing/deleted session; summary failure/retry; Recap failure/retry. Do not synthesize database
+   rows or mock IPC responses merely to make a state appear tested.
+8. At 1280×720, 1920×1080, and 3440×1440, check 100%, 125%, and 150% Windows display scaling where
+   the hardware permits. Cover Timeline, session drill-in, affected Moment, and Deck. At each point
+   confirm fixed rails, exactly one vertical route scroll context, no route-level horizontal
+   scrollbar, no nested vertical scroller, wrapped frame/citation/exchange strips, no clipped band
+   lanes, and no cumulative layout shift when session/summary/Recap data arrives. Repeat with Windows
+   reduced motion enabled and confirm session-band/scan ambient motion is absent.
+
+### PR5 evidence status
+
+The automated UI-first verification proves formatting, lint/Rules-of-Hooks, TypeScript/Vite build,
+Rust integration, tests, and generated-binding stability. It does **not** prove the native checks
+above. As of the PR5 documentation pass on 2026-07-10, the controller owns the real WebView2
+debug-port run and its screenshots/recording; that evidence is **pending**, so PR5 native acceptance
+must not be reported as passed yet.

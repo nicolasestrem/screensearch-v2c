@@ -33,3 +33,10 @@ internally consistent with `03 §7`/`§7e`/`§8b`; no schema or contract amendme
 No new patch rows: the Task 2 UI brief is consistent with the generated Task 1 interfaces and
 `UI_REFERENCE §3`–`§8`. The implementation required no schema, API/MCP, segmentation, taxonomy,
 setting-semantic, or visual-token amendment.
+
+## 2026-07-10 — 0.4.0 PR5 final audit
+
+No new patch row and no contradiction: the final review fixes (measured token-aware band packing,
+normal-flow lane expansion, request-scoped Recap cancellation, and separate lazy-summary failure)
+implement the existing `UI_REFERENCE §3`–`§8` and `03 §7e`/`§8b` contracts. PR5 performs no schema
+change or migration; schema remains 11. Native acceptance is pending evidence, not a spec conflict.
