@@ -445,4 +445,7 @@ CREATE TABLE session_artifacts (
   created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000)
 );
 CREATE INDEX idx_artifacts_session ON session_artifacts(session_id, created_at);
+-- index the `frame_id` FK: SQLite does not auto-index FKs, and `frame_id` is ON DELETE SET NULL,
+-- so a frame retention delete would otherwise full-scan session_artifacts to null matching rows.
+CREATE INDEX idx_artifacts_frame ON session_artifacts(frame_id);
 "#;

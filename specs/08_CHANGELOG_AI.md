@@ -26,17 +26,22 @@
 
 - **Change:** appended `MIGRATION_V11` (`crates/store/src/schema.rs`) and bumped
   `LATEST_SCHEMA_VERSION` 10 -> 11 — the sessions arc's only schema change (D4). Creates the
-  `sessions` and `session_artifacts` tables, the `frames.session_id` column, and the three indexes
-  (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`), transcribed verbatim from the
-  authoritative DDL in `03 §4`. Structure only, no backfill, no table rebuild (PR4's segmenter assigns
-  history later). Updated the three post-migration-latest tripwire asserts to 11 and extended the
-  fresh-vs-migrated parity test to span v11. Added five inline `migration_tests` (structure-only /
-  no-backfill, sessions CHECKs, the compound artifact role CHECK incl. the load-bearing
-  NULL-role-on-exchange rejection, FK SET-NULL/CASCADE behaviors, and the D10 additivity proof: seven
-  store surfaces identical pre/post on a populated fixture) plus an env-gated `#[ignore]` Gate 0
-  live-copy test (`crates/store/tests/store.rs`). Re-normalized the `03 §4` `context_key` column
-  comment to the `06` #27/#28 closed grammar; logged the `03`-vs-`0.4.0.md` DDL divergence as `06` #29
-  (03 wins, by-design PR1 normalization).
+  `sessions` and `session_artifacts` tables, the `frames.session_id` column, and the four indexes
+  (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`, `idx_artifacts_frame`),
+  transcribed verbatim from the authoritative DDL in `03 §4`. Structure only, no backfill, no table
+  rebuild (PR4's segmenter assigns history later). Updated the three post-migration-latest tripwire
+  asserts to 11 and extended the fresh-vs-migrated parity test to span v11. Added five inline
+  `migration_tests` (structure-only / no-backfill, sessions CHECKs, the compound artifact role CHECK
+  incl. the load-bearing NULL-role-on-exchange rejection, FK SET-NULL/CASCADE behaviors + the
+  `idx_artifacts_frame` query-plan assertion, and the D10 additivity proof: seven store surfaces
+  identical pre/post on a populated fixture) plus an env-gated `#[ignore]` Gate 0 live-copy test
+  (`crates/store/tests/store.rs`). Re-normalized the `03 §4` `context_key` column comment to the
+  `06` #27/#28 closed grammar; logged the `03`-vs-`0.4.0.md` DDL divergence as `06` #29 (03 wins,
+  by-design PR1 normalization). **Post-review amendment (`06` #30, PR #102):** added
+  `idx_artifacts_frame ON session_artifacts(frame_id)` to both `MIGRATION_V11` and `03 §4` in lockstep
+  after the review flagged the `frame_id` FK (`ON DELETE SET NULL`) as the one unindexed v11 FK
+  delete-path — a frame-retention delete would otherwise full-scan `session_artifacts`. Additive, no
+  behavior change; the DDL stays a verbatim transcription.
 - **Why:** `docs/0.4.0.md` §3 PR3 / `03 §4` "0.4.0 migration" / `03 §13c.3` (D1/D4/D8/D10). Additive
   (D10) — every frame-level feature is proven unchanged; structure-only +1 forward-only migration (D4).
 - **Verification:** `cargo test -p store --lib migration` -> **11 passed** (5 new v11 tests + the

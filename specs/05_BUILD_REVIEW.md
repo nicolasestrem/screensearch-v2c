@@ -367,9 +367,10 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 ## Pass 4 — 2026-07-10 — 0.4.0 PR3 (sessions schema + migration 10 → 11)
 
 - **Implemented:** `MIGRATION_V11` (`crates/store/src/schema.rs`) — the sessions arc's **only**
-  schema change (D4). Creates `sessions`, `session_artifacts`, `frames.session_id`, and the three
-  indexes (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`), transcribed verbatim
-  from the authoritative DDL in `03 §4:328–365` (both hardened CHECKs included:
+  schema change (D4). Creates `sessions`, `session_artifacts`, `frames.session_id`, and the four
+  indexes (`idx_sessions_time`, `idx_frames_session`, `idx_artifacts_session`, `idx_artifacts_frame`
+  — the last added by the review amendment `06` #30, see below), transcribed verbatim
+  from the authoritative DDL in `03 §4:328–368` (both hardened CHECKs included:
   `sessions.tool CHECK (tool IS NULL OR kind = 'ai')` and the compound `session_artifacts.role`
   CHECK with the load-bearing `role IS NOT NULL` guard). **Structure only, no backfill** — plain
   `CREATE TABLE` + `ALTER TABLE ... ADD COLUMN` + `CREATE INDEX`, no table rebuild, so the runner's
@@ -382,11 +383,12 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   populated schema-10 fixture (`seed_v10_fixture`: three frames with
   `app_hint`/`window_title`/`browser_url`/`capture_trigger` incl. one image-purged, `frame_text` +
   FTS mirrors, `text_spans`, two marks open+resolved, two text embeddings with vec0 vectors, a mixed
-  jobs queue): `migration_v11_adds_sessions_structure_only` (version +1, five new objects,
+  jobs queue): `migration_v11_adds_sessions_structure_only` (version +1, six new objects,
   sessions/artifacts empty, every frame `session_id IS NULL`, all pre-existing rows survive incl. FTS
   match, fk clean); `migration_v11_sessions_check_constraints`; `migration_v11_artifact_role_kind_coupling`
   (incl. the NULL-role-on-exchange rejection — the load-bearing guard case);
-  `migration_v11_fk_set_null_and_cascade`; and the **D10 additivity proof**
+  `migration_v11_fk_set_null_and_cascade` (adds an `EXPLAIN QUERY PLAN` assertion that the frame-delete
+  FK lookup rides `idx_artifacts_frame`); and the **D10 additivity proof**
   `migration_v11_preserves_frame_surfaces` — seven store surfaces (`hybrid_search` FTS+vector arms,
   `ocr_texts`, `list_marks`, `recent_frame_contexts`, `timeline_buckets`, `sample_frames_in_range`,
   `insights_summary`) are `assert_eq!`-identical before and after the migration on the same fixture,
@@ -457,3 +459,13 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   evaluates to NULL and SQLite passes a NULL CHECK) — intentional (host is optional), and covered by
   the constraint test's focus-session-with-NULL-host case. The `session_artifacts.role` CHECK relies
   on the `role IS NOT NULL` guard for the same NULL-CHECK reason; the guard case is tested explicitly.
+- **Review amendment (2026-07-10, PR #102, `06` #30):** the PR review (gemini-code-assist) flagged that
+  `session_artifacts.frame_id` (an `ON DELETE SET NULL` FK) had no covering index, so a routine
+  frame-retention delete (`03 §5`) would full-scan `session_artifacts` to null matching rows — the one
+  FK delete-path in v11 that was unindexed (session→frames and session→artifacts were already covered).
+  With maintainer approval, `CREATE INDEX idx_artifacts_frame ON session_artifacts(frame_id)` was added
+  to **both** `MIGRATION_V11` and the authoritative `03 §4` DDL in lockstep, preserving the verbatim
+  transcription (the DDL block is `03 §4:328–368`; the claude-review "character-for-character identical"
+  property holds). Pure performance, additive, no behavior change (D10). Tests updated: the structure
+  test asserts **six** new objects (2 tables + 4 indexes); the FK test adds an `EXPLAIN QUERY PLAN`
+  assertion that the frame-delete lookup uses the new index. Full ladder re-run green after the change.

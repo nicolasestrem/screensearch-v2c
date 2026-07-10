@@ -883,17 +883,17 @@ mod migration_tests {
             "latest schema is v11 (0.4.0 PR3 added the sessions tables)"
         );
 
-        // All five new objects (2 tables + 3 indexes) exist by exact name and type.
+        // All six new objects (2 tables + 4 indexes) exist by exact name and type.
         let objs: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master
                  WHERE (type = 'table' AND name IN ('sessions', 'session_artifacts'))
-                    OR (type = 'index' AND name IN ('idx_sessions_time', 'idx_frames_session', 'idx_artifacts_session'))",
+                    OR (type = 'index' AND name IN ('idx_sessions_time', 'idx_frames_session', 'idx_artifacts_session', 'idx_artifacts_frame'))",
                 [],
                 |r| r.get(0),
             )
             .expect("read sqlite_master");
-        assert_eq!(objs, 5, "v11 creates 2 tables + 3 indexes");
+        assert_eq!(objs, 6, "v11 creates 2 tables + 4 indexes");
 
         // Structure only — the migration creates zero rows and backfills nothing (D4).
         let sessions: i64 = conn
@@ -1140,6 +1140,20 @@ mod migration_tests {
             [],
         )
         .expect("artifacts");
+
+        // The frame-delete SET-NULL lookup rides idx_artifacts_frame, not a full scan (the point
+        // of the index): SQLite finds child rows via `WHERE frame_id = ?` when nulling the FK.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM session_artifacts WHERE frame_id = 2",
+                [],
+                |r| r.get(3),
+            )
+            .expect("explain query plan");
+        assert!(
+            plan.contains("idx_artifacts_frame"),
+            "frame-delete FK lookup must use idx_artifacts_frame, got plan: {plan}"
+        );
 
         // Deleting a frame SET-NULLs the artifact's frame_id (artifact survives).
         conn.execute("DELETE FROM frames WHERE id = 2", [])
