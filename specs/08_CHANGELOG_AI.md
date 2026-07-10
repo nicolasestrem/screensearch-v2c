@@ -22,6 +22,24 @@
 
 ---
 
+## 2026-07-10 - 0.4.0 PR2b: PR review fixes (3 harness correctness findings)
+
+- **Change:** addressed three automated-review findings on the open PR, all dev-only harness code.
+  (1) `main.rs` `overlaps_any` (the replay `~` concurrency marker) compared spans by pointer, but
+  the detailed session list and the `spans_for` pass are separate allocations, so the self-copy was
+  never excluded and every overlapping session was marked concurrent; now excluded by value (frame
+  range). (2) `group.rs` `group_concurrent` re-sorts after `enforce_non_overlap_per_track`, whose
+  same-track start-forward clamp could push a start past a different-track session and trip the
+  global-sort `debug_assert!`. (3) `score.rs` `tool_accuracy` now restricts the max-overlap candidate
+  set to predicted `Kind::Ai` spans, so a labeled AI session that overlaps a longer meeting/focus span
+  is no longer stolen by it (which would underreport the D9 primary tool-accuracy gate).
+- **Verification:** `cargo test -p harness` **119 passed** (+3 regression tests); fmt + clippy
+  `-D warnings` clean. Re-scored at frozen params (`merge_gap 2700`/`absorb_max 1800`, 120 s): the
+  recorded evidence is unchanged — held-out **07-09** still partitioned F1 **0.29**, tool **4/4 =
+  1.000**; the fixes prevent underreporting on shapes the scored days did not happen to hit.
+
+---
+
 ## 2026-07-10 - 0.4.0 PR2b: concurrent segmenter built + validated; D9 gate SET
 
 - **Change:** built the concurrent per-identity-track segmenter (`06` #28 / `07` #114) in the

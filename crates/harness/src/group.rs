@@ -982,14 +982,20 @@ pub fn group_concurrent(
     }
 
     // Global sort by start (then frame id, then key for determinism); per-track non-overlap.
-    out.sort_by(|a, b| {
-        a.span
-            .start_ms
-            .cmp(&b.span.start_ms)
-            .then(a.span.first_frame_id.cmp(&b.span.first_frame_id))
-            .then(a.span.context_key.cmp(&b.span.context_key))
-    });
+    let sort_by_start = |v: &mut Vec<GroupedSession>| {
+        v.sort_by(|a, b| {
+            a.span
+                .start_ms
+                .cmp(&b.span.start_ms)
+                .then(a.span.first_frame_id.cmp(&b.span.first_frame_id))
+                .then(a.span.context_key.cmp(&b.span.context_key))
+        });
+    };
+    sort_by_start(&mut out);
+    // Clamping a same-track start forward can push it past a different-track session, so re-sort
+    // to restore the global start order the assertions (and callers) expect.
     enforce_non_overlap_per_track(&mut out);
+    sort_by_start(&mut out);
     debug_assert!(
         out.windows(2)
             .all(|w| w[0].span.start_ms <= w[1].span.start_ms),
@@ -1692,5 +1698,57 @@ mod tests {
         assert_eq!(s.len(), 1, "{s:?}");
         assert_eq!(s[0].tool.as_deref(), Some("codex"));
         assert_eq!((s[0].start_ms, s[0].end_ms), (0, 450_000));
+    }
+
+    #[test]
+    fn enforce_non_overlap_then_resort_restores_global_order() {
+        // A residual same-track overlap makes enforce_non_overlap_per_track pull a start forward
+        // past a different-track session, breaking the global start sort. group_concurrent re-sorts
+        // afterwards; this pins that the enforce + re-sort pair keeps the order the assertions want.
+        let gs = |key: &str, kind: Kind, tool: Option<&str>, s: i64, e: i64| GroupedSession {
+            span: SessionSpan {
+                start_ms: s,
+                end_ms: e,
+                context_key: key.into(),
+                kind,
+                tool: tool.map(str::to_string),
+                host: None,
+                frame_count: 1,
+                first_frame_id: s,
+                last_frame_id: e,
+            },
+            close_reason: CloseReason::EndOfInput,
+        };
+        // codex A [0,100_000] ; claude [10_000,20_000] ; codex B [5_000,50_000] overlaps codex A.
+        let mut out = vec![
+            gs("ai:codex", Kind::Ai, Some("codex"), 0, 100_000),
+            gs("ai:codex", Kind::Ai, Some("codex"), 5_000, 50_000),
+            gs(
+                "ai:claude-code",
+                Kind::Ai,
+                Some("claude-code"),
+                10_000,
+                20_000,
+            ),
+        ];
+        enforce_non_overlap_per_track(&mut out);
+        // codex B was clamped to start at codex A's end (100_000), now out of global start order.
+        assert!(
+            out.windows(2)
+                .any(|w| w[0].span.start_ms > w[1].span.start_ms),
+            "enforce alone is expected to break the sort here: {out:?}"
+        );
+        out.sort_by(|a, b| {
+            a.span
+                .start_ms
+                .cmp(&b.span.start_ms)
+                .then(a.span.first_frame_id.cmp(&b.span.first_frame_id))
+                .then(a.span.context_key.cmp(&b.span.context_key))
+        });
+        assert!(
+            out.windows(2)
+                .all(|w| w[0].span.start_ms <= w[1].span.start_ms),
+            "re-sort restores global start order: {out:?}"
+        );
     }
 }

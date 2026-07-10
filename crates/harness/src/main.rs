@@ -92,9 +92,17 @@ fn frame_times(frames: &[FrameRow]) -> Vec<i64> {
 }
 
 /// Whether `s` overlaps any other span in `all` (the concurrency marker in replay output).
+/// `s` comes from the detailed session list, `all` from a separate `spans_for` pass, so the two
+/// live in different allocations: exclude the self-copy by value (frame range is the natural key),
+/// never by pointer identity.
 fn overlaps_any(s: &SessionSpan, all: &[SessionSpan]) -> bool {
-    all.iter()
-        .any(|o| !std::ptr::eq(o, s) && s.start_ms < o.end_ms && o.start_ms < s.end_ms)
+    all.iter().any(|o| {
+        let is_self = o.start_ms == s.start_ms
+            && o.end_ms == s.end_ms
+            && o.first_frame_id == s.first_frame_id
+            && o.last_frame_id == s.last_frame_id;
+        !is_self && s.start_ms < o.end_ms && o.start_ms < s.end_ms
+    })
 }
 
 fn close_label(r: CloseReason) -> &'static str {
@@ -643,5 +651,50 @@ fn main() -> ExitCode {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness::model::Kind;
+
+    fn span(start_ms: i64, end_ms: i64, first: i64, last: i64) -> SessionSpan {
+        SessionSpan {
+            start_ms,
+            end_ms,
+            context_key: "ai:codex".into(),
+            kind: Kind::Ai,
+            tool: Some("codex".into()),
+            host: None,
+            frame_count: 1,
+            first_frame_id: first,
+            last_frame_id: last,
+        }
+    }
+
+    #[test]
+    fn overlaps_any_excludes_self_copy_by_value() {
+        // `s` and its twin in `all` are separate allocations (detailed list vs spans_for pass), so
+        // the self-exclusion must be by value, not pointer identity.
+        let a = span(0, 100_000, 0, 100);
+        let all = vec![a.clone()];
+        assert!(
+            !overlaps_any(&a, &all),
+            "a lone span must not overlap itself"
+        );
+
+        // A genuine second span overlapping it is detected.
+        let b = span(50_000, 150_000, 200, 300);
+        let all2 = vec![a.clone(), b];
+        assert!(
+            overlaps_any(&a, &all2),
+            "a truly overlapping span is flagged"
+        );
+
+        // A disjoint neighbour is not.
+        let c = span(200_000, 300_000, 400, 500);
+        let all3 = vec![a.clone(), c];
+        assert!(!overlaps_any(&a, &all3), "a disjoint span is not flagged");
     }
 }

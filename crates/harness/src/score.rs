@@ -299,7 +299,10 @@ pub fn score_day_partitioned(
 }
 
 /// Tool-recognition accuracy on labeled AI sessions: match each labeled `ai` session to the
-/// predicted span of maximum temporal overlap; correct iff `tool` matches.
+/// predicted **AI** span of maximum temporal overlap; correct iff `tool` matches. Under the
+/// concurrent model a labeled AI session can overlap a longer meeting/focus span; restricting the
+/// candidate set to `Kind::Ai` keeps that longer non-AI span from stealing the match and
+/// underreporting the D9 tool-accuracy gate.
 pub fn tool_accuracy(spans: &[SessionSpan], labels: &[ResolvedLabel]) -> (usize, usize) {
     let mut correct = 0;
     let mut total = 0;
@@ -307,6 +310,7 @@ pub fn tool_accuracy(spans: &[SessionSpan], labels: &[ResolvedLabel]) -> (usize,
         total += 1;
         let best = spans
             .iter()
+            .filter(|s| s.kind == Kind::Ai)
             .filter_map(|s| {
                 let ov = (s.end_ms.min(l.end_ms) - s.start_ms.max(l.start_ms)).max(0);
                 (ov > 0).then_some((ov, s))
@@ -828,6 +832,19 @@ mod tests {
         // An AI label with no overlapping predicted span -> counted, wrong.
         let disjoint = vec![label(10_000, 11_000, Kind::Ai, Some("codex"))];
         assert_eq!(tool_accuracy(&spans, &disjoint), (0, 1));
+    }
+
+    #[test]
+    fn tool_accuracy_ignores_larger_overlapping_non_ai_span() {
+        // Concurrent case: a labeled AI session (codex) overlaps BOTH a correct short AI span and a
+        // longer meeting span that overlaps it more. Restricting candidates to Kind::Ai must keep
+        // the meeting from stealing the match and marking the correct tool wrong.
+        let spans = vec![
+            span(0, 3600, Kind::Meeting, None), // long meeting, larger overlap
+            span(100, 500, Kind::Ai, Some("codex")), // correct AI prediction, smaller overlap
+        ];
+        let labeled = vec![label(100, 500, Kind::Ai, Some("codex"))];
+        assert_eq!(tool_accuracy(&spans, &labeled), (1, 1));
     }
 
     fn frow(id: i64, sec: i64, app: Option<&str>, title: Option<&str>) -> FrameRow {
