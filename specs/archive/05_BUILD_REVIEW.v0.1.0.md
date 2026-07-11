@@ -1012,9 +1012,9 @@ $ cargo fmt --all -- --check
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking store v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\store)
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
-    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking store v0.0.0 (<repo>\crates\store)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
+    Checking kernel v0.0.0 (<repo>\crates\kernel)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.92s
 ```
 
@@ -1257,8 +1257,8 @@ $ cargo fmt --all -- --check
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking kernel v0.0.0 (<repo>\crates\kernel)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.65s
 ```
 
@@ -1336,8 +1336,8 @@ $ cargo fmt --all -- --check
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking kernel v0.0.0 (<repo>\crates\kernel)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.95s
 ```
 
@@ -1403,7 +1403,7 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.08s
 ```
 
@@ -1454,8 +1454,8 @@ $ cargo fmt --all -- --check
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
+    Checking kernel v0.0.0 (<repo>\crates\kernel)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.98s
 ```
 
@@ -1528,9 +1528,9 @@ $ cargo fmt --all -- --check
 
 ```
 $ cargo clippy --workspace --all-targets -- -D warnings
-    Checking store v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\store)
-    Checking screensearch v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\src-tauri)
-    Checking kernel v0.0.0 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\crates\kernel)
+    Checking store v0.0.0 (<repo>\crates\store)
+    Checking screensearch v0.0.0 (<repo>\src-tauri)
+    Checking kernel v0.0.0 (<repo>\crates\kernel)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.51s
 ```
 

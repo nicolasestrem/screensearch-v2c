@@ -336,7 +336,7 @@ fn windows_breadcrumb_chevrons_are_not_claude_code_prompts() {
         "claude-code",
         &[content(
             1,
-            "> This pc\nUsers > nicol > Documents\n> Network\n234 items",
+            "> This pc\nUsers > user > Documents\n> Network\n234 items",
         )],
     );
     assert!(extracted.is_empty());
@@ -348,7 +348,7 @@ fn empty_claude_prompt_does_not_capture_the_terminal_status_bar() {
         "claude-code",
         &[content(
             1,
-            "❯\n────────────────────\nnicol@TBX repo Opus 4.8 ctx:84%\nauto mode on",
+            "❯\n────────────────────\nuser@DEVBOX repo Opus 4.8 ctx:84%\nauto mode on",
         )],
     );
     assert!(extracted.is_empty());
