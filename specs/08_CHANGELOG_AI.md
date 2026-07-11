@@ -22,6 +22,21 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 Pass 11: final review-fix native acceptance
+
+- **Change:** Recorded the real `npm run dev` Tauri/WebView2 acceptance of code `02e5cad` against docs
+  `67b76ce`: typed-null `sessions_changed` fired once after startup scheduler work without a toast;
+  loading, empty, 7-day populated, and dense 30-day all retained the fixed 140/192 grid/outer
+  geometry; dense overflow rendered the neutral range-narrowing control.
+- **Keyboard/layout evidence:** the dense view showed 12 visible bands plus
+  `9 more sessions — narrow the range`, zero overlaps, and 1280 document/viewport parity. Native CDP
+  Enter moved focus from the keyboard-focusable overflow button to `TODAY` inside `aria-label="Time
+  range"`. Loading used `32px 32px 32px 32px` and five skeleton elements; the 7-day view showed 21
+  visible bands with identical geometry.
+- **Why:** closes the final live acceptance for the explicit fixed-four-lane D9 decision and quiet
+  scheduler invalidation protocol (`05` Pass 11; `docs/TESTING.md`).
+- **Scope:** documentation evidence only. No schema, API/MCP, frame, code, or generated-binding change.
+
 ## 2026-07-11 — 0.4.0 PR5 final review: fixed session geometry + live refresh
 
 - **Change:** Recorded code commit `02e5cad` (`fix(sessions): stabilize live session bands`): Timeline

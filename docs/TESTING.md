@@ -670,5 +670,25 @@ tagged. Evidence:
   lazy-image intervention; no app runtime errors were observed. The screenshot remains outside the
   repo at `%TEMP%\screensearch-pr5-timeline.png` and is not committed.
 
+**Observed 2026-07-11 — final review-fix acceptance at code `02e5cad` / docs `67b76ce`.** The real
+`npm run dev` process was again this worktree's `target/debug/screensearch.exe`, with
+`window.__TAURI_INTERNALS__ === true`. Through the real typed listener in
+`/src/lib/ipc/events.ts`, a startup scheduler pass produced `sessions_changed` probe `{count:1}` and
+no toast or notification. Fixed geometry was then observed at 1280 px:
+
+- Forced initial loading through the existing dev-state seam: grid
+  `32px 32px 32px 32px`, grid height 140, session outer height 192, and five skeleton elements.
+- Live empty Today: the same 140/192 grid/outer geometry and no horizontal overflow.
+- Live populated 7-day: the same 140/192 geometry, 21 visible bands, zero band overlaps, and document
+  width 1280 equal to viewport width 1280.
+- Live populated dense 30-day: the same 140/192 geometry, 12 visible bands, neutral
+  `9 more sessions — narrow the range`, zero overlaps, and document width 1280 equal to viewport
+  width 1280. The overflow button was keyboard-focusable. CDP native
+  `rawKeyDown` / `char` / `keyUp` Enter moved focus to `TODAY`, whose parent `aria-label` was
+  `Time range`.
+
+These observations close the focused dense-overflow, fixed-state-geometry, keyboard-focus, and live
+scheduler-refresh steps above. No schema, API/MCP, or frame behavior changed.
+
 The automated UI-first verification below this acceptance record remains the build/test evidence;
 the native observations above complete `03 §13c-5` without substituting mocks for the live app.

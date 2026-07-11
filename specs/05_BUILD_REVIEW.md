@@ -2345,3 +2345,27 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   schema migration/version change, API/MCP, audio, notification, nudge, score, new NavRail route, or
   frame-level behavior change. Pass 8's raw integrated suite and Pass 9's native evidence above are
   unchanged; this pass records the final focused RED/GREEN review and explicit user resolution.
+
+## Pass 11 — 2026-07-11 — 0.4.0 PR5 final review-fix native acceptance
+
+- **Runtime provenance:** Actual `npm run dev` Tauri process was the worktree's
+  `target/debug/screensearch.exe`; `window.__TAURI_INTERNALS__` was `true`. Code under test was
+  `02e5cad`; contract docs were `67b76ce`.
+- **Live refresh:** Registered the real typed `sessions_changed` listener through
+  `/src/lib/ipc/events.ts`. The startup scheduler pass produced the observed probe `{count:1}`. No
+  toast or notification appeared; the signal remained pull-based query invalidation.
+- **Initial loading:** Forced the real Timeline initial-loading state through the existing dev-state
+  seam. Computed lane grid was `32px 32px 32px 32px`, grid height 140, session outer height 192, with
+  five skeleton elements.
+- **Empty/populated geometry:** Live empty Today retained grid/outer 140/192 with no horizontal
+  overflow. Live populated 7-day retained 140/192 with 21 visible bands, zero overlaps, and document
+  width 1280 equal to viewport width 1280.
+- **Dense overflow:** Live populated 30-day retained grid/outer 140/192 with 12 visible bands,
+  `9 more sessions — narrow the range`, zero overlaps, and document width 1280 equal to viewport
+  width 1280. The neutral overflow button was keyboard-focusable.
+- **Keyboard:** CDP native `rawKeyDown` / `char` / `keyUp` Enter on the overflow button moved focus to
+  `TODAY`; its parent carried `aria-label="Time range"`. The control therefore routes keyboard users
+  to the existing range presets without adding a fifth lane or new range surface.
+- **Acceptance/scope:** Fixed four-lane geometry is identical across actual loading, empty, populated,
+  and dense-overflow states; live scheduler refresh and neutral overflow focus both pass. No schema,
+  API/MCP, or frame behavior changed. Passes 8–10 above remain unchanged.
