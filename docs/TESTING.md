@@ -690,5 +690,11 @@ no toast or notification. Fixed geometry was then observed at 1280 px:
 These observations close the focused dense-overflow, fixed-state-geometry, keyboard-focus, and live
 scheduler-refresh steps above. No schema, API/MCP, or frame behavior changed.
 
+**Final clean suite (Pass 12, 2026-07-11):** the required UI-first sequence passed at tip `8629e0c`,
+with the additional `npm run test` session-band regression gate between `npm ci` and lint. Full
+color-disabled raw output—including the 1,084-line workspace test log and empty fmt/binding-guard
+outputs—is preserved verbatim in `specs/05_BUILD_REVIEW.md` Pass 12. The npm allow-scripts warning
+was non-failing.
+
 The automated UI-first verification below this acceptance record remains the build/test evidence;
 the native observations above complete `03 §13c-5` without substituting mocks for the live app.

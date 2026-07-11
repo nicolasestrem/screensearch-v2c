@@ -22,6 +22,16 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 Pass 12: final clean integrated suite
+
+- **Verification:** Ran the color-disabled UI-first sequence at tip `8629e0c`: `npm ci` → additional
+  `npm run test` regression gate → lint → UI build → MCP staging → fmt → workspace clippy/build/test
+  → generated-binding guard. All commands exited 0; the npm allow-scripts warning was non-failing.
+- **Evidence:** `specs/05_BUILD_REVIEW.md` Pass 12 preserves every command's raw output verbatim,
+  including the 1,084-line `cargo test --workspace` log and empty fmt/binding-guard blocks.
+- **Scope:** verification/docs only; no code, schema, API/MCP, frame behavior, or generated binding
+  was changed by this record.
+
 ## 2026-07-11 — 0.4.0 PR5 Pass 11: final review-fix native acceptance
 
 - **Change:** Recorded the real `npm run dev` Tauri/WebView2 acceptance of code `02e5cad` against docs
