@@ -1,6 +1,6 @@
 # Architecture (as-built)
 
-How ScreenSearch V2c is actually put together **as of 2026-07-06** — reflecting the complete 0.3.0
+How ScreenSearch V2c is actually put together **as of 2026-07-11** — reflecting the complete 0.3.0
 arc (PR1–PR8: surface reduction, Flow overlay, where-was-i + marks, local HTTP API + export, MCP
 server), the shipped **0.3.1 patch** (P7.1 triage: the #64 vision-throughput fix —
 `VISION_MAX_EDGE` capped back at 1280 px — plus polish: inline Moment text, dated report
@@ -54,8 +54,19 @@ Where they ever disagree, the specs win — open an issue.
   UI-side: the D9 shell-layout contract (one scroll context per route) and the two-tier Settings
   IA (Essentials + seven collapsed Advanced expanders; `storage.jpeg_quality` and
   `capture.uia_run_on_interactive` retired via `RETIRED_SETTINGS_KEYS` tolerate-and-drop).
-- Still open: Authenticode code signing (the updater's minisign signature is separate and live)
-  and the remaining follow-ups tracked in `specs/07_KNOWN_GAPS.md`.
+- Implemented for 0.3.3 (hotfix): the UIA text source **skips Chromium/Electron windows** to stop
+  browser freezes (`07` #93); this release is the first delivered automatically by the 0.3.2 updater.
+- Implemented for 0.4.0 (P8 — the **sessions** arc; `docs/0.4.0.md`, `03 §7e/§13c`): frames are
+  grouped into **sessions** — additively (D10, zero frame-level behavior change) and with **no model
+  calls in segmentation** (D3). The one schema migration of the arc (**v10 → v11**) adds the
+  `sessions` + `session_artifacts` tables and a nullable `frames.session_id`; the pure heuristic
+  `sessions` engine (`crates/sessions`) segments per identity track and recognizes tool identity from
+  a seed taxonomy; a dev-only, read-only validation harness (`crates/harness`) scores segmentation
+  against hand-labeled ground truth. Sessions are pull-based / non-shaming (D11), audio-free (D14),
+  and add **no new NavRail route** (D13); titles/summaries are lazily generated + cached (D3).
+- Still open: Authenticode code signing (the updater's minisign signature is separate and live);
+  the 0.4.0 sessions API/MCP surface (PR6) and the remaining follow-ups tracked in
+  `specs/07_KNOWN_GAPS.md`.
 
 ---
 
@@ -81,7 +92,7 @@ Where they ever disagree, the specs win — open an issue.
 
 ## 2. Crate map
 
-A 13-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
+A 15-crate Rust workspace plus the React/TS `ui/`. `src-tauri` is the **composition root**: it opens
 the store, spawns OCR, builds the `kernel`, loads the embedder + inference off-thread, owns the
 Flow overlay window/hotkey plumbing and the local-API host, and registers commands. `kernel`
 orchestrates (event bus, capture loop, worker pool, vision scheduler, readiness, the where-was-i
@@ -89,8 +100,10 @@ resume heuristic);
 the module crates — `capture` (WGC + triggers + privacy), `ocr` (WinRT), `uia` (UI-Automation text),
 `store` (SQLite + sqlite-vec + FTS5), `embeddings` (fastembed), `inference` (Job-Object-bound
 `llama-server` sidecar), `textfilter` (attention-first span classifier), `sysmon` (pressure probe),
-`doctor` (env smoke-check), `api` (opt-in localhost HTTP API + export), and `mcp` (the
-`screensearch-mcp.exe` stdio wrapper over that API) — each
+`doctor` (env smoke-check), `api` (opt-in localhost HTTP API + export), `mcp` (the
+`screensearch-mcp.exe` stdio wrapper over that API), `sessions` (0.4.0 — the pure heuristic
+segmentation + tool-recognition engine), and `harness` (0.4.0 — a dev-only, read-only segmentation
+validation harness, not shipped in the app) — each
 depend only on the contracts in `traits`, never on one another's concrete impls.
 
 **Authoritative crate map & dependency rule: `specs/03_MASTER_PRODUCTION_SPEC.md` §2.** The
@@ -103,20 +116,24 @@ per-crate file-level guide to where each concern lives is the rest of this docum
 Single file `screensearch.db`; forward-only migrations tracked in `schema_version` (`store::schema`).
 Per-connection pragmas: `journal_mode=WAL`, `foreign_keys=ON`, `recursive_triggers=ON`,
 `busy_timeout=5000`. **Authoritative as-built DDL (every table, column, index, trigger, and the full
-v1→v10 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 10`)** — this is
+v1→v11 migration chain): `crates/store/src/schema.rs` (`LATEST_SCHEMA_VERSION = 11`)** — this is
 code, so it never drifts. `03 §4` is the design contract for the schema; where the migrations have
 moved ahead of it (v3 drops legacy `ocr_text`, v4 adds `text_spans.line_index`, v5 adds the nullable
 `frames.capture_trigger`, v6 widens that trigger token set for click / scroll-stop, v7 adds
 `frames.image_purged` for degrade-to-text retention, v8 adds the partial
 `idx_frames_image_retention` index for the retention sweep, v9 drops the removed image-embedding
-lane, and v10 adds the `marks` table — frame-cascading intention capture with `idx_marks_open`),
+lane, v10 adds the `marks` table — frame-cascading intention capture with `idx_marks_open` — and
+**v10 → v11 (0.4.0 PR3)** adds the `sessions` and `session_artifacts` tables plus a nullable
+`frames.session_id` and its three indexes, structure-only with no backfill),
 the code in `store::schema` wins.
 
 Conceptually the schema groups into: capture rows (`frames`), the 0.2.x text signal (preserved raw
 vs. filtered `content_text` plus per-span and static-chrome metadata, with content-text and raw-text
 FTS mirrors), the text embedding lane, vision analysis (P4), the durable `jobs`
-queue, tags, `marks` (0.3.0), and `settings`. The notes below capture the two as-built decisions
-that the DDL alone doesn't convey.
+queue, tags, `marks` (0.3.0), **sessions** (`sessions` + `session_artifacts`, 0.4.0 — derived-but-
+persisted: a wiped `sessions` table is fully recomputable from frames, so `frames.session_id` is
+`ON DELETE SET NULL` while `session_artifacts` CASCADE with their session), and `settings`. The
+notes below capture the two as-built decisions that the DDL alone doesn't convey.
 
 Each embedding lives in **two** lock-step places — a metadata row and its `vec0` `FLOAT[768]` cosine
 shadow keyed by the same id. Upserts do both in one transaction; deletes are handled by

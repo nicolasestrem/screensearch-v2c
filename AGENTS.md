@@ -34,7 +34,7 @@ segmentation engine → UI ∥ API/MCP → audit. Sessions are **additive** (D10
 behavior change), **pull-based/non-shaming** (D11), **no audio** (D14), **no new NavRail route**
 (D13). v0.4.0 is the **first auto-delivered release** (D16), reaching 0.3.2+ installs automatically.
 The full app exists —
-a 13-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
+a 15-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up
 (the 0.3.2 minisign updater signature is not Authenticode — `03 §11b`).
 
@@ -63,7 +63,9 @@ Re-read each session — the files are the source of truth, not your memory.
   llama.cpp sidecar client + Job-Object supervisor · `crates/textfilter` — attention-first span
   classifier · `crates/sysmon` — CPU/GPU pressure probe · `crates/doctor` — env smoke-check ·
   `crates/api` — opt-in localhost HTTP API + export · `crates/mcp` — `screensearch-mcp.exe` stdio
-  MCP wrapper over that API.
+  MCP wrapper over that API · `crates/sessions` — 0.4.0 pure heuristic session segmentation + tool
+  recognition (no model calls) · `crates/harness` — 0.4.0 dev-only, read-only segmentation
+  validation harness (not shipped in the app).
 - `ui/` — React + TS + Vite; typed IPC bindings are generated into `ui/src/bindings/` — never
   hand-edit them.
 - Module crates depend on `traits` only, never on each other's impls (`Cargo.toml`, spec `03 §2`).
