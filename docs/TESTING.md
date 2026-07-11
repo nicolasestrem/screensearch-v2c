@@ -629,8 +629,10 @@ the PR7 audit.
 9. Keep Timeline mounted while a real scheduler pass commits new/reconciled session rows. Confirm the
    Tauri `sessions_changed` event payload is `null`, the mounted session list refetches without route
    navigation or manual reload, and the new bands/ownership become visible. Confirm the signal creates
-   no toast, notification, badge, nudge, or score. Repeat with a failed scheduler pass and confirm no
-   false refresh event is claimed.
+   no toast, notification, badge, nudge, or score. Repeat an unchanged pass and confirm it emits no
+   event; repeat with a failed scheduler pass and confirm no false success is claimed (a failed
+   multi-write pass may conservatively invalidate because an earlier write may already have
+   committed).
 
 ### PR5 evidence status
 
@@ -695,6 +697,16 @@ with the additional `npm run test` session-band regression gate between `npm ci`
 color-disabled raw output—including the 1,084-line workspace test log and empty fmt/binding-guard
 outputs—is preserved verbatim in `specs/05_BUILD_REVIEW.md` Pass 12. The npm allow-scripts warning
 was non-failing.
+
+**PR #104 review follow-up (Pass 13, 2026-07-11):** all four unresolved inline threads were
+applicable and are fixed in code `c360d7e`; two store threads described the same unbounded content
+scan. Focused RED/GREEN evidence is preserved in `specs/05_BUILD_REVIEW.md` Pass 13. The store query
+now stops in SQLite and exactly preserves Rust Unicode trim behavior; Timeline loading/error/empty/
+populated all reserve four lanes (the forced error/loading render measured four 31.9965 px rows,
+139.9653 px total, 1704 px document/viewport parity, and no nested scrollers); and a repeated
+unchanged scheduler pass emits no `sessions_changed` event or redundant ownership/artifact writes.
+This is focused review verification only; the post-review full UI-first suite is recorded separately
+after it runs.
 
 The automated UI-first verification below this acceptance record remains the build/test evidence;
 the native observations above complete `03 §13c-5` without substituting mocks for the live app.

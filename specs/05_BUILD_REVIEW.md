@@ -3586,3 +3586,112 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ```text
 
 ```
+
+## Pass 13 — 2026-07-11 — 0.4.0 PR5 PR #104 review follow-up (`c360d7e`)
+
+- **Review disposition:** All four unresolved inline threads were relevant and addressed. Two
+  threads duplicated the same store concern, so the implementation clusters into three fixes. Per
+  maintainer instruction, no bot replies were posted and no review-thread state was mutated.
+- **Store (duplicate threads):** `session_has_usable_content` no longer materializes every matching
+  content row in Rust. Its indexed SQLite `EXISTS` query stops after the first usable row. Passing an
+  explicit character set to SQLite `trim` preserves the pre-existing Rust `str::trim` contract
+  exactly across every Unicode scalar for which `char::is_whitespace()` is true; U+200B remains
+  usable content because Rust does not classify it as whitespace.
+- **Timeline:** Error and empty top-level branches now render the same fixed session layer already
+  used by loading and populated states, preserving the settled four-lane D9 geometry.
+- **Scheduler:** Reconciliation now returns a semantic-change bit and performs delta ownership and
+  exchange-artifact writes. An identical pass neither rewrites correct state nor emits
+  `sessions_changed`; failures after a possible earlier write conservatively invalidate mounted
+  readers.
+
+### Store RED
+
+```text
+test sessions::tests::usable_content_query_bounds_results_inside_sqlite ... FAILED
+the VM must stop after SQLite finds one usable row; opcodes: ["Init", "OpenRead", "OpenRead", "Variable", "IsNull", "Affinity", "SeekGE", "IdxGT", "IdxRowid", "SeekRowid", "Column", "ResultRow", "Next", "Halt", "Transaction", "Goto"]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 38 filtered out
+```
+
+### Store GREEN and focused gates
+
+```text
+test sessions::tests::usable_content_query_bounds_results_inside_sqlite ... ok
+test session_usable_content_matches_rust_trim_unicode_whitespace ... ok
+test result: ok. 40 passed; 0 failed
+test result: ok. 10 passed; 0 failed
+test result: ok. 63 passed; 0 failed; 1 ignored
+```
+
+Focused store clippy and `cargo fmt --all -- --check` exited 0.
+
+### Timeline RED
+
+```text
+✖ Timeline keeps fixed session lanes in every content state
+AssertionError [ERR_ASSERTION]: the loading skeleton must reserve the fixed session lanes
+0 !== 1
+ℹ pass 1
+ℹ fail 1
+```
+
+### Timeline GREEN and focused gates
+
+```text
+✔ five simultaneous sessions use four fixed rows and aggregate the fifth (0.9343ms)
+✔ Timeline keeps fixed session lanes in every content state (0.3541ms)
+ℹ tests 2
+ℹ pass 2
+ℹ fail 0
+```
+
+UI typecheck and lint exited 0. Production build:
+
+```text
+✓ 438 modules transformed.
+✓ built in 1.64s
+```
+
+The rendered forced error/loading check measured four `31.9965px` rows, a `139.9653`-pixel group,
+`documentWidth === viewportWidth === 1704`, and nested scrollers `[]`.
+
+### Scheduler RED
+
+```text
+running 1 test
+test sessions_scheduler_contract_tests::no_op_scheduler_pass_does_not_emit_sessions_changed ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 58 filtered out; finished in 0.01s
+```
+
+The assertion at `crates/kernel/src/lib.rs:602` observed that the receiver was not `Empty` after the
+second, unchanged pass.
+
+### Scheduler GREEN and focused gates
+
+```text
+running 2 tests
+test sessions_scheduler_contract_tests::successful_scheduler_pass_emits_sessions_changed_after_rows_commit ... ok
+test sessions_scheduler_contract_tests::no_op_scheduler_pass_does_not_emit_sessions_changed ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.01s
+test result: ok. 59 passed; 0 failed
+```
+
+### Controller targeted recheck
+
+The controller independently reran the touched gates at code `c360d7e`; all exited 0. Store
+summaries remained 40/0, 10/0, and 63/0/1 ignored; kernel remained 59/0; fmt and focused clippy were
+clean. UI test output was 2 passed / 0 failed in 66.6182 ms; typecheck and lint were clean; build:
+
+```text
+✓ 438 modules transformed.
+✓ built in 1.62s
+```
+
+### Independent post-fix review
+
+The independent review found **Critical: none; Important: none; Minor: none; Ready: yes**. Its own
+focused rerun passed the scheduler contract 13/13, store sessions 10/10, and UI tests 2/2. No bot
+reply or review-thread mutation was made.
+
+- **Scope/status:** No schema/migration, API/MCP, audio, notification, nudge, score, NavRail,
+  frame-level behavior, or generated binding changed. This pass records focused review evidence;
+  the post-review full UI-first suite has not yet run and will be recorded separately.

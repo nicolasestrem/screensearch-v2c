@@ -22,6 +22,28 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 PR #104 review follow-up
+
+- **Change:** Addressed all four unresolved inline review threads in code `c360d7e`, clustered into
+  three fixes because the two store threads were duplicates. The session-content preflight is now an
+  indexed, early-stopping SQLite `EXISTS` query with an explicit character set proven identical to
+  Rust `str::trim` Unicode whitespace. Timeline error and empty states reserve the same four session
+  lanes as loading/populated. Scheduler reconciliation compares session/artifact state, writes only
+  assignment/artifact deltas, and suppresses `sessions_changed` for a semantic no-op while retaining
+  conservative invalidation if a multi-write pass fails after a possible partial commit.
+- **Why:** The review findings were applicable correctness/performance issues inside the settled
+  PR5 session UI contract: avoid loading every content row, keep D9 geometry state-stable, and keep
+  the pull-based refresh event truthful rather than firing once per scheduler cadence.
+- **Verification:** Focused tests went RED then GREEN for the SQL VM early stop plus exact Unicode
+  whitespace, Timeline error/empty fixed lanes, and unchanged-pass event suppression. Full store and
+  kernel focused suites, UI test/typecheck/lint/build, fmt, and focused clippy passed; exact evidence
+  is preserved in `05` Pass 13. Independent post-fix review found no critical, important, or minor
+  findings and returned Ready: yes after its scheduler 13/13, store sessions 10/10, and UI 2/2
+  focused reruns. The post-review full workspace suite is intentionally a later pass.
+- **Review handling:** No bot replies or review-thread state changes were made, per maintainer
+  instruction. No schema/migration, API/MCP, audio, notification, nudge, score, NavRail, frame-level
+  behavior, or generated binding changed.
+
 ## 2026-07-11 — 0.4.0 PR5 Pass 12: final clean integrated suite
 
 - **Verification:** Ran the color-disabled UI-first sequence at tip `8629e0c`: `npm ci` → additional

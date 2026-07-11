@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,000-frame database in testing.
 
 ### Changed
+- PR #104 review follow-up resolves all four unresolved inline findings (two were the same store
+  issue): session-content preflight now stops inside SQLite with an indexed `EXISTS` query while
+  preserving Rust `str::trim`'s exact Unicode-whitespace semantics; Timeline error and empty states
+  reserve the same fixed four session lanes as loading and populated states; and the session
+  scheduler now emits quiet `sessions_changed` invalidation only for semantic changes, using delta
+  ownership/artifact writes so an unchanged pass is also a physical no-op.
 - PR5 review hardening makes Timeline session-band packing use measured token-sized hit targets,
   holds loading/error/empty/populated at exactly four lanes to prevent layout shift, and summarizes
   dense overflow without nested/horizontal scrolling. Mounted session queries now refetch after a

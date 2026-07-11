@@ -49,3 +49,14 @@ Row #31 records the genuinely new dense-layout/live-refresh ambiguity and the us
 aggregates lane 5+ into the neutral range-preset-focus control, and adds quiet typed-null
 `sessions_changed` invalidation after successful scheduler work. D9 remains strict; no relaxation or
 silent product choice remains.
+
+## 2026-07-11 — 0.4.0 PR5 PR #104 review audit
+
+No new spec contradiction or product decision surfaced. All four unresolved inline threads were
+applicable, with two duplicate threads identifying the same store preflight scan. Code `c360d7e`
+resolved them within the existing contracts: indexed/bounded SQLite `EXISTS` with exact Rust Unicode
+trim preservation; fixed session lanes in Timeline error and empty states; and semantic scheduler
+change detection with delta ownership/artifact writes and no event for an unchanged pass. These are
+implementation corrections under the already-set D9/session-refresh contracts, so no new numbered
+patch row is required. Focused RED/GREEN evidence is in `05` Pass 13; the final full suite follows in
+a separate pass.

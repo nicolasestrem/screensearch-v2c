@@ -140,3 +140,12 @@ control that focuses existing range presets; D9 no-CLS is not relaxed** (`06` #3
 The typed-null `sessions_changed` event is pull-based mounted-query invalidation after successful
 scheduler work, not a notification/toast. No schema/version, API/MCP, audio, nudge, score, NavRail,
 or frame-level behavior change was introduced.
+
+### 0.4.0 PR5 PR #104 review gap audit — 2026-07-11
+
+No new known gap or silent-spec ambiguity was opened. All four unresolved review threads were
+applicable and resolved in `c360d7e`; the two store threads were duplicates. Exact Rust Unicode trim
+semantics remain intact in the bounded SQL preflight, Timeline error/empty geometry now honors the
+existing fixed-four-lane decision, and scheduler invalidation now distinguishes semantic changes
+from unchanged passes while using delta writes. No schema/migration, API/MCP, audio, notification,
+nudge, score, NavRail, or frame-level behavior change was introduced.
