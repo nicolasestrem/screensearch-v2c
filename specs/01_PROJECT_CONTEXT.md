@@ -9,7 +9,7 @@
 ## 1. What exists today
 
 **Nothing is built yet.** `screensearch-v2c` is a greenfield, standalone repository
-(`C:\Users\nicol\Documents\GitHub\screensearch-v2c`) initialized with git (branch `main`) and a
+(`<repo>`) initialized with git (branch `main`) and a
 `specs/` folder. There is **no source code, no dependencies installed, no scaffold**. This
 document records the *starting truth* — environment, decisions already made, and the knowledge
 inherited as reference — so later layers don't re-derive it.

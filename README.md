@@ -4,7 +4,7 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status — v0.3.2 shipped.** Capture → OCR/UIA text → deferred enrichment →
+> **Status — v0.3.3 shipped; the 0.4.0 sessions arc is in progress.** Capture → OCR/UIA text → deferred enrichment →
 > **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
 > the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
 > The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
@@ -16,7 +16,11 @@ on-device, no cloud.
 > Releases, background download, install only on your restart — v0.3.2 is the last manual
 > download), a **system tray** with a passive capture-state icon and quick actions
 > (close-to-tray on by default, run-at-startup off by default), a hardened one-scroll-context
-> layout, and a **two-tier Settings** page. The **NSIS installer** is unsigned (SmartScreen will
+> layout, and a **two-tier Settings** page. The **0.3.3** hotfix (auto-delivered by the 0.3.2
+> updater — the first automatic release) skips Chromium/Electron windows in the UIA text source to
+> stop browser freezes. The in-progress **0.4.0 sessions arc** groups frames into sessions
+> additively (zero frame-level behavior change) via a pure heuristic engine with no model calls,
+> behind its one schema migration (v10 → v11). The **NSIS installer** is unsigned (SmartScreen will
 > warn — "More info → Run anyway"); **Authenticode code-signing** is the lone remaining packaging
 > follow-up (the updater's minisign signature is separate and already live). Design lives
 > in [`specs/`](./specs); the as-built architecture is in
@@ -25,22 +29,18 @@ on-device, no cloud.
 
 ## Screenshots
 
-The **Command Deck** — six on-device screens over your screen history (five shown below; Settings
-omitted). Nothing here touches the network: every frame, query, and answer stays on the machine.
-
-![ScreenSearch Deck — capture toggle, today's activity, live enrichment queue, and recent frames](screenshots/deck.png)
-
-> **Deck** — start/stop capture, today's capture count with a per-app breakdown, the live enrichment
-> queue, and a "jump back in" strip of recent frames.
-
-| Recall — grounded **Ask** | Insights — activity analytics | Moment — frame detail |
-|:--:|:--:|:--:|
-| [![Recall screen — natural-language Ask with cited frames](screenshots/recall-ask.png)](screenshots/recall-ask.png) | [![Insights screen — captures over time, top apps, activities](screenshots/insights.png)](screenshots/insights.png) | [![Moment screen — recognized text and vision tagging](screenshots/moment.png)](screenshots/moment.png) |
-| Ask in plain language; answers **cite the exact frames** they came from. | Captures over time, top apps, and inferred activities from vision tags. | One moment's recognized text and context, with on-demand **vision tagging**. |
+The **Command Deck** is six on-device screens over your screen history — Deck, Recall (grounded
+**Ask** with cited frames), Insights (activity analytics), Moment (frame detail + on-demand vision
+tagging), Timeline, and Settings. Nothing here touches the network: every frame, query, and answer
+stays on the machine.
 
 ![Timeline — scrub the day's captures on a scanline](screenshots/timeline.png)
 
 > **Timeline** — scrub a day / week / month of captures on a scanline; `Enter` opens the Moment.
+
+> **Note:** the earlier hero screenshots were captured from a live install and showed real personal
+> screen content, so they were removed. Fresh demo screenshots taken against synthetic data will be
+> restored here.
 
 ## Build progress
 
@@ -82,6 +82,19 @@ The **0.3.2 arc** (shipped) is the product-shell pass — lifecycle + interface:
 | **System tray + quick actions** | Passive capture-state icon (capturing / paused / error), six-item menu (open, pause/resume, load/unload model, start/stop vision, check for updates, quit); close-to-tray default on; run-at-startup default off | ✅ Shipped |
 | **Shell layout hardening** | One scroll context per route, no nested scrollbars, no layout shift on load; WebView2 ghost-rail mitigation | ✅ Shipped |
 | **Settings two-tier IA** | Essentials always visible; Advanced collapsed into seven groups; live hotkey-conflict warning; two dead settings retired (old configs still load) | ✅ Shipped |
+
+The **0.3.3 hotfix** (shipped, first auto-delivered release): the UIA text source skips
+Chromium/Electron windows to stop browser freezes.
+
+The **0.4.0 sessions arc** (in progress) reframes frames into **sessions** — additively, with no
+frame-level behavior change:
+
+| Feature | What it adds | Status |
+|---|---|---|
+| **Sessions schema** | Migration v10 → v11: `sessions` + `session_artifacts` tables and a nullable `frames.session_id`, structure-only (no backfill) | ✅ Shipped (PR3) |
+| **Segmentation engine** | Pure heuristic `crates/sessions` — no model calls; per-identity-track segmentation + tool recognition from a seed taxonomy | ✅ Shipped (PR4) |
+| **Sessions in the UI** | Typed session commands and a sessions surface (pull-based, non-shaming; no new NavRail route) | ✅ Shipped (PR5) |
+| **Sessions API / MCP** | `list_sessions` / `get_session` / `ask_session` over the local API and MCP wrapper | 🚧 Planned (PR6) |
 
 > Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
 > not pushed).
@@ -165,7 +178,7 @@ Cargo.toml         Cargo workspace (centralized dependency versions)
 docs/
   ARCHITECTURE.md          as-built system design + data flow
   audits/                  point-in-time PR audit evidence (local-only, git-ignored)
-screenshots/       Command-Deck UI screenshots (used by this README)
+screenshots/       Command-Deck UI screenshots used by this README
 crates/
   traits/          module contracts + shared domain/IPC/job types (no impls)
   kernel/          orchestrator: event bus, capture loop, worker pool, settings
@@ -178,6 +191,10 @@ crates/
   inference/       VisionProvider + AnswerProvider + llama.cpp supervisor (Job-Object lifecycle)
   sysmon/          CPU/GPU pressure probe driving the enrichment throttle
   doctor/          WebView2 / Vulkan / llama-server environment smoke-check
+  api/             opt-in localhost HTTP API + JSON export (axum, 127.0.0.1 + bearer token)
+  mcp/             screensearch-mcp.exe — stdio MCP wrapper over the local API
+  sessions/        0.4.0 — pure heuristic session segmentation + tool recognition (no model calls)
+  harness/         0.4.0 — dev-only, read-only segmentation validation harness (not shipped)
 src-tauri/         Tauri 2 shell + composition root + command handlers + main()
 ui/                React 18 + TS + Vite — the full "Command Deck" (6 screens, typed IPC)
 specs/             spec-engineering pipeline (00 intake → 04 build prompt → 05–08 build/review)
@@ -196,13 +213,18 @@ npm, and WebView2 (preinstalled on current Windows). First run downloads the emb
 #    Rust build fails if the UI hasn't been built yet. `npm run lint` is the Rules-of-Hooks gate.
 cd ui && npm ci && npm run lint && npm run build && cd ..
 
-# 2. Rust workspace
+# 2. Stage the MCP sidecar — src-tauri declares `screensearch-mcp.exe` as a `bundle.externalBin`
+#    that `tauri-build` resolves on every compile, so a fresh clone must stage it once before any
+#    cargo command (npm run dev / build do this automatically; a bare cargo build does not).
+node scripts/stage-mcp.mjs
+
+# 3. Rust workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 cargo test --workspace            # GPU/WinRT/model/perf tests are #[ignore]d
 
-# 3. Binding guard — `cargo test` regenerates the ts-rs IPC bindings; they must stay clean
+# 4. Binding guard — `cargo test` regenerates the ts-rs IPC bindings; they must stay clean
 #    (commit the regenerated files, or CI fails).
 git diff --exit-code -- ui/src/bindings
 

@@ -149,11 +149,11 @@ Data accumulated (07-07..07-09). The maintainer flagged day-kinds and gave rough
 which I **verified against the shipped live local API** (`GET /v1/export` on `127.0.0.1:43210`;
 bearer token read read-only from the D5 backup, never the live DB) rather than trusting memory. Took
 a fresh **D5 backup** first (`screensearch-2026-07-09.db`, `integrity_check` ok, 1780/1780 frames).
-Wrote ground-truth `harness-data/*/labels.toml` for the two substantive days: 07-07 = Google Meet
-standup 09:58-10:30 + admin/focus + Claude desktop + two short Claude Code terminal stints (a mixed
-day, not Claude-Code-heavy, correcting the maintainer's guess); 07-08 = Codex desktop 16:59-19:00 +
-one Claude Code evening session 19:00-22:54 (the maintainer's call over steady Codex activity
-underneath).
+Wrote ground-truth `harness-data/*/labels.toml` for the two substantive days: 07-07 = a video-call
+meeting block + admin/focus + assistant-desktop use + two short Claude Code terminal stints (a mixed
+day, not Claude-Code-heavy, correcting the initial recalled estimate); 07-08 = Codex desktop +
+one evening Claude Code session over steady Codex activity
+underneath.
 
 - **Headline finding (redesign checkpoint; `07` #110):** the `§7e` app-context key **over-segments**
   these real days ~10-40x. Baseline (seed taxonomy, defaults) pooled boundary **F1 0.13** (P 0.07,
@@ -290,10 +290,10 @@ change.
   files drafted from the digests and reviewed. Tuning days 07-07/08 **revised for concurrency and
   approved**: 07-07 splits the old single 15:15 session into concurrent `claude-code ∥ claude-desktop`
   (the serial label already noted the desktop app "open alongside"); 07-08 is the concurrency source -
-  `codex` runs continuously 16:59-22:53 **under** two `claude-code` terminal stints (17:02-17:11,
-  20:13-21:39), correcting the recalled serial `claude-code 19:00-22:54`. Held-out 07-09 (primary
-  fresh day): the leisure-heavy 19:01-20:23 block **unlabeled** per maintainer (Telegram chatting,
-  not focus); the 12:05-13:24 analytics block kept as focus. Parser-validated (per-identity
+  `codex` runs continuously **under** two `claude-code` terminal stints, correcting the recalled
+  serial `claude-code` evening span. Held-out 07-09 (primary
+  fresh day): a leisure block left **unlabeled** (non-focus);
+  the analytics block kept as focus. Parser-validated (per-identity
   non-overlap holds on all four); the serial `--algo grouped` scores the new concurrent 07-07/08
   labels at pooled F1 0.44/0.50 - lower than the old serial-label 0.50/0.57 precisely because the
   serial algo cannot represent the concurrency the labels now encode (the gap the concurrent
@@ -600,47 +600,47 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 
   $ node scripts/stage-mcp.mjs
   [stage-mcp] building screensearch-mcp (release)...
-  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+  [stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
       Finished `release` profile [optimized] target(s) in 0.29s
 
   $ cargo fmt --all -- --check
   (no output; exit 0)
 
   $ cargo clippy --workspace --all-targets -- -D warnings
-      Checking traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
-     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
-      Checking mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
-      Checking doctor v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\doctor)
-      Checking textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
-      Checking sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
-      Checking inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
-      Checking kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
-      Checking api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
-      Checking capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
-      Checking uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
-      Checking ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
-      Checking sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
-      Checking embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
-      Checking store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
-      Checking harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+      Checking traits v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+      Checking mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+      Checking doctor v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\doctor)
+      Checking textfilter v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+      Checking sessions v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+      Checking inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+      Checking kernel v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+      Checking api v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+      Checking capture v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+      Checking uia v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+      Checking ocr v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+      Checking sysmon v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+      Checking embeddings v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+      Checking store v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+      Checking harness v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
       Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.62s
 
   $ cargo build --workspace
-     Compiling traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
-     Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
-     Compiling sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
-     Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
-     Compiling textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
-     Compiling embeddings v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
-     Compiling uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
-     Compiling ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
-     Compiling capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
-     Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
-     Compiling sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
-     Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
-     Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
-     Compiling harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
-     Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
+     Compiling traits v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\traits)
+     Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\mcp)
+     Compiling sessions v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sessions)
+     Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\inference)
+     Compiling textfilter v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\textfilter)
+     Compiling embeddings v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\embeddings)
+     Compiling uia v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\uia)
+     Compiling ocr v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\ocr)
+     Compiling capture v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\capture)
+     Compiling api v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\api)
+     Compiling sysmon v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\sysmon)
+     Compiling kernel v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\kernel)
+     Compiling store v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\store)
+     Compiling harness v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\crates\harness)
+     Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri)
       Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.96s
 
   $ cargo test --workspace
@@ -693,11 +693,11 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
 - **D5/live evidence obtained:** backup command output was:
 
   ```text
-  D5 backup written: \\?\C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  D5 backup written: \\?\<backup-dir>\screensearch-2026-07-10.db
   PRAGMA integrity_check: ok
   row counts — source: 3114 frames / 0 marks; copy: 3114 frames / 0 marks (match: true)
 
-  FullName      : C:\Users\nicol\ScreenSearch Backups\screensearch-2026-07-10.db
+  FullName      : <backup-dir>\screensearch-2026-07-10.db
   Length        : 185266176
   LastWriteTime : 7/10/2026 2:19:32 PM
   BACKUP_OUTSIDE_APP_DATA=True
@@ -778,7 +778,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   ✓ 434 modules transformed.
   ✓ built in 1.76s
   $ node scripts/stage-mcp.mjs
-  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+  [stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
       Finished `release` profile [optimized] target(s) in 0.28s
   $ cargo fmt --all -- --check
   (no output; exit 0)
@@ -854,7 +854,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   ✓ 434 modules transformed.
   ✓ built in 1.63s
   $ node scripts/stage-mcp.mjs
-  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+  [stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
       Finished `release` profile [optimized] target(s) in 0.26s
   $ cargo fmt --all -- --check
   (no output; exit 0)
@@ -936,7 +936,7 @@ serial path is byte-untouched, kept as the `--algo grouped` A/B baseline).
   ✓ 434 modules transformed.
   ✓ built in 1.75s
   $ node scripts/stage-mcp.mjs
-  [stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+  [stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr4-segmentation-engine\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
       Finished `release` profile [optimized] target(s) in 0.21s
   $ cargo fmt --all -- --check
   (no output; exit 0)
@@ -1141,7 +1141,7 @@ dist/assets/CitationTile-CmOyNcPu.js            157.84 kB │ gzip: 47.99 kB
 ```text
 [stage-mcp] building screensearch-mcp (release)...
     Finished `release` profile [optimized] target(s) in 0.24s
-[stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+[stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
 ```
 
 #### `cargo fmt --all -- --check` (exit 0)
@@ -1159,10 +1159,10 @@ dist/assets/CitationTile-CmOyNcPu.js            157.84 kB │ gzip: 47.99 kB
 #### `cargo build --workspace` (exit 0)
 
 ```text
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\harness)
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling harness v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\harness)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 28.63s
 ```
 
@@ -1170,18 +1170,18 @@ dist/assets/CitationTile-CmOyNcPu.js            157.84 kB │ gzip: 47.99 kB
 
 ```text
     Blocking waiting for file lock on build directory
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
-   Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
-   Compiling harness v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\harness)
-   Compiling sessions v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\sessions)
-   Compiling ocr v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\ocr)
-   Compiling capture v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\capture)
-   Compiling uia v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\uia)
-   Compiling sysmon v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\sysmon)
-   Compiling traits v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\traits)
-   Compiling textfilter v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\textfilter)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling api v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
+   Compiling harness v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\harness)
+   Compiling sessions v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\sessions)
+   Compiling ocr v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\ocr)
+   Compiling capture v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\capture)
+   Compiling uia v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\uia)
+   Compiling sysmon v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\sysmon)
+   Compiling traits v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\traits)
+   Compiling textfilter v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\textfilter)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 27.32s
      Running unittests src\lib.rs (target\debug\deps\api-582ea0631a5e71d8.exe)
 
@@ -2469,7 +2469,7 @@ dist/assets/CitationTile-CarmCXg3.js            157.84 kB │ gzip: 47.99 kB
 ```text
 [stage-mcp] building screensearch-mcp (release)...
     Finished `release` profile [optimized] target(s) in 0.21s
-[stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+[stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
 ```
 
 ### `cargo fmt --all -- --check` (exit 0)
@@ -2487,18 +2487,18 @@ dist/assets/CitationTile-CarmCXg3.js            157.84 kB │ gzip: 47.99 kB
 ### `cargo build --workspace` (exit 0)
 
 ```text
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.06s
 ```
 
 ### `cargo test --workspace` (exit 0)
 
 ```text
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.61s
      Running unittests src\lib.rs (target\debug\deps\api-582ea0631a5e71d8.exe)
 
@@ -3796,7 +3796,7 @@ dist/assets/CitationTile-CarmCXg3.js            157.84 kB │ gzip: 47.99 kB
 ```text
 [stage-mcp] building screensearch-mcp (release)...
     Finished `release` profile [optimized] target(s) in 0.21s
-[stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+[stage-mcp] up to date: <repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
 ```
 
 ### `cargo fmt --all -- --check` (exit 0)
@@ -3807,34 +3807,34 @@ dist/assets/CitationTile-CarmCXg3.js            157.84 kB │ gzip: 47.99 kB
 ### `cargo clippy --workspace --all-targets -- -D warnings` (exit 0)
 
 ```text
-    Checking store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
-    Checking kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
-    Checking mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-    Checking screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
-    Checking api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
+    Checking store v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+    Checking kernel v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+    Checking mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+    Checking screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+    Checking api v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.14s
 ```
 
 ### `cargo build --workspace` (exit 0)
 
 ```text
-   Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
-   Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling store v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+   Compiling kernel v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.11s
 ```
 
 ### `cargo test --workspace` (exit 0)
 
 ```text
-   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
-   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
-   Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
-   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
-   Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
-   Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+   Compiling mcp v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling api v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
+   Compiling inference v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling kernel v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+   Compiling store v0.3.3 (<repo>\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 26.72s
      Running unittests src\lib.rs (target\debug\deps\api-582ea0631a5e71d8.exe)
 
@@ -4925,4 +4925,43 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 ### `git diff --exit-code -- ui/src/bindings` (exit 0)
 
 ```text
+```
+
+## Pass 15 — 2026-07-11 — Docs cleanup + repository-exposure scrub
+
+Maintenance pass (no app/runtime behavior change). Removed four live-capture demo screenshots,
+scrubbed absolute user paths + personal-activity prose from the build-loop logs and
+`01_PROJECT_CONTEXT.md`, sanitized `crates/sessions/tests/engine.rs` fixtures to synthetic
+`user`/`DEVBOX`, moved the crate author email to a noreply address, refreshed the as-built docs for
+v0.3.3 + the 0.4.0 sessions arc (15 crates / schema v11), archived the pre-0.4.0 manual acceptance
+checklists to `specs/archive/TESTING.pre-0.4.0.md`, and deleted the dead `docs/superpowers/` notes.
+
+Rust was touched (test fixtures + `Cargo.toml`), so the CI-order gate was run:
+
+```
+$ cargo fmt --all -- --check
+FMT_CLEAN
+
+$ cargo test -p sessions --test engine
+running 21 tests
+...
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.42s   # no warnings
+
+$ cargo build --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.54s
+
+$ cargo test --workspace
+# every suite reported "test result: ok"; 0 failed across the workspace
+
+$ git diff --exit-code -- ui/src/bindings
+BINDINGS_CLEAN
+
+$ git grep -inE 'users.nicol|nicol@|estrem@gmail' -- .
+EXPOSURE_CLEAN   # no hits
+
+$ git ls-files -- screenshots/
+screenshots/timeline.png
 ```

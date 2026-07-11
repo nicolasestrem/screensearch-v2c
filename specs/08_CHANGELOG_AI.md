@@ -465,3 +465,27 @@
   so the existing API/MCP JSON remains unchanged; made the preflight use Rust whitespace semantics;
   and clamped the store sampler itself to 24. Focused RED→GREEN tests, UI lint/build, fmt, and focused
   clippy passed; broad integration and native acceptance are now recorded in `05` Passes 8–9.
+
+## 2026-07-11 — Docs cleanup + repository-exposure scrub (maintenance, no app changes)
+
+- **Change:** Reduced over-exposure in a public repo and refreshed stale docs. Removed four demo
+  screenshots that had been captured from a live install (real name/username/personal folders,
+  messaging-app usage, real browsing OCR) — `screenshots/timeline.png` kept, the rest pending
+  re-shoot on synthetic data. Replaced ~90 absolute `C:\Users\<name>\…` paths in the build-loop
+  logs (`05` live + `05` v0.1.0 archive) and `01_PROJECT_CONTEXT.md` with a `<repo>` / `<backup-dir>`
+  placeholder; genericized timestamped personal-activity prose in `05` (messaging-app leisure blocks,
+  evening-session wording) to honor the no-personal-life-in-repo rule; sanitized the
+  `crates/sessions/tests/engine.rs` fixtures to synthetic `user` / `DEVBOX`; switched the crate author
+  email to a `users.noreply.github.com` address. Refreshed `docs/ARCHITECTURE.md` (15 crates, schema
+  v11 sessions migration, `sessions`/`harness` crates), `README.md` (status → v0.3.3 + 0.4.0 arc,
+  crate layout, the mandatory `node scripts/stage-mcp.mjs` build step, screenshots note), the shared
+  15-crate line + code map in `CLAUDE.md`/`AGENTS.md`, and the `docs/API.md` health version. Moved
+  the pre-0.4.0 manual acceptance checklists to `specs/archive/TESTING.pre-0.4.0.md`; deleted the
+  three obsolete `docs/superpowers/` design notes.
+- **Why:** Maintainer request to cut over-exposure and bring key docs current; enforces the
+  no-personal-life-in-repo rule and the archive-on-release convention (`04 §7`).
+- **Verification:** `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets --
+  -D warnings` finished with no warnings; `cargo build --workspace` clean; `cargo test --workspace`
+  all suites `ok` / 0 failed (sessions engine 21/21 with the sanitized fixtures);
+  `git diff --exit-code -- ui/src/bindings` clean; `git grep -inE 'users.nicol|nicol@|estrem@gmail'`
+  returns no hits; `git ls-files -- screenshots/` lists only `timeline.png`.
