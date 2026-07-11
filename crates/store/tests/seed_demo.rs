@@ -247,9 +247,14 @@ async fn seed_demo_db() {
     let frames_dir = env_path("DEMO_FRAMES_DIR");
     let scene_dir = env_path("DEMO_SCENE_DIR");
     let now_ms: i64 = std::env::var("DEMO_NOW_MS")
-        .expect("DEMO_NOW_MS must be set (Date.now(), unix ms)")
-        .parse()
-        .expect("DEMO_NOW_MS must be an integer");
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("System time is before UNIX epoch")
+                .as_millis() as i64
+        });
     // Frames start a few minutes ahead of now so the scheduler (which only segments the
     // past) never touches them.
     let base = now_ms + 3 * MIN_MS;
