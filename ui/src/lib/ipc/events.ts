@@ -42,6 +42,9 @@ export interface AppEvents {
   // downloading / ready / error / back to idle). The UI mirrors it into the
   // `updateStatus` query cache — no toast, the updater is quiet (`03 §11b`, D1).
   update_status_changed: UpdateStatus;
+  // Pull-based cache invalidation after the independent sessions scheduler commits.
+  // Null payload and no toast: mounted views simply refetch their typed queries.
+  sessions_changed: null;
 }
 
 /**

@@ -507,6 +507,46 @@ mod sessions_scheduler_contract_tests {
         assert_eq!(second[0].id, stable_id);
         assert_eq!(store.session_frames_meta(stable_id).await.unwrap().len(), 7);
     }
+
+    #[tokio::test]
+    async fn successful_scheduler_pass_emits_sessions_changed_after_rows_commit() {
+        let store = store::SqliteStore::open_in_memory().unwrap();
+        for (index, captured_at) in (0_i64..=6).map(|index| (index, index * 30_000)) {
+            store
+                .insert_frame(traits::NewFrame {
+                    captured_at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{index}.webp"),
+                    content_hash: format!("sessions-changed-{index}"),
+                    app_hint: Some("codex".to_string()),
+                    window_title: Some("Codex".to_string()),
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+        }
+        let engine = sessions::SessionEngine::new().unwrap();
+        let (events, mut receiver) = tokio::sync::broadcast::channel(8);
+
+        crate::sessions_scheduler::run_scheduler_pass(
+            &store,
+            &engine,
+            200_000,
+            &traits::Settings::default(),
+            false,
+            &events,
+        )
+        .await;
+
+        assert!(!store.unfrozen_sessions().await.unwrap().is_empty());
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(crate::KernelEvent::SessionsChanged)
+        ));
+    }
 }
 
 pub use capture_loop::{run_capture_loop, CaptureLoopExit, LoopCtx, PendingDemand};
@@ -1072,6 +1112,7 @@ impl Kernel {
                 self.store.clone(),
                 segmenter,
                 self.throttle_level.clone(),
+                self.events.clone(),
             ));
             tracing::info!("sessions scheduler started");
         }

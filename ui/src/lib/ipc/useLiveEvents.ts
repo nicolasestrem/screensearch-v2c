@@ -119,6 +119,12 @@ export function useLiveEvents() {
       }),
     );
 
+    track(
+      listenTo("sessions_changed", () => {
+        qc.invalidateQueries({ queryKey: queryKeys.sessionsPrefix });
+      }),
+    );
+
     // A mark was created / resolved / annotated (possibly from the overlay window's own
     // JS context via the mark hotkey) — refresh the Deck's Intentions strip.
     track(

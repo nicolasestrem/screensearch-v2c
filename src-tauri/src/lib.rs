@@ -1947,6 +1947,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             Ok(KernelEvent::ThrottleChanged(status)) => {
                 let _ = app.emit("throttle_changed", status);
             }
+            Ok(KernelEvent::SessionsChanged) => {
+                let _ = app.emit("sessions_changed", ());
+            }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")
             }

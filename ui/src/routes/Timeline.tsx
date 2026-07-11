@@ -5,7 +5,7 @@
 // scope the window (and the Recall search). All five states: loading skeleton,
 // empty ("No captures in this range"), error+retry, partial (thumbnails resolving),
 // populated. The scrub area never goes blank — empty windows show an invitation.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
@@ -41,6 +41,7 @@ export function Component() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setSelectedRange = useUiStore((s) => s.setSelectedRange);
+  const rangePresetRef = useRef<HTMLDivElement>(null);
 
   const [days, setDays] = useState(1);
   const range = lastDaysRange(days);
@@ -91,9 +92,29 @@ export function Component() {
 
   const buckets = timeline.data ?? [];
   const hasData = buckets.length > 0;
+  const sessionLayer = (forceLoading = false) => (
+    <SessionBands
+      sessions={sessions.data ?? []}
+      range={range}
+      loading={forceLoading || sessions.isLoading}
+      error={sessions.isError ? String(sessions.error) : null}
+      onRetry={() => sessions.refetch()}
+      onFocusRangePresets={() =>
+        rangePresetRef.current
+          ?.querySelector<HTMLButtonElement>("button")
+          ?.focus()
+      }
+      onOpen={(sessionId) => navigate(`/timeline/session/${sessionId}`)}
+    />
+  );
 
   const rangeControl = (
-    <div className="flex gap-1" role="group" aria-label="Time range">
+    <div
+      ref={rangePresetRef}
+      className="flex gap-1"
+      role="group"
+      aria-label="Time range"
+    >
       {PRESETS.map((p) => (
         <button
           key={p.days}
@@ -137,7 +158,10 @@ export function Component() {
           }
         >
           {timeline.isLoading ? (
-            <Skeleton className="h-24 w-full rounded-none" />
+            <div className="relative min-h-24 overflow-hidden rounded-none bg-base">
+              <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
+              {sessionLayer(true)}
+            </div>
           ) : timeline.isError ? (
             <ErrorState
               title="Couldn't load the timeline"
@@ -163,18 +187,7 @@ export function Component() {
                 onScrub={setPosition}
                 onOpen={openAt}
                 thumbnails={thumbs.data ?? []}
-                sessionLayer={
-                  <SessionBands
-                    sessions={sessions.data ?? []}
-                    range={range}
-                    loading={sessions.isLoading}
-                    error={sessions.isError ? String(sessions.error) : null}
-                    onRetry={() => sessions.refetch()}
-                    onOpen={(sessionId) =>
-                      navigate(`/timeline/session/${sessionId}`)
-                    }
-                  />
-                }
+                sessionLayer={sessionLayer()}
               />
               <p className="px-1 text-caption text-ink-faint font-body">
                 Drag or use ← → to scrub (Shift for bigger steps, Home/End to

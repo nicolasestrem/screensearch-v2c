@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use traits::{
     NewSessionArtifact, SegmentationParams, SegmenterFrame, Session, SessionArtifactKind,
     SessionDraft, SessionFilter, SessionKind, SessionSegmenter, Settings, Store,
 };
 
-use crate::{settings, worker_pool};
+use crate::{settings, worker_pool, KernelEvent};
 
 const CADENCE: Duration = Duration::from_secs(60);
 const BACKFILL_CHUNK_MS: i64 = 6 * 60 * 60 * 1000;
@@ -45,9 +45,16 @@ pub(crate) fn spawn(
     store: Arc<dyn Store>,
     segmenter: Arc<dyn SessionSegmenter>,
     throttle_level: Arc<AtomicU8>,
+    events: broadcast::Sender<KernelEvent>,
 ) -> SchedulerHandle {
     let (stop_tx, stop_rx) = watch::channel(false);
-    let join = tokio::spawn(scheduler_loop(store, segmenter, throttle_level, stop_rx));
+    let join = tokio::spawn(scheduler_loop(
+        store,
+        segmenter,
+        throttle_level,
+        events,
+        stop_rx,
+    ));
     SchedulerHandle {
         stop: stop_tx,
         join: Some(join),
@@ -58,35 +65,68 @@ async fn scheduler_loop(
     store: Arc<dyn Store>,
     segmenter: Arc<dyn SessionSegmenter>,
     throttle_level: Arc<AtomicU8>,
+    events: broadcast::Sender<KernelEvent>,
     mut stop: watch::Receiver<bool>,
 ) {
     loop {
         let now = worker_pool::now_ms();
         let current = settings::load_settings(store.as_ref()).await;
-        if let Err(error) =
-            run_incremental_pass(store.as_ref(), segmenter.as_ref(), now, &current).await
-        {
-            tracing::warn!(%error, "sessions incremental pass failed; capture remains active");
-        }
-        let params = params_from_settings(now, &current);
-        if let Err(error) = store
-            .freeze_sessions(now.saturating_sub(params.freeze_lookback_ms))
-            .await
-        {
-            tracing::warn!(%error, "sessions freeze pass failed; capture remains active");
-        }
-        if throttle_level.load(Ordering::Relaxed) == 0 {
-            if let Err(error) =
-                run_backfill_chunk(store.as_ref(), segmenter.as_ref(), now, &current).await
-            {
-                tracing::warn!(%error, "sessions historical pass failed; capture remains active");
-            }
-        } else {
-            tracing::debug!("sessions historical pass yielded to enrichment throttle");
-        }
+        run_scheduler_pass(
+            store.as_ref(),
+            segmenter.as_ref(),
+            now,
+            &current,
+            throttle_level.load(Ordering::Relaxed) != 0,
+            &events,
+        )
+        .await;
         if wait_or_stop(&mut stop, CADENCE).await {
             break;
         }
+    }
+}
+
+/// Runs one scheduler iteration and broadcasts only after at least one awaited store pass
+/// succeeds. Individual failures retain the scheduler's additive degradation contract: other
+/// passes still run, and any already-committed session changes still invalidate mounted readers.
+pub(crate) async fn run_scheduler_pass(
+    store: &dyn Store,
+    segmenter: &dyn SessionSegmenter,
+    now: i64,
+    current: &Settings,
+    historical_throttled: bool,
+    events: &broadcast::Sender<KernelEvent>,
+) {
+    let mut committed = false;
+    match run_incremental_pass(store, segmenter, now, current).await {
+        Ok(()) => committed = true,
+        Err(error) => {
+            tracing::warn!(%error, "sessions incremental pass failed; capture remains active")
+        }
+    }
+
+    let params = params_from_settings(now, current);
+    match store
+        .freeze_sessions(now.saturating_sub(params.freeze_lookback_ms))
+        .await
+    {
+        Ok(_) => committed = true,
+        Err(error) => tracing::warn!(%error, "sessions freeze pass failed; capture remains active"),
+    }
+
+    if historical_throttled {
+        tracing::debug!("sessions historical pass yielded to enrichment throttle");
+    } else {
+        match run_backfill_chunk(store, segmenter, now, current).await {
+            Ok(()) => committed = true,
+            Err(error) => {
+                tracing::warn!(%error, "sessions historical pass failed; capture remains active")
+            }
+        }
+    }
+
+    if committed {
+        let _ = events.send(KernelEvent::SessionsChanged);
     }
 }
 
