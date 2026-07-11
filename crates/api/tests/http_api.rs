@@ -926,6 +926,19 @@ async fn sessions_list_filters_validate_and_clamp() {
         .unwrap();
     assert_eq!(ids_of(&arr), vec![2]);
 
+    // An empty/whitespace tool is "no filter", not "match the empty-string tool" — it must
+    // return every session, identical to omitting the parameter.
+    let arr: serde_json::Value = get_sessions(&base, "/v1/sessions?tool=")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        ids_of(&arr),
+        vec![3, 2, 1],
+        "empty tool filter returns all sessions"
+    );
+
     // from > to → 400.
     let r = get_sessions(&base, "/v1/sessions?from=5000&to=1000").await;
     assert_eq!(r.status(), 400);

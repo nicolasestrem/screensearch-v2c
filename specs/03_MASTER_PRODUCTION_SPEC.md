@@ -651,14 +651,19 @@ enabling this is an explicit trust decision.*
     single-bound forms (`COALESCE(ended_at, now) > from` for `from` only; `started_at < to` for `to`
     only). Open sessions (`ended_at` null) use request-time `now` for this overlap test, so a long or
     still-active session that began before `from` remains visible in Timeline/MCP range queries. The
-    list surface behind `list_sessions` (§7) and the MCP `list_sessions` tool.
+    list surface behind `list_sessions` (§7) and the MCP `list_sessions` tool. `limit` defaults to
+    **1000** and is clamped to **1..=1000** (mirrors the in-app `list_sessions` IPC surface;
+    constants `SESSIONS_LIMIT_DEFAULT`/`SESSIONS_LIMIT_MAX` in `crates/api/src/sessions.rs`). List
+    rows serve `summary`/`summary_model` as **null** (title is always included); the summary is
+    revealed only by the detail endpoint's `include_summary=1`.
   - `GET /v1/sessions/{id}?include_summary=` — session detail + its `exchange` artifacts.
     `include_summary=1` returns the **cached** summary if one exists, else `null` — it **never
     triggers generation** over this surface. D12 makes the API/MCP strictly read-only: a GET must not
     start inference or write `sessions.summary`/`summary_model`. Lazy generation is an **in-app IPC
     action** (`session_recap` / the app requesting a summary, §7/§7e); the API only ever reflects
-    already-cached state. For an **open** session the cached summary (if any) is served with an
-    `open: true`/non-final marker, never regenerated on read. (If a future need for API-triggered
+    already-cached state. Without `include_summary=1` (and on every list row) `summary`/`summary_model`
+    are served as **null**; `title` is always included. For an **open** session the cached summary (if
+    any) is served with an `open: true`/non-final marker, never regenerated on read. (If a future need for API-triggered
     generation appears, it is an explicit `POST` command — a new write scope, out of this arc, `07`.)
   - `POST /v1/ask` gains an optional **`session_id`** scope — when set, retrieval is restricted to that
     session's frames and the answer cites **only** in-session frames (the arc's strategic payoff:

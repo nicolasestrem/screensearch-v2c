@@ -337,3 +337,59 @@ including the complete 1,091-line workspace-test log and the empty fmt/binding-g
 
 The automated UI-first verification below this acceptance record remains the build/test evidence;
 the native observations above complete `03 §13c-5` without substituting mocks for the live app.
+
+## Sessions API + MCP acceptance (0.4.0 PR6)
+
+PR6 exposes the sessions surface over the local HTTP API and the MCP wrapper. It is **read-only**
+and adds no schema change (the sessions tables shipped in PR3). All of the automated tests below
+run in the normal `cargo test --workspace` gate against synthetic fixtures / tempfile SQLite; no
+test touches `%APPDATA%` or real screen history.
+
+### Automated tests (CI-safe, no real data)
+
+- **`crates/api` fixture tests** (`crates/api/tests/http_api.rs`, extended): `GET /v1/sessions`
+  ordering (`started_at DESC, id DESC`) and the overlap predicate
+  (`started_at < to AND COALESCE(ended_at, now) > from`, so an open or before-`from` session that
+  spans the window stays visible and `from`/`to` are each independently optional); validation
+  (unknown `kind` → 400 naming the valid values, `from` > `to` → 400, non-integer id → 400,
+  unknown id → 404); `GET /v1/sessions/{id}` detail shape (`{ session, exchanges }`, only
+  `kind = exchange` artifacts returned); summary visibility (`include_summary=1` reveals the
+  **cached** `summary`/`summary_model`, any other value serves them as `null`); and the **D12
+  never-generate** guarantee, where a GET with `include_summary=1` on a session with no cached
+  summary starts no inference and writes no row (the summary stays `null`, the row is unchanged).
+- **`crates/store` scoped-search tests**: the session-scoped hybrid search restricts retrieval to a
+  session's **own** frames, so a query answered under `session_id` returns and cites only in-session
+  frames even when a concurrent session overlaps in wall-clock time (ownership is exclusive, not a
+  time window).
+- **`crates/mcp` session-tool round-trips** (`crates/mcp/tests/stdio_mcp.rs`, extended): `tools/list`
+  now advertises **nine** tools; `list_sessions` / `get_session` / `ask_session` round-trip over the
+  stdio wrapper against a fixture API (including the empty-result "No sessions." reply and the
+  `include_summary` default of `false`), and the API-off / wrong-token states still return the guided
+  errors rather than crashing.
+
+### Live MCP round-trip (maintainer in the loop)
+
+A real end-to-end check that the three tools drive the running app, with the citation-ownership
+invariant confirmed against the live database.
+
+1. Start the app from the repo root with `npm run dev` (never the debug executable, never
+   `cargo tauri dev`). In **Settings → Local API**, toggle it on and **copy the bearer token**; in
+   the model panel, **load an answer model** (`ask_session` needs it ready).
+2. Run the staged binary against the live API, passing both values by environment:
+   `SCREENSEARCH_API_URL=http://127.0.0.1:43210` and `SCREENSEARCH_API_TOKEN=<copied token>`, then
+   launch `target\debug\screensearch-mcp.exe`.
+3. Drive `tools/list` and confirm it lists **nine** tools (the six prior tools plus `list_sessions`,
+   `get_session`, `ask_session`).
+4. Call `list_sessions` with `kind=ai`, `tool=claude-code`; confirm the returned sessions are
+   AI / Claude Code and ordered most-recent first. Take one session `id`.
+5. Call `get_session` for that id **without** `include_summary` (summary/summary_model come back
+   `null`), then **with** `include_summary=true` (a cached summary appears only if the app already
+   generated one, which the tool never triggers); confirm the exchange artifacts match the
+   session.
+6. Call `ask_session` with that `session_id` and a query. For every cited frame id, confirm it
+   belongs to the session with a read-only lookup:
+   `SELECT session_id FROM frames WHERE id = ?` must return the same session id for each citation,
+   proving no frame from an overlapping session leaked into the answer.
+
+Record the date, Windows build, WebView2 version, and the observed session/frame ids and citation
+ownership results, the same way the PR5 acceptance run above does.

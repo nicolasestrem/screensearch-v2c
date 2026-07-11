@@ -270,6 +270,24 @@ async fn sessions_fixture_host(with_answer: bool) -> Arc<TestHost> {
         })
         .await
         .unwrap();
+    // A second recognized AI session (id 3, codex) owning frame 3, which matches the same term.
+    // With this, a scoped ask that leaked to a global search would surface frame 3, so the
+    // ask_session test can actually detect a dropped scope (not just round-trip).
+    let b = store
+        .insert_session(NewSession {
+            started_at: 3_000,
+            ended_at: Some(9_000),
+            kind: SessionKind::Ai,
+            tool: Some("codex".to_string()),
+            host: Some(SessionHost::Terminal),
+            context_key: "ai:codex".to_string(),
+            confidence: 0.9,
+            frozen: false,
+        })
+        .await
+        .unwrap();
+    let f3 = seed_frame(&store, 4_000, "deployment pipeline audit in codex").await;
+    store.assign_frames_session(&[f3], Some(b)).await.unwrap();
     Arc::new(TestHost {
         store,
         answer: with_answer.then(|| Arc::new(ScriptedAnswer) as Arc<dyn AnswerProvider>),
@@ -842,20 +860,26 @@ async fn ask_session_tool_cites_only_in_session_frames() {
     let mut mcp = McpChild::spawn(&base, Some(&token));
     mcp.handshake();
 
-    // Session 1 owns frames 1 and 2 (both match the term); the scoped answer cites only those.
+    // Session 1 owns frames 1 and 2; session 3 (codex) owns frame 3, which matches the same
+    // term. A scoped answer must cite only 1 and 2 — if the scope leaked to a global search it
+    // would also cite frame 3, so this asserts the scope actually bites, not just a round-trip.
     let result = mcp.call_tool(
         "ask_session",
         json!({ "session_id": 1, "query": "deployment pipeline", "top_k": 10 }),
     );
     assert_ne!(result["isError"], json!(true));
     let text = first_text(&result);
+    let cited = text
+        .split("Cited frames:")
+        .nth(1)
+        .expect("answer includes a Cited frames line");
     assert!(
-        text.contains("Cited frames:"),
-        "answer cites frames: {text}"
+        cited.contains('1') && cited.contains('2'),
+        "cites the session's own frames: {text}"
     );
     assert!(
-        text.contains('1') && text.contains('2'),
-        "cites session frames: {text}"
+        !cited.contains('3'),
+        "must not cite the other session's frame 3: {text}"
     );
 
     // An unknown session is a JSON 404 → isError not_found tool result (never a stream).
