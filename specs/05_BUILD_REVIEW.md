@@ -2301,3 +2301,47 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   intervention appeared; no app runtime errors. PR5 native acceptance **passes except for the
   transparently unavailable open-session variant**. No new product ambiguity, contradiction, known
   gap, schema/migration change, code change, or generated-binding change was introduced.
+
+## Pass 10 — 2026-07-11 — 0.4.0 PR5 final-review stability fixes (`02e5cad`)
+
+- **Finding — dense-band CLS ambiguity:** The reviewed normal-flow lane expansion was correct for
+  visibility but not for D9: five simultaneous sessions could change Timeline route height after
+  data arrived. The new focused layout test went RED because zero fixed rows were reserved where the
+  contract needed four:
+
+  ```text
+  npm test
+  0 !== 4
+  0 pass / 1 fail
+  ```
+
+- **User decision (option 1):** Keep D9 strict. Timeline reserves **exactly four session lanes** in
+  initial route skeleton/loading/error/empty/populated. Sessions whose measured collision packing
+  needs lane 5+ are aggregated into a neutral keyboard-operable overflow control; activating it
+  focuses the existing range presets. There is no fifth lane, modal, new range control, or CLS.
+- **Layout GREEN/controller evidence:** `npm run test` reported 1 pass / 0 fail; the controller rerun
+  duration was 65.3531 ms. `npm run typecheck` and `npm run lint` were clean. Production build:
+
+  ```text
+  ✓ 438 modules transformed.
+  ✓ built in 1.59s
+  ```
+
+- **Finding — mounted-query freshness:** A scheduler pass could commit new session rows/ownership
+  while mounted Timeline/detail queries remained cached. The focused Rust test first went RED with
+  E0425 (missing `run_scheduler_pass`) and E0599 (missing `KernelEvent::SessionsChanged`). The final
+  protocol emits typed-null `sessions_changed` only after successful awaited scheduler/store work;
+  mounted session queries refetch. It is pull-based invalidation, not a notification/toast.
+- **Refresh GREEN/controller evidence:** focused controller output:
+
+  ```text
+  running 1 test
+  successful_scheduler_pass_emits_sessions_changed_after_rows_commit ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out
+  ```
+
+  Focused `cargo clippy -p kernel -p screensearch --all-targets -- -D warnings` finished clean.
+- **Final scope audit:** Code commit `02e5cad` is `fix(sessions): stabilize live session bands`. No
+  schema migration/version change, API/MCP, audio, notification, nudge, score, new NavRail route, or
+  frame-level behavior change. Pass 8's raw integrated suite and Pass 9's native evidence above are
+  unchanged; this pass records the final focused RED/GREEN review and explicit user resolution.

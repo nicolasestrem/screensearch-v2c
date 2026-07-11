@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Sessions are now visible throughout the existing recall flow: Timeline shows accessible,
-  lane-packed session bands; a code-split drill-in shows lazy summaries, representative frames,
-  exchanges, and cited Recaps; Moment and Deck link the same context back to its session; and
-  Advanced Settings exposes the two existing session-pass thresholds. No new navigation item or
-  frame-level behavior was added.
+  lane-packed session bands in exactly four stable rows; sessions needing lane five or later are
+  summarized by a neutral keyboard control that focuses the existing range presets. A code-split
+  drill-in shows lazy summaries, representative frames, exchanges, and cited Recaps; Moment and Deck
+  link the same context back to its session; and Advanced Settings exposes the two existing
+  session-pass thresholds. No new navigation item or frame-level behavior was added.
 - The in-app sessions surface now has typed core commands to list overlapping sessions, load a
   bounded drill-in with representative frames and extracted exchanges, connect Moment and
   where-was-i frames back to their session, lazily cache session title/summary intelligence, and
@@ -37,10 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - PR5 review hardening makes Timeline session-band packing use measured token-sized hit targets,
-  expands dense lanes in normal flow without hidden bands or nested/horizontal scrolling, and makes
-  Recap cancellation stop backend work on cancel, route change, or unmount. Native WebView2
-  acceptance passed against the live schema-11 database; the dataset had no open session, so that
-  visual variant remains transparently unobserved rather than claimed.
+  holds loading/error/empty/populated at exactly four lanes to prevent layout shift, and summarizes
+  dense overflow without nested/horizontal scrolling. Mounted session queries now refetch after a
+  successful scheduler pass through a quiet typed event. Recap cancellation stops backend work on
+  cancel, route change, or unmount. Native WebView2 acceptance passed against the live schema-11
+  database; the dataset had no open session, so that visual variant remains transparently unobserved
+  rather than claimed.
 - Review hardening now includes the final frame when sampling session intelligence, parses taxonomy
   match strings once instead of allocating per frame, treats frozen boundary timestamps as
   inclusive, refuses to match merely touching mutable sessions, and resumes a crash-interrupted

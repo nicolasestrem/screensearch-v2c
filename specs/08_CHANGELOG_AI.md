@@ -22,6 +22,23 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 final review: fixed session geometry + live refresh
+
+- **Change:** Recorded code commit `02e5cad` (`fix(sessions): stabilize live session bands`): Timeline
+  reserves exactly four band lanes in initial skeleton/loading/error/empty/populated; collisions that
+  need lane 5+ aggregate into a neutral keyboard control focusing the existing range presets. A
+  typed-null `sessions_changed` event now invalidates mounted session queries after successful
+  scheduler work, without any notification/toast surface.
+- **Why:** the five-simultaneous-session RED exposed a genuine D9 ambiguity: unbounded normal-flow
+  lane growth changed route geometry. The user explicitly selected fixed-four-lane option 1; no-CLS
+  remains binding (`UI_REFERENCE §3`/`§8`, `03 §7`, `06` #31).
+- **Verification:** layout RED `0 !== 4` (0 pass / 1 fail); GREEN `npm run test` 1 pass / 0 fail,
+  controller rerun 65.3531 ms; typecheck/lint clean; build 438 modules in 1.59 s. Refresh RED E0425
+  (missing `run_scheduler_pass`) + E0599 (missing `KernelEvent::SessionsChanged`); GREEN scheduler
+  event test 1 passed / 0 failed / 57 filtered; focused kernel+screensearch all-target clippy clean.
+- **Scope:** documentation normalization only in this follow-up. Code/schema version, API/MCP, audio,
+  notifications, nudges, scores, NavRail, and frame-level behavior remain unchanged.
+
 ## 2026-07-10 — 0.4.0 PR5 Task 3: native runbook and integrated verification record
 
 - **Change:** Added the PR5 native/WebView2 acceptance runbook to `docs/TESTING.md`; reconciled the

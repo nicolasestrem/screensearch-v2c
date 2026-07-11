@@ -118,7 +118,7 @@ of PR5, while API/MCP session exposure remains PR6-owned.
 
 No new silent-spec gaps were opened. Static UI gates cover Hooks, typing, code splitting, and the
 production bundle; the already-contracted `03 §13c-5` live acceptance remains: run the native app on
-real session data and verify band → drill-in → Moment → back, cited Recap, and the expandable
+real session data and verify band → drill-in → Moment → back, cited Recap, and the fixed-four-lane
 session-ribbon/single-scroll layout at supported sizes and DPI. API/MCP exposure remains PR6-owned.
 
 ### 0.4.0 PR5 final gap audit — 2026-07-10
@@ -131,3 +131,12 @@ cancellation, low-confidence/no-exchange honesty, keyboard operation, reduced mo
 clamps, and the supported layout matrix (`05` Pass 9). The live dataset contained 21 sessions and
 zero open rows, so the open-session variant is recorded as **unavailable**, not passed or failed.
 That absence creates no new product ambiguity or known gap; implementation/test coverage remains.
+
+### 0.4.0 PR5 final-review decision audit — 2026-07-11
+
+No new silent-spec gap remains after the dense-layout ambiguity was raised explicitly and the user
+selected option 1: **exactly four lanes in every state; lane 5+ aggregated into a neutral keyboard
+control that focuses existing range presets; D9 no-CLS is not relaxed** (`06` #31, `05` Pass 10).
+The typed-null `sessions_changed` event is pull-based mounted-query invalidation after successful
+scheduler work, not a notification/toast. No schema/version, API/MCP, audio, nudge, score, NavRail,
+or frame-level behavior change was introduced.

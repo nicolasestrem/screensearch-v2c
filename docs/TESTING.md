@@ -586,8 +586,12 @@ the PR7 audit.
 
 1. Open Timeline on a range containing multiple session kinds and overlapping sessions. Confirm the
    density ribbon remains visible, session bands use the existing neutral/ok/warn token vocabulary,
-   every visible band has a usable native-button hit target, and dense overlaps create additional
-   normal-flow lanes without clipping, hidden lanes, nested scrolling, or horizontal scrolling.
+   every visible band has a usable native-button hit target, and the band layer is exactly four lanes.
+   Use a fixture/range with at least five simultaneous collisions: confirm no fifth row appears, the
+   omitted bands are counted by the neutral “more sessions — narrow the range” keyboard control, and
+   activating that control focuses the existing range presets. Repeat during initial route skeleton,
+   loading, error, empty, and populated; all five states must reserve identical four-lane geometry
+   with no clipping, nested scrolling, horizontal scrolling, or layout shift.
 2. With pointer input, follow **band → session drill-in → representative Moment → back**. Confirm
    Back returns to the same session drill-in and the drill-in remains on the same Timeline context.
    Open a Moment directly and use **Part of session**; confirm the link is omitted for a frame with
@@ -622,6 +626,11 @@ the PR7 audit.
    scrollbar, no nested vertical scroller, wrapped frame/citation/exchange strips, no clipped band
    lanes, and no cumulative layout shift when session/summary/Recap data arrives. Repeat with Windows
    reduced motion enabled and confirm session-band/scan ambient motion is absent.
+9. Keep Timeline mounted while a real scheduler pass commits new/reconciled session rows. Confirm the
+   Tauri `sessions_changed` event payload is `null`, the mounted session list refetches without route
+   navigation or manual reload, and the new bands/ownership become visible. Confirm the signal creates
+   no toast, notification, badge, nudge, or score. Repeat with a failed scheduler pass and confirm no
+   false refresh event is claimed.
 
 ### PR5 evidence status
 
