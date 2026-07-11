@@ -1,4 +1,4 @@
-//! The six MCP tools and their dispatch to the local API.
+//! The nine MCP tools and their dispatch to the local API.
 //!
 //! Each tool maps to one HTTP endpoint (`docs/API.md`). Tool results are pretty-printed
 //! JSON text blocks — full fidelity for the calling model — plus, for `get_moment`, an
@@ -29,7 +29,7 @@ impl ToolError {
     }
 }
 
-/// The six tool definitions, in listing order. One source of truth for `tools/list` and
+/// The nine tool definitions, in listing order. One source of truth for `tools/list` and
 /// dispatch, so a name can never drift between them.
 pub fn definitions() -> Value {
     json!([
@@ -104,6 +104,53 @@ pub fn definitions() -> Value {
                 },
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "list_sessions",
+            "title": "List sessions",
+            "description": "List the user's activity sessions (derived runs of related screen activity), newest first. Filter by kind, tool, and/or a time window; sessions that overlap the window are returned. Use a session id from the results with get_session or ask_session. Local data only — served by the ScreenSearch app on 127.0.0.1.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "enum": ["focus", "meeting", "ai", "other"], "description": "Filter by session kind." },
+                    "tool": { "type": "string", "description": "Filter by recognized tool id, e.g. claude-code, codex, browser-ai." },
+                    "from": { "type": "integer", "description": "Start of the time window, unix epoch ms. from and to are each optional; a session that overlaps the window is included." },
+                    "to": { "type": "integer", "description": "End of the time window (exclusive), unix epoch ms." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "description": "Max results (default 1000)." }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "get_session",
+            "title": "Get a session",
+            "description": "Fetch one session's detail plus its extracted user/agent exchanges by session id. include_summary returns the cached summary if one exists — it never generates one. Local data only — served by the ScreenSearch app on 127.0.0.1.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "integer", "description": "The session id, e.g. from list_sessions." },
+                    "include_summary": { "type": "boolean", "description": "Reveal the cached summary if one exists (never generates; default false)." }
+                },
+                "required": ["session_id"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "ask_session",
+            "title": "Ask about a session",
+            "description": "Ask a natural-language question scoped to one session and get a grounded answer citing only that session's frames — e.g. 'what did I do in my last Claude Code session?'. Runs a local model — may take a while. Local data only — served by the ScreenSearch app on 127.0.0.1.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "integer", "description": "The session to scope the answer to, e.g. from list_sessions." },
+                    "query": { "type": "string", "description": "The question to answer from this session's frames." },
+                    "top_k": { "type": "integer", "minimum": 1, "description": "How many frames to ground the answer on (default follows the app setting)." },
+                    "thinking": { "type": "boolean", "description": "Let the model reason before answering (default follows the app setting)." },
+                    "max_tokens": { "type": "integer", "minimum": 1, "description": "Cap on the answer length." }
+                },
+                "required": ["session_id", "query"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -124,6 +171,9 @@ pub async fn call(client: &ApiClient, id: Value, params: Value) -> Value {
         "where_was_i" => where_was_i(client).await,
         "list_marks" => list_marks(client).await,
         "add_mark" => add_mark(client, &args).await,
+        "list_sessions" => list_sessions(client, &args).await,
+        "get_session" => get_session(client, &args).await,
+        "ask_session" => ask_session(client, &args).await,
         other => {
             return rpc::error(id, rpc::INVALID_PARAMS, &format!("Unknown tool: {other}"));
         }
@@ -162,6 +212,24 @@ async fn search(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolErro
 }
 
 async fn ask(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> {
+    let body = build_ask_body(args, None)?;
+    run_ask(client, body).await
+}
+
+/// `ask_session` — the same grounded answer as `ask_screen_history`, but scoped to one session
+/// so the answer cites only that session's frames (`POST /v1/ask` with `session_id`, D12). An
+/// unknown session surfaces as an `isError` `not_found` result via the structured-error mapping.
+async fn ask_session(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> {
+    let session_id = require_i64(args, "session_id")?;
+    let body = build_ask_body(args, Some(session_id))?;
+    run_ask(client, body).await
+}
+
+/// Builds the `POST /v1/ask` body shared by `ask_screen_history` and `ask_session`.
+fn build_ask_body(
+    args: &Value,
+    session_id: Option<i64>,
+) -> Result<serde_json::Map<String, Value>, ToolError> {
     let query = require_str(args, "query")?;
     let mut body = serde_json::Map::new();
     body.insert("query".to_string(), json!(query));
@@ -173,7 +241,17 @@ async fn ask(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> 
     if let Some(t) = args.get("thinking").and_then(|v| v.as_bool()) {
         body.insert("thinking".to_string(), json!(t));
     }
+    if let Some(id) = session_id {
+        body.insert("session_id".to_string(), json!(id));
+    }
+    Ok(body)
+}
 
+/// Streams the ask, aggregates the SSE, and renders the answer + cited frames.
+async fn run_ask(
+    client: &ApiClient,
+    body: serde_json::Map<String, Value>,
+) -> Result<Vec<Value>, ToolError> {
     let outcome = client
         .ask(Value::Object(body))
         .await
@@ -284,6 +362,52 @@ async fn add_mark(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolEr
     Ok(vec![text_block(text)])
 }
 
+async fn list_sessions(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> {
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(kind) = args.get("kind").and_then(|v| v.as_str()) {
+        params.push(("kind", kind.to_string()));
+    }
+    if let Some(tool) = args.get("tool").and_then(|v| v.as_str()) {
+        params.push(("tool", tool.to_string()));
+    }
+    if let Some(from) = args.get("from").and_then(|v| v.as_i64()) {
+        params.push(("from", from.to_string()));
+    }
+    if let Some(to) = args.get("to").and_then(|v| v.as_i64()) {
+        params.push(("to", to.to_string()));
+    }
+    if let Some(limit) = args.get("limit").and_then(|v| v.as_i64()) {
+        params.push(("limit", limit.to_string()));
+    }
+    let body = client
+        .get_json("/v1/sessions", &params)
+        .await
+        .map_err(ToolError::Api)?;
+    let count = body.as_array().map(|a| a.len()).unwrap_or(0);
+    if count == 0 {
+        return Ok(vec![text_block("No sessions.")]);
+    }
+    Ok(vec![text_block(pretty(&body))])
+}
+
+async fn get_session(client: &ApiClient, args: &Value) -> Result<Vec<Value>, ToolError> {
+    let session_id = require_i64(args, "session_id")?;
+    let mut params: Vec<(&str, String)> = Vec::new();
+    // The API reveals the cached summary only when asked, and never generates one (D12).
+    if args
+        .get("include_summary")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        params.push(("include_summary", "1".to_string()));
+    }
+    let body = client
+        .get_json(&format!("/v1/sessions/{session_id}"), &params)
+        .await
+        .map_err(ToolError::Api)?;
+    Ok(vec![text_block(pretty(&body))])
+}
+
 /// Builds the `POST /v1/marks` body from the tool arguments.
 ///
 /// `frame_id` absent (or JSON `null`) means "capture the current screen now, past the diff
@@ -347,7 +471,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exactly_six_tools_with_object_schemas() {
+    fn exactly_nine_tools_with_object_schemas() {
         let defs = definitions();
         let arr = defs.as_array().unwrap();
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -360,6 +484,9 @@ mod tests {
                 "where_was_i",
                 "list_marks",
                 "add_mark",
+                "list_sessions",
+                "get_session",
+                "ask_session",
             ]
         );
         for t in arr {
@@ -388,6 +515,18 @@ mod tests {
         );
         // add_mark has no required field (frame_id omitted => capture now).
         assert!(by_name("add_mark")["inputSchema"].get("required").is_none());
+        // list_sessions has no required field (all filters optional).
+        assert!(by_name("list_sessions")["inputSchema"]
+            .get("required")
+            .is_none());
+        assert_eq!(
+            by_name("get_session")["inputSchema"]["required"],
+            json!(["session_id"])
+        );
+        assert_eq!(
+            by_name("ask_session")["inputSchema"]["required"],
+            json!(["session_id", "query"])
+        );
     }
 
     #[test]
