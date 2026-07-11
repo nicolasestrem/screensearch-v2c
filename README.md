@@ -34,13 +34,33 @@ The **Command Deck** is six on-device screens over your screen history — Deck,
 tagging), Timeline, and Settings. Nothing here touches the network: every frame, query, and answer
 stays on the machine.
 
-![Timeline — scrub the day's captures on a scanline](screenshots/timeline.png)
+![Deck — capture status, today's activity, where to jump back in](screenshots/deck.png)
 
-> **Timeline** — scrub a day / week / month of captures on a scanline; `Enter` opens the Moment.
+> **Deck** — the at-a-glance home: capture status, today's activity and top apps, where-was-I resume,
+> intentions (marks), and recent captures.
 
-> **Note:** the earlier hero screenshots were captured from a live install and showed real personal
-> screen content, so they were removed. Fresh demo screenshots taken against synthetic data will be
-> restored here.
+![Timeline — a scanline of the day with session bands](screenshots/timeline.png)
+
+> **Timeline** — scrub a day / week / month of captures on a scanline, with additive **session bands**
+> (focus, meeting, and concurrent AI-tool sessions) layered over the density. `Enter` opens the Moment.
+
+![Recall — hybrid search over screen history with highlighted matches](screenshots/recall.png)
+
+> **Recall** — hybrid text + semantic search over everything on screen (grounded **Ask** and recall
+> **Reports** share the screen). Matches are highlighted and link straight to the captured frame.
+
+![Insights — capture density, top apps, and activity breakdown](screenshots/insights.png)
+
+> **Insights** — truthful aggregates over a range: captures over time, top foreground apps, and the
+> activity-type breakdown.
+
+![Moment — one captured frame with context, recognized text, and vision tags](screenshots/moment.png)
+
+> **Moment** — a single capture in full: the image, its session, recognized text, vision tags, and the
+> neighbouring captures.
+
+> **Note:** every screenshot above is rendered against **synthetic seed data** — invented frames,
+> sessions, and text with no personal content (see [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md)).
 
 ## Build progress
 

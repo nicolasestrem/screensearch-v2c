@@ -489,3 +489,22 @@
   all suites `ok` / 0 failed (sessions engine 21/21 with the sanitized fixtures);
   `git diff --exit-code -- ui/src/bindings` clean; `git grep -inE 'users.nicol|nicol@|estrem@gmail'`
   returns no hits; `git ls-files -- screenshots/` lists only `timeline.png`.
+
+## 2026-07-11 — Synthetic-data README screenshots + dev-only seeder
+- **Change:** Restored the five README hero screenshots (Deck, Timeline with session bands, Recall,
+  Insights, Moment), all rendered against **synthetic seed data** with no personal content. Added
+  `crates/store/tests/seed_demo.rs` — a CI-ignored (`#[ignore]`) integration test that seeds an
+  isolated schema-11 store entirely through the public `store` API: ~120 frames across a plausible day,
+  ten **frozen** overlapping sessions (focus / meeting / concurrent Claude Code), marks, and AI
+  exchanges. Frames are future-dated so the sessions scheduler (past-only, never deletes a frozen row)
+  leaves them intact. Screenshots were captured from the real WebView2 app (capture off, no model)
+  pointed at an isolated app-data dir via a temporary, uncommitted `identifier` swap, driven over the
+  WebView2 remote-debugging port. Added `docs/SCREENSHOTS.md` (the regeneration how-to), updated the
+  README Screenshots section into a five-image gallery with a synthetic-data note, and logged both in
+  `CHANGELOG.md`.
+- **Why:** Maintainer request to re-shoot the screenshots removed in the exposure scrub, on synthetic
+  data — restoring the visual preview with zero personal content and a documented, repeatable path.
+- **Verification:** `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets --
+  -D warnings` no warnings; `cargo build --workspace` clean; `cargo test --workspace` all suites `ok`
+  (the seeder test stays ignored); `git diff --exit-code -- ui/src/bindings` clean. The demo data was
+  seeded live (122 frames / 10 frozen sessions verified in the DB) and every route captured populated.

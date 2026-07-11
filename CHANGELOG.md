@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crates, schema v11). The pre-0.4.0 manual acceptance checklists moved to
   `specs/archive/TESTING.pre-0.4.0.md`, and three obsolete design notes under `docs/superpowers/`
   were removed.
+- Restored the README screenshots, now rendered against **synthetic seed data** (invented frames,
+  sessions, and text — no personal content): Deck, Timeline (with session bands), Recall, Insights, and
+  Moment. A dev-only, CI-ignored seeder (`crates/store/tests/seed_demo.rs`) populates an isolated
+  schema-11 database through the public store API, and `docs/SCREENSHOTS.md` documents the process.
 
 ## Older versions
 
