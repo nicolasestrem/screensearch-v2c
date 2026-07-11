@@ -18,6 +18,7 @@ pub mod error;
 pub mod export;
 pub mod extract;
 pub mod routes;
+pub mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
@@ -199,6 +200,8 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/search", get(routes::search))
         .route("/v1/frames/{id}", get(routes::frame))
         .route("/v1/context/where-was-i", get(routes::where_was_i))
+        .route("/v1/sessions", get(sessions::list_sessions))
+        .route("/v1/sessions/{id}", get(sessions::session_detail))
         .route(
             "/v1/marks",
             get(routes::list_marks).post(routes::create_mark),

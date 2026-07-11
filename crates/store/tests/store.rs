@@ -2502,7 +2502,8 @@ async fn scoped_fts_search_returns_only_the_named_sessions_frames() {
         .map(|h| h.frame_id)
         .collect();
     assert_eq!(
-        scoped, vec![a_frame],
+        scoped,
+        vec![a_frame],
         "scoped search must return only session A's frame; got {scoped:?}"
     );
 

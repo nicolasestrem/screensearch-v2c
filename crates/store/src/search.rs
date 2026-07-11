@@ -132,8 +132,9 @@ fn count_embedded_frames_in_range(
         values.push(Value::Integer(sid));
     }
     // `scanned` = frames examined (≤ scan_cap); `embedded` = how many of those hold an embedding.
-    let (scanned, embedded): (i64, i64) =
-        conn.query_row(&sql, params_from_iter(values), |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let (scanned, embedded): (i64, i64) = conn.query_row(&sql, params_from_iter(values), |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?;
     let (scanned, embedded) = (scanned as usize, embedded as usize);
     if scanned >= scan_cap {
         // Scan budget exhausted: `embedded` is only a lower bound on the window's true count, so
@@ -704,7 +705,11 @@ mod tests {
         // the un-embedded f3 and out-of-window f4 don't count. Scan budget far exceeds the 4
         // in-window frames, so the count is exact.
         let n = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, None, 50, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 50, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -715,7 +720,11 @@ mod tests {
 
         // Capped at `pool`: the caller only ever needs min(pool, n).
         let capped = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, None, 1, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 1, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(capped, Some(1), "the target is capped at `pool`");
@@ -725,7 +734,11 @@ mod tests {
         // the small exact count — this is what keeps the pre-count O(cap) on a wide, sparsely
         // embedded window (the P2 residual). Without the bound this returned Some(2).
         let bounded = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, None, 500, 2)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 500, 2,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -736,7 +749,11 @@ mod tests {
 
         // A window with no embedded frames returns `None` (drives the KNN-skip fast path).
         let empty = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 200, 300, None, 50, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 200, 300, None, 50, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(empty, None, "no embedded frames in the window");
