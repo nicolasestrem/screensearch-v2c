@@ -9,8 +9,8 @@ use std::sync::Arc;
 use store::{SqliteStore, EMBEDDING_DIM, FILTER_VERSION};
 use traits::{
     ChunkSource, Embedding, EmbeddingProvider, FrameMeta, JobKind, JobState, NewFrame, NewJob,
-    OcrResult, SearchQuery, TextFilterContext, TextRole, TextSource, TextSpan, TimeRange,
-    TimelineBucket, VisionAnalysis,
+    NewSession, OcrResult, SearchQuery, SessionHost, SessionKind, TextFilterContext, TextRole,
+    TextSource, TextSpan, TimeRange, TimelineBucket, VisionAnalysis,
 };
 
 /// One unsuppressed OCR span at the given normalized bbox — the shape PR2's OCR
@@ -2443,5 +2443,165 @@ fn live_db_copy_migrates_to_v11_fast_and_clean() {
     assert!(
         elapsed < std::time::Duration::from_secs(30),
         "structure-only migration must stay fast on the live-shaped DB (took {elapsed:?})"
+    );
+}
+
+// --- 0.4.0 PR6: session-scoped hybrid search (`hybrid_search_in_session`, D12) ---------------
+// Retrieval restricted to a session's own frames so `POST /v1/ask?session_id` cites only
+// in-session frames. Concurrent sessions can overlap in wall-clock time, so scoping is by
+// exclusive `frames.session_id` ownership, never a time window.
+
+/// A closed AI session over `[started_at, ended_at]` with the given context key.
+fn session_row(started_at: i64, ended_at: i64, key: &str) -> NewSession {
+    NewSession {
+        started_at,
+        ended_at: Some(ended_at),
+        kind: SessionKind::Ai,
+        tool: Some("claude-code".to_string()),
+        host: Some(SessionHost::Terminal),
+        context_key: key.to_string(),
+        confidence: 0.9,
+        frozen: false,
+    }
+}
+
+/// FTS arm: two sessions overlapping in wall-clock time each own a frame with the shared term,
+/// plus one unowned (session_id NULL) frame that also matches. A scoped search returns only the
+/// named session's frame; the unscoped search still sees every match (D10 — scoping is additive).
+#[tokio::test]
+async fn scoped_fts_search_returns_only_the_named_sessions_frames() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a_frame = seed(&store, 1_000, "shared invoice term", None).await;
+    let b_frame = seed(&store, 2_000, "shared invoice term", None).await;
+    let orphan = seed(&store, 3_000, "shared invoice term", None).await;
+
+    let a = store
+        .insert_session(session_row(500, 4_000, "ai:claude-code"))
+        .await
+        .unwrap();
+    let b = store
+        .insert_session(session_row(1_500, 4_500, "ai:codex"))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[a_frame], Some(a))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[b_frame], Some(b))
+        .await
+        .unwrap();
+    // `orphan` stays unassigned (session_id NULL).
+
+    let q = query("invoice", 10);
+    let scoped: Vec<i64> = store
+        .hybrid_search_in_session(&q, a)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|h| h.frame_id)
+        .collect();
+    assert_eq!(
+        scoped, vec![a_frame],
+        "scoped search must return only session A's frame; got {scoped:?}"
+    );
+
+    let mut unscoped: Vec<i64> = store
+        .hybrid_search(&q)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|h| h.frame_id)
+        .collect();
+    unscoped.sort();
+    let mut want = vec![a_frame, b_frame, orphan];
+    want.sort();
+    assert_eq!(
+        unscoped, want,
+        "unscoped search is unchanged and still sees every session's match"
+    );
+}
+
+/// Vector arm: session A's only frame is buried past the `pool = 50` nearest vectors (all owned
+/// by other sessions or unowned). A naive fixed-`k` KNN + session filter would fetch only the
+/// nearer non-A frames and drop them all — the session-aware escalation target must still surface
+/// A's match (the `07` #8 recall hole in session form).
+#[tokio::test]
+async fn scoped_vector_search_finds_in_session_match_buried_beyond_pool() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let b = store
+        .insert_session(session_row(0, 100_000, "ai:codex"))
+        .await
+        .unwrap();
+    // 55 vector-only frames nearer than A's, none owned by A (half to B, half unowned).
+    for i in 1..=55 {
+        let id = seed(
+            &store,
+            1_000 + i,
+            "filler noise unrelated",
+            Some(&vec_at_angle(0.001 * i as f32)),
+        )
+        .await;
+        if i % 2 == 0 {
+            store.assign_frames_session(&[id], Some(b)).await.unwrap();
+        }
+    }
+    let a = store
+        .insert_session(session_row(0, 100_000, "ai:claude-code"))
+        .await
+        .unwrap();
+    // A's only frame: farther than all 55 (rank 56, beyond the k = 50 first pass), vector-only.
+    let a_frame = seed(
+        &store,
+        60_000,
+        "filler noise unrelated",
+        Some(&vec_at_angle(0.060)),
+    )
+    .await;
+    store
+        .assign_frames_session(&[a_frame], Some(a))
+        .await
+        .unwrap();
+
+    let mut by_text = HashMap::new();
+    by_text.insert("target".to_string(), vec_at_angle(0.0));
+    let store = store.with_embedder(Arc::new(FakeEmbedder { by_text }));
+
+    let q = SearchQuery {
+        text: "target".to_string(),
+        limit: 1, // pool = max(1*5, 50) = 50; A's frame sits at rank 56
+        time_range: None,
+        include_chrome: false,
+    };
+    let scoped: Vec<i64> = store
+        .hybrid_search_in_session(&q, a)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|h| h.frame_id)
+        .collect();
+    assert_eq!(
+        scoped, vec![a_frame],
+        "the in-session vector match must be found even when buried beyond the pool; got {scoped:?}"
+    );
+}
+
+/// A session that owns no matching frame grounds a scoped ask on nothing — honest empty, never a
+/// silent fall-through to the global result set.
+#[tokio::test]
+async fn scoped_search_with_no_in_session_matches_returns_empty() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let _orphan = seed(&store, 1_000, "shared invoice term", None).await;
+    let a = store
+        .insert_session(session_row(0, 10_000, "ai:claude-code"))
+        .await
+        .unwrap();
+    let scoped = store
+        .hybrid_search_in_session(&query("invoice", 10), a)
+        .await
+        .unwrap();
+    assert!(
+        scoped.is_empty(),
+        "a session that owns no matching frame must ground a scoped ask on nothing"
     );
 }
