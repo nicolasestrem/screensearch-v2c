@@ -204,6 +204,65 @@ async fn frame_metadata_and_content_reads_are_chronological() {
 }
 
 #[tokio::test]
+async fn session_usable_content_matches_rust_trim_unicode_whitespace() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let rust_whitespace: String = (0..=char::MAX as u32)
+        .filter_map(char::from_u32)
+        .filter(|character| character.is_whitespace())
+        .collect();
+
+    let whitespace_frame = seed_frame(&store, 100, &rust_whitespace).await;
+    let whitespace_session = store
+        .insert_session(session(100, Some(200), "ai:whitespace"))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[whitespace_frame], Some(whitespace_session))
+        .await
+        .unwrap();
+    assert!(!store
+        .session_has_usable_content(whitespace_session)
+        .await
+        .unwrap());
+
+    let padded_frame = seed_frame(
+        &store,
+        300,
+        &format!("{rust_whitespace}usable{rust_whitespace}"),
+    )
+    .await;
+    let padded_session = store
+        .insert_session(session(300, Some(400), "ai:padded"))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[padded_frame], Some(padded_session))
+        .await
+        .unwrap();
+    assert!(store
+        .session_has_usable_content(padded_session)
+        .await
+        .unwrap());
+
+    let zero_width_frame = seed_frame(&store, 500, "\u{200b}").await;
+    let zero_width_session = store
+        .insert_session(session(500, Some(600), "ai:zero-width"))
+        .await
+        .unwrap();
+    store
+        .assign_frames_session(&[zero_width_frame], Some(zero_width_session))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .session_has_usable_content(zero_width_session)
+            .await
+            .unwrap(),
+        "zero-width space is not Rust whitespace and remains usable content"
+    );
+}
+
+#[tokio::test]
 async fn artifact_checks_and_delete_by_kind_are_enforced() {
     let store = SqliteStore::open_in_memory().unwrap();
     let frame_id = seed_frame(&store, 100, "content").await;

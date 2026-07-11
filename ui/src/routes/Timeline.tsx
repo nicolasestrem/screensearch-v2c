@@ -163,21 +163,27 @@ export function Component() {
               {sessionLayer(true)}
             </div>
           ) : timeline.isError ? (
-            <ErrorState
-              title="Couldn't load the timeline"
-              message={String(timeline.error)}
-              onRetry={() => timeline.refetch()}
-            />
+            <div className="flex flex-col gap-2">
+              <ErrorState
+                title="Couldn't load the timeline"
+                message={String(timeline.error)}
+                onRetry={() => timeline.refetch()}
+              />
+              {sessionLayer()}
+            </div>
           ) : !hasData ? (
-            <EmptyState
-              title="No captures in this range"
-              description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
-              action={
-                <Button variant="secondary" onClick={() => navigate("/")}>
-                  Back to Deck
-                </Button>
-              }
-            />
+            <div className="flex flex-col gap-2">
+              <EmptyState
+                title="No captures in this range"
+                description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
+                action={
+                  <Button variant="secondary" onClick={() => navigate("/")}>
+                    Back to Deck
+                  </Button>
+                }
+              />
+              {sessionLayer()}
+            </div>
           ) : (
             <div className="flex flex-col gap-2">
               <ScanlineTimeline

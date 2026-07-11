@@ -546,6 +546,63 @@ mod sessions_scheduler_contract_tests {
             receiver.try_recv(),
             Ok(crate::KernelEvent::SessionsChanged)
         ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn no_op_scheduler_pass_does_not_emit_sessions_changed() {
+        let store = store::SqliteStore::open_in_memory().unwrap();
+        for (index, captured_at) in (0_i64..=6).map(|index| (index, index * 30_000)) {
+            store
+                .insert_frame(traits::NewFrame {
+                    captured_at,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{index}.webp"),
+                    content_hash: format!("sessions-no-op-{index}"),
+                    app_hint: Some("codex".to_string()),
+                    window_title: Some("Codex".to_string()),
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+        }
+        let engine = sessions::SessionEngine::new().unwrap();
+        let (events, mut receiver) = tokio::sync::broadcast::channel(8);
+
+        crate::sessions_scheduler::run_scheduler_pass(
+            &store,
+            &engine,
+            200_000,
+            &traits::Settings::default(),
+            false,
+            &events,
+        )
+        .await;
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(crate::KernelEvent::SessionsChanged)
+        ));
+
+        crate::sessions_scheduler::run_scheduler_pass(
+            &store,
+            &engine,
+            260_000,
+            &traits::Settings::default(),
+            false,
+            &events,
+        )
+        .await;
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
     }
 }
 

@@ -13,6 +13,18 @@ use crate::SqliteStore;
 
 const MAX_SESSION_FRAME_SAMPLE: u32 = 24;
 
+// SQLite's one-argument trim() only removes ASCII space. This is the complete set used by
+// Rust's `char::is_whitespace`/`str::trim` for the pinned toolchain, passed as trim()'s explicit
+// character set so moving the predicate into SQLite does not narrow the existing contract.
+const RUST_TRIM_WHITESPACE: &str = "\u{0009}\u{000a}\u{000b}\u{000c}\u{000d}\u{0020}\u{0085}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+
+const SESSION_HAS_USABLE_CONTENT_SQL: &str = "SELECT EXISTS(
+       SELECT 1 FROM frames f
+       JOIN frame_text ft ON ft.frame_id=f.id
+       WHERE f.session_id=?1 AND trim(ft.content_text, ?2)<>''
+       LIMIT 1
+     )";
+
 fn kind_from_db(value: &str) -> rusqlite::Result<SessionKind> {
     match value {
         "focus" => Ok(SessionKind::Focus),
@@ -386,19 +398,11 @@ impl SqliteStore {
 
     pub async fn session_has_usable_content(&self, session_id: i64) -> Result<bool> {
         self.with_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT ft.content_text FROM frames f
-                 JOIN frame_text ft ON ft.frame_id=f.id
-                 WHERE f.session_id=?1",
-            )?;
-            let mut rows = stmt.query([session_id])?;
-            while let Some(row) = rows.next()? {
-                let content: String = row.get(0)?;
-                if !content.trim().is_empty() {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+            Ok(conn.query_row(
+                SESSION_HAS_USABLE_CONTENT_SQL,
+                params![session_id, RUST_TRIM_WHITESPACE],
+                |row| row.get(0),
+            )?)
         })
         .await
     }
@@ -550,5 +554,76 @@ impl SqliteStore {
             )? > 0)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{RUST_TRIM_WHITESPACE, SESSION_HAS_USABLE_CONTENT_SQL};
+
+    #[test]
+    fn usable_content_query_bounds_results_inside_sqlite() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE sessions (id INTEGER PRIMARY KEY);
+             CREATE TABLE frames (
+               id INTEGER PRIMARY KEY,
+               session_id INTEGER REFERENCES sessions(id)
+             );
+             CREATE INDEX idx_frames_session ON frames(session_id);
+             CREATE TABLE frame_text (
+               frame_id INTEGER PRIMARY KEY REFERENCES frames(id),
+               content_text TEXT NOT NULL
+             );",
+        )
+        .expect("create query-plan fixture");
+
+        let explain = format!("EXPLAIN {SESSION_HAS_USABLE_CONTENT_SQL}");
+        let opcodes = conn
+            .prepare(&explain)
+            .expect("prepare EXPLAIN")
+            .query_map(rusqlite::params![1_i64, RUST_TRIM_WHITESPACE], |row| {
+                row.get::<_, String>(1)
+            })
+            .expect("read EXPLAIN opcodes")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect EXPLAIN opcodes");
+
+        assert!(
+            opcodes.iter().any(|opcode| opcode == "DecrJumpZero"),
+            "the VM must stop after SQLite finds one usable row; opcodes: {opcodes:?}"
+        );
+
+        let query_plan = format!("EXPLAIN QUERY PLAN {SESSION_HAS_USABLE_CONTENT_SQL}");
+        let plan = conn
+            .prepare(&query_plan)
+            .expect("prepare EXPLAIN QUERY PLAN")
+            .query_map(rusqlite::params![1_i64, RUST_TRIM_WHITESPACE], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("read query plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect query plan");
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_frames_session")),
+            "session filtering must use idx_frames_session; plan: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("INTEGER PRIMARY KEY")),
+            "frame_text lookup must use its frame_id primary key; plan: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn sqlite_trim_character_set_matches_rust_trim() {
+        let rust_whitespace: String = (0..=char::MAX as u32)
+            .filter_map(char::from_u32)
+            .filter(|character| character.is_whitespace())
+            .collect();
+        assert_eq!(RUST_TRIM_WHITESPACE, rust_whitespace);
     }
 }

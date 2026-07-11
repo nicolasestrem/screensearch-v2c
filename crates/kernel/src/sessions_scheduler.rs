@@ -86,9 +86,10 @@ async fn scheduler_loop(
     }
 }
 
-/// Runs one scheduler iteration and broadcasts only after at least one awaited store pass
-/// succeeds. Individual failures retain the scheduler's additive degradation contract: other
-/// passes still run, and any already-committed session changes still invalidate mounted readers.
+/// Runs one scheduler iteration and broadcasts only after at least one pass reports a semantic
+/// session, ownership, freeze, or artifact change. Individual failures retain the scheduler's
+/// additive degradation contract: the other passes still run, and a failed multi-write pass
+/// conservatively invalidates readers because an earlier write may already have committed.
 pub(crate) async fn run_scheduler_pass(
     store: &dyn Store,
     segmenter: &dyn SessionSegmenter,
@@ -97,10 +98,11 @@ pub(crate) async fn run_scheduler_pass(
     historical_throttled: bool,
     events: &broadcast::Sender<KernelEvent>,
 ) {
-    let mut committed = false;
+    let mut changed = false;
     match run_incremental_pass(store, segmenter, now, current).await {
-        Ok(()) => committed = true,
+        Ok(pass_changed) => changed |= pass_changed,
         Err(error) => {
+            changed = true;
             tracing::warn!(%error, "sessions incremental pass failed; capture remains active")
         }
     }
@@ -110,7 +112,7 @@ pub(crate) async fn run_scheduler_pass(
         .freeze_sessions(now.saturating_sub(params.freeze_lookback_ms))
         .await
     {
-        Ok(_) => committed = true,
+        Ok(frozen) => changed |= frozen > 0,
         Err(error) => tracing::warn!(%error, "sessions freeze pass failed; capture remains active"),
     }
 
@@ -118,14 +120,15 @@ pub(crate) async fn run_scheduler_pass(
         tracing::debug!("sessions historical pass yielded to enrichment throttle");
     } else {
         match run_backfill_chunk(store, segmenter, now, current).await {
-            Ok(()) => committed = true,
+            Ok(pass_changed) => changed |= pass_changed,
             Err(error) => {
+                changed = true;
                 tracing::warn!(%error, "sessions historical pass failed; capture remains active")
             }
         }
     }
 
-    if committed {
+    if changed {
         let _ = events.send(KernelEvent::SessionsChanged);
     }
 }
@@ -242,7 +245,7 @@ pub(crate) async fn run_incremental_pass(
     segmenter: &dyn SessionSegmenter,
     now_ms: i64,
     current: &Settings,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let params = params_from_settings(now_ms, current);
     let existing = store.unfrozen_sessions().await?;
     let mutable_tail = now_ms.saturating_sub(params.freeze_lookback_ms);
@@ -269,8 +272,16 @@ pub(crate) async fn run_incremental_pass(
     let drafts = trim_drafts_against_frozen(drafts, &frozen, &frames);
     let matches = match_drafts_to_existing(&drafts, &existing, now_ms);
 
-    // Clear only mutable ownership before rebuilding it. The store's SQL guard makes this a
-    // no-op for any frame whose current session froze between the read and this write.
+    let mut changed = false;
+    let desired_by_existing: HashMap<i64, &SessionDraft> = drafts
+        .iter()
+        .zip(&matches)
+        .filter_map(|(draft, matched)| matched.map(|id| (id, draft)))
+        .collect();
+    let mut owned_by_existing = HashMap::new();
+
+    // Remove only stale mutable ownership. Keeping already-correct assignments intact makes an
+    // identical reconciliation a semantic and physical no-op.
     for session in &existing {
         let ids: Vec<i64> = store
             .session_frames_meta(session.id)
@@ -278,37 +289,76 @@ pub(crate) async fn run_incremental_pass(
             .into_iter()
             .map(|frame| frame.id)
             .collect();
-        store.assign_frames_session(&ids, None).await?;
+        if let Some(draft) = desired_by_existing.get(&session.id) {
+            let desired: HashSet<i64> = draft.frame_ids.iter().copied().collect();
+            let stale: Vec<i64> = ids
+                .iter()
+                .filter(|id| !desired.contains(id))
+                .copied()
+                .collect();
+            changed |= store.assign_frames_session(&stale, None).await? > 0;
+        }
+        owned_by_existing.insert(session.id, ids.into_iter().collect::<HashSet<_>>());
     }
 
     let matched_ids: HashSet<i64> = matches.iter().flatten().copied().collect();
     for session in &existing {
         if !matched_ids.contains(&session.id) {
-            store.delete_unfrozen_session(session.id).await?;
+            changed |= store.delete_unfrozen_session(session.id).await?;
         }
     }
 
     for (draft, matched) in drafts.iter().zip(matches) {
         let session_id = match matched {
             Some(id) => {
-                if !store
-                    .update_unfrozen_session(id, draft.as_new_session(false))
-                    .await?
+                if existing
+                    .iter()
+                    .find(|session| session.id == id)
+                    .is_some_and(|session| !session_matches_draft(session, draft))
                 {
-                    continue;
+                    if !store
+                        .update_unfrozen_session(id, draft.as_new_session(false))
+                        .await?
+                    {
+                        continue;
+                    }
+                    changed = true;
                 }
                 id
             }
-            None => store.insert_session(draft.as_new_session(false)).await?,
+            None => {
+                changed = true;
+                store.insert_session(draft.as_new_session(false)).await?
+            }
         };
-        store
-            .assign_frames_session(&draft.frame_ids, Some(session_id))
-            .await?;
+        let already_owned = owned_by_existing.get(&session_id);
+        let to_assign: Vec<i64> = draft
+            .frame_ids
+            .iter()
+            .filter(|id| !already_owned.is_some_and(|owned| owned.contains(id)))
+            .copied()
+            .collect();
+        changed |= store
+            .assign_frames_session(&to_assign, Some(session_id))
+            .await?
+            > 0;
         if draft.kind == SessionKind::Ai {
-            refresh_exchanges(store, segmenter, session_id, draft).await?;
+            changed |= refresh_exchanges(store, segmenter, session_id, draft).await?;
         }
     }
-    Ok(())
+    Ok(changed)
+}
+
+fn session_matches_draft(session: &Session, draft: &SessionDraft) -> bool {
+    let desired = draft.as_new_session(false);
+    session.started_at == desired.started_at
+        && session.ended_at == desired.ended_at
+        && session.kind == desired.kind
+        && session.tool == desired.tool
+        && session.host == desired.host
+        && session.context_key == desired.context_key
+        && session.confidence == desired.confidence
+        && !session.frozen
 }
 
 async fn refresh_exchanges(
@@ -316,12 +366,9 @@ async fn refresh_exchanges(
     segmenter: &dyn SessionSegmenter,
     session_id: i64,
     draft: &SessionDraft,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let contents = store.content_texts_for_frames(&draft.frame_ids).await?;
     let extracted = segmenter.extract_exchanges(draft.tool.as_deref().unwrap_or(""), &contents);
-    store
-        .delete_session_artifacts_by_kind(session_id, SessionArtifactKind::Exchange)
-        .await?;
     let artifacts: Vec<NewSessionArtifact> = extracted
         .into_iter()
         .map(|exchange| NewSessionArtifact {
@@ -331,10 +378,28 @@ async fn refresh_exchanges(
             content: exchange.content,
         })
         .collect();
+    let current: Vec<NewSessionArtifact> = store
+        .list_session_artifacts(session_id)
+        .await?
+        .into_iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::Exchange)
+        .map(|artifact| NewSessionArtifact {
+            kind: artifact.kind,
+            role: artifact.role,
+            frame_id: artifact.frame_id,
+            content: artifact.content,
+        })
+        .collect();
+    if current == artifacts {
+        return Ok(false);
+    }
+    store
+        .delete_session_artifacts_by_kind(session_id, SessionArtifactKind::Exchange)
+        .await?;
     store
         .insert_session_artifacts(session_id, &artifacts)
         .await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Returns the timestamp at which a chunk can safely stop: the first frame after a global
@@ -441,14 +506,14 @@ pub(crate) async fn run_backfill_chunk(
     segmenter: &dyn SessionSegmenter,
     now_ms: i64,
     current: &Settings,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let params = params_from_settings(now_ms, current);
     let current_frozen_horizon = now_ms.saturating_sub(params.freeze_lookback_ms);
     let mut checkpoint = load_or_initialize_checkpoint(store, current_frozen_horizon).await?;
     if checkpoint.cursor_ms >= checkpoint.target_ms
         || current_frozen_horizon <= checkpoint.cursor_ms
     {
-        return Ok(());
+        return Ok(false);
     }
 
     let desired = checkpoint
@@ -485,12 +550,13 @@ pub(crate) async fn run_backfill_chunk(
     ) else {
         // The fixed historical target cuts through a still-continuous track. Leave the cursor
         // untouched; the incremental tail owns current work and a later pass can close safely.
-        return Ok(());
+        return Ok(false);
     };
     let chunk: Vec<SegmenterFrame> = frames
         .into_iter()
         .filter(|frame| frame.captured_at < cut)
         .collect();
+    let mut changed = false;
     if !chunk.is_empty() {
         let frame_times: HashMap<i64, i64> = chunk
             .iter()
@@ -540,6 +606,7 @@ pub(crate) async fn run_backfill_chunk(
                     // Assign before freezing so a partial assignment can be rolled back without
                     // violating the immutable-frozen-row contract.
                     let id = store.insert_session(draft.as_new_session(false)).await?;
+                    changed = true;
                     (id, draft, true)
                 }
             };
@@ -556,19 +623,20 @@ pub(crate) async fn run_backfill_chunk(
                 .copied()
                 .collect();
             let expected_changes = unowned_ids.len() as u64;
-            let changed = store
+            let assigned = store
                 .assign_frames_session(&unowned_ids, Some(session_id))
                 .await?;
-            if changed != expected_changes {
+            if assigned != expected_changes {
                 if needs_freeze {
                     store.delete_unfrozen_session(session_id).await?;
                 }
                 anyhow::bail!(
-                    "historical session {session_id} assigned {changed}/{expected_changes} new frames"
+                    "historical session {session_id} assigned {assigned}/{expected_changes} new frames"
                 );
             }
+            changed |= assigned > 0;
             if needs_freeze {
-                store.freeze_sessions(current_frozen_horizon).await?;
+                changed |= store.freeze_sessions(current_frozen_horizon).await? > 0;
                 if !store
                     .get_session(session_id)
                     .await?
@@ -581,7 +649,7 @@ pub(crate) async fn run_backfill_chunk(
                 }
             }
             if draft.kind == SessionKind::Ai {
-                refresh_exchanges(store, segmenter, session_id, &draft).await?;
+                changed |= refresh_exchanges(store, segmenter, session_id, &draft).await?;
             }
         }
     }
@@ -592,7 +660,7 @@ pub(crate) async fn run_backfill_chunk(
         target_ms = checkpoint.target_ms,
         "sessions historical backfill advanced"
     );
-    Ok(())
+    Ok(changed)
 }
 
 async fn wait_or_stop(stop: &mut watch::Receiver<bool>, duration: Duration) -> bool {

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { URL } from "node:url";
 
 import { packFixedSessionBands } from "../src/components/domain/sessionBandLayout.ts";
 
@@ -31,4 +33,32 @@ test("five simultaneous sessions use four fixed rows and aggregate the fifth", (
     ],
   );
   assert.equal(packed.overflowCount, 1);
+});
+
+test("Timeline keeps fixed session lanes in every content state", () => {
+  const source = readFileSync(
+    new URL("../src/routes/Timeline.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(
+    source.match(/\{sessionLayer\(true\)\}/g)?.length ?? 0,
+    1,
+    "the loading skeleton must reserve the fixed session lanes",
+  );
+  assert.equal(
+    source.match(/^\s*\{sessionLayer\(\)\}\s*$/gm)?.length ?? 0,
+    2,
+    "the top-level error and empty branches must each reserve the fixed session lanes",
+  );
+  assert.match(
+    source,
+    /sessionLayer=\{sessionLayer\(/,
+    "the populated branch must keep the bands inside ScanlineTimeline",
+  );
+  assert.doesNotMatch(
+    source,
+    /\{sessionLayer\(timeline\.isLoading\)\}/,
+    "the session layer must not move below the populated scanline",
+  );
 });
