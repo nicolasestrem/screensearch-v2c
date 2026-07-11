@@ -27,12 +27,15 @@ expanders; the gap-#100 cross-chord conflict warning; the two dead settings reti
 `RETIRED_SETTINGS_KEYS` tolerate-and-drop, D8). Zero DB schema migrations (D10, schema stays 10);
 PR6 audited D1–D12 (all PASS), fixed #89 (daily/weekly report filenames carry the kind), and
 released with the signed updater manifest. The **0.3.3 hotfix shipped** (`v0.3.3`, 2026-07-07 — UIA
-skips Chromium/Electron windows to stop browser freezes, `07` #93). **The 0.4.0 sessions arc (P8 —
-"frames → sessions reframe") is now active** (`docs/0.4.0.md`, `02 §5d`, `03 §7e`): PR1 specs
-contract, then ground-truth harness → the arc's **one** schema migration (10 → 11, PR3 only, D4) →
-segmentation engine → UI ∥ API/MCP → audit. Sessions are **additive** (D10 — zero frame-level
+skips Chromium/Electron windows to stop browser freezes, `07` #93). **The 0.4.0 sessions arc (P8,
+"frames → sessions reframe") shipped as v0.4.0 (2026-07-11)** (`docs/0.4.0.md`, `02 §5d`, `03 §7e`):
+the specs contract, the ground-truth harness, the arc's **one** schema migration (10 → 11, PR3
+only, D4), the pure-heuristic segmentation engine + recognition, the Timeline sessions surface, the
+read-only API/MCP session tools, and the PR7 audit. Sessions are **additive** (D10, zero frame-level
 behavior change), **pull-based/non-shaming** (D11), **no audio** (D14), **no new NavRail route**
-(D13). v0.4.0 is the **first auto-delivered release** (D16), reaching 0.3.2+ installs automatically.
+(D13). v0.4.0 is the **first auto-delivered release** (D16): the live update gate passed before the
+tag (0.3.3 install, auto-update, restart, first-boot 10 → 11 migration, sessions over pre-existing
+history), and it reaches 0.3.2+ installs automatically. `#88` (AI-tool recall) closed at the release.
 The full app exists —
 a 15-crate Rust workspace + a React/TS UI. The specs remain the contract; the build-loop docs
 (`05`/`06`/`07`/`08`) are the live status of record. Code-signing is the lone packaging follow-up

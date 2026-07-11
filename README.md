@@ -4,7 +4,7 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status — v0.3.3 shipped; the 0.4.0 sessions arc is in progress.** Capture → OCR/UIA text → deferred enrichment →
+> **Status: v0.4.0 shipped (the sessions arc).** Capture → OCR/UIA text → deferred enrichment →
 > **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
 > the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
 > The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
@@ -18,9 +18,11 @@ on-device, no cloud.
 > (close-to-tray on by default, run-at-startup off by default), a hardened one-scroll-context
 > layout, and a **two-tier Settings** page. The **0.3.3** hotfix (auto-delivered by the 0.3.2
 > updater — the first automatic release) skips Chromium/Electron windows in the UIA text source to
-> stop browser freezes. The in-progress **0.4.0 sessions arc** groups frames into sessions
+> stop browser freezes. The **0.4.0 sessions arc** (shipped) groups frames into sessions
 > additively (zero frame-level behavior change) via a pure heuristic engine with no model calls,
-> behind its one schema migration (v10 → v11). The **NSIS installer** is unsigned (SmartScreen will
+> behind its one schema migration (v10 → v11); sessions are reachable in the Timeline and the
+> read-only local API and MCP, and v0.4.0 is the first release auto-delivered to 0.3.2+ installs.
+> The **NSIS installer** is unsigned (SmartScreen will
 > warn — "More info → Run anyway"); **Authenticode code-signing** is the lone remaining packaging
 > follow-up (the updater's minisign signature is separate and already live). Design lives
 > in [`specs/`](./specs); the as-built architecture is in
@@ -106,15 +108,15 @@ The **0.3.2 arc** (shipped) is the product-shell pass — lifecycle + interface:
 The **0.3.3 hotfix** (shipped, first auto-delivered release): the UIA text source skips
 Chromium/Electron windows to stop browser freezes.
 
-The **0.4.0 sessions arc** (in progress) reframes frames into **sessions** — additively, with no
-frame-level behavior change:
+The **0.4.0 sessions arc** (shipped as `v0.4.0`, 2026-07-11) reframes frames into **sessions**,
+additively, with no frame-level behavior change:
 
 | Feature | What it adds | Status |
 |---|---|---|
 | **Sessions schema** | Migration v10 → v11: `sessions` + `session_artifacts` tables and a nullable `frames.session_id`, structure-only (no backfill) | ✅ Shipped (PR3) |
 | **Segmentation engine** | Pure heuristic `crates/sessions` — no model calls; per-identity-track segmentation + tool recognition from a seed taxonomy | ✅ Shipped (PR4) |
 | **Sessions in the UI** | Typed session commands and a sessions surface (pull-based, non-shaming; no new NavRail route) | ✅ Shipped (PR5) |
-| **Sessions API / MCP** | `list_sessions` / `get_session` / `ask_session` over the local API and MCP wrapper | 🚧 Planned (PR6) |
+| **Sessions API / MCP** | `list_sessions` / `get_session` / `ask_session` over the local API and MCP wrapper | ✅ Shipped (PR6) |
 
 > Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
 > not pushed).

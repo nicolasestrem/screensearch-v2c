@@ -147,8 +147,8 @@ shipped app, **not** a retrofit of the phases above. It is tracked in detail in 
 
 ## 5d. Post-1.0 arc — 0.4.0 (sessions: frames → sessions reframe)
 
-The 0.3.x line is shipped (0.3.0 through the 0.3.3 hotfix); **0.4.0 (P8)** is the next **separate
-arc** layered on the shipped app, **not** a retrofit of the phases above. It is tracked in detail in
+The 0.3.x line is shipped (0.3.0 through the 0.3.3 hotfix), and **0.4.0 (P8)** shipped as `v0.4.0`
+(2026-07-11), a **separate arc** layered on the shipped app, **not** a retrofit of the phases above. It is tracked in detail in
 `docs/0.4.0.md` (roadmap) and `03` (contract, `§7e`); this section states only the strategic
 *what/why*.
 
@@ -217,8 +217,9 @@ issues), never by in-app instrumentation — the reading procedure lives in `07`
   quick actions) **and interface** (shell-layout hardening; Settings two-tier IA), under the
   **zero-DB-schema-migration** constraint (held — schema stays 10); the **0.3.3 hotfix shipped**
   (`v0.3.3`, 2026-07-07 — UIA skips Chromium/Electron windows to stop browser freezes, `07` #93).
-  **The 0.4.0 sessions arc is now active** (`§5d`, `docs/0.4.0.md`, `03 §7e`; PR1 specs contract in
-  flight), delivered via the auto-updater 0.3.2 shipped — the **first auto-delivered release** (D16).
+  **The 0.4.0 sessions arc shipped** (`v0.4.0`, 2026-07-11; `§5d`, `docs/0.4.0.md`, `03 §7e`):
+  sessions over frames, additive and pull-based, delivered via the auto-updater 0.3.2 shipped, the
+  **first auto-delivered release** (D16, gate passed live before the tag; closes #88).
 
 ---
 
