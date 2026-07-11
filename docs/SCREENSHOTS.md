@@ -35,8 +35,8 @@ Everything runs against an **isolated** app-data dir so your real database is ne
 #    plain self-contained HTML). Call that folder <scenes>.
 
 # 3. Seed the isolated DB + copy the scene images into place:
-DEMO_DB="%APPDATA%/app.screensearchv2c.demo/screensearch.db" \
-DEMO_FRAMES_DIR="%APPDATA%/app.screensearchv2c.demo/frames" \
+DEMO_DB="$APPDATA/app.screensearchv2c.demo/screensearch.db" \
+DEMO_FRAMES_DIR="$APPDATA/app.screensearchv2c.demo/frames" \
 DEMO_SCENE_DIR="<scenes>" \
 DEMO_NOW_MS="$(node -e 'console.log(Date.now())')" \
 cargo test -p store --test seed_demo -- --ignored --nocapture
