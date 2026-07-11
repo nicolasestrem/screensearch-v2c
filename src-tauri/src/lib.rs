@@ -535,17 +535,22 @@ async fn ask_context<S: Store + ?Sized>(
     store: &S,
     query: &str,
     top_k: u32,
+    session_id: Option<i64>,
 ) -> Result<Vec<RetrievedChunk>, String> {
-    let hits = store
-        .hybrid_search(&SearchQuery {
-            text: query.to_string(),
-            limit: top_k,
-            time_range: None,
-            // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
-            include_chrome: false,
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+    let query = SearchQuery {
+        text: query.to_string(),
+        limit: top_k,
+        time_range: None,
+        // Ask grounds on content text (`03 §3b`); raw/chrome stays opt-in.
+        include_chrome: false,
+    };
+    // `session_id` (0.4.0 PR6, D12) restricts retrieval to the session's own frames so the
+    // answer cites only in-session frames; without it, the frame-level path is unchanged (D10).
+    let hits = match session_id {
+        Some(id) => store.hybrid_search_in_session(&query, id).await,
+        None => store.hybrid_search(&query).await,
+    }
+    .map_err(|e| e.to_string())?;
     // Hydrate context text in a single bulk query (avoid an N+1 over the hits).
     // If the bulk read fails, return before spawning the answer stream so grounded
     // Ask does not silently answer from low-quality snippets only.
@@ -610,7 +615,8 @@ async fn ask(
     // ASK_TOP_K), overridable per request via `AskRequest.top_k`.
     let settings = kernel::settings::load_settings(store.as_ref()).await;
     let top_k = request.top_k.unwrap_or(settings.retrieval_default_top_k);
-    let context = ask_context(store.as_ref(), &request.query, top_k).await?;
+    // The in-app Ask is always frame-level (session scoping is a PR6 API/MCP surface, D10).
+    let context = ask_context(store.as_ref(), &request.query, top_k, None).await?;
 
     // Stream: the provider sends typed deltas on `tx`; a forwarder tags each with
     // `request_id` before emitting it as an `answer_delta` event. The provider task

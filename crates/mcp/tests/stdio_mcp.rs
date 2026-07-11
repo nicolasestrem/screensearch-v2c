@@ -47,7 +47,9 @@ impl AnswerProvider for ScriptedAnswer {
                 text: "grounded answer".to_string(),
             })
             .await;
-        if let Some(chunk) = context.first() {
+        // Cite every grounded frame so a scoped-ask test can assert the citation set equals
+        // the retrieved (session-restricted) context.
+        for chunk in context {
             let _ = tx
                 .send(AnswerDelta::Citation {
                     frame_id: chunk.frame_id,
@@ -94,16 +96,22 @@ impl ApiHost for TestHost {
             _ => Ok(None),
         }
     }
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>> {
-        let hits = self
-            .store
-            .hybrid_search(&traits::SearchQuery {
-                text: query.to_string(),
-                limit: top_k,
-                time_range: None,
-                include_chrome: false,
-            })
-            .await?;
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>> {
+        let q = traits::SearchQuery {
+            text: query.to_string(),
+            limit: top_k,
+            time_range: None,
+            include_chrome: false,
+        };
+        let hits = match session_id {
+            Some(id) => self.store.hybrid_search_in_session(&q, id).await?,
+            None => self.store.hybrid_search(&q).await?,
+        };
         Ok(hits
             .into_iter()
             .map(|h| RetrievedChunk {

@@ -36,8 +36,9 @@ impl AnswerProvider for ScriptedAnswer {
                 text: "grounded answer".to_string(),
             })
             .await;
-        // Cite the first grounded frame so the SSE carries a Citation too.
-        if let Some(chunk) = context.first() {
+        // Cite *every* grounded frame, so a test can assert the citation set equals the
+        // retrieved context (which is what session scoping restricts).
+        for chunk in context {
             let _ = tx
                 .send(AnswerDelta::Citation {
                     frame_id: chunk.frame_id,
@@ -88,16 +89,22 @@ impl ApiHost for TestHost {
             _ => Ok(None),
         }
     }
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>> {
-        let hits = self
-            .store
-            .hybrid_search(&traits::SearchQuery {
-                text: query.to_string(),
-                limit: top_k,
-                time_range: None,
-                include_chrome: false,
-            })
-            .await?;
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>> {
+        let q = traits::SearchQuery {
+            text: query.to_string(),
+            limit: top_k,
+            time_range: None,
+            include_chrome: false,
+        };
+        let hits = match session_id {
+            Some(id) => self.store.hybrid_search_in_session(&q, id).await?,
+            None => self.store.hybrid_search(&q).await?,
+        };
         Ok(hits
             .into_iter()
             .map(|h| RetrievedChunk {
@@ -1038,5 +1045,119 @@ async fn session_detail_include_summary_never_generates() {
         "a GET must not write sessions.summary/summary_model (D12)"
     );
 
+    server.stop().await;
+}
+
+// ---- POST /v1/ask session_id scope (0.4.0 PR6, D12) ----
+
+/// POSTs an ask and returns the sorted frame ids the answer cited (parsed from the SSE stream).
+/// `ScriptedAnswer` cites every grounded chunk, so the citation set equals the retrieved
+/// context — which is exactly what `session_id` scoping restricts.
+async fn scoped_ask_citations(base: &str, payload: serde_json::Value) -> Vec<i64> {
+    let r = client()
+        .post(format!("{base}/v1/ask"))
+        .headers(bearer(TEST_TOKEN))
+        .json(&payload)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "ask should stream a 200");
+    let text = r.text().await.unwrap();
+    let mut ids: Vec<i64> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .filter_map(|d| serde_json::from_str::<serde_json::Value>(d.trim()).ok())
+        .filter(|v| v["type"] == "citation")
+        .filter_map(|v| v["frame_id"].as_i64())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[tokio::test]
+async fn ask_scoped_cites_only_in_session_frames() {
+    let (base, server, _t) = start_server(sessions_fixture_host(true).await).await;
+
+    // Unscoped: the shared term hits every frame (A: 1, 2; B: 3).
+    let all = scoped_ask_citations(
+        &base,
+        serde_json::json!({"query":"deployment pipeline","top_k":10}),
+    )
+    .await;
+    assert_eq!(
+        all,
+        vec![1, 2, 3],
+        "unscoped ask cites frames across both sessions"
+    );
+
+    // Scoped to A (session 1): only A frames.
+    let a = scoped_ask_citations(
+        &base,
+        serde_json::json!({"query":"deployment pipeline","top_k":10,"session_id":1}),
+    )
+    .await;
+    assert_eq!(a, vec![1, 2], "scoped ask cites only session A frames");
+
+    // Scoped to B (session 2): only B frame.
+    let b = scoped_ask_citations(
+        &base,
+        serde_json::json!({"query":"deployment pipeline","top_k":10,"session_id":2}),
+    )
+    .await;
+    assert_eq!(b, vec![3], "scoped ask cites only session B frame");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ask_unknown_session_is_404_before_stream() {
+    // With an answer model available, a bad session_id is a JSON 404, not a stream and not a 200.
+    let (base, server, _t) = start_server(sessions_fixture_host(true).await).await;
+    let r = client()
+        .post(format!("{base}/v1/ask"))
+        .headers(bearer(TEST_TOKEN))
+        .json(&serde_json::json!({"query":"x","session_id":9999}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    let ct = r
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.contains("application/json"),
+        "a 404 must be JSON, never an SSE stream: {ct}"
+    );
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+    server.stop().await;
+
+    // Even with no answer model loaded, the 404 for a bad session precedes the 503 for no model.
+    let (base, server, _t) = start_server(sessions_fixture_host(false).await).await;
+    let r = client()
+        .post(format!("{base}/v1/ask"))
+        .headers(bearer(TEST_TOKEN))
+        .json(&serde_json::json!({"query":"x","session_id":9999}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        404,
+        "404 for a bad session takes precedence over the 503 for no model"
+    );
+    // A known session with no model still 503s.
+    let r = client()
+        .post(format!("{base}/v1/ask"))
+        .headers(bearer(TEST_TOKEN))
+        .json(&serde_json::json!({"query":"x","session_id":1}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 503);
     server.stop().await;
 }

@@ -241,12 +241,30 @@ pub struct AskBody {
     top_k: Option<u32>,
     thinking: Option<bool>,
     max_tokens: Option<u32>,
+    /// 0.4.0 PR6 (D12): scope retrieval to one session's frames so the answer cites only
+    /// in-session frames. Absent → unchanged frame-level behavior (D10).
+    session_id: Option<i64>,
 }
 
 pub async fn ask(
     State(state): State<ApiState>,
     ApiJson(body): ApiJson<AskBody>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
+    // A bad `session_id` is a 404 on the request itself — resolve it *before* the answer-model
+    // check and before any SSE headers go out (a 404 must not arrive as a stream, and it takes
+    // precedence over the 503 for a missing model).
+    if let Some(id) = body.session_id {
+        if state
+            .host
+            .store()
+            .get_session(id)
+            .await
+            .map_err(ApiError::Internal)?
+            .is_none()
+        {
+            return Err(ApiError::NotFound(format!("session {id} not found")));
+        }
+    }
     let provider = state
         .host
         .answer_provider()
@@ -258,7 +276,7 @@ pub async fn ask(
     // low-quality answer), mirroring the `ask` command.
     let context = state
         .host
-        .ask_context(&body.query, top_k)
+        .ask_context(&body.query, top_k, body.session_id)
         .await
         .map_err(ApiError::Internal)?;
     let opts = AnswerOpts {

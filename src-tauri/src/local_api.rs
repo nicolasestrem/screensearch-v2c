@@ -150,8 +150,13 @@ impl ApiHost for TauriApiHost {
         }))
     }
 
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>> {
-        ask_context(self.store.as_ref(), query, top_k)
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>> {
+        ask_context(self.store.as_ref(), query, top_k, session_id)
             .await
             .map_err(|e| anyhow::anyhow!(e))
     }
@@ -473,6 +478,7 @@ mod tests {
             &self,
             _query: &str,
             _top_k: u32,
+            _session_id: Option<i64>,
         ) -> anyhow::Result<Vec<RetrievedChunk>> {
             Ok(vec![])
         }

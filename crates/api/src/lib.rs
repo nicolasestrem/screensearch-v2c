@@ -85,8 +85,15 @@ pub trait ApiHost: Send + Sync + 'static {
     async fn frame_image(&self, frame_id: i64) -> anyhow::Result<Option<FrameImage>>;
 
     /// Grounding context for `/v1/ask` — the same hybrid-search + OCR-hydrate path the
-    /// `ask` command uses.
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>>;
+    /// `ask` command uses. `session_id = Some(id)` (0.4.0 PR6) scopes retrieval to that
+    /// session's own frames so the answer cites only in-session frames; `None` is the
+    /// unchanged frame-level path (D10).
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>>;
 
     /// The active answer provider, or `None` when no answer model is loaded (`/v1/ask`
     /// then returns 503).
