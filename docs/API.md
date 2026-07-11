@@ -1,8 +1,8 @@
 # ScreenSearch Local API (v1)
 
-The **local HTTP API** exposes ScreenSearch's search, ask, frames, where-was-i, and marks
-over `127.0.0.1` for local scripts and agents. It is **opt-in and off by default** (0.3.0
-PR7; spec `03 §7c`).
+The **local HTTP API** exposes ScreenSearch's search, ask, frames, sessions, where-was-i, and
+marks over `127.0.0.1` for local scripts and agents. It is **opt-in and off by default** (0.3.0
+PR7; the sessions surface added in 0.4.0 PR6, specs `03 §7c` / `§7e`).
 
 > **Threat model — read this before enabling.** *Any local process holding the token can
 > read your entire screen history — enabling this is an explicit trust decision.* The API
@@ -45,9 +45,9 @@ clients can parse errors uniformly:
 
 | Status | `error`         | When |
 |--------|-----------------|------|
-| 400    | `bad_request`   | Malformed params/body (e.g. missing `q`, `from`/`to` not paired, `from` > `to`, `format` ≠ `json`, both `frame_id` and `now`). |
+| 400    | `bad_request`   | Malformed params/body (e.g. missing `q`, `from`/`to` not paired, `from` > `to`, invalid session `kind`, non-integer session id, `format` ≠ `json`, both `frame_id` and `now`). |
 | 401    | `unauthorized`  | Missing or wrong bearer token. |
-| 404    | `not_found`     | Unknown frame or mark — or an unknown endpoint path. |
+| 404    | `not_found`     | Unknown frame, mark, or session (or an unknown endpoint path). |
 | 404    | `image_purged`  | The frame exists but its screenshot was retention-purged (text is preserved). |
 | 503    | `unavailable`   | A dependency is unavailable (answer model not loaded; capture off for `POST /v1/marks {"now":true}`). |
 | 500    | `internal`      | Unexpected store failure. |
@@ -78,7 +78,8 @@ Returns an array of `SearchHit` (`frame_id`, `captured_at`, `snippet`, `score`,
 
 ### `POST /v1/ask`
 
-Body: `{ "query": "...", "top_k"?: number, "thinking"?: bool, "max_tokens"?: number }`.
+Body: `{ "query": "...", "top_k"?: number, "thinking"?: bool, "max_tokens"?: number,
+"session_id"?: number }`.
 Returns a **Server-Sent Events** stream (`Content-Type: text/event-stream`); each `data:`
 line is a JSON `AnswerDelta`:
 
@@ -93,6 +94,12 @@ data: {"type":"done"}
 sent every 15 s. **Disconnecting the client cancels generation** — a dropped connection
 stops the model rather than leaving it generating into a closed socket. Returns **503** if
 no answer model is loaded.
+
+With `session_id` set, retrieval is restricted to that session's **own** frames and the answer
+cites **only** in-session frames (session ownership is exclusive, so concurrent sessions that
+overlap in wall-clock time never leak into each other). An unknown `session_id` returns a JSON
+**404** *before* the stream starts, and that check takes precedence over the 503-no-model case.
+Absent `session_id`, behavior is unchanged.
 
 ```bash
 curl -N -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -116,6 +123,69 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 Returns the last sustained context before your current detour (`ResumeContext`), or `null`
 when nothing qualifies.
+
+### `GET /v1/sessions`
+
+Lists the sessions that **overlap** the requested window. Query params: `kind`
+(`focus` | `meeting` | `ai` | `other`), `tool` (a taxonomy id, one of `claude-code`, `codex`,
+`claude-desktop`, `browser-ai`, `cursor`, `vscode`, `zoom`, `teams`, `meet`, `webex`,
+`discord`), `from`, `to` (unix ms, **each independently optional**, unlike `/v1/search`
+where they pair), `limit` (default 1000, clamped `1..=1000`). The overlap predicate is
+`started_at < to AND COALESCE(ended_at, now) > from`, so an open or long-running session that
+began before `from` stays visible (open sessions use request-time now). An unknown `kind` →
+400 naming the valid values; `from` > `to` (both present) → 400.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:43210/v1/sessions?kind=ai&tool=claude-code&limit=50"
+```
+
+Returns a bare JSON array of session objects, ordered `started_at DESC, id DESC`. `summary`
+and `summary_model` are always `null` on this list surface (fetch a single session for them):
+
+```json
+[
+  { "id": 42, "started_at": 1720000000000, "ended_at": 1720003600000, "open": false,
+    "kind": "ai", "tool": "claude-code", "host": "terminal", "context_key": "claude-code",
+    "title": "Refactor the store crate", "summary": null, "summary_model": null,
+    "confidence": 0.82, "frozen": true, "created_at": 1720003600000,
+    "updated_at": 1720003600000 }
+]
+```
+
+`open` is the non-final marker (`true` iff `ended_at` is `null`). `title` is always present
+(may be `null`); `host` is `terminal` | `desktop` | `browser` | `ide` or `null`.
+
+### `GET /v1/sessions/{id}`
+
+One session's detail plus its **exchange** artifacts. Query param: `include_summary`, set to
+`1` to reveal the session's **cached** `summary` + `summary_model` (any other value, or absent,
+serves both as `null`). It **never generates** a summary: a GET starts no inference and writes
+no row (D12); lazy summary generation is an in-app-only action. Unknown id → 404; a non-integer
+id → 400.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:43210/v1/sessions/42?include_summary=1"
+```
+
+```json
+{
+  "session": { "id": 42, "started_at": 1720000000000, "ended_at": 1720003600000,
+    "open": false, "kind": "ai", "tool": "claude-code", "host": "terminal",
+    "context_key": "claude-code", "title": "Refactor the store crate",
+    "summary": "Reworked the store crate's job queue …", "summary_model": "qwen2.5-7b",
+    "confidence": 0.82, "frozen": true, "created_at": 1720003600000,
+    "updated_at": 1720003600000 },
+  "exchanges": [
+    { "id": 7, "session_id": 42, "kind": "exchange", "role": "user", "frame_id": 2651,
+      "content": "how does the worker pool claim jobs?", "created_at": 1720000100000 }
+  ]
+}
+```
+
+Only `kind = exchange` artifacts are returned (transcript / note are reserved and never
+served). Each artifact's `role` is `user` | `agent` | `null` and `frame_id` may be `null`.
 
 ### Marks — the only write surface
 

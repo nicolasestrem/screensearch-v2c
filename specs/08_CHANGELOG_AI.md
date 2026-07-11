@@ -22,6 +22,47 @@
 
 ---
 
+## 2026-07-11 - 0.4.0 PR6: API + MCP session exposure
+
+- **Change:** exposed the sessions surface over the read-only local API and its MCP wrapper (D12).
+  Added `GET /v1/sessions` (overlap predicate `started_at < to AND COALESCE(ended_at, now) > from`,
+  each bound independently optional, open sessions evaluated against request-time `now`; filters
+  `kind` [`focus`|`meeting`|`ai`|`other`, unknown → 400] / `tool` / `from` / `to`; `limit` default
+  1000 clamped 1..=1000; summary omitted on the list); `GET /v1/sessions/{id}?include_summary=`
+  (detail + `exchange` artifacts only; `include_summary=1` reveals the **cached** summary or null and
+  **never** generates; unknown id → 404); and an optional `session_id` scope on `POST /v1/ask`
+  (retrieval restricted to the session's own frames via exclusive `frames.session_id` ownership, since
+  concurrent sessions overlap in wall-clock time; unknown session → 404 before the SSE stream and
+  before the 503; absent → unchanged, D10). The MCP wrapper gained `list_sessions`, `get_session`,
+  and `ask_session` (nine tools total; stdio HTTP client, no store access, 0.3.0 D13). New Store
+  trait method `hybrid_search_in_session` (`crates/store/src/search.rs` generalizes `hybrid_search`
+  with a session-aware FTS predicate + KNN escalation target; the unscoped path stays byte-identical);
+  new `crates/api/src/sessions.rs` module (the GETs read via the Store trait, no new `ApiHost`
+  methods); `ApiHost::ask_context` widened with `session_id` (4 impls updated); `tools.rs` three new
+  tool definitions over a shared ask body-builder.
+- **Implementer's calls:** (1) `hybrid_search_in_session` generalizes rather than forks the existing
+  hybrid search so the unscoped byte-identical property is preserved and testable; (2) the two GET
+  reads go through the Store trait (no new `ApiHost` seam) because they need no inference or
+  cancellation, unlike ask; (3) exclusive `frames.session_id` ownership is the scoping key, not a
+  time-window intersection, so overlapping concurrent tracks cannot leak each other's citations;
+  (4) the maintainer-decided list `limit` (default 1000 / clamp 1..=1000, `07` #118) and
+  summary-visibility rule (list + detail-without-the-flag serve summary null, title always, reveal is
+  cached-only never-generate, `07` #119) live as constants/logic in `crates/api/src/sessions.rs` and
+  are now pinned in `03 §7c`.
+- **Why:** `docs/0.4.0.md` §3 PR6 / `03 §7c`/§7e / D12 / D10. This gives local scripts and MCP clients
+  the arc's strategic payoff (*"what did I do in my last Claude Code session?"*) while keeping the
+  external surface strictly read-only: no GET starts inference or writes `sessions.summary`/
+  `summary_model`, so lazy generation stays an in-app IPC action (`06` #32 records the resolved
+  `docs/0.4.0.md`-vs-`03` divergence, `03` winning by design). No schema change (D4 stays PR3-only),
+  no new settings, and no ts-rs binding churn (the existing `Session`/`SessionArtifact` types were
+  reused).
+- **Verification:** the full verification suite is green. Coverage includes the overlap-predicate
+  and single-bound forms, `kind`/`tool`/`from`/`to` filtering with the unknown-kind 400, the
+  `limit` default/clamp, list-omits-summary vs `include_summary=1` cached-or-null-never-generate,
+  the unknown-id 404 on detail and the unknown-`session_id` 404 ordering on ask, exclusive
+  in-session citation scoping, the unscoped hybrid-search byte-identical guard, and the three new MCP
+  tools over the stdio HTTP client. Raw command output is preserved in `05`.
+
 ## 2026-07-11 — 0.4.0 PR5 Pass 14: post-review final clean integrated suite
 
 - **Verification:** Ran the color-disabled UI-first sequence after the PR #104 fixes: `npm ci` →

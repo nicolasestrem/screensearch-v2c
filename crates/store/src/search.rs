@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter};
 use traits::{Result, SearchHit, SearchQuery};
 
@@ -103,20 +104,37 @@ fn count_embedded_frames_in_range(
     conn: &rusqlite::Connection,
     start: i64,
     end: i64,
+    session_id: Option<i64>,
     pool: usize,
     scan_cap: usize,
 ) -> rusqlite::Result<Option<usize>> {
-    // `scanned` = frames examined (≤ scan_cap); `embedded` = how many of those hold an embedding.
-    let (scanned, embedded): (i64, i64) = conn.query_row(
+    // Scoped counting (0.4.0 PR6) restricts to the session's own frames — indexed by
+    // `idx_frames_session`, so the target becomes the exact `min(pool, embedded-in-session)`.
+    let session_clause = if session_id.is_some() {
+        " AND fr.session_id = ?4"
+    } else {
+        ""
+    };
+    let sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(has_emb), 0) FROM (
              SELECT EXISTS (SELECT 1 FROM embeddings m WHERE m.frame_id = fr.id) AS has_emb
              FROM frames fr
-             WHERE fr.captured_at >= ?1 AND fr.captured_at < ?2
+             WHERE fr.captured_at >= ?1 AND fr.captured_at < ?2{session_clause}
              LIMIT ?3
-         )",
-        params![start, end, scan_cap as i64],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+         )"
+    );
+    let mut values: Vec<Value> = vec![
+        Value::Integer(start),
+        Value::Integer(end),
+        Value::Integer(scan_cap as i64),
+    ];
+    if let Some(sid) = session_id {
+        values.push(Value::Integer(sid));
+    }
+    // `scanned` = frames examined (≤ scan_cap); `embedded` = how many of those hold an embedding.
+    let (scanned, embedded): (i64, i64) = conn.query_row(&sql, params_from_iter(values), |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?;
     let (scanned, embedded) = (scanned as usize, embedded as usize);
     if scanned >= scan_cap {
         // Scan budget exhausted: `embedded` is only a lower bound on the window's true count, so
@@ -178,6 +196,30 @@ impl SqliteStore {
     /// Hybrid search over OCR text + (optional) text embeddings, fused via RRF
     /// (`03 §3/§13`).
     pub async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
+        self.hybrid_search_scoped(q, None).await
+    }
+
+    /// Session-scoped hybrid search (0.4.0 PR6, D12): identical fusion to
+    /// [`Self::hybrid_search`] but every arm additionally restricts to frames owned by
+    /// `session_id`, so a scoped answer cites only in-session frames. Concurrent sessions
+    /// can overlap in wall-clock time, so scoping is by exclusive `frames.session_id`
+    /// ownership — a time window alone would let an overlapping session's frames leak in.
+    pub async fn hybrid_search_in_session(
+        &self,
+        q: &SearchQuery,
+        session_id: i64,
+    ) -> Result<Vec<SearchHit>> {
+        self.hybrid_search_scoped(q, Some(session_id)).await
+    }
+
+    /// The shared retrieval core. `session_id = None` is the frame-level path (byte-identical
+    /// to pre-0.4.0 behavior — the existing search tests are its regression guard); `Some(id)`
+    /// threads a `frames.session_id` predicate through both arms.
+    async fn hybrid_search_scoped(
+        &self,
+        q: &SearchQuery,
+        session_id: Option<i64>,
+    ) -> Result<Vec<SearchHit>> {
         let limit = normalized_limit(q.limit);
         let pool = candidate_pool(limit);
         // Half-open `[start, end)` per the `TimeRange` contract: both arms filter
@@ -189,7 +231,7 @@ impl SqliteStore {
 
         // --- content FTS arm (default retrieval text; carries the highlighted snippets) ---
         let fts = self
-            .fts_arm("frame_text_fts", &q.text, start, end, pool)
+            .fts_arm("frame_text_fts", &q.text, start, end, pool, session_id)
             .await?;
         let fts_ids: Vec<i64> = fts.iter().map(|(id, _)| *id).collect();
         let mut snippets: HashMap<i64, String> = fts.into_iter().collect();
@@ -200,7 +242,7 @@ impl SqliteStore {
         // content arm didn't match.
         let raw_ids: Vec<i64> = if q.include_chrome {
             let raw = self
-                .fts_arm("frame_text_raw_fts", &q.text, start, end, pool)
+                .fts_arm("frame_text_raw_fts", &q.text, start, end, pool, session_id)
                 .await?;
             let ids: Vec<i64> = raw.iter().map(|(id, _)| *id).collect();
             for (id, snip) in raw {
@@ -225,7 +267,7 @@ impl SqliteStore {
                 let query_emb = embs
                     .pop()
                     .ok_or_else(|| anyhow::anyhow!("embedder returned no vector for the query"))?;
-                self.text_knn_in_range(query_emb.0, pool, start, end)
+                self.text_knn_in_range(query_emb.0, pool, start, end, session_id)
                     .await?
             }
             _ => Vec::new(),
@@ -252,9 +294,17 @@ impl SqliteStore {
         start: i64,
         end: i64,
         pool: u32,
+        session_id: Option<i64>,
     ) -> Result<Vec<(i64, String)>> {
         let Some(match_q) = fts_match_query(text) else {
             return Ok(Vec::new());
+        };
+        // Scoped path (0.4.0 PR6) appends the session predicate as `?5`; the unscoped path
+        // leaves the SQL byte-identical to the pre-0.4.0 query.
+        let session_clause = if session_id.is_some() {
+            " AND fr.session_id = ?5"
+        } else {
+            ""
         };
         let sql = format!(
             "SELECT fts.rowid,
@@ -262,14 +312,23 @@ impl SqliteStore {
                     bm25({table}) AS rank
              FROM {table} fts
              JOIN frames fr ON fr.id = fts.rowid
-             WHERE {table} MATCH ?1 AND fr.captured_at >= ?2 AND fr.captured_at < ?3
+             WHERE {table} MATCH ?1 AND fr.captured_at >= ?2 AND fr.captured_at < ?3{session_clause}
              ORDER BY rank
              LIMIT ?4"
         );
         self.with_conn(move |conn| {
+            let mut values: Vec<Value> = vec![
+                Value::Text(match_q),
+                Value::Integer(start),
+                Value::Integer(end),
+                Value::Integer(pool as i64),
+            ];
+            if let Some(sid) = session_id {
+                values.push(Value::Integer(sid));
+            }
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt
-                .query_map(params![match_q, start, end, pool as i64], |r| {
+                .query_map(params_from_iter(values), |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -290,61 +349,92 @@ impl SqliteStore {
     /// query when the DB holds more than [`MAX_TIME_RANGE_KNN`] vectors (neither the pool-fill
     /// nor the exhaustion gate can fire in that case). An unbounded range keeps the single
     /// `k = pool` pass (the time filter is then a no-op).
+    ///
+    /// `session_id = Some(id)` (0.4.0 PR6) adds an exclusive `frames.session_id` post-filter
+    /// alongside the window check and forces the escalation path (a session's frames are a tiny
+    /// fraction of the DB and can rank far past the top-`pool` nearest — the same recall hole as
+    /// `07` #8, in session form). The escalation target is then `min(pool, embedded-in-session)`.
     async fn text_knn_in_range(
         &self,
         query: Vec<f32>,
         pool: u32,
         start: i64,
         end: i64,
+        session_id: Option<i64>,
     ) -> Result<Vec<i64>> {
         let blob = f32_blob(&query);
-        // A full `[i64::MIN, i64::MAX)` line means "no time filter": one pass, no escalation.
-        let bounded = start != i64::MIN || end != i64::MAX;
+        // A full `[i64::MIN, i64::MAX)` line means "no time filter"; a session scope also needs
+        // the escalating path (its frames can rank arbitrarily far in global distance order).
+        let bounded = start != i64::MIN || end != i64::MAX || session_id.is_some();
         self.with_conn(move |conn| {
             // Escalation target: for a bounded window, never chase more frames than the window
-            // holds — an indexed count of distinct in-window embedded frames, capped at `pool`
-            // (all we ever need is `min(pool, n)`). An empty window skips the KNN entirely; an
-            // unbounded window uses `pool` (single pass).
+            // (and session, if scoped) holds — an indexed count of distinct embedded frames,
+            // capped at `pool` (all we ever need is `min(pool, n)`). An empty window skips the
+            // KNN entirely; an unbounded, unscoped query uses `pool` (single pass).
             let target = if bounded {
                 match count_embedded_frames_in_range(
                     conn,
                     start,
                     end,
+                    session_id,
                     pool as usize,
                     COUNT_SCAN_CAP,
                 )? {
-                    // Provably no embedded frames in the window — nothing for the KNN to find.
+                    // Provably no embedded frames in the window/session — nothing for the KNN.
                     None => return Ok(Vec::new()),
-                    // min(pool, embedded-in-window), or `pool` when the window was too large to
-                    // prove sparse within the scan budget (safe dense assumption).
+                    // min(pool, embedded-in-window/session), or `pool` when too large to prove
+                    // sparse within the scan budget (safe dense assumption).
                     Some(target) => target,
                 }
             } else {
                 pool as usize
             };
 
-            // Return each KNN row's frame + capture time (distance order) and post-filter the
-            // window in Rust, so we can see both the in-range count and the *raw* KNN row count
-            // (the exhaustion signal — a KNN that returned `< k` rows has no more vectors).
-            let mut stmt = conn.prepare(
+            // Return each KNN row's frame + capture time (+ owning session only when scoped) in
+            // distance order and post-filter window + session in Rust, so we can see both the
+            // in-range count and the *raw* KNN row count (the exhaustion signal — a KNN that
+            // returned `< k` rows has no more vectors). Session-filtering in SQL would corrupt that
+            // `raw < k` signal. The unscoped SELECT omits `session_id` entirely, keeping the query
+            // byte-identical to the pre-0.4.0 arm (and valid against pre-session schemas).
+            let scoped = session_id.is_some();
+            let sql = if scoped {
+                "SELECT fr.id, fr.captured_at, fr.session_id FROM (
+                     SELECT embedding_id AS vid, distance FROM embedding_vectors
+                     WHERE embedding MATCH ?1 AND k = ?2 ORDER BY distance
+                 ) knn
+                 JOIN embeddings m ON m.id = knn.vid
+                 JOIN frames fr ON fr.id = m.frame_id
+                 ORDER BY knn.distance"
+            } else {
                 "SELECT fr.id, fr.captured_at FROM (
                      SELECT embedding_id AS vid, distance FROM embedding_vectors
                      WHERE embedding MATCH ?1 AND k = ?2 ORDER BY distance
                  ) knn
                  JOIN embeddings m ON m.id = knn.vid
                  JOIN frames fr ON fr.id = m.frame_id
-                 ORDER BY knn.distance",
-            )?;
+                 ORDER BY knn.distance"
+            };
+            let mut stmt = conn.prepare(sql)?;
             let mut fetch = |k: u32| -> rusqlite::Result<(usize, Vec<i64>)> {
                 let mut raw = 0_usize;
                 let mut in_range: Vec<i64> = Vec::new();
                 let rows = stmt.query_map(params![blob, k as i64], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+                    let frame_id = r.get::<_, i64>(0)?;
+                    let captured_at = r.get::<_, i64>(1)?;
+                    let frame_session = if scoped {
+                        r.get::<_, Option<i64>>(2)?
+                    } else {
+                        None
+                    };
+                    Ok((frame_id, captured_at, frame_session))
                 })?;
                 for row in rows {
-                    let (frame_id, captured_at) = row?;
+                    let (frame_id, captured_at, frame_session) = row?;
                     raw += 1;
-                    if captured_at >= start && captured_at < end {
+                    let in_window = captured_at >= start && captured_at < end;
+                    // No scope → every frame qualifies; scoped → only this session's frames.
+                    let in_session = session_id.is_none_or(|want| frame_session == Some(want));
+                    if in_window && in_session {
                         in_range.push(frame_id);
                     }
                 }
@@ -615,7 +705,11 @@ mod tests {
         // the un-embedded f3 and out-of-window f4 don't count. Scan budget far exceeds the 4
         // in-window frames, so the count is exact.
         let n = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 50, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 50, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -626,7 +720,11 @@ mod tests {
 
         // Capped at `pool`: the caller only ever needs min(pool, n).
         let capped = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 1, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 1, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(capped, Some(1), "the target is capped at `pool`");
@@ -636,7 +734,11 @@ mod tests {
         // the small exact count — this is what keeps the pre-count O(cap) on a wide, sparsely
         // embedded window (the P2 residual). Without the bound this returned Some(2).
         let bounded = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 100, 200, 500, 2)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 100, 200, None, 500, 2,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(
@@ -647,7 +749,11 @@ mod tests {
 
         // A window with no embedded frames returns `None` (drives the KNN-skip fast path).
         let empty = store
-            .with_conn(|conn| Ok(count_embedded_frames_in_range(conn, 200, 300, 50, 1_000)?))
+            .with_conn(|conn| {
+                Ok(count_embedded_frames_in_range(
+                    conn, 200, 300, None, 50, 1_000,
+                )?)
+            })
             .await
             .unwrap();
         assert_eq!(empty, None, "no embedded frames in the window");

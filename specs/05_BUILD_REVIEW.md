@@ -4965,3 +4965,88 @@ EXPOSURE_CLEAN   # no hits
 $ git ls-files -- screenshots/
 screenshots/timeline.png
 ```
+
+---
+
+## Pass 16 — 2026-07-11 — 0.4.0 PR6 (API + MCP session exposure)
+
+- **Implemented:** The read-only sessions surface over the local API and its MCP wrapper (D12),
+  in four sequential lanes, each behind its own crate test gate before the next.
+  - **Store lane** (`crates/traits/src/contracts.rs`, `crates/store/src/search.rs`,
+    `crates/store/src/lib.rs`): new `Store::hybrid_search_in_session(&SearchQuery, session_id)`
+    (default `Err`, so a store without session ownership never silently grounds a scoped ask on
+    nothing). `hybrid_search` becomes a thin `hybrid_search_scoped(q, None)`; the scoped path
+    threads a `frames.session_id` predicate through the FTS arm and the KNN arm, and the KNN
+    escalation target (`count_embedded_frames_in_range`) counts embedded frames **in-session** so
+    an in-session match ranked past the top-`pool` nearest is not dropped (the `07` #8 recall hole
+    in session form). The unscoped path is byte-identical (unchanged SQL, no `session_id` column
+    reference), so pre-session schemas and the D10 migration-parity test are unaffected.
+  - **API GETs** (`crates/api/src/sessions.rs`, new; `crates/api/src/lib.rs` router): `GET
+    /v1/sessions` (overlap predicate, `from`/`to` each optional, `kind` unknown → 400, `tool`
+    empty → no filter, `limit` default 1000 clamp 1..=1000, summary hidden) and `GET
+    /v1/sessions/{id}` (`{session, exchanges}`, exchange-only, `open` marker, `include_summary=1`
+    reveals cached-or-null, never generates). No new `ApiHost` method — the reads go through the
+    `Store` trait (precedent `routes::list_marks`). D12 is structural: `crates/api` links `kernel`
+    only as a dev-dependency, so no generation path is reachable at runtime.
+  - **Ask scope** (`crates/api/src/routes.rs`, `crates/api/src/lib.rs`, `src-tauri`): `AskBody`
+    gains `session_id`; `ApiHost::ask_context` widened with `session_id` (all four impls updated);
+    the src-tauri helper routes `Some` → `hybrid_search_in_session`, `None` → unchanged (the in-app
+    `ask` command passes `None`, D10). An unknown `session_id` is a JSON 404 resolved before the
+    SSE stream and before the 503-no-model check.
+  - **MCP** (`crates/mcp/src/tools.rs`): `list_sessions` / `get_session` / `ask_session` (nine
+    tools), a shared ask body-builder, sidecar re-staged.
+  - No schema change (D4 stays PR3-only), no new settings, no ts-rs binding churn.
+- **Verification (verbatim):** full ladder green.
+
+  ```
+  PASS: npm ci (rc=0)
+  PASS: npm run lint (rc=0)
+  PASS: npm run build (rc=0)
+  PASS: node scripts/stage-mcp.mjs (rc=0)
+  ### cargo fmt --all -- --check
+  fmt OK
+  ### cargo clippy --workspace --all-targets -- -D warnings
+  clippy OK
+  ### cargo build --workspace
+  build OK
+  ### cargo test --workspace
+  test OK        (742 tests passed, 0 failed across the workspace)
+  ### bindings guard
+  $ git diff --exit-code -- ui/src/bindings
+  bindings CLEAN
+  ```
+
+  New PR6 tests (all green in the run above): store `scoped_fts_search_returns_only_the_named_sessions_frames`,
+  `scoped_vector_search_finds_in_session_match_buried_beyond_pool`,
+  `scoped_search_with_no_in_session_matches_returns_empty`; api
+  `sessions_list_orders_newest_first_and_hides_summary`,
+  `sessions_list_overlap_predicate_and_open_session`, `sessions_list_filters_validate_and_clamp`
+  (incl. empty-`tool` = no filter), `sessions_endpoints_require_token`,
+  `session_detail_returns_exchanges_only_and_404s_unknown`,
+  `session_detail_reveals_cached_summary_only_when_asked`,
+  `session_detail_include_summary_never_generates`, `ask_scoped_cites_only_in_session_frames`,
+  `ask_unknown_session_is_404_before_stream`; mcp `list_sessions_tool_roundtrips_and_empties`,
+  `get_session_tool_roundtrips_and_404s`, `ask_session_tool_cites_only_in_session_frames`, plus
+  the six→nine tool-list assertions.
+- **Review:** two independent adversarial passes on the committed diff. A correctness/security
+  pass confirmed all six risk areas sound (KNN buried-match recall, unscoped-path byte-identity,
+  404-before-stream ordering, structural D12 read-only, overlap/now_ms/limit clamp, SQL param
+  safety) with no code change required. A silent-failure/coverage pass confirmed clean error
+  handling and flagged two test gaps (no code defects): the empty-`tool` filter and a
+  single-frame-owning MCP fixture that could not detect a dropped scope. Both fixed in this PR
+  (empty-`tool` assertion; a second frame-owning session in the MCP fixture so `ask_session` now
+  asserts it cites only the scoped session's frames, not the other session's).
+- **Skipped / deferred:** the live-app MCP round-trip (DoD `13c`-6) is documented in
+  `docs/TESTING.md` for execution at the release gate; recap is deliberately not exposed over the
+  API/MCP (in-app IPC only, `03 §7e`); no frame sample in the API detail response (contract is
+  `{session, exchanges}`).
+- **Hallucinated / corrected:** none. One process catch — the first full-ladder run failed at
+  `cargo fmt --check` because the two coverage-gap test edits were added after the prior `cargo
+  fmt --all`; reformatted and re-verified clean.
+- **Broke / regressed:** nothing. The D10 migration-parity test initially failed when the KNN
+  SELECT referenced `fr.session_id` unconditionally (search runs at schema 10 in that test);
+  fixed by keeping the unscoped SELECT byte-identical (no `session_id` column) and selecting it
+  only on the scoped branch.
+- **Still risky:** the scoped path with `include_chrome=true` is not exercised (the only prod
+  caller, `ask_context`, uses `include_chrome=false`); the raw-FTS arm's session clause is
+  symmetric with the content arm and low-risk. Recorded, not blocking.

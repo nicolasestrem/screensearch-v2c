@@ -86,15 +86,28 @@ before this?"*, *"mark this moment."*
 | `where_was_i` | `GET /v1/context/where-was-i` | *(none)* | The last sustained context before your current activity, or a "nothing to resume" note. |
 | `list_marks` | `GET /v1/marks` | *(none)* | Your marks, unresolved first then newest-first. |
 | `add_mark` | `POST /v1/marks` | `frame_id` (omit to capture **now**); `note` | Creates a mark. Omitting `frame_id` captures the current screen past the change gate, then marks it. |
+| `list_sessions` | `GET /v1/sessions` | `kind`, `tool`, `from`, `to`, `limit` (all optional) | The sessions overlapping the window (id, kind, tool, host, title, span, open flag); "No sessions." when none match. |
+| `get_session` | `GET /v1/sessions/{id}` | `session_id` (required); `include_summary` (default false) | One session plus its exchange artifacts; `include_summary` returns the cached summary if one exists and never generates one. |
+| `ask_session` | `POST /v1/ask` (`session_id`) | `session_id` (required); `query` (required); `top_k`; `thinking`; `max_tokens` | A grounded answer that cites **only** frames owned by that session. |
 
 The API's `health`, `export`, and mark-`resolve` surfaces are intentionally **not** exposed as
-tools — the tool set is read + add-a-mark only.
+tools; the tool set is read + add-a-mark only. The three 0.4.0 session tools (`list_sessions`,
+`get_session`, `ask_session`) keep that boundary: they are **read-only** over the same HTTP
+surface, add no new write scope, and remain a stdio wrapper (no store access).
 
-> **Coming in 0.4.0 (PR6).** The sessions arc adds three read-only tools — `list_sessions`,
-> `get_session`, and `ask_session` (over the `/v1/sessions*` endpoints; contract in
-> `specs/03_MASTER_PRODUCTION_SPEC.md §7c`/`§7e`) — so an agent can ask *"what did I do in my last
-> Claude Code session?"*. They keep the boundary above: read-only, no new write scopes, still a
-> stdio wrapper over the HTTP API. This table grows when PR6 lands.
+### Example: asking about a past session
+
+*"What did I do in my last Claude Code session?"* is a two-step flow: find the session, then
+ask within it.
+
+1. `list_sessions` with `kind: "ai"`, `tool: "claude-code"`. The newest matching session is
+   first (results are ordered most-recent first). Take its `id`.
+2. `ask_session` with that `session_id` and `query: "what did I do?"`. The answer is grounded
+   in that session's frames only, and every cited frame belongs to it.
+
+`get_session` fills in the detail between the two: pass `include_summary: true` to read a
+cached recap (it returns one only if the app already generated it, and never triggers
+generation itself).
 
 ## Protocol notes
 

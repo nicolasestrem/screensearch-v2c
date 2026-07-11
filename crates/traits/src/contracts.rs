@@ -202,6 +202,22 @@ pub trait Store: Send + Sync {
 
     // retrieval
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>>;
+    /// Session-scoped hybrid search backing `POST /v1/ask?session_id` (0.4.0 PR6, D12):
+    /// retrieval restricted to frames owned by `session_id`, so a scoped answer cites
+    /// **only** in-session frames. Concurrent sessions can overlap in wall-clock time
+    /// (`06` #27/#28), so this filters by exclusive `frames.session_id` ownership, not by
+    /// a time window. Default errors loudly — a store without session ownership must never
+    /// silently ground a scoped ask on nothing (an `Ok(vec![])` default would do exactly
+    /// that).
+    async fn hybrid_search_in_session(
+        &self,
+        _q: &SearchQuery,
+        _session_id: i64,
+    ) -> Result<Vec<SearchHit>> {
+        Err(anyhow::anyhow!(
+            "session-scoped search not supported by this store"
+        ))
+    }
     /// The minimal inputs the embedding worker needs for a frame (image path + OCR
     /// text), or `None` if the frame no longer exists (`03 §5`).
     async fn get_enrichment_input(&self, frame_id: i64) -> Result<Option<FrameEnrichmentInput>>;

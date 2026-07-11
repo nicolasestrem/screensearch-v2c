@@ -18,8 +18,9 @@ use serde_json::{json, Value};
 use store::SqliteStore;
 use tokio::sync::mpsc::Sender;
 use traits::{
-    AnswerDelta, AnswerOpts, AnswerProvider, ExportFrameRow, FrameDetail, NewFrame, OcrResult,
-    ResumeContext, RetrievedChunk, Settings, Store,
+    AnswerDelta, AnswerOpts, AnswerProvider, ExportFrameRow, FrameDetail, NewFrame, NewSession,
+    NewSessionArtifact, OcrResult, ResumeContext, RetrievedChunk, SessionArtifactKind,
+    SessionArtifactRole, SessionHost, SessionKind, Settings, Store,
 };
 
 const TEST_TOKEN: &str = "test-token-000000000000000000000000000000000000000000000000000000";
@@ -47,7 +48,9 @@ impl AnswerProvider for ScriptedAnswer {
                 text: "grounded answer".to_string(),
             })
             .await;
-        if let Some(chunk) = context.first() {
+        // Cite every grounded frame so a scoped-ask test can assert the citation set equals
+        // the retrieved (session-restricted) context.
+        for chunk in context {
             let _ = tx
                 .send(AnswerDelta::Citation {
                     frame_id: chunk.frame_id,
@@ -94,16 +97,22 @@ impl ApiHost for TestHost {
             _ => Ok(None),
         }
     }
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>> {
-        let hits = self
-            .store
-            .hybrid_search(&traits::SearchQuery {
-                text: query.to_string(),
-                limit: top_k,
-                time_range: None,
-                include_chrome: false,
-            })
-            .await?;
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>> {
+        let q = traits::SearchQuery {
+            text: query.to_string(),
+            limit: top_k,
+            time_range: None,
+            include_chrome: false,
+        };
+        let hits = match session_id {
+            Some(id) => self.store.hybrid_search_in_session(&q, id).await?,
+            None => self.store.hybrid_search(&q).await?,
+        };
         Ok(hits
             .into_iter()
             .map(|h| RetrievedChunk {
@@ -198,6 +207,98 @@ async fn fixture_host(with_answer: bool) -> Arc<TestHost> {
 async fn start_api(with_answer: bool) -> (String, ApiServer, String) {
     let token: SharedToken = Arc::new(std::sync::RwLock::new(TEST_TOKEN.to_string()));
     let server = ApiServer::start(fixture_host(with_answer).await, token, 0)
+        .await
+        .expect("bind ephemeral loopback");
+    let base = format!("http://{}", server.local_addr());
+    (base, server, TEST_TOKEN.to_string())
+}
+
+/// A fixture with one recognized AI session (id 1, claude-code) owning two frames + a
+/// user/agent exchange pair, plus an open focus session (id 2). Used by the PR6 session tools.
+async fn sessions_fixture_host(with_answer: bool) -> Arc<TestHost> {
+    let store = Arc::new(SqliteStore::open_in_memory().expect("open store"));
+    let a = store
+        .insert_session(NewSession {
+            started_at: 1_000,
+            ended_at: Some(5_000),
+            kind: SessionKind::Ai,
+            tool: Some("claude-code".to_string()),
+            host: Some(SessionHost::Terminal),
+            context_key: "ai:claude-code".to_string(),
+            confidence: 0.9,
+            frozen: false,
+        })
+        .await
+        .unwrap();
+    let f1 = seed_frame(&store, 1_500, "deployment pipeline config change").await;
+    let f2 = seed_frame(&store, 2_500, "deployment pipeline rollout notes").await;
+    store
+        .assign_frames_session(&[f1, f2], Some(a))
+        .await
+        .unwrap();
+    store
+        .insert_session_artifacts(
+            a,
+            &[
+                NewSessionArtifact {
+                    kind: SessionArtifactKind::Exchange,
+                    role: Some(SessionArtifactRole::User),
+                    frame_id: Some(f1),
+                    content: "fix the deploy".to_string(),
+                },
+                NewSessionArtifact {
+                    kind: SessionArtifactKind::Exchange,
+                    role: Some(SessionArtifactRole::Agent),
+                    frame_id: Some(f2),
+                    content: "done, pipeline updated".to_string(),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    // An open focus session with no frames.
+    store
+        .insert_session(NewSession {
+            started_at: 10_000,
+            ended_at: None,
+            kind: SessionKind::Focus,
+            tool: None,
+            host: None,
+            context_key: "focus:vscode".to_string(),
+            confidence: 0.8,
+            frozen: false,
+        })
+        .await
+        .unwrap();
+    // A second recognized AI session (id 3, codex) owning frame 3, which matches the same term.
+    // With this, a scoped ask that leaked to a global search would surface frame 3, so the
+    // ask_session test can actually detect a dropped scope (not just round-trip).
+    let b = store
+        .insert_session(NewSession {
+            started_at: 3_000,
+            ended_at: Some(9_000),
+            kind: SessionKind::Ai,
+            tool: Some("codex".to_string()),
+            host: Some(SessionHost::Terminal),
+            context_key: "ai:codex".to_string(),
+            confidence: 0.9,
+            frozen: false,
+        })
+        .await
+        .unwrap();
+    let f3 = seed_frame(&store, 4_000, "deployment pipeline audit in codex").await;
+    store.assign_frames_session(&[f3], Some(b)).await.unwrap();
+    Arc::new(TestHost {
+        store,
+        answer: with_answer.then(|| Arc::new(ScriptedAnswer) as Arc<dyn AnswerProvider>),
+        started_at_ms: 500,
+    })
+}
+
+/// Starts the real API server over the sessions fixture on an ephemeral loopback port.
+async fn start_api_sessions(with_answer: bool) -> (String, ApiServer, String) {
+    let token: SharedToken = Arc::new(std::sync::RwLock::new(TEST_TOKEN.to_string()));
+    let server = ApiServer::start(sessions_fixture_host(with_answer).await, token, 0)
         .await
         .expect("bind ephemeral loopback");
     let base = format!("http://{}", server.local_addr());
@@ -368,6 +469,9 @@ async fn handshake_and_tools_list_over_stdio() {
             "where_was_i",
             "list_marks",
             "add_mark",
+            "list_sessions",
+            "get_session",
+            "ask_session",
         ]
     );
     for t in resp["result"]["tools"].as_array().unwrap() {
@@ -635,7 +739,7 @@ async fn api_off_tool_calls_return_guided_error() {
     // Handshake + tools/list still work (they never touch the API).
     mcp.handshake();
     let list = mcp.request("tools/list", json!({}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
 
     // Release the port now — immediately before the call that must hit connection-refused —
     // shrinking the reuse window to the microseconds between here and the child's connect.
@@ -676,7 +780,7 @@ async fn missing_token_still_serves_tools_list_but_calls_are_guided() {
 
     // Listing works.
     let list = mcp.request("tools/list", json!({}));
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 6);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
 
     // A call is guided (the no-token message also carries the contract phrase).
     let result = mcp.call_tool("list_marks", json!({}));
@@ -694,4 +798,97 @@ async fn child_exits_zero_on_stdin_close() {
     server.stop().await;
     // Closing stdin is the MCP shutdown signal — the child must exit cleanly.
     assert_eq!(mcp.close_and_wait(), 0);
+}
+
+// ---- 0.4.0 PR6 session tools ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_sessions_tool_roundtrips_and_empties() {
+    let (base, server, token) = start_api_sessions(false).await;
+    let mut mcp = McpChild::spawn(&base, Some(&token));
+    mcp.handshake();
+
+    // Full list: the fixture has an ai and a focus session.
+    let result = mcp.call_tool("list_sessions", json!({}));
+    assert_ne!(result["isError"], json!(true));
+    let text = first_text(&result);
+    assert!(text.contains("claude-code"), "sessions listed: {text}");
+
+    // A filter that matches nothing → the empty sentinel.
+    let empty = mcp.call_tool("list_sessions", json!({ "tool": "no-such-tool" }));
+    assert_eq!(first_text(&empty), "No sessions.");
+
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn get_session_tool_roundtrips_and_404s() {
+    let (base, server, token) = start_api_sessions(false).await;
+    let mut mcp = McpChild::spawn(&base, Some(&token));
+    mcp.handshake();
+
+    // Session 1 has two exchange artifacts (user + agent).
+    let result = mcp.call_tool("get_session", json!({ "session_id": 1 }));
+    assert_ne!(result["isError"], json!(true));
+    let text = first_text(&result);
+    assert!(text.contains("\"exchanges\""), "detail JSON: {text}");
+    assert!(
+        text.contains("done, pipeline updated"),
+        "exchange content: {text}"
+    );
+    // Without include_summary the cached summary is null (and this session has none anyway).
+    assert!(text.contains("\"summary\": null"), "summary hidden: {text}");
+
+    // include_summary is accepted and still never generates.
+    let with_summary = mcp.call_tool(
+        "get_session",
+        json!({ "session_id": 1, "include_summary": true }),
+    );
+    assert_ne!(with_summary["isError"], json!(true));
+
+    // Unknown id → the API 404 surfaces as an isError not_found tool result.
+    let missing = mcp.call_tool("get_session", json!({ "session_id": 9999 }));
+    assert_eq!(missing["isError"], json!(true));
+    assert!(first_text(&missing).contains("not_found"));
+
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ask_session_tool_cites_only_in_session_frames() {
+    let (base, server, token) = start_api_sessions(true).await;
+    let mut mcp = McpChild::spawn(&base, Some(&token));
+    mcp.handshake();
+
+    // Session 1 owns frames 1 and 2; session 3 (codex) owns frame 3, which matches the same
+    // term. A scoped answer must cite only 1 and 2 — if the scope leaked to a global search it
+    // would also cite frame 3, so this asserts the scope actually bites, not just a round-trip.
+    let result = mcp.call_tool(
+        "ask_session",
+        json!({ "session_id": 1, "query": "deployment pipeline", "top_k": 10 }),
+    );
+    assert_ne!(result["isError"], json!(true));
+    let text = first_text(&result);
+    let cited = text
+        .split("Cited frames:")
+        .nth(1)
+        .expect("answer includes a Cited frames line");
+    assert!(
+        cited.contains('1') && cited.contains('2'),
+        "cites the session's own frames: {text}"
+    );
+    assert!(
+        !cited.contains('3'),
+        "must not cite the other session's frame 3: {text}"
+    );
+
+    // An unknown session is a JSON 404 → isError not_found tool result (never a stream).
+    let missing = mcp.call_tool(
+        "ask_session",
+        json!({ "session_id": 9999, "query": "anything" }),
+    );
+    assert_eq!(missing["isError"], json!(true));
+    assert!(first_text(&missing).contains("not_found"));
+
+    server.stop().await;
 }

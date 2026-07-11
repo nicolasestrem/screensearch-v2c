@@ -273,6 +273,13 @@ impl Store for SqliteStore {
     async fn hybrid_search(&self, q: &SearchQuery) -> Result<Vec<SearchHit>> {
         SqliteStore::hybrid_search(self, q).await
     }
+    async fn hybrid_search_in_session(
+        &self,
+        q: &SearchQuery,
+        session_id: i64,
+    ) -> Result<Vec<SearchHit>> {
+        SqliteStore::hybrid_search_in_session(self, q, session_id).await
+    }
     async fn timeline_buckets(
         &self,
         start: i64,

@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Sessions are now reachable from the local API and its MCP wrapper, read-only. Scripts and AI
+  clients can list the sessions overlapping a time range (filtered by kind or tool), open one session
+  to see its representative exchanges and its cached summary if one exists, and ask a grounded
+  question scoped to a single session so the answer only cites that session's own frames. Three
+  matching MCP tools (list sessions, get session, ask session) join the existing set. The API never
+  generates a summary on read and never writes, and questions without a session behave exactly as
+  before.
 - Sessions are now visible throughout the existing recall flow: Timeline shows accessible,
   lane-packed session bands in exactly four stable rows; sessions needing lane five or later are
   summarized by a neutral keyboard control that focuses the existing range presets. A code-split

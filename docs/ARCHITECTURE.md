@@ -459,8 +459,9 @@ request id, and the UI ignores stale deltas.
   same export code path directly, so export works with the API off. Reference: `docs/API.md`.
 - **MCP server** (`crates/mcp` → `screensearch-mcp.exe`, PR8): a dependency-thin **stdio** JSON-RPC
   binary that never links the store (D13) — purely an HTTP client of the local API using
-  `SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`. Six tools (`search_screen_history`,
-  `ask_screen_history`, `get_moment`, `where_was_i`, `list_marks`, `add_mark`); API-off or bad-token
+  `SCREENSEARCH_API_URL` / `SCREENSEARCH_API_TOKEN`. Nine tools (`search_screen_history`,
+  `ask_screen_history`, `get_moment`, `where_was_i`, `list_marks`, `add_mark`, and the 0.4.0
+  read-only session trio `list_sessions`, `get_session`, `ask_session`); API-off or bad-token
   states return guided errors ("enable the API in ScreenSearch Settings"), never a crash. Staged as
   the Tauri `externalBin` by `scripts/stage-mcp.mjs` and shipped inside the NSIS installer next to
   `ScreenSearch.exe`. Reference: `docs/MCP.md`.
@@ -521,7 +522,7 @@ request id, and the UI ignores stale deltas.
   v10 marks migration test, and `capture_now` pipeline tests (diff-gate bypass, capture-off denial).
   PR7 adds `crates/api/tests/http_api.rs` (fixture-DB integration: loopback-only bind assertion,
   401s, every endpoint, SSE ask, export). PR8 adds `crates/mcp/tests/stdio_mcp.rs`, which spawns the
-  real compiled binary over stdio (handshake, six tools, guided API-off/wrong-token errors).
+  real compiled binary over stdio (handshake, nine tools, guided API-off/wrong-token errors).
 - **Inference, deterministic (run in CI, no GPU/network):** the **no-orphan gate**
   (`tests/no_orphan.rs` — kill a parent, assert the Job-Object child dies), startup **reap**
   (`tests/reap.rs` — reaps a matching stray, never a foreign pid), the HTTP **client** against a

@@ -18,6 +18,7 @@ pub mod error;
 pub mod export;
 pub mod extract;
 pub mod routes;
+pub mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
@@ -84,8 +85,15 @@ pub trait ApiHost: Send + Sync + 'static {
     async fn frame_image(&self, frame_id: i64) -> anyhow::Result<Option<FrameImage>>;
 
     /// Grounding context for `/v1/ask` — the same hybrid-search + OCR-hydrate path the
-    /// `ask` command uses.
-    async fn ask_context(&self, query: &str, top_k: u32) -> anyhow::Result<Vec<RetrievedChunk>>;
+    /// `ask` command uses. `session_id = Some(id)` (0.4.0 PR6) scopes retrieval to that
+    /// session's own frames so the answer cites only in-session frames; `None` is the
+    /// unchanged frame-level path (D10).
+    async fn ask_context(
+        &self,
+        query: &str,
+        top_k: u32,
+        session_id: Option<i64>,
+    ) -> anyhow::Result<Vec<RetrievedChunk>>;
 
     /// The active answer provider, or `None` when no answer model is loaded (`/v1/ask`
     /// then returns 503).
@@ -199,6 +207,8 @@ pub fn build_router(state: ApiState) -> Router {
         .route("/v1/search", get(routes::search))
         .route("/v1/frames/{id}", get(routes::frame))
         .route("/v1/context/where-was-i", get(routes::where_was_i))
+        .route("/v1/sessions", get(sessions::list_sessions))
+        .route("/v1/sessions/{id}", get(sessions::session_detail))
         .route(
             "/v1/marks",
             get(routes::list_marks).post(routes::create_mark),
