@@ -4926,3 +4926,42 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 ```text
 ```
+
+## Pass 15 — 2026-07-11 — Docs cleanup + repository-exposure scrub
+
+Maintenance pass (no app/runtime behavior change). Removed four live-capture demo screenshots,
+scrubbed absolute user paths + personal-activity prose from the build-loop logs and
+`01_PROJECT_CONTEXT.md`, sanitized `crates/sessions/tests/engine.rs` fixtures to synthetic
+`user`/`DEVBOX`, moved the crate author email to a noreply address, refreshed the as-built docs for
+v0.3.3 + the 0.4.0 sessions arc (15 crates / schema v11), archived the pre-0.4.0 manual acceptance
+checklists to `specs/archive/TESTING.pre-0.4.0.md`, and deleted the dead `docs/superpowers/` notes.
+
+Rust was touched (test fixtures + `Cargo.toml`), so the CI-order gate was run:
+
+```
+$ cargo fmt --all -- --check
+FMT_CLEAN
+
+$ cargo test -p sessions --test engine
+running 21 tests
+...
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.42s   # no warnings
+
+$ cargo build --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.54s
+
+$ cargo test --workspace
+# every suite reported "test result: ok"; 0 failed across the workspace
+
+$ git diff --exit-code -- ui/src/bindings
+BINDINGS_CLEAN
+
+$ git grep -inE 'users.nicol|nicol@|estrem@gmail' -- .
+EXPOSURE_CLEAN   # no hits
+
+$ git ls-files -- screenshots/
+screenshots/timeline.png
+```

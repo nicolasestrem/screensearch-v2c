@@ -68,6 +68,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen capture only sees the foreground window, so a tool running in the background is under-
   recorded, which caps how completely concurrent work can be reconstructed.
 
+### Documentation
+- Documentation refresh and repository-exposure scrub. Demo screenshots that had been captured from
+  a live install (and therefore showed real personal screen content) were removed pending re-shoot
+  against synthetic data. Absolute user paths and personal-activity notes were replaced with
+  placeholders in the build-loop logs, test fixtures were changed to synthetic user/host values, and
+  the crate author email now uses a noreply address. `docs/ARCHITECTURE.md`, `README.md`,
+  `CLAUDE.md`, `AGENTS.md`, and `docs/API.md` were updated for v0.3.3 and the 0.4.0 sessions arc (15
+  crates, schema v11). The pre-0.4.0 manual acceptance checklists moved to
+  `specs/archive/TESTING.pre-0.4.0.md`, and three obsolete design notes under `docs/superpowers/`
+  were removed.
+
 ## Older versions
 
 Releases 0.3.3 and earlier are archived in [CHANGELOG-ARCHIVE.md](./CHANGELOG-ARCHIVE.md).
