@@ -393,3 +393,101 @@ invariant confirmed against the live database.
 
 Record the date, Windows build, WebView2 version, and the observed session/frame ids and citation
 ownership results, the same way the PR5 acceptance run above does.
+
+## D16 first-auto-delivery gate — live update path (0.4.0 PR7)
+
+This is the release-blocking gate for v0.4.0 (decision D16, `docs/0.4.0.md`). v0.4.0 is the first
+release existing installs receive automatically, so before the tag we prove the whole update path
+on a real 0.3.2-or-0.3.3 install: **auto-update check → background download → user-initiated
+restart → first boot runs the 10 → 11 migration → sessions appear over pre-existing history → the
+frame-level features are unchanged.** A failure anywhere here is a stop-and-report; do not tag.
+
+The installed app's updater endpoint is baked to `releases/latest/download/latest.json`, which
+only resolves for a published, non-prerelease GitHub release. Because the real v0.4.0 tag comes
+after this gate, the gate is served by a **temporary** full release under a non-`v*` tag
+(`pre-0.4.0`), built and signed locally, published just before the run and deleted right after.
+This mirrors the 0.3.2 PR2 update E2E; the difference is that the manifest advertises the real
+`0.4.0` version (so the installed 0.3.3 sees a strictly-newer update) while the assets live under
+the temporary tag.
+
+**Do not run `npm run dev`, `cargo tauri dev`, or any repo-built executable against the live data
+directory during this gate.** A dev build shares the Roaming data dir and would migrate the live
+DB to schema 11 out of band, destroying the test bed. Every DB read below is `sqlite3 -readonly`,
+which is safe against the running app.
+
+Paths on the maintainer machine: live DB `%APPDATA%\app.screensearchv2c.desktop\screensearch.db`;
+logs `%APPDATA%\app.screensearchv2c.desktop\logs\screensearch.log.YYYY-MM-DD` (daily-rolling, the
+suffix date is UTC, so an evening run can span two files; tail with
+`Get-Content <file> -Wait -Tail 50`); installed exe
+`%LOCALAPPDATA%\ScreenSearch\ScreenSearch.exe`.
+
+### Precondition — D5 backup verified present
+
+Before the run, confirm a dated copy of the live `screensearch.db` exists outside the repo and
+outside `%APPDATA%` (decision D5, release-blocker-class). Verify integrity and that it predates the
+migration:
+
+```
+sqlite3 -readonly "<backup>.db" "PRAGMA integrity_check; SELECT version FROM schema_version;"
+```
+
+Expect `ok` and `10`. If the intended D16 history bed is a restored historical backup, it must read
+schema **10**; a schema-11 file cannot be restored under 0.3.3 (the installed app rejects a newer
+schema). Take one more fresh dated backup of the actual bed with
+`cargo run -p harness -- backup --to <dir outside repo and appdata>` and keep both.
+
+### BEFORE — the running 0.3.3 install, temp release published
+
+Capture the baseline so the after-state is comparable:
+
+1. Version: `(Get-Item "$env:LOCALAPPDATA\ScreenSearch\ScreenSearch.exe").VersionInfo.ProductVersion`
+   is `0.3.3`.
+2. Schema: `SELECT version FROM schema_version;` is `10`; `SELECT COUNT(*) FROM sqlite_master WHERE
+   name IN ('sessions','session_artifacts');` is `0`.
+3. History baseline: `SELECT COUNT(*), MIN(captured_at), MAX(captured_at) FROM frames;` and
+   `SELECT COUNT(*) FROM marks;` — record verbatim.
+4. Frame-level baseline via the local API (enable **Settings → Local API**; the token persists in
+   the DB and survives the update): `GET /v1/health` (`"version":"0.3.3"`, `capturing:true`) and
+   `GET /v1/search?q=<a known term from the historical data>` — record the top result frame ids
+   verbatim for a byte-comparable after-check.
+5. Trigger: the user clicks **Check for updates** (Settings App section, NavRail footer, or tray).
+   Expected: the UI shows an available `0.4.0` update; the log shows the background download begin
+   and then a signature-verified download whose byte count equals the installer size; a
+   restart-to-update affordance appears. No update should ever install without the user's click.
+
+### THE UPDATE — user-initiated restart
+
+The user clicks restart (the only install trigger). Expected: a log line recording the install on
+user-initiated restart, a graceful shutdown, the passive NSIS installer running, and the app
+relaunching on its own.
+
+### AFTER — first boot of 0.4.0
+
+1. Version: exe ProductVersion is `0.4.0`; `GET /v1/health` reports `"version":"0.4.0"` using the
+   **same** token as before.
+2. Migration (**gate**): `SELECT version FROM schema_version;` is `11`; both `sessions` and
+   `session_artifacts` tables exist; the day's log carries the migration lines. A failure here is
+   stop-and-report — do not tag. Rollback: quit the app, delete
+   `screensearch.db`/`-wal`/`-shm`, copy the D5 backup back, reinstall 0.3.3 from its GitHub
+   release.
+3. Frames untouched (D10): re-run the BEFORE queries. The frame count is greater than or equal to
+   the baseline (capture resumed), `MIN(captured_at)` is unchanged, the marks count is identical,
+   and the same `/v1/search` query returns the same top frame ids.
+4. Sessions over pre-existing history (**gate**): within roughly 60 s of boot and continuing, the
+   log shows `sessions historical backfill advanced` with `cursor_ms` climbing toward `target_ms`
+   and no `sessions ... failed; capture remains active` warnings; `SELECT COUNT(*) FROM sessions;`
+   grows across polls; `SELECT COUNT(*) FROM sessions WHERE started_at < <update-epoch-ms>;` is
+   greater than zero (sessions strictly over history that predates the update); `SELECT value FROM
+   settings WHERE key LIKE 'sessions.%';` shows the `backfill_done_until` checkpoint advancing; and
+   the Timeline on a backfilled historical date shows session bands, with one drill-in opening
+   truthfully against its real row. Do **not** gate the tag on backfill completion (months of
+   history at 6 h per chunk per 60 s tick takes hours and yields to capture by design); gate on a
+   clean migration, an advancing scheduler, historical sessions visible, and frame features
+   unchanged. Confirm completion (`cursor_ms == target_ms`) opportunistically before the PR opens.
+5. Idle re-check: **Check for updates** on the 0.4.0 install reports no update (the temp manifest's
+   `0.4.0` equals the running version).
+
+Record in the build log (`specs/05`): timestamps, verbatim query outputs, verbatim log lines, and
+the installer byte-count match. After the gate and the remaining live acceptance, delete the temp
+release (`gh release delete pre-0.4.0 --yes --cleanup-tag`) and confirm the endpoint reverts to
+`0.3.3`.
