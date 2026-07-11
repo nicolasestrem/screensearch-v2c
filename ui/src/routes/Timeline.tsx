@@ -5,7 +5,7 @@
 // scope the window (and the Recall search). All five states: loading skeleton,
 // empty ("No captures in this range"), error+retry, partial (thumbnails resolving),
 // populated. The scrub area never goes blank — empty windows show an invitation.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
@@ -16,9 +16,9 @@ import {
   Panel,
   Skeleton,
 } from "../components/primitives";
-import { ScanlineTimeline } from "../components/domain";
+import { ScanlineTimeline, SessionBands } from "../components/domain";
 import * as cmd from "../lib/ipc/commands";
-import { useFrames, useTimeline } from "../lib/ipc/queries";
+import { useFrames, useSessions, useTimeline } from "../lib/ipc/queries";
 import { useUiStore } from "../state/uiStore";
 import { toast } from "../state/toastStore";
 import { absoluteDate, absoluteTime } from "../lib/time";
@@ -41,6 +41,7 @@ export function Component() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setSelectedRange = useUiStore((s) => s.setSelectedRange);
+  const rangePresetRef = useRef<HTMLDivElement>(null);
 
   const [days, setDays] = useState(1);
   const range = lastDaysRange(days);
@@ -60,6 +61,12 @@ export function Component() {
   );
   const timeline = useTimeline(range, bucketCount);
   const thumbs = useFrames(range, THUMB_LIMIT);
+  const sessions = useSessions({
+    time_range: range,
+    kind: null,
+    tool: null,
+    limit: null,
+  });
 
   // Keep the head inside the window when the range changes.
   useEffect(() => {
@@ -85,9 +92,29 @@ export function Component() {
 
   const buckets = timeline.data ?? [];
   const hasData = buckets.length > 0;
+  const sessionLayer = (forceLoading = false) => (
+    <SessionBands
+      sessions={sessions.data ?? []}
+      range={range}
+      loading={forceLoading || sessions.isLoading}
+      error={sessions.isError ? String(sessions.error) : null}
+      onRetry={() => sessions.refetch()}
+      onFocusRangePresets={() =>
+        rangePresetRef.current
+          ?.querySelector<HTMLButtonElement>("button")
+          ?.focus()
+      }
+      onOpen={(sessionId) => navigate(`/timeline/session/${sessionId}`)}
+    />
+  );
 
   const rangeControl = (
-    <div className="flex gap-1" role="group" aria-label="Time range">
+    <div
+      ref={rangePresetRef}
+      className="flex gap-1"
+      role="group"
+      aria-label="Time range"
+    >
       {PRESETS.map((p) => (
         <button
           key={p.days}
@@ -131,23 +158,32 @@ export function Component() {
           }
         >
           {timeline.isLoading ? (
-            <Skeleton className="h-24 w-full rounded-none" />
+            <div className="relative min-h-24 overflow-hidden rounded-none bg-base">
+              <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
+              {sessionLayer(true)}
+            </div>
           ) : timeline.isError ? (
-            <ErrorState
-              title="Couldn't load the timeline"
-              message={String(timeline.error)}
-              onRetry={() => timeline.refetch()}
-            />
+            <div className="flex flex-col gap-2">
+              <ErrorState
+                title="Couldn't load the timeline"
+                message={String(timeline.error)}
+                onRetry={() => timeline.refetch()}
+              />
+              {sessionLayer()}
+            </div>
           ) : !hasData ? (
-            <EmptyState
-              title="No captures in this range"
-              description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
-              action={
-                <Button variant="secondary" onClick={() => navigate("/")}>
-                  Back to Deck
-                </Button>
-              }
-            />
+            <div className="flex flex-col gap-2">
+              <EmptyState
+                title="No captures in this range"
+                description="Nothing was recorded in this window. Widen the range, or start capture from the Deck."
+                action={
+                  <Button variant="secondary" onClick={() => navigate("/")}>
+                    Back to Deck
+                  </Button>
+                }
+              />
+              {sessionLayer()}
+            </div>
           ) : (
             <div className="flex flex-col gap-2">
               <ScanlineTimeline
@@ -157,11 +193,14 @@ export function Component() {
                 onScrub={setPosition}
                 onOpen={openAt}
                 thumbnails={thumbs.data ?? []}
+                sessionLayer={sessionLayer()}
               />
               <p className="px-1 text-caption text-ink-faint font-body">
                 Drag or use ← → to scrub (Shift for bigger steps, Home/End to
                 jump). Enter opens the moment.
                 {thumbs.isLoading ? " · Loading thumbnails…" : ""}
+                {sessions.isLoading ? " · Loading sessions…" : ""}
+                {sessions.isError ? " · Session bands unavailable." : ""}
               </p>
             </div>
           )}

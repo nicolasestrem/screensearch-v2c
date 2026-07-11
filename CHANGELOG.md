@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Sessions are now visible throughout the existing recall flow: Timeline shows accessible,
+  lane-packed session bands in exactly four stable rows; sessions needing lane five or later are
+  summarized by a neutral keyboard control that focuses the existing range presets. A code-split
+  drill-in shows lazy summaries, representative frames, exchanges, and cited Recaps; Moment and Deck
+  link the same context back to its session; and Advanced Settings exposes the two existing
+  session-pass thresholds. No new navigation item or frame-level behavior was added.
+- The in-app sessions surface now has typed core commands to list overlapping sessions, load a
+  bounded drill-in with representative frames and extracted exchanges, connect Moment and
+  where-was-i frames back to their session, lazily cache session title/summary intelligence, and
+  generate a cancellable Recap through the existing coverage-first report engine. Session Recaps
+  are scoped by exact frame ownership, so overlapping tracks cannot leak citations.
 - The sessions engine now groups captured frames in the background into stable focus, meeting, and
   recognized AI-tool sessions. It supports overlapping tools while keeping each frame owned by one
   session, incrementally updates the recent tail, and resumably backfills existing history without
@@ -26,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3,000-frame database in testing.
 
 ### Changed
+- PR #104 review follow-up resolves all four unresolved inline findings (two were the same store
+  issue): session-content preflight now stops inside SQLite with an indexed `EXISTS` query while
+  preserving Rust `str::trim`'s exact Unicode-whitespace semantics; Timeline error and empty states
+  reserve the same fixed four session lanes as loading and populated states; and the session
+  scheduler now emits quiet `sessions_changed` invalidation only for semantic changes, using delta
+  ownership/artifact writes so an unchanged pass is also a physical no-op.
+- PR5 review hardening makes Timeline session-band packing use measured token-sized hit targets,
+  holds loading/error/empty/populated at exactly four lanes to prevent layout shift, and summarizes
+  dense overflow without nested/horizontal scrolling. Mounted session queries now refetch after a
+  successful scheduler pass through a quiet typed event. Recap cancellation stops backend work on
+  cancel, route change, or unmount. Native WebView2 acceptance passed against the live schema-11
+  database; the dataset had no open session, so that visual variant remains transparently unobserved
+  rather than claimed.
 - Review hardening now includes the final frame when sampling session intelligence, parses taxonomy
   match strings once instead of allocating per frame, treats frozen boundary timestamps as
   inclusive, refuses to match merely touching mutable sessions, and resumes a crash-interrupted

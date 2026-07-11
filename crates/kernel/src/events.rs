@@ -40,4 +40,8 @@ pub enum KernelEvent {
     /// (`throttle_changed`, `03 §7`). Emitted each sample tick while the throttle is
     /// enabled so the readout stays live.
     ThrottleChanged(ThrottleStatus),
+    /// A sessions scheduler iteration committed session-row or ownership work. The UI
+    /// uses this pull-based signal to refetch mounted session queries; it carries no
+    /// user-facing notification (`sessions_changed`).
+    SessionsChanged,
 }

@@ -169,7 +169,13 @@ primitives (`03 §7e`):
 - **Timeline — session bands.** A kind-coded band layer over the Scanline ribbon (`§1`), **tokens
   only, one-accent discipline** (signal-orange stays the single accent — bands are differentiated by
   the functional palette + labels, not by competing accents). Data comes from `list_sessions`
-  (`03 §7`). Selecting a band opens the drill-in.
+  (`03 §7`). Selecting a band opens the drill-in. **Geometry is fixed at exactly four lanes in every
+  state**: initial route skeleton, loading, error, empty, and populated all reserve the same four
+  token-height rows. Sessions whose collision packing would require lane 5+ are not allowed to grow
+  the ribbon; they are aggregated into one neutral, keyboard-operable “more sessions — narrow the
+  range” control. Activating it focuses the Timeline's **existing range presets** (it does not add a
+  fifth lane, modal, new route, or new range control). This is the user-selected no-CLS resolution:
+  D9 remains strict and is not relaxed for dense overlap.
 - **Session drill-in** (`/timeline/session/:id`, a Timeline sub-route, **not** a NavRail item): title,
   span, tool/host chips, the **frames strip**, **exchanges** when present (best-effort — absent when
   markers didn't match, shown honestly, never invented), and a **Recap** action that runs the existing
@@ -196,7 +202,7 @@ ships with only the happy path; no mock data; no "Coming Soon."
 | Recall (search) | "No matches — try different words / widen the range, or include app chrome" | search cmd failed → retry | vectors still indexing → "searching text only for now" banner | content text by default + "include app chrome / raw text" toggle; never a zero-result dead end |
 | Recall (ask) | prompt invites a question (or a premade card) | sidecar unavailable → "answer model not loaded; load it?" | streaming (tokens arriving) | cite frames; premade cards prefill + submit |
 | Recall (reports) | range picked; prompt invites "Generate" | generation failed → retry, keep range | generating (single-pass / map-reduce in progress) | markdown + clickable source-frame chips + Copy + `.md` download + footer; honest empty on no-evidence ranges. **0.3.1 (D2/D3, #65):** the download is named `screensearch-report-YYYY-MM-DD-HHmm.md` (**local time**; same-minute collisions append `-2`, `-3`, …; extension unchanged); **0.3.2 (#89):** daily/weekly downloads carry the kind in the stem — `screensearch-report-daily-…` / `-weekly-…` — custom keeps the bare shape; the footer is one plain-text line block stating the **app version, model id used for generation, time span covered, and active filters** (plus the existing counts: passes · periods covered · frames summarized) — no new settings toggle |
-| Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank; **0.4.0:** session bands over the scanline (`03 §7e`) — a range with frames but no sessions yet shows the scrub with **no bands**, never a blank strip |
+| Timeline | "No captures in this range" | load failed → retry | thumbnails still resolving | scrub never blank; **0.4.0:** session bands over the scanline (`03 §7e`) reserve **exactly four lanes** in initial skeleton/loading/error/empty/populated; a range with frames but no sessions shows four empty reserved rows, while lane-5+ collisions aggregate into the neutral keyboard range-focus control — no geometry change |
 | Moment | — | frame missing/deleted → explain + back | vision not yet tagged → "queue vision for this frame" | on-demand vision entry point; **0.3.1 (D1, #59):** the recognized-text **and** raw-text regions **grow inline** with their content — full height, no internal max-height, **no nested scrollbar**; the page is one scroll context (the outer page scrolls); **0.4.0:** a "part of session" line links into the drill-in (absent, not placeholdered, when the frame has no session) |
 | Session drill-in (0.4.0) | session has **no exchanges** captured → honest "no exchanges captured for this session" (never invented) | session missing/deleted → explain + back to Timeline | **open session** → "still running — boundaries not final"; summary generating → skeleton line | title/span/tool-host chips + frames strip + exchanges (when present) + **Recap** (runs the report engine, `03 §8b`); low `confidence` surfaced honestly; **one scroll context**, no nested scrollbars (`§8`); loading = skeleton; populated = the assembled session |
 | Insights | "Not enough history yet" (honest) | compute failed → retry | partial windows labeled | no fabricated charts |
@@ -249,7 +255,8 @@ reveal/copy/regenerate + threat-model copy + the loud port-in-use "pick another"
 frames + content text + marks to a JSON file in the user's Downloads folder, **no images**;
 its own panel so it reads as independent of the API — it **works with the API off** — D12).
 Domain (0.4.0, names proposal-level — PR5 owns): `SessionBands` (the kind-coded band layer over
-`ScanlineTimeline`, tokens only, one-accent — data via `list_sessions`), `SessionDrillIn` (the
+`ScanlineTimeline`, tokens only, one-accent — data via `list_sessions`; exactly four reserved lanes
+in every state, lane-5+ overflow aggregated into the neutral range-preset-focus control), `SessionDrillIn` (the
 `/timeline/session/:id` view: title/span/tool-host chips + frames strip + exchanges + **Recap** via
 the report engine; one scroll context, no nested scrollbars — `§4`/`§8`).
 Each component owns one job; a label labels, an example demonstrates — nothing does double duty.
@@ -302,7 +309,9 @@ latency < 100 ms; no layout shift on data arrival (skeletons reserve space).
   100 / 125 / 150 % DPI.
 - **No cumulative layout shift on load:** skeletons reserve final dimensions (the budget rule above,
   now acceptance-grade); status chips have stable widths; toasts and banners **overlay** rather than
-  push — the readiness banner alone may reserve space.
+  push — the readiness banner alone may reserve space. The Timeline's 0.4.0 session layer is a fixed
+  application of this rule: initial route skeleton and loading/error/empty/populated states all
+  reserve exactly four band lanes; dense overlap is summarized, never allowed to add a fifth row.
 - Verified by PR4's screenshot matrix (all six content routes — Deck, Recall, Timeline, Moment
   (`/timeline/:id`), Insights, Settings — × {1280×720, 1920×1080, 3440×1440} × {100 %, 150 %}); any
   later view violating a line above is a regression against this section. Moment is not optional here:

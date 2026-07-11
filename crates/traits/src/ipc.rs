@@ -14,6 +14,7 @@ use ts_rs::TS;
 
 use crate::domain::{CaptureTrigger, TextSource, VisionAnalysis};
 use crate::jobs::{JobKind, JobStats};
+use crate::sessions::{Session, SessionArtifact, SessionHost, SessionKind};
 
 /// Half-open `[start, end)` time window (start inclusive, end exclusive), unix
 /// epoch milliseconds. `Store::hybrid_search` filters with `captured_at >= start
@@ -79,6 +80,55 @@ pub struct FrameMeta {
     /// file is gone but the text proof remains (`storage.retention_days`). The UI shows a
     /// "screenshot expired, text kept" state instead of a broken thumbnail.
     pub image_purged: bool,
+}
+
+/// Filters for the Timeline/session list. The command normalizes an empty `tool`
+/// to no filter and defaults/clamps `limit` at the shell boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct SessionQuery {
+    pub time_range: Option<TimeRange>,
+    pub kind: Option<SessionKind>,
+    pub tool: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// Compact session identity joined onto frame and resume responses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct SessionReference {
+    #[ts(type = "number")]
+    pub id: i64,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    #[ts(type = "number | null")]
+    pub ended_at: Option<i64>,
+    pub kind: SessionKind,
+    pub tool: Option<String>,
+    pub host: Option<SessionHost>,
+    pub title: Option<String>,
+    pub confidence: f64,
+}
+
+/// Session drill-in payload: bounded representative frames plus every extracted
+/// exchange. `frame_count` remains the truthful total even when `frames` is sampled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct SessionDetail {
+    pub session: Session,
+    pub frames: Vec<FrameMeta>,
+    pub frame_count: u32,
+    pub exchanges: Vec<SessionArtifact>,
+}
+
+/// Request-scoped in-app session Recap. Progress and cancellation reuse the existing
+/// report request id machinery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct SessionRecapRequest {
+    #[ts(type = "number")]
+    pub session_id: i64,
+    pub request_id: Option<String>,
 }
 
 /// Input to the `ask` command. The answer streams back via request-scoped `answer_delta` events.
@@ -294,6 +344,17 @@ pub struct FrameDetail {
     pub suppressed_text_count: u32,
     pub vision: Option<VisionAnalysis>,
     pub tags: Vec<String>,
+}
+
+/// Tauri-only frame response. The flattened base preserves the shipped Moment wire
+/// shape while the in-app command adds a session reference without changing HTTP/MCP.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct UiFrameDetail {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub frame: FrameDetail,
+    pub session: Option<SessionReference>,
 }
 
 /// Target of an `enqueue_vision` request: a single frame or a time range.
@@ -986,7 +1047,7 @@ pub struct OpenMoment {
 /// the run's representative (last) frame — `Enter`/click opens its Moment. `image_path`
 /// and `image_purged` let the overlay/Deck render a thumbnail without a second
 /// `get_frame`. `browser_url` is dormant today (always `None` in production capture).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../ui/src/bindings/")]
 pub struct ResumeContext {
     #[ts(type = "number")]
@@ -1003,6 +1064,17 @@ pub struct ResumeContext {
     pub span_end: i64,
     pub image_path: String,
     pub image_purged: bool,
+}
+
+/// Tauri-only where-was-i response. HTTP/MCP retain the shipped `ResumeContext`
+/// object; the in-app command receives the same flattened fields plus session context.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../ui/src/bindings/")]
+pub struct UiResumeContext {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub context: ResumeContext,
+    pub session: Option<SessionReference>,
 }
 
 /// A mark — a user-flagged moment with an optional intention note (`list_marks`
@@ -1180,11 +1252,16 @@ mod ts_number_guard {
             ("TimeRange", TimeRange::inline()),
             ("SearchHit", SearchHit::inline()),
             ("FrameMeta", FrameMeta::inline()),
+            ("SessionQuery", SessionQuery::inline()),
+            ("SessionReference", SessionReference::inline()),
+            ("SessionDetail", SessionDetail::inline()),
+            ("SessionRecapRequest", SessionRecapRequest::inline()),
             ("TimelineBucket", TimelineBucket::inline()),
             ("InsightsSummary", InsightsSummary::inline()),
             ("StorageStats", StorageStats::inline()),
             ("AppSuppression", AppSuppression::inline()),
             ("FrameDetail", FrameDetail::inline()),
+            ("UiFrameDetail", UiFrameDetail::inline()),
             ("VisionTarget", VisionTarget::inline()),
             ("CaptureTick", CaptureTick::inline()),
             ("AnswerEvent", AnswerEvent::inline()),
@@ -1195,6 +1272,7 @@ mod ts_number_guard {
             ("ReportResponse", ReportResponse::inline()),
             ("OpenMoment", OpenMoment::inline()),
             ("ResumeContext", ResumeContext::inline()),
+            ("UiResumeContext", UiResumeContext::inline()),
             ("Mark", Mark::inline()),
             ("MarkToast", MarkToast::inline()),
             ("PressureSample", PressureSample::inline()),

@@ -19,11 +19,13 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use traits::{
     AnswerEvent, AnswerOpts, AppSuppression, AskRequest, CaptureControl, CaptureSource,
-    CapturedFrame, ComponentReadiness, ComponentStatus, FrameDetail, FrameMeta, InsightsSummary,
-    JobStats, Mark, ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig,
-    ReportKind, ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse,
-    ResumeContext, RetrievedChunk, SearchHit, SearchQuery, SetModelTier, Settings, StorageStats,
-    Store, TextSpan, ThrottleStatus, TimeRange, TimelineBucket, ToastLevel, VisionTarget,
+    CapturedFrame, ComponentReadiness, ComponentStatus, FrameMeta, InsightsSummary, JobStats, Mark,
+    ModelLane, MonitorInfo, OcrProvider, OcrResult, Readiness, ReportConfig, ReportKind,
+    ReportMode, ReportProgress, ReportRange, ReportRequest, ReportResponse, RetrievedChunk,
+    SearchHit, SearchQuery, Session, SessionArtifactKind, SessionDetail, SessionFilter,
+    SessionQuery, SessionRecapRequest, SetModelTier, Settings, StorageStats, Store, TextSpan,
+    ThrottleStatus, TimeRange, TimelineBucket, ToastLevel, UiFrameDetail, UiResumeContext,
+    VisionTarget,
 };
 
 use embeddings::FastEmbedProvider;
@@ -46,6 +48,9 @@ const SIDECAR_HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 const REPORT_REPLY_BUDGET: u32 = 2048;
 const MAX_FRAME_LIST_LIMIT: u32 = 500;
 const MAX_FRAME_CONTEXT_LIMIT_EACH: u32 = 50;
+const MAX_SESSION_QUERY_LIMIT: u32 = 1000;
+const DEFAULT_SESSION_QUERY_LIMIT: u32 = 1000;
+const SESSION_DETAIL_FRAME_LIMIT: u32 = 24;
 const MIN_TIMELINE_BUCKETS: u32 = 120;
 const MAX_TIMELINE_BUCKETS: u32 = 2000;
 const MIN_INSIGHTS_BUCKETS: u32 = 24;
@@ -73,6 +78,88 @@ fn clamp_frame_list_limit(limit: u32) -> u32 {
 
 fn clamp_frame_context_limit(limit_each: u32) -> u32 {
     limit_each.min(MAX_FRAME_CONTEXT_LIMIT_EACH)
+}
+
+fn normalize_session_query(query: SessionQuery, request_now_ms: i64) -> SessionFilter {
+    let (from_ms, to_ms) = query
+        .time_range
+        .map_or((None, None), |range| (Some(range.start), Some(range.end)));
+    let tool = query.tool.and_then(|tool| {
+        let tool = tool.trim();
+        (!tool.is_empty()).then(|| tool.to_string())
+    });
+    SessionFilter {
+        from_ms,
+        to_ms,
+        kind: query.kind,
+        tool,
+        limit: Some(
+            query
+                .limit
+                .unwrap_or(DEFAULT_SESSION_QUERY_LIMIT)
+                .clamp(1, MAX_SESSION_QUERY_LIMIT),
+        ),
+        now_ms: request_now_ms,
+    }
+}
+
+async fn load_session_detail(
+    store: Arc<dyn Store>,
+    session_id: i64,
+    include_summary: bool,
+    answer: Option<Arc<dyn traits::AnswerProvider>>,
+) -> Result<Option<SessionDetail>, String> {
+    let Some(mut session) = store
+        .get_session(session_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let fully_cached =
+        session.title.is_some() && session.summary.is_some() && session.summary_model.is_some();
+    if include_summary && !fully_cached {
+        let answer = answer.ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+        session = kernel::sessions_intel::generate_session_title_summary(
+            store.clone(),
+            answer,
+            session_id,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    let sample = store
+        .session_frame_sample(session_id, SESSION_DETAIL_FRAME_LIMIT)
+        .await
+        .map_err(|error| error.to_string())?;
+    let exchanges = store
+        .list_session_artifacts(session_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|artifact| artifact.kind == SessionArtifactKind::Exchange)
+        .collect();
+    Ok(Some(SessionDetail {
+        session,
+        frames: sample.frames,
+        frame_count: sample.total_count,
+        exchanges,
+    }))
+}
+
+async fn session_recap_has_evidence(store: &dyn Store, session_id: i64) -> traits::Result<bool> {
+    store.session_has_usable_content(session_id).await
+}
+
+async fn load_ui_resume_context(
+    store: &dyn Store,
+    settings: &Settings,
+) -> traits::Result<Option<UiResumeContext>> {
+    let Some(context) = kernel::resume::where_was_i(store, settings).await? else {
+        return Ok(None);
+    };
+    let session = store.session_reference_for_frame(context.frame_id).await?;
+    Ok(Some(UiResumeContext { context, session }))
 }
 
 /// A slot the composition root fills off the launch thread, shared with command
@@ -213,12 +300,64 @@ async fn list_sidecar_devices(state: State<'_, AppState>) -> Result<Vec<String>,
 async fn get_frame(
     frame_id: i64,
     state: State<'_, AppState>,
-) -> Result<Option<FrameDetail>, String> {
+) -> Result<Option<UiFrameDetail>, String> {
     let store = state
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
-    store.get_frame(frame_id).await.map_err(|e| e.to_string())
+    let Some(frame) = store
+        .get_frame(frame_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let session = store
+        .session_reference_for_frame(frame_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(UiFrameDetail { frame, session }))
+}
+
+/// Lists sessions overlapping the optional half-open range. Open rows use this
+/// request's clock; presentation limits and an empty tool are normalized here.
+#[tauri::command]
+async fn list_sessions(
+    query: SessionQuery,
+    state: State<'_, AppState>,
+) -> Result<Vec<Session>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    store
+        .sessions_in_range(normalize_session_query(query, now_ms()))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Returns a bounded session drill-in. The base read performs no inference;
+/// `include_summary` lazily fills an incomplete title/summary and preserves the
+/// one-call cache path in `kernel::sessions_intel`.
+#[tauri::command]
+async fn get_session(
+    session_id: i64,
+    include_summary: bool,
+    state: State<'_, AppState>,
+) -> Result<Option<SessionDetail>, String> {
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    let answer = if include_summary {
+        match &state.kernel {
+            Some(kernel) => kernel.answer_provider().await,
+            None => None,
+        }
+    } else {
+        None
+    };
+    load_session_detail(store, session_id, include_summary, answer).await
 }
 
 /// All recognized text spans for a frame — normalized `[0,1]` geometry + classified role
@@ -302,13 +441,13 @@ async fn cancel_vision(state: State<'_, AppState>) -> Result<u64, String> {
 /// `None` = "nothing to resume yet". Reads the live `resume.min_dwell_secs` +
 /// `privacy.excluded_apps`; the heuristic itself is the pure `kernel::resume`.
 #[tauri::command]
-async fn where_was_i(state: State<'_, AppState>) -> Result<Option<ResumeContext>, String> {
+async fn where_was_i(state: State<'_, AppState>) -> Result<Option<UiResumeContext>, String> {
     let store = state
         .store
         .clone()
         .ok_or_else(|| "database unavailable".to_string())?;
     let settings = kernel::settings::load_settings(store.as_ref()).await;
-    kernel::resume::where_was_i(store.as_ref(), &settings)
+    load_ui_resume_context(store.as_ref(), &settings)
         .await
         .map_err(|e| e.to_string())
 }
@@ -627,6 +766,105 @@ async fn generate_report(
         markdown: out.markdown,
         cited_frame_ids: out.cited_frame_ids,
         range_label,
+        periods_total: out.periods_total,
+        periods_covered: out.periods_covered,
+        frames_sampled: out.frames_sampled,
+        frames_summarized: out.frames_summarized,
+        passes: out.passes,
+        truncated: out.truncated,
+        model,
+    })
+}
+
+/// Generates the existing coverage-first report over exactly the named session's
+/// owned frames. It shares progress/cancellation with recall reports and probes
+/// filtered evidence before acquiring the answer provider.
+#[tauri::command]
+async fn session_recap(
+    request: SessionRecapRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<ReportResponse, String> {
+    let request_id = request
+        .request_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| format!("session-recap-{}", next_ask_id()));
+    let store = state
+        .store
+        .clone()
+        .ok_or_else(|| "database unavailable".to_string())?;
+    if store
+        .get_session(request.session_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
+        return Err(format!("session {} not found", request.session_id));
+    }
+    if !session_recap_has_evidence(store.as_ref(), request.session_id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(empty_report_response("this session".to_string()));
+    }
+
+    let kernel = state
+        .kernel
+        .clone()
+        .ok_or_else(|| "kernel unavailable (database not open)".to_string())?;
+    let settings = kernel::settings::load_settings(store.as_ref()).await;
+    let cfg = ReportConfig {
+        daily_top_k: settings.reports_daily_top_k,
+        weekly_top_k: settings.reports_weekly_top_k,
+        map_reduce_min_frames: settings.reports_map_reduce_min_frames,
+        reply_budget: REPORT_REPLY_BUDGET,
+    };
+    let answer = kernel
+        .answer_provider()
+        .await
+        .ok_or_else(|| "inference sidecar not ready yet".to_string())?;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    state
+        .report_tasks
+        .lock()
+        .await
+        .insert(request_id.clone(), cancel.clone());
+    let emitter = app.clone();
+    let progress_id = request_id.clone();
+    let progress = move |stage: &str, done: u32, total: u32| {
+        let _ = emitter.emit(
+            "report_progress",
+            ReportProgress {
+                request_id: progress_id.clone(),
+                stage: stage.to_string(),
+                done,
+                total,
+            },
+        );
+    };
+
+    let result = kernel::reports::generate_session_recap(
+        store.as_ref(),
+        answer.as_ref(),
+        request.session_id,
+        cfg,
+        Some(&progress),
+        &cancel,
+    )
+    .await;
+    state.report_tasks.lock().await.remove(&request_id);
+    let out = result.map_err(|error| error.to_string())?;
+    let model = if out.mode == ReportMode::Empty {
+        None
+    } else {
+        answer.answer_model_label().await
+    };
+    Ok(ReportResponse {
+        markdown: out.markdown,
+        cited_frame_ids: out.cited_frame_ids,
+        range_label: "this session".to_string(),
         periods_total: out.periods_total,
         periods_covered: out.periods_covered,
         frames_sampled: out.frames_sampled,
@@ -1360,6 +1598,8 @@ pub fn run() {
             list_sidecar_devices,
             get_frame,
             get_frame_spans,
+            list_sessions,
+            get_session,
             search,
             capture_control,
             enqueue_vision,
@@ -1367,6 +1607,7 @@ pub fn run() {
             ask,
             cancel_ask,
             generate_report,
+            session_recap,
             cancel_report,
             save_report_markdown,
             set_model_tier,
@@ -1705,6 +1946,9 @@ async fn forward_events(kernel: Arc<Kernel>, app: tauri::AppHandle) {
             }
             Ok(KernelEvent::ThrottleChanged(status)) => {
                 let _ = app.emit("throttle_changed", status);
+            }
+            Ok(KernelEvent::SessionsChanged) => {
+                let _ = app.emit("sessions_changed", ());
             }
             Err(RecvError::Lagged(n)) => {
                 tracing::warn!(skipped = n, "event bus lagged; some ticks dropped")
@@ -2559,6 +2803,271 @@ mod tests {
         assert_eq!(clamp_timeline_buckets(u32::MAX), MAX_TIMELINE_BUCKETS);
         assert_eq!(clamp_insights_buckets(1), MIN_INSIGHTS_BUCKETS);
         assert_eq!(clamp_insights_buckets(u32::MAX), MAX_INSIGHTS_BUCKETS);
+    }
+
+    #[test]
+    fn session_query_normalizes_time_kind_tool_and_limit() {
+        let filter = normalize_session_query(
+            traits::SessionQuery {
+                time_range: Some(TimeRange {
+                    start: 100,
+                    end: 200,
+                }),
+                kind: Some(traits::SessionKind::Ai),
+                tool: Some("  codex  ".to_string()),
+                limit: Some(u32::MAX),
+            },
+            999,
+        );
+        assert_eq!(filter.from_ms, Some(100));
+        assert_eq!(filter.to_ms, Some(200));
+        assert_eq!(filter.kind, Some(traits::SessionKind::Ai));
+        assert_eq!(filter.tool.as_deref(), Some("codex"));
+        assert_eq!(filter.limit, Some(1000));
+        assert_eq!(filter.now_ms, 999);
+
+        let defaults = normalize_session_query(
+            traits::SessionQuery {
+                time_range: None,
+                kind: None,
+                tool: Some("   ".to_string()),
+                limit: Some(0),
+            },
+            123,
+        );
+        assert_eq!(defaults.tool, None);
+        assert_eq!(defaults.limit, Some(1));
+
+        let omitted = normalize_session_query(
+            traits::SessionQuery {
+                time_range: None,
+                kind: None,
+                tool: None,
+                limit: None,
+            },
+            321,
+        );
+        assert_eq!(omitted.limit, Some(1000));
+    }
+
+    #[tokio::test]
+    async fn session_detail_samples_24_frames_and_returns_only_exchanges_without_inference() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let session_id = store
+            .insert_session(traits::NewSession {
+                started_at: 0,
+                ended_at: Some(3_000),
+                kind: traits::SessionKind::Ai,
+                tool: Some("codex".to_string()),
+                host: Some(traits::SessionHost::Desktop),
+                context_key: "ai:codex".to_string(),
+                confidence: 0.9,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let mut frame_ids = Vec::new();
+        for index in 0..30_i64 {
+            let frame_id = store
+                .insert_frame(traits::NewFrame {
+                    captured_at: index * 100,
+                    monitor_index: 0,
+                    width: 1920,
+                    height: 1080,
+                    image_path: format!("frames/{index}.webp"),
+                    content_hash: format!("hash-{index}"),
+                    app_hint: Some("codex".to_string()),
+                    window_title: Some("Codex".to_string()),
+                    browser_url: None,
+                    capture_trigger: None,
+                })
+                .await
+                .unwrap();
+            frame_ids.push(frame_id);
+        }
+        store
+            .assign_frames_session(&frame_ids, Some(session_id))
+            .await
+            .unwrap();
+        store
+            .insert_session_artifacts(
+                session_id,
+                &[
+                    traits::NewSessionArtifact {
+                        kind: traits::SessionArtifactKind::Exchange,
+                        role: Some(traits::SessionArtifactRole::User),
+                        frame_id: Some(frame_ids[0]),
+                        content: "please fix it".to_string(),
+                    },
+                    traits::NewSessionArtifact {
+                        kind: traits::SessionArtifactKind::Note,
+                        role: None,
+                        frame_id: Some(frame_ids[1]),
+                        content: "reserved note".to_string(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        let detail = load_session_detail(store, session_id, false, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.frame_count, 30);
+        assert_eq!(detail.frames.len(), 24);
+        assert_eq!(
+            detail.frames.first().map(|frame| frame.frame_id),
+            frame_ids.first().copied()
+        );
+        assert_eq!(
+            detail.frames.last().map(|frame| frame.frame_id),
+            frame_ids.last().copied()
+        );
+        assert_eq!(detail.exchanges.len(), 1);
+        assert_eq!(
+            detail.exchanges[0].kind,
+            traits::SessionArtifactKind::Exchange
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_resume_context_hydrates_session_without_changing_external_resume_shape() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut ids = Vec::new();
+        for (at, app) in [
+            (0, "Code"),
+            (120_000, "Code"),
+            (200_000, "Firefox"),
+            (320_000, "Firefox"),
+        ] {
+            ids.push(
+                store
+                    .insert_frame(traits::NewFrame {
+                        captured_at: at,
+                        monitor_index: 0,
+                        width: 1920,
+                        height: 1080,
+                        image_path: format!("frames/{at}.webp"),
+                        content_hash: format!("resume-{at}"),
+                        app_hint: Some(app.to_string()),
+                        window_title: Some(app.to_string()),
+                        browser_url: None,
+                        capture_trigger: None,
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let session_id = store
+            .insert_session(traits::NewSession {
+                started_at: 0,
+                ended_at: Some(120_000),
+                kind: traits::SessionKind::Focus,
+                tool: None,
+                host: Some(traits::SessionHost::Ide),
+                context_key: "focus:code".to_string(),
+                confidence: 0.75,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        store
+            .assign_frames_session(&ids[..2], Some(session_id))
+            .await
+            .unwrap();
+
+        let joined = load_ui_resume_context(store.as_ref(), &Settings::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(joined.context.frame_id, ids[1]);
+        assert_eq!(
+            joined.session.as_ref().map(|session| session.id),
+            Some(session_id)
+        );
+
+        assert!(store.delete_unfrozen_session(session_id).await.unwrap());
+        let deleted = load_ui_resume_context(store.as_ref(), &Settings::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(deleted.context.frame_id, ids[1]);
+        assert!(deleted.session.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_recap_evidence_probe_rejects_missing_text_before_provider_acquisition() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let session_id = store
+            .insert_session(traits::NewSession {
+                started_at: 0,
+                ended_at: Some(1_000),
+                kind: traits::SessionKind::Focus,
+                tool: None,
+                host: Some(traits::SessionHost::Ide),
+                context_key: "focus:code".to_string(),
+                confidence: 0.7,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        let frame_id = store
+            .insert_frame(traits::NewFrame {
+                captured_at: 100,
+                monitor_index: 0,
+                width: 1920,
+                height: 1080,
+                image_path: "frames/100.webp".to_string(),
+                content_hash: "hash-100".to_string(),
+                app_hint: Some("Code".to_string()),
+                window_title: Some("Code".to_string()),
+                browser_url: None,
+                capture_trigger: None,
+            })
+            .await
+            .unwrap();
+        store
+            .assign_frames_session(&[frame_id], Some(session_id))
+            .await
+            .unwrap();
+
+        assert!(!session_recap_has_evidence(store.as_ref(), session_id)
+            .await
+            .unwrap());
+        store
+            .insert_ocr(
+                frame_id,
+                traits::OcrResult {
+                    text: "\t\n \r".to_string(),
+                    mean_confidence: 0.9,
+                    engine: "test".to_string(),
+                    spans: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            !session_recap_has_evidence(store.as_ref(), session_id)
+                .await
+                .unwrap(),
+            "Rust str::trim whitespace must not acquire the answer provider"
+        );
+        store
+            .insert_ocr(
+                frame_id,
+                traits::OcrResult {
+                    text: "usable filtered content".to_string(),
+                    mean_confidence: 0.9,
+                    engine: "test".to_string(),
+                    spans: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(session_recap_has_evidence(store.as_ref(), session_id)
+            .await
+            .unwrap());
     }
 
     #[test]

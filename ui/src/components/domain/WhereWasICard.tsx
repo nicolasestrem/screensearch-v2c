@@ -7,14 +7,14 @@ import { FrameImage } from "./FrameImage";
 import { IconMark } from "../icons";
 import { useWhereWasI } from "../../lib/ipc/queries";
 import { clockTime } from "../../lib/time";
-import type { ResumeContext } from "../../bindings/ResumeContext";
+import type { UiResumeContext } from "../../bindings/UiResumeContext";
 
 export interface WhereWasICardProps {
   /** Open the resumed context's Moment (Deck wires this to `/timeline/:id`). */
   onOpen: (frameId: number) => void;
 }
 
-function headline(ctx: ResumeContext): string {
+function headline(ctx: UiResumeContext): string {
   return ctx.window_title ? `${ctx.window_title} — ${ctx.app}` : ctx.app;
 }
 
@@ -63,6 +63,14 @@ export function WhereWasICard({ onOpen }: WhereWasICardProps) {
             <span className="font-mono text-data text-ink-faint">
               until {clockTime(resume.data.span_end)}
             </span>
+            {resume.data.session ? (
+              <span className="font-mono text-data text-ink-muted">
+                session {clockTime(resume.data.session.started_at)}–
+                {resume.data.session.ended_at
+                  ? clockTime(resume.data.session.ended_at)
+                  : "still running"}
+              </span>
+            ) : null}
           </span>
         </button>
       )}

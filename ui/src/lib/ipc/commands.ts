@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { Readiness } from "../../bindings/Readiness";
 import type { JobStats } from "../../bindings/JobStats";
-import type { FrameDetail } from "../../bindings/FrameDetail";
+import type { UiFrameDetail } from "../../bindings/UiFrameDetail";
 import type { FrameMeta } from "../../bindings/FrameMeta";
 import type { TextSpan } from "../../bindings/TextSpan";
 import type { SearchQuery } from "../../bindings/SearchQuery";
@@ -28,11 +28,15 @@ import type { AppSuppression } from "../../bindings/AppSuppression";
 import type { ThrottleStatus } from "../../bindings/ThrottleStatus";
 import type { HotkeyStatus } from "../../bindings/HotkeyStatus";
 import type { Mark } from "../../bindings/Mark";
-import type { ResumeContext } from "../../bindings/ResumeContext";
+import type { UiResumeContext } from "../../bindings/UiResumeContext";
 import type { ApiStatus } from "../../bindings/ApiStatus";
 import type { ExportRequest } from "../../bindings/ExportRequest";
 import type { ExportResult } from "../../bindings/ExportResult";
 import type { UpdateStatus } from "../../bindings/UpdateStatus";
+import type { Session } from "../../bindings/Session";
+import type { SessionDetail } from "../../bindings/SessionDetail";
+import type { SessionQuery } from "../../bindings/SessionQuery";
+import type { SessionRecapRequest } from "../../bindings/SessionRecapRequest";
 
 /** Liveness probe for the IPC bridge. */
 export const ping = (): Promise<string> => invoke<string>("ping");
@@ -58,8 +62,20 @@ export const listSidecarDevices = (): Promise<string[]> =>
   invoke<string[]>("list_sidecar_devices");
 
 /** Full per-frame detail; `null` if the id is unknown. */
-export const getFrame = (frameId: number): Promise<FrameDetail | null> =>
-  invoke<FrameDetail | null>("get_frame", { frameId });
+export const getFrame = (frameId: number): Promise<UiFrameDetail | null> =>
+  invoke<UiFrameDetail | null>("get_frame", { frameId });
+
+/** Sessions overlapping the requested range, with optional kind/tool filters. */
+export const listSessions = (query: SessionQuery): Promise<Session[]> =>
+  invoke<Session[]>("list_sessions", { query });
+
+/** A bounded session drill-in. `includeSummary` lazily generates and caches the
+ *  title/summary on the in-app path; the base read remains inference-free. */
+export const getSession = (
+  sessionId: number,
+  includeSummary: boolean,
+): Promise<SessionDetail | null> =>
+  invoke<SessionDetail | null>("get_session", { sessionId, includeSummary });
 
 /** A frame's recognized text spans (normalized geometry + role), reading order. Backs
  *  the Moment text+layout reconstruction shown when a screenshot has been degraded. */
@@ -101,6 +117,12 @@ export const generateReport = (
 /** Cancel an in-flight report by request id (stops at the next pass boundary). */
 export const cancelReport = (requestId: string): Promise<void> =>
   invoke<void>("cancel_report", { requestId });
+
+/** Generate the existing coverage-first report over one stable session id. */
+export const sessionRecap = (
+  request: SessionRecapRequest,
+): Promise<ReportResponse> =>
+  invoke<ReportResponse>("session_recap", { request });
 
 /** Save a report's markdown to a date-stamped `.md` file in Downloads and return the
  *  written path (0.3.1 D2, #65). `stem` is the local-time filename stem the UI builds;
@@ -196,8 +218,8 @@ export const openMoment = (frameId: number): Promise<void> =>
 
 /** The last sustained context before the current detour, or `null` for "nothing to
  *  resume yet" (`where_was_i`, `03 §7b`). Drives the overlay empty state + Deck card. */
-export const whereWasI = (): Promise<ResumeContext | null> =>
-  invoke<ResumeContext | null>("where_was_i");
+export const whereWasI = (): Promise<UiResumeContext | null> =>
+  invoke<UiResumeContext | null>("where_was_i");
 
 /** Create a mark: exactly one of an existing `frameId`, or `captureNow` to capture the
  *  current screen past the diff gate first (`add_mark`, `03 §7b`, D8). Returns the id. */

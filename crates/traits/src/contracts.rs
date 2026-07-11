@@ -16,12 +16,13 @@ use crate::domain::{
 };
 use crate::ipc::{
     AnswerDelta, AppSuppression, FrameMeta, InsightsSummary, Mark, PressureSample, SearchHit,
-    SearchQuery, TimelineBucket,
+    SearchQuery, SessionReference, TimelineBucket,
 };
 use crate::jobs::{Job, JobKind, JobStats, NewJob};
 use crate::sessions::{
     ExtractedExchange, NewSession, NewSessionArtifact, SegmentationParams, SegmenterFrame, Session,
     SessionArtifact, SessionArtifactKind, SessionContent, SessionDraft, SessionFilter,
+    SessionFrameSample,
 };
 use crate::{MonitorInfo, Result};
 
@@ -413,6 +414,28 @@ pub trait Store: Send + Sync {
 
     async fn get_session(&self, _id: i64) -> Result<Option<Session>> {
         Ok(None)
+    }
+
+    async fn session_frame_sample(
+        &self,
+        _session_id: i64,
+        _limit: u32,
+    ) -> Result<SessionFrameSample> {
+        Ok(SessionFrameSample {
+            total_count: 0,
+            frames: Vec::new(),
+        })
+    }
+
+    async fn session_reference_for_frame(
+        &self,
+        _frame_id: i64,
+    ) -> Result<Option<SessionReference>> {
+        Ok(None)
+    }
+
+    async fn session_has_usable_content(&self, _session_id: i64) -> Result<bool> {
+        Ok(false)
     }
 
     async fn session_frames_meta(&self, _session_id: i64) -> Result<Vec<SegmenterFrame>> {

@@ -22,6 +22,118 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 Pass 14: post-review final clean integrated suite
+
+- **Verification:** Ran the color-disabled UI-first sequence after the PR #104 fixes: `npm ci` →
+  `npm run test` → lint → UI build → MCP staging → fmt → workspace clippy/build/test → generated-
+  binding guard. All ten commands exited 0; the npm allow-scripts warning was non-failing.
+- **Evidence:** `specs/05_BUILD_REVIEW.md` Pass 14 preserves each captured log verbatim, including
+  all 1,091 workspace-test lines and the empty fmt/binding-guard outputs. An exact source-vs-fence
+  comparison passed for all ten blocks.
+- **Scope:** verification/docs only; no code, schema/migration, API/MCP, frame behavior, or generated
+  binding changed in this pass.
+
+## 2026-07-11 — 0.4.0 PR5 PR #104 review follow-up
+
+- **Change:** Addressed all four unresolved inline review threads in code `c360d7e`, clustered into
+  three fixes because the two store threads were duplicates. The session-content preflight is now an
+  indexed, early-stopping SQLite `EXISTS` query with an explicit character set proven identical to
+  Rust `str::trim` Unicode whitespace. Timeline error and empty states reserve the same four session
+  lanes as loading/populated. Scheduler reconciliation compares session/artifact state, writes only
+  assignment/artifact deltas, and suppresses `sessions_changed` for a semantic no-op while retaining
+  conservative invalidation if a multi-write pass fails after a possible partial commit.
+- **Why:** The review findings were applicable correctness/performance issues inside the settled
+  PR5 session UI contract: avoid loading every content row, keep D9 geometry state-stable, and keep
+  the pull-based refresh event truthful rather than firing once per scheduler cadence.
+- **Verification:** Focused tests went RED then GREEN for the SQL VM early stop plus exact Unicode
+  whitespace, Timeline error/empty fixed lanes, and unchanged-pass event suppression. Full store and
+  kernel focused suites, UI test/typecheck/lint/build, fmt, and focused clippy passed; exact evidence
+  is preserved in `05` Pass 13. Independent post-fix review found no critical, important, or minor
+  findings and returned Ready: yes after its scheduler 13/13, store sessions 10/10, and UI 2/2
+  focused reruns. The post-review full workspace suite is intentionally a later pass.
+- **Review handling:** No bot replies or review-thread state changes were made, per maintainer
+  instruction. No schema/migration, API/MCP, audio, notification, nudge, score, NavRail, frame-level
+  behavior, or generated binding changed.
+
+## 2026-07-11 — 0.4.0 PR5 Pass 12: final clean integrated suite
+
+- **Verification:** Ran the color-disabled UI-first sequence at tip `8629e0c`: `npm ci` → additional
+  `npm run test` regression gate → lint → UI build → MCP staging → fmt → workspace clippy/build/test
+  → generated-binding guard. All commands exited 0; the npm allow-scripts warning was non-failing.
+- **Evidence:** `specs/05_BUILD_REVIEW.md` Pass 12 preserves every command's raw output verbatim,
+  including the 1,084-line `cargo test --workspace` log and empty fmt/binding-guard blocks.
+- **Scope:** verification/docs only; no code, schema, API/MCP, frame behavior, or generated binding
+  was changed by this record.
+
+## 2026-07-11 — 0.4.0 PR5 Pass 11: final review-fix native acceptance
+
+- **Change:** Recorded the real `npm run dev` Tauri/WebView2 acceptance of code `02e5cad` against docs
+  `67b76ce`: typed-null `sessions_changed` fired once after startup scheduler work without a toast;
+  loading, empty, 7-day populated, and dense 30-day all retained the fixed 140/192 grid/outer
+  geometry; dense overflow rendered the neutral range-narrowing control.
+- **Keyboard/layout evidence:** the dense view showed 12 visible bands plus
+  `9 more sessions — narrow the range`, zero overlaps, and 1280 document/viewport parity. Native CDP
+  Enter moved focus from the keyboard-focusable overflow button to `TODAY` inside `aria-label="Time
+  range"`. Loading used `32px 32px 32px 32px` and five skeleton elements; the 7-day view showed 21
+  visible bands with identical geometry.
+- **Why:** closes the final live acceptance for the explicit fixed-four-lane D9 decision and quiet
+  scheduler invalidation protocol (`05` Pass 11; `docs/TESTING.md`).
+- **Scope:** documentation evidence only. No schema, API/MCP, frame, code, or generated-binding change.
+
+## 2026-07-11 — 0.4.0 PR5 final review: fixed session geometry + live refresh
+
+- **Change:** Recorded code commit `02e5cad` (`fix(sessions): stabilize live session bands`): Timeline
+  reserves exactly four band lanes in initial skeleton/loading/error/empty/populated; collisions that
+  need lane 5+ aggregate into a neutral keyboard control focusing the existing range presets. A
+  typed-null `sessions_changed` event now invalidates mounted session queries after successful
+  scheduler work, without any notification/toast surface.
+- **Why:** the five-simultaneous-session RED exposed a genuine D9 ambiguity: unbounded normal-flow
+  lane growth changed route geometry. The user explicitly selected fixed-four-lane option 1; no-CLS
+  remains binding (`UI_REFERENCE §3`/`§8`, `03 §7`, `06` #31).
+- **Verification:** layout RED `0 !== 4` (0 pass / 1 fail); GREEN `npm run test` 1 pass / 0 fail,
+  controller rerun 65.3531 ms; typecheck/lint clean; build 438 modules in 1.59 s. Refresh RED E0425
+  (missing `run_scheduler_pass`) + E0599 (missing `KernelEvent::SessionsChanged`); GREEN scheduler
+  event test 1 passed / 0 failed / 57 filtered; focused kernel+screensearch all-target clippy clean.
+- **Scope:** documentation normalization only in this follow-up. Code/schema version, API/MCP, audio,
+  notifications, nudges, scores, NavRail, and frame-level behavior remain unchanged.
+
+## 2026-07-10 — 0.4.0 PR5 Task 3: native runbook and integrated verification record
+
+- **Change:** Added the PR5 native/WebView2 acceptance runbook to `docs/TESTING.md`; reconciled the
+  final review behavior (measured token-aware session-band packing, normal-flow lane expansion,
+  absolute band labels, Recap backend cancellation, and separate lazy-summary failure) across the
+  human changelog and live build-loop records; and recorded the integrated UI-first verification in
+  `05` with raw command output.
+- **Why:** `03 §13c-5`, `UI_REFERENCE §7`/`§8`, and the PR5 Task 3 brief require native acceptance to
+  be reproducible and automated evidence to remain distinct from real WebView2 observation.
+- **Contract status:** no schema change or migration (schema remains 11), no new contradiction, and
+  no new silent-spec gap. API/MCP remains PR6-owned.
+- **Verification:** full UI-first command output is preserved verbatim in `specs/05_BUILD_REVIEW.md`;
+  the subsequent real `npm run dev` Tauri/WebView2 acceptance is recorded in `05` Pass 9 and
+  `docs/TESTING.md`. It passed the live band/drill-in/Moment round trip, exact ownership of all 39
+  Recap citations, Recap cancellation, keyboard entry, layout/DPI, reduced-motion, low-confidence,
+  no-exchange, and Settings checks. The current 21-session dataset had no open row, so that variant
+  is transparently unavailable rather than claimed. No app runtime errors were observed.
+
+## 2026-07-10 — 0.4.0 PR5 Task 2: session recall surfaces
+
+- **Change:** Added generated-type IPC/TanStack Query integration for session lists, base/lazy detail,
+  and Recap; deterministic Timeline bands whose configured ribbon height is a minimum and whose
+  token-height normal-flow lanes expand as needed, with no hidden lanes or nested or horizontal
+  scrollbar; the code-split session drill-in with inline
+  summary/exchanges, wrapped representative frames, existing report rendering and citations; safe
+  Session↔Moment route-state round-trips; optional Moment/Deck session context; and the collapsed
+  Advanced Sessions settings group. Capture and retention now invalidate session caches with frames.
+- **Why:** `03 §7`/`§7e`/`§8b`, `UI_REFERENCE §3`–`§8`, and the PR5 Task 2 brief require sessions to
+  become visible inside existing routes without a NavRail addition, new report machinery, duplicate
+  server state, nested scrollbars, or frame-level behavior change.
+- **Verification:** `npm run lint`, `npm run typecheck`, and `npm run build` pass. The production build
+  emits a distinct `Session-*.js` chunk. Focused state review covers invalid/missing/loading/error/
+  partial/populated drill-in, session-band loading/error/empty/populated, open boundaries, absent
+  exchanges/session references, summary/Recap retries, and direct-link versus route-state navigation.
+- **Remaining acceptance:** native real-data/sidecar/DPI walkthrough under `03 §13c-5`; no browser-only
+  mock was introduced to make that integration appear exercised.
+
 ## 2026-07-10 - 0.4.0 PR4: production sessions engine + recognition
 
 - **Change:** added `crates/sessions` as the production home for the pure concurrent segmenter,
@@ -335,3 +447,21 @@
   meetings, gap equality, density, qualification, and open projection without changing the frozen
   harness baseline. The post-fix D9 rerun remained F1 0.400/tool 0.818. Active run instructions now
   use only `npm run dev`; never a direct executable.
+
+## 2026-07-10 — 0.4.0 PR5 Task 1: typed session UI commands and exact Recap
+
+- **Change:** Added `ts-rs` exports for the schema-11 session domain and four new IPC models; session
+  references on frame/resume payloads; exact overlap-query normalization; bounded session detail;
+  lazy cached title/summary generation; and a cancellable session Recap that reuses the existing
+  report engine over only the requested session's frame ownership.
+- **Why:** `03 §7`/`§7e`, `§8b`, `UI_REFERENCE §3`/`§6`, and the PR5 Task 1 brief require a typed Rust
+  boundary for the Timeline drill-in, Moment/Deck links, and a Recap with no cross-track leakage or
+  new summarization machinery.
+- **Verification:** TDD RED→GREEN focused tests covered exports/no-bigint, store sample totals and
+  endpoints, no cross-session leakage, missing/deleted references, query normalization, detail
+  filtering, cached intelligence, scoped Recap citations, and no-evidence zero calls. The combined
+  `cargo test -p traits -p store -p kernel -p screensearch` and task-relevant clippy passed.
+- **Review follow-up:** Split the session-bearing frame/resume shapes into Tauri-only generated DTOs
+  so the existing API/MCP JSON remains unchanged; made the preflight use Rust whitespace semantics;
+  and clamped the store sampler itself to 24. Focused RED→GREEN tests, UI lint/build, fmt, and focused
+  clippy passed; broad integration and native acceptance are now recorded in `05` Passes 8–9.

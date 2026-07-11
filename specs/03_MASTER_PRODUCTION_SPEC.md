@@ -531,7 +531,11 @@ proposal.)*
 
 **Events** (core → UI): `capture_tick`, `job_progress`, `answer_delta`, `sidecar_status`,
 `readiness_changed`, `toast`, `throttle_changed` (0.2.1; payload `ThrottleStatus`, broadcast each
-governor tick while `throttle.enabled` — `§5`).
+governor tick while `throttle.enabled` — `§5`), and `sessions_changed` (0.4.0 PR5; typed payload
+`null`, from Rust unit `()`). After a sessions scheduler iteration has at least one successful awaited
+store pass, the kernel emits `sessions_changed`; mounted session list/detail queries refetch from the
+store. It is a pull-based cache-invalidation signal only: **no notification, toast,
+nudge, badge, or score** is produced (D10/D11).
 
 **`ThrottleStatus` shape** (0.2.1, smart enrichment throttle): `{ enabled: bool, level: u8 (0=Normal
 / 1=High / 2=Sustained), sample: Option<PressureSample>, gpu_monitored: bool }`, where
@@ -738,7 +742,10 @@ the unfrozen tail plus a **one-shot, resumable, throttle-aware historical pass**
 frames. Its raw checkpoint is `sessions.backfill_done_until` (not part of typed `Settings`); one
 approximately six-hour chunk runs per tick and extends to the next global `merge_gap` before it is
 committed, so chunk boundaries cannot split a session. Any pass failure logs and degrades to no
-sessions; capture/OCR never waits on it (D10).
+sessions; capture/OCR never waits on it (D10). A scheduler iteration emits the typed-null
+`sessions_changed` event only after a successful awaited store pass, so mounted session queries can
+refetch committed rows; failures do not fabricate a change event, and the signal has no user-facing
+notification/toast semantics (`§7`).
 - **Two key levels ([a]).** The `§7b`-generalized key — `app_hint` ⊕ browser domain ⊕ taxonomy tool
   id — remains the internal **micro-run** key; where-was-i/`resume.rs` is untouched. The persisted
   task-level grammar is exactly `ai:<tool-id>` | `meeting:<taxonomy-id>` |

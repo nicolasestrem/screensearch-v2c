@@ -568,3 +568,152 @@ gate). The exported sample and labels are never committed; specs/PR carry aggreg
    invented role.
 6. **D10 regression spot-check:** exercise where-was-i, frame search, Ask, Timeline, and marks while
    capture continues. PR4 adds no commands, no NavRail route, no audio, and no notification surface.
+
+## Native acceptance — sessions UI (0.4.0 PR5)
+
+This is a **real Tauri/WebView2 acceptance run**, not a Vite-browser substitute. Start only from the
+repo root with `npm run dev`; never launch the debug executable or use `cargo tauri dev`. Before
+opening the PR5 build against the live database, confirm the D5 backup described above still exists
+outside both the repo and the app-data directory. Use real schema-11 session data. A local answer
+model must be ready for the Recap checks.
+
+Record the date, Windows build, WebView2 version, monitor resolution/DPI, database frame/session
+counts, and screenshots or screen recording for every observed result. Do not mark a row accepted
+when the required real-data state is absent; record that state as **not available** and carry it to
+the PR7 audit.
+
+### Navigation and data truth
+
+1. Open Timeline on a range containing multiple session kinds and overlapping sessions. Confirm the
+   density ribbon remains visible, session bands use the existing neutral/ok/warn token vocabulary,
+   every visible band has a usable native-button hit target, and the band layer is exactly four lanes.
+   Use a fixture/range with at least five simultaneous collisions: confirm no fifth row appears, the
+   omitted bands are counted by the neutral “more sessions — narrow the range” keyboard control, and
+   activating that control focuses the existing range presets. Repeat during initial route skeleton,
+   loading, error, empty, and populated; all five states must reserve identical four-lane geometry
+   with no clipping, nested scrolling, horizontal scrolling, or layout shift.
+2. With pointer input, follow **band → session drill-in → representative Moment → back**. Confirm
+   Back returns to the same session drill-in and the drill-in remains on the same Timeline context.
+   Open a Moment directly and use **Part of session**; confirm the link is omitted for a frame with
+   no session. Also open the session URL directly and confirm its back action returns to Timeline.
+3. In the drill-in, compare the displayed absolute span, kind/tool/host, confidence, frame total,
+   representative first/last frames, and exchanges against the real session row/artifacts. Confirm
+   exchange links open the cited Moment and no exchange roles are invented when artifacts are absent.
+4. Generate **Recap** with the answer model ready. Confirm progress is visible, the result uses the
+   existing report rendering/footer, every citation opens a Moment owned by this exact session, and
+   no frame from an overlapping session leaks into the citations. Run it again and press **Cancel**;
+   confirm generation stops and no late result replaces the idle state. Repeat once while navigating
+   away mid-generation to confirm route teardown also cancels backend work.
+5. Open Deck and confirm the existing Jump back action still opens its Moment while the optional
+   session span truthfully frames it. In Advanced Settings, confirm the collapsed **Sessions** group
+   contains only `sessions.min_len_secs` (30–3600) and `sessions.gap_close_secs` (60–3600), saves
+   normally, and adds no NavRail item.
+
+### Keyboard, state, and layout matrix
+
+6. Keyboard-only: focus the Timeline slider and use its existing arrow/Enter behavior; then Tab to
+   session bands, move through every band in DOM order, press Enter/Space to open one, traverse every
+   drill-in action/link, open a Moment, and return. Confirm visible focus throughout and no interactive
+   button is nested inside the ARIA slider.
+7. Observe each real-data state that is available: loading skeletons; list/detail error + Retry;
+   frames with **no sessions** (density ribbon remains usable); session with **no exchanges**; **open**
+   session (still running/non-final boundary); **low-confidence** session (numeric confidence shown);
+   missing/deleted session; summary failure/retry; Recap failure/retry. Do not synthesize database
+   rows or mock IPC responses merely to make a state appear tested.
+8. At 1280×720, 1920×1080, and 3440×1440, check 100%, 125%, and 150% Windows display scaling where
+   the hardware permits. Cover Timeline, session drill-in, affected Moment, and Deck. At each point
+   confirm fixed rails, exactly one vertical route scroll context, no route-level horizontal
+   scrollbar, no nested vertical scroller, wrapped frame/citation/exchange strips, no clipped band
+   lanes, and no cumulative layout shift when session/summary/Recap data arrives. Repeat with Windows
+   reduced motion enabled and confirm session-band/scan ambient motion is absent.
+9. Keep Timeline mounted while a real scheduler pass commits new/reconciled session rows. Confirm the
+   Tauri `sessions_changed` event payload is `null`, the mounted session list refetches without route
+   navigation or manual reload, and the new bands/ownership become visible. Confirm the signal creates
+   no toast, notification, badge, nudge, or score. Repeat an unchanged pass and confirm it emits no
+   event; repeat with a failed scheduler pass and confirm no false success is claimed (a failed
+   multi-write pass may conservatively invalidate because an earlier write may already have
+   committed).
+
+### PR5 evidence status
+
+**Observed 2026-07-10 — native acceptance passed, with the open-session variant unavailable in the
+current live dataset.** The run used `npm run dev` against the live schema-11 database, with the
+worktree's `target/debug/screensearch.exe` process and a real Tauri WebView
+(`window.__TAURI_INTERNALS__ === true`), not browser mocks. The live status showed 515 captures / 514
+tagged. Evidence:
+
+- Deck rendered `JUMP BACK ... until 17:08 session 16:44–17:14`, preserving the existing action while
+  adding truthful session framing.
+- Timeline rendered eight real overlapping sessions in two lanes. At 1280×720 DPR 1, 1920×1080 DPR
+  1, and emulated 3440×1440 DPR 1.5, document width equalled viewport width; every band was at least
+  32×32; band overlaps, nested vertical scroll contexts, and horizontal overflow were all zero.
+  Accessible band labels included kind, full date/time, and tool/host.
+- Keyboard focus on the first band followed by CDP native `rawKeyDown` / `char` / `keyUp` Enter
+  opened `/timeline/session/3`. The real round trip was AI band → session 3 → representative frame
+  `/timeline/2651`; Moment showed back label `SESSION` and `PART OF SESSION ScreenSearch Workflow`,
+  and SESSION returned exactly to `/timeline/session/3`.
+- Session 3 showed AI · codex/desktop · Confidence 78.5% · Jul 10 01:21–02:50 · 41 frames / 24
+  representatives, plus the honest `No exchanges captured for this session.` state. It had one
+  vertical scroller and no horizontal overflow.
+- Recap cancellation was observed after `Summarizing 1 of 4 · 1/4`: clicking CANCEL returned to
+  GENERATE RECAP and no stale result appeared. A clean Recap completed in 15 seconds with 5 passes,
+  1/1 periods, 39/39 frames summarized, and the truthful trimmed footer. All 39
+  `report.cited_frame_ids` were read back through the live `get_frame` command; every frame resolved
+  with `session.id === 3`.
+- Live session 21 provided the low-confidence state: neutral Confidence 47.2%, 50 frames, no invented
+  exchanges, one scroll context, and no horizontal overflow. A live `list_sessions` query returned
+  21 sessions and open IDs `[]`; therefore the open-session visual variant was **unavailable in this
+  dataset**, not passed or failed. Its implementation/test coverage remains, but no live observation
+  is claimed.
+- With CDP emulating `prefers-reduced-motion: reduce`, the media query matched and computed animated
+  elements were `[]`. The Sessions expander showed Minimum session length 120 (min 30 / max 3600)
+  and Close gap 300 (min 60 / max 3600), with labels explaining the next session pass.
+- The only console/network noise was the existing `favicon.ico` 404 and an informational WebView
+  lazy-image intervention; no app runtime errors were observed. The screenshot remains outside the
+  repo at `%TEMP%\screensearch-pr5-timeline.png` and is not committed.
+
+**Observed 2026-07-11 — final review-fix acceptance at code `02e5cad` / docs `67b76ce`.** The real
+`npm run dev` process was again this worktree's `target/debug/screensearch.exe`, with
+`window.__TAURI_INTERNALS__ === true`. Through the real typed listener in
+`/src/lib/ipc/events.ts`, a startup scheduler pass produced `sessions_changed` probe `{count:1}` and
+no toast or notification. Fixed geometry was then observed at 1280 px:
+
+- Forced initial loading through the existing dev-state seam: grid
+  `32px 32px 32px 32px`, grid height 140, session outer height 192, and five skeleton elements.
+- Live empty Today: the same 140/192 grid/outer geometry and no horizontal overflow.
+- Live populated 7-day: the same 140/192 geometry, 21 visible bands, zero band overlaps, and document
+  width 1280 equal to viewport width 1280.
+- Live populated dense 30-day: the same 140/192 geometry, 12 visible bands, neutral
+  `9 more sessions — narrow the range`, zero overlaps, and document width 1280 equal to viewport
+  width 1280. The overflow button was keyboard-focusable. CDP native
+  `rawKeyDown` / `char` / `keyUp` Enter moved focus to `TODAY`, whose parent `aria-label` was
+  `Time range`.
+
+These observations close the focused dense-overflow, fixed-state-geometry, keyboard-focus, and live
+scheduler-refresh steps above. No schema, API/MCP, or frame behavior changed.
+
+**Final clean suite (Pass 12, 2026-07-11):** the required UI-first sequence passed at tip `8629e0c`,
+with the additional `npm run test` session-band regression gate between `npm ci` and lint. Full
+color-disabled raw output—including the 1,084-line workspace test log and empty fmt/binding-guard
+outputs—is preserved verbatim in `specs/05_BUILD_REVIEW.md` Pass 12. The npm allow-scripts warning
+was non-failing.
+
+**PR #104 review follow-up (Pass 13, 2026-07-11):** all four unresolved inline threads were
+applicable and are fixed in code `c360d7e`; two store threads described the same unbounded content
+scan. Focused RED/GREEN evidence is preserved in `specs/05_BUILD_REVIEW.md` Pass 13. The store query
+now stops in SQLite and exactly preserves Rust Unicode trim behavior; Timeline loading/error/empty/
+populated all reserve four lanes (the forced error/loading render measured four 31.9965 px rows,
+139.9653 px total, 1704 px document/viewport parity, and no nested scrollers); and a repeated
+unchanged scheduler pass emits no `sessions_changed` event or redundant ownership/artifact writes.
+This is focused review verification only; the post-review full UI-first suite is recorded separately
+after it runs.
+
+**Post-review final clean suite (Pass 14, 2026-07-11):** the required color-disabled UI-first
+sequence passed after code `c360d7e` and review documentation `3f62479`: `npm ci` → `npm run test`
+→ lint → UI build → MCP staging → fmt → workspace clippy/build/test → generated-binding guard. All
+ten commands exited 0; the npm allow-scripts warning was non-failing. The ten fenced blocks in
+`specs/05_BUILD_REVIEW.md` Pass 14 were compared directly with their captured logs; all matched,
+including the complete 1,091-line workspace-test log and the empty fmt/binding-guard logs.
+
+The automated UI-first verification below this acceptance record remains the build/test evidence;
+the native observations above complete `03 §13c-5` without substituting mocks for the live app.

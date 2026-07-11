@@ -4,12 +4,26 @@
 
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Row};
 use traits::{
-    NewSession, NewSessionArtifact, Result, SegmenterFrame, Session, SessionArtifact,
-    SessionArtifactKind, SessionArtifactRole, SessionContent, SessionFilter, SessionHost,
-    SessionKind,
+    FrameMeta, NewSession, NewSessionArtifact, Result, SegmenterFrame, Session, SessionArtifact,
+    SessionArtifactKind, SessionArtifactRole, SessionContent, SessionFilter, SessionFrameSample,
+    SessionHost, SessionKind, SessionReference,
 };
 
 use crate::SqliteStore;
+
+const MAX_SESSION_FRAME_SAMPLE: u32 = 24;
+
+// SQLite's one-argument trim() only removes ASCII space. This is the complete set used by
+// Rust's `char::is_whitespace`/`str::trim` for the pinned toolchain, passed as trim()'s explicit
+// character set so moving the predicate into SQLite does not narrow the existing contract.
+const RUST_TRIM_WHITESPACE: &str = "\u{0009}\u{000a}\u{000b}\u{000c}\u{000d}\u{0020}\u{0085}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+
+const SESSION_HAS_USABLE_CONTENT_SQL: &str = "SELECT EXISTS(
+       SELECT 1 FROM frames f
+       JOIN frame_text ft ON ft.frame_id=f.id
+       WHERE f.session_id=?1 AND trim(ft.content_text, ?2)<>''
+       LIMIT 1
+     )";
 
 fn kind_from_db(value: &str) -> rusqlite::Result<SessionKind> {
     match value {
@@ -110,6 +124,30 @@ fn row_to_artifact(row: &Row<'_>) -> rusqlite::Result<SessionArtifact> {
         frame_id: row.get(4)?,
         content: row.get(5)?,
         created_at: row.get(6)?,
+    })
+}
+
+fn row_to_frame_meta(row: &Row<'_>) -> rusqlite::Result<FrameMeta> {
+    Ok(FrameMeta {
+        frame_id: row.get(0)?,
+        captured_at: row.get(1)?,
+        image_path: row.get(2)?,
+        image_purged: row.get::<_, i64>(3)? != 0,
+        app_hint: row.get(4)?,
+    })
+}
+
+pub(crate) fn row_to_session_reference(row: &Row<'_>) -> rusqlite::Result<SessionReference> {
+    let kind: String = row.get(3)?;
+    Ok(SessionReference {
+        id: row.get(0)?,
+        started_at: row.get(1)?,
+        ended_at: row.get(2)?,
+        kind: kind_from_db(&kind)?,
+        tool: row.get(4)?,
+        host: host_from_db(row.get(5)?)?,
+        title: row.get(6)?,
+        confidence: row.get(7)?,
     })
 }
 
@@ -274,6 +312,101 @@ impl SqliteStore {
         .await
     }
 
+    pub async fn session_frame_sample(
+        &self,
+        session_id: i64,
+        limit: u32,
+    ) -> Result<SessionFrameSample> {
+        let limit = limit.min(MAX_SESSION_FRAME_SAMPLE);
+        self.with_conn(move |conn| {
+            let total: i64 = conn.query_row(
+                "SELECT count(*) FROM frames WHERE session_id=?1",
+                [session_id],
+                |row| row.get(0),
+            )?;
+            let total_count = u32::try_from(total).unwrap_or(u32::MAX);
+            if total == 0 || limit == 0 {
+                return Ok(SessionFrameSample {
+                    total_count,
+                    frames: Vec::new(),
+                });
+            }
+
+            let frames = if limit == 1 {
+                let mut stmt = conn.prepare(
+                    "SELECT id, captured_at, image_path, image_purged, app_hint
+                     FROM frames WHERE session_id=?1
+                     ORDER BY captured_at, id LIMIT 1",
+                )?;
+                let rows = stmt
+                    .query_map([session_id], row_to_frame_meta)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            } else {
+                let mut stmt = conn.prepare(
+                    "WITH RECURSIVE
+                     ranked AS (
+                         SELECT id, captured_at, image_path, image_purged, app_hint,
+                                row_number() OVER (ORDER BY captured_at, id) - 1 AS rn,
+                                count(*) OVER () AS total
+                         FROM frames WHERE session_id=?1
+                     ),
+                     slots(k) AS (
+                         SELECT 0
+                         UNION ALL SELECT k + 1 FROM slots WHERE k + 1 < ?2
+                     )
+                     SELECT r.id, r.captured_at, r.image_path, r.image_purged, r.app_hint
+                     FROM ranked r JOIN slots s
+                       ON r.rn = CASE
+                           WHEN r.total <= ?2 THEN s.k
+                           ELSE (s.k * (r.total - 1)) / (?2 - 1)
+                       END
+                     WHERE s.k < min(r.total, ?2)
+                     ORDER BY r.captured_at, r.id",
+                )?;
+                let rows = stmt
+                    .query_map(params![session_id, i64::from(limit)], row_to_frame_meta)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            Ok(SessionFrameSample {
+                total_count,
+                frames,
+            })
+        })
+        .await
+    }
+
+    pub async fn session_reference_for_frame(
+        &self,
+        frame_id: i64,
+    ) -> Result<Option<SessionReference>> {
+        self.with_conn(move |conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT s.id, s.started_at, s.ended_at, s.kind, s.tool, s.host,
+                            s.title, s.confidence
+                     FROM frames f JOIN sessions s ON s.id=f.session_id
+                     WHERE f.id=?1",
+                    [frame_id],
+                    row_to_session_reference,
+                )
+                .optional()?)
+        })
+        .await
+    }
+
+    pub async fn session_has_usable_content(&self, session_id: i64) -> Result<bool> {
+        self.with_conn(move |conn| {
+            Ok(conn.query_row(
+                SESSION_HAS_USABLE_CONTENT_SQL,
+                params![session_id, RUST_TRIM_WHITESPACE],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+    }
+
     pub async fn session_frames_meta(&self, session_id: i64) -> Result<Vec<SegmenterFrame>> {
         self.with_conn(move |conn| {
             let mut stmt = conn.prepare(
@@ -421,5 +554,76 @@ impl SqliteStore {
             )? > 0)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{RUST_TRIM_WHITESPACE, SESSION_HAS_USABLE_CONTENT_SQL};
+
+    #[test]
+    fn usable_content_query_bounds_results_inside_sqlite() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE sessions (id INTEGER PRIMARY KEY);
+             CREATE TABLE frames (
+               id INTEGER PRIMARY KEY,
+               session_id INTEGER REFERENCES sessions(id)
+             );
+             CREATE INDEX idx_frames_session ON frames(session_id);
+             CREATE TABLE frame_text (
+               frame_id INTEGER PRIMARY KEY REFERENCES frames(id),
+               content_text TEXT NOT NULL
+             );",
+        )
+        .expect("create query-plan fixture");
+
+        let explain = format!("EXPLAIN {SESSION_HAS_USABLE_CONTENT_SQL}");
+        let opcodes = conn
+            .prepare(&explain)
+            .expect("prepare EXPLAIN")
+            .query_map(rusqlite::params![1_i64, RUST_TRIM_WHITESPACE], |row| {
+                row.get::<_, String>(1)
+            })
+            .expect("read EXPLAIN opcodes")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect EXPLAIN opcodes");
+
+        assert!(
+            opcodes.iter().any(|opcode| opcode == "DecrJumpZero"),
+            "the VM must stop after SQLite finds one usable row; opcodes: {opcodes:?}"
+        );
+
+        let query_plan = format!("EXPLAIN QUERY PLAN {SESSION_HAS_USABLE_CONTENT_SQL}");
+        let plan = conn
+            .prepare(&query_plan)
+            .expect("prepare EXPLAIN QUERY PLAN")
+            .query_map(rusqlite::params![1_i64, RUST_TRIM_WHITESPACE], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("read query plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect query plan");
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_frames_session")),
+            "session filtering must use idx_frames_session; plan: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("INTEGER PRIMARY KEY")),
+            "frame_text lookup must use its frame_id primary key; plan: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn sqlite_trim_character_set_matches_rust_trim() {
+        let rust_whitespace: String = (0..=char::MAX as u32)
+            .filter_map(char::from_u32)
+            .filter(|character| character.is_whitespace())
+            .collect();
+        assert_eq!(RUST_TRIM_WHITESPACE, rust_whitespace);
     }
 }
