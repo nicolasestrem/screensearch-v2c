@@ -22,6 +22,17 @@
 
 ---
 
+## 2026-07-11 — 0.4.0 PR5 Pass 14: post-review final clean integrated suite
+
+- **Verification:** Ran the color-disabled UI-first sequence after the PR #104 fixes: `npm ci` →
+  `npm run test` → lint → UI build → MCP staging → fmt → workspace clippy/build/test → generated-
+  binding guard. All ten commands exited 0; the npm allow-scripts warning was non-failing.
+- **Evidence:** `specs/05_BUILD_REVIEW.md` Pass 14 preserves each captured log verbatim, including
+  all 1,091 workspace-test lines and the empty fmt/binding-guard outputs. An exact source-vs-fence
+  comparison passed for all ten blocks.
+- **Scope:** verification/docs only; no code, schema/migration, API/MCP, frame behavior, or generated
+  binding changed in this pass.
+
 ## 2026-07-11 — 0.4.0 PR5 PR #104 review follow-up
 
 - **Change:** Addressed all four unresolved inline review threads in code `c360d7e`, clustered into

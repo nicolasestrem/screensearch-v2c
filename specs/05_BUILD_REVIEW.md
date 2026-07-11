@@ -3695,3 +3695,1234 @@ reply or review-thread mutation was made.
 - **Scope/status:** No schema/migration, API/MCP, audio, notification, nudge, score, NavRail,
   frame-level behavior, or generated binding changed. This pass records focused review evidence;
   the post-review full UI-first suite has not yet run and will be recorded separately.
+
+## Pass 14 — 2026-07-11 — 0.4.0 PR5 post-review final clean integrated verification
+
+- **Scope:** Final color-disabled UI-first suite after the PR #104 fixes and Pass 13 documentation. All commands exited 0. The npm allow-scripts warning is non-failing. Raw output follows verbatim; empty fmt/binding-guard logs are represented by empty fenced blocks.
+
+### `cd ui && npm ci` (exit 0)
+
+```text
+
+added 348 packages, and audited 349 packages in 4s
+
+151 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts:
+npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+```
+
+### `npm run test` (exit 0)
+
+```text
+
+> screensearch-ui@0.3.3 test
+> node --experimental-strip-types --test test/sessionBandLayout.test.mjs
+
+✔ five simultaneous sessions use four fixed rows and aggregate the fifth (0.9343ms)
+✔ Timeline keeps fixed session lanes in every content state (0.3573ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 67.3035
+```
+
+### `npm run lint` (exit 0)
+
+```text
+
+> screensearch-ui@0.3.3 lint
+> eslint .
+
+```
+
+### `npm run build` (exit 0)
+
+```text
+
+> screensearch-ui@0.3.3 build
+> tsc --noEmit && vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 438 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                   0.80 kB │ gzip:  0.36 kB
+dist/overlay.html                                 0.99 kB │ gzip:  0.42 kB
+dist/assets/globals-80FYB378.css                 32.04 kB │ gzip:  6.80 kB
+dist/assets/timeRanges-BJgzkTNX.js                0.29 kB │ gzip:  0.19 kB
+dist/assets/openExternal-CrF7EMqa.js              0.31 kB │ gzip:  0.23 kB
+dist/assets/useAdaptiveBucketCount-pnT9Dvsn.js    0.35 kB │ gzip:  0.26 kB
+dist/assets/NotFound-Dj8WojQC.js                  0.44 kB │ gzip:  0.32 kB
+dist/assets/EmptyState-CIH9-Lyf.js                0.52 kB │ gzip:  0.31 kB
+dist/assets/Panel-BACJHu4M.js                     0.68 kB │ gzip:  0.44 kB
+dist/assets/timelineDraw-B37WQvuk.js              0.75 kB │ gzip:  0.44 kB
+dist/assets/FrameTile-DDAv1yCm.js                 0.97 kB │ gzip:  0.55 kB
+dist/assets/time-cX9c3v95.js                      1.01 kB │ gzip:  0.46 kB
+dist/assets/FrameImage-Ch_VvMBg.js                1.62 kB │ gzip:  0.85 kB
+dist/assets/HighlightedSnippet-CPtxR-fM.js        1.65 kB │ gzip:  0.83 kB
+dist/assets/AnswerStream-CdQ9QPy3.js              2.35 kB │ gzip:  1.20 kB
+dist/assets/HotkeyField-tDLhRbul.js               2.54 kB │ gzip:  1.32 kB
+dist/assets/ReportView-rO3sIXou.js                2.92 kB │ gzip:  1.45 kB
+dist/assets/path-r4_HdewI.js                      3.83 kB │ gzip:  0.96 kB
+dist/assets/Insights-D4NKE2C4.js                  5.46 kB │ gzip:  2.11 kB
+dist/assets/Session-DNF0ve2V.js                   7.26 kB │ gzip:  2.52 kB
+dist/assets/Moment-CpH_m4pU.js                    8.01 kB │ gzip:  2.98 kB
+dist/assets/Deck-DHu-AASz.js                     10.87 kB │ gzip:  3.67 kB
+dist/assets/overlay-CSt7Tmyw.js                  10.95 kB │ gzip:  3.87 kB
+dist/assets/Timeline-CiDmcsem.js                 11.16 kB │ gzip:  4.51 kB
+dist/assets/globals-CWyGAXYX.js                  16.74 kB │ gzip:  6.03 kB
+dist/assets/main-CTaclnnk.js                     22.86 kB │ gzip:  7.40 kB
+dist/assets/query-u_0r_xiX.js                    35.77 kB │ gzip: 10.59 kB
+dist/assets/Recall-C5bHg1qK.js                   37.86 kB │ gzip: 12.24 kB
+dist/assets/Settings-C_0vH6aU.js                 47.53 kB │ gzip: 13.45 kB
+dist/assets/router-CL_afuJ-.js                   64.86 kB │ gzip: 22.21 kB
+dist/assets/react-vendor-DTiTYlFD.js            143.42 kB │ gzip: 46.01 kB
+dist/assets/CitationTile-CarmCXg3.js            157.84 kB │ gzip: 47.99 kB
+✓ built in 1.70s
+```
+
+### `node scripts/stage-mcp.mjs` (exit 0)
+
+```text
+[stage-mcp] building screensearch-mcp (release)...
+    Finished `release` profile [optimized] target(s) in 0.21s
+[stage-mcp] up to date: C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri\binaries\screensearch-mcp-x86_64-pc-windows-msvc.exe
+```
+
+### `cargo fmt --all -- --check` (exit 0)
+
+```text
+```
+
+### `cargo clippy --workspace --all-targets -- -D warnings` (exit 0)
+
+```text
+    Checking store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+    Checking kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+    Checking mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+    Checking screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+    Checking api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.14s
+```
+
+### `cargo build --workspace` (exit 0)
+
+```text
+   Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+   Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 26.11s
+```
+
+### `cargo test --workspace` (exit 0)
+
+```text
+   Compiling mcp v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\mcp)
+   Compiling screensearch v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\src-tauri)
+   Compiling api v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\api)
+   Compiling inference v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\inference)
+   Compiling kernel v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\kernel)
+   Compiling store v0.3.3 (C:\Users\nicol\Documents\GitHub\screensearch-v2c\.worktrees\feat-0.4.0-pr5-sessions-ui\crates\store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.72s
+     Running unittests src\lib.rs (target\debug\deps\api-582ea0631a5e71d8.exe)
+
+running 2 tests
+test auth::tests::constant_time_eq_matches_only_identical_slices ... ok
+test export::tests::utc_stamp_matches_known_instants ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\http_api.rs (target\debug\deps\http_api-c0e77c0557ba1ea0.exe)
+
+running 15 tests
+test live_server_for_curl ... ignored
+test binds_loopback_only ... ok
+test ask_without_answer_model_is_503 ... ok
+test unknown_route_is_json_404 ... ok
+test where_was_i_returns_null_when_nothing_qualifies ... ok
+test export_window_excludes_out_of_range_frames ... ok
+test inverted_time_range_is_400 ... ok
+test ask_streams_sse_deltas ... ok
+test export_over_http_is_valid_json ... ok
+test health_requires_token_and_reports_state ... ok
+test token_swap_takes_effect_without_restart ... ok
+test search_returns_hits_from_fixture ... ok
+test marks_crud_roundtrip ... ok
+test frame_detail_image_and_not_found ... ok
+test export_to_file_writes_valid_json_without_a_server ... ok
+
+test result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src\lib.rs (target\debug\deps\capture-9abedaa63a7f798a.exe)
+
+running 26 tests
+test events::tests::source_starts_and_stops_cleanly_repeatedly ... ignored, requires a real desktop (USER32 message pump); run locally
+test diff::tests::content_hash_is_stable_and_distinct ... ok
+test privacy::tests::own_window_pid_rejects_foreign_process ... ok
+test tests::window_offset_maps_relative_to_monitor_origin ... ok
+test privacy::tests::own_window_pid_matches_any_nonzero_own_process_window ... ok
+test tests::degenerate_inputs_are_none ... ok
+test tests::target_monitor_falls_back_to_primary_then_first ... ok
+test privacy::tests::own_window_pid_rejects_unknown_foreground_pid ... ok
+test tests::target_monitor_is_the_one_holding_the_foreground_window ... ok
+test trigger::tests::burst_of_events_collapses_to_one_capture ... ok
+test tests::window_rect_normalizes_within_its_monitor ... ok
+test trigger::tests::disabled_foreground_never_emits ... ok
+test tests::window_on_another_monitor_is_none ... ok
+test trigger::tests::foreground_event_emits_after_debounce ... ok
+test trigger::tests::idle_disabled_never_emits_from_polling ... ok
+test trigger::tests::idle_fires_once_per_quiet_period ... ok
+test diff::tests::gate_passes_bypass_forces_unchanged_frame_through ... ok
+test trigger::tests::idle_poll_while_active_is_quiet ... ok
+test trigger::tests::idle_retries_after_min_interval_block ... ok
+test trigger::tests::min_interval_suppresses_a_second_capture ... ok
+test trigger::tests::pending_event_retries_after_min_interval_block ... ok
+test diff::tests::tiny_change_stays_below_default_threshold ... ok
+test diff::tests::identical_frames_have_zero_difference ... ok
+test diff::tests::black_vs_white_is_near_full_difference ... ok
+test diff::tests::gate_passes_first_frame_and_real_change ... ok
+test diff::tests::resolution_change_is_full_difference ... ok
+
+test result: ok. 25 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\wgc_smoke.rs (target\debug\deps\wgc_smoke-930b91d667839d47.exe)
+
+running 1 test
+test wgc_captures_a_frame_from_the_primary_monitor ... ignored, requires a real desktop + GPU (WGC); run locally
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\doctor-51f5f66998236517.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\doctor-8746a4d1eb703f86.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\embeddings-2b03e9f3cde8be59.exe)
+
+running 2 tests
+test tests::loads_and_embeds_text ... ignored, downloads the EmbeddingGemma model; run locally with --ignored
+test tests::embed_dim_is_768 ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\harness-e42846f165808eea.exe)
+
+running 119 tests
+test digest::tests::collapses_consecutive_same_app_runs ... ok
+test digest::tests::leading_keyless_counted_separately ... ok
+test export::tests::git_root_walks_above_the_crate_dir ... ok
+test digest::tests::keyless_frames_are_absorbed_not_split ... ok
+test digest::tests::digest_renders_table_marks_and_top_titles ... ok
+test digest::tests::labels_template_lists_marks_as_comments ... ok
+test group::tests::anchorless_focus_below_floor_is_dropped ... ok
+test group::tests::anchored_ai_is_exempt_from_the_density_gate ... ok
+test group::tests::anchorless_focus_above_floor_is_kept ... ok
+test group::tests::back_to_back_sustained_tools_split_at_the_handoff ... ok
+test group::tests::ai_track_spans_through_a_meeting_band ... ok
+test group::tests::empty_and_keyless_produce_no_sessions ... ok
+test group::tests::enforce_non_overlap_then_resort_restores_global_order ... ok
+test group::tests::band_interior_unrecognized_is_owned_by_the_meeting ... ok
+test group::tests::gap_at_merge_gap_splits ... ok
+test group::tests::focus_ramp_converts_to_ai_keeping_start ... ok
+test group::tests::concurrent_walk_is_deterministic ... ok
+test group::tests::host_precedence_picks_terminal_over_desktop ... ok
+test group::tests::intra_session_lull_below_merge_gap_holds ... ok
+test group::tests::density_gate_suppresses_sparse_focus_but_keeps_dense ... ok
+test group::tests::leading_none_ramp_attaches_to_an_opening_track ... ok
+test group::tests::low_density_background_ai_track_survives ... ok
+test group::tests::meeting_band_is_a_hard_session_at_presence_endpoints ... ok
+test group::tests::meeting_band_splits_the_surrounding_work ... ok
+test group::tests::mixed_day_output_is_sorted_and_non_overlapping ... ok
+test group::tests::none_run_over_budget_becomes_focus_overlapping_the_track ... ok
+test group::tests::none_sandwich_within_budget_absorbs_into_the_track ... ok
+test group::tests::output_globally_sorted_with_cross_track_overlap_present ... ok
+test group::tests::overlapping_meetings_emit_overlapping_sessions ... ok
+test group::tests::per_track_gap_close_is_independent ... ok
+test group::tests::ramp_does_not_fire_when_a_track_is_open ... ok
+test group::tests::same_tool_two_instances_fold_into_one_track ... ok
+test group::tests::same_track_never_overlaps_itself ... ok
+test group::tests::scattered_sub_qualify_presence_emits_no_ai_session ... ok
+test group::tests::short_foreign_ai_run_is_absorbed ... ok
+test group::tests::short_foreign_run_dropped_by_qualification ... ok
+test group::tests::short_meeting_chain_is_demoted_not_a_band ... ok
+test group::tests::single_ai_run_is_one_anchored_session ... ok
+test group::tests::sustained_foreign_ai_runs_split ... ok
+test group::tests::sub_qualify_ai_run_does_not_flip_a_focus_session ... ok
+test group::tests::sustained_foreign_run_no_longer_splits_a_track ... ok
+test group::tests::two_tools_interleaved_form_two_overlapping_sessions ... ok
+test group::tests::trailing_none_extends_the_last_touched_track ... ok
+test group::tests::unrecognized_excursion_above_budget_splits_off_focus ... ok
+test labels::tests::accepts_touching_sessions ... ok
+test labels::tests::end_at_2400_is_local_midnight_next_day ... ok
+test labels::tests::accepts_cross_identity_overlap ... ok
+test labels::tests::parses_and_resolves_template ... ok
+test labels::tests::rejects_ai_without_tool ... ok
+test labels::tests::rejects_bad_enum ... ok
+test labels::tests::rejects_malformed_time ... ok
+test labels::tests::rejects_end_at_or_before_start ... ok
+test group::tests::unrecognized_excursion_below_budget_is_absorbed ... ok
+test labels::tests::rejects_out_of_start_order ... ok
+test labels::tests::rejects_same_tool_and_focus_overlap ... ok
+test labels::tests::rejects_start_at_2400 ... ok
+test labels::tests::rejects_tool_when_not_ai ... ok
+test labels::tests::rejects_true_overlap ... ok
+test score::tests::edge_boundaries_are_excluded_both_sides ... ok
+test labels::tests::serial_label_files_still_validate ... ok
+test score::tests::missed_and_spurious_boundaries_lower_pr ... ok
+test score::tests::old_boundary_comparison_is_symmetric ... ok
+test score::tests::optimal_match_beats_greedy ... ok
+test score::tests::optimal_match_respects_tolerance_and_one_to_one ... ok
+test score::tests::partitioned_match_never_exceeds_pooled ... ok
+test score::tests::partitioned_perfect_concurrent_day_scores_one ... ok
+test score::tests::perfect_day_scores_one ... ok
+test score::tests::pooling_sums_then_recomputes ... ok
+test score::tests::stability_counts_identity_swaps_as_drift ... ok
+test score::tests::tool_accuracy_ignores_larger_overlapping_non_ai_span ... ok
+test score::tests::tool_accuracy_max_overlap_and_no_overlap_is_wrong ... ok
+test score::tests::typed_matching_does_not_cross_start_and_end ... ok
+test score::tests::stability_small_lookback_unstable_large_lookback_stable ... ok
+test score::tests::sweep_1d_varies_one_knob ... ok
+test score::tests::sweep_grid_scores_every_cell_through_the_grouped_pipeline ... ok
+test segmenter::tests::brief_excursion_is_absorbed_into_one_span ... ok
+test segmenter::tests::browser_ai_vs_plain_browser_are_distinct ... ok
+test segmenter::tests::fragmented_interrupter_reaching_dwell_splits ... ok
+test segmenter::tests::empty_and_keyless_produce_no_spans ... ok
+test segmenter::tests::gap_close_splits_same_context_after_idle ... ok
+test segmenter::tests::keyless_stretch_over_gap_close_splits ... ok
+test segmenter::tests::multimonitor_equal_timestamps_are_deterministic ... ok
+test data::tests::round_trips_an_exported_day ... ok
+test segmenter::tests::meeting_recognition_sets_kind_without_tool ... ok
+test segmenter::tests::same_context_within_gap_close_stays_one_span ... ok
+test segmenter::tests::single_sustained_run_is_one_span ... ok
+test segmenter::tests::segment_micro_keeps_sub_floor_runs_that_segment_drops ... ok
+test segmenter::tests::sub_min_len_run_is_dropped ... ok
+test segmenter::tests::sustained_interruption_splits_into_three_spans ... ok
+test taxonomy::tests::app_hint_matches_by_exact_stem_not_substring ... ok
+test segmenter::tests::tool_identity_splits_same_app_into_adjacent_sessions ... ok
+test taxonomy::tests::browser_ai_needs_browser_app_and_ai_title ... ok
+test taxonomy::tests::braille_prefix_matches_claude_code ... ok
+test taxonomy::tests::case_insensitive_and_none_on_empty_context ... ok
+test taxonomy::tests::claude_desktop_vs_claude_code_precedence ... ok
+test taxonomy::tests::claude_code_needs_terminal_app_and_claude_title ... ok
+test taxonomy::tests::codex_stem_does_not_collide_with_a_code_ide_hint ... ok
+test taxonomy::tests::invalid_prefix_range_rejected_at_parse ... ok
+test taxonomy::tests::codex_desktop_app ... ok
+test taxonomy::tests::rejects_entry_with_empty_matcher ... ok
+test taxonomy::tests::leading_whitespace_before_spinner_tolerated ... ok
+test taxonomy::tests::meeting_recognition ... ok
+test taxonomy::tests::plain_shell_title_does_not_match_prefix ... ok
+test taxonomy::tests::plain_terminal_without_ai_title_is_unrecognized ... ok
+test taxonomy::tests::renamed_chatgpt_stem_maps_to_codex_except_classic ... ok
+test taxonomy::tests::seed_parses_and_has_the_d7_set ... ok
+test taxonomy::tests::spinner_prefix_confined_to_terminal_stems ... ok
+test taxonomy::tests::sparkle_prefix_matches_claude_code ... ok
+test taxonomy::tests::substring_fallback_still_recognizes_claude_code ... ok
+test data::tests::rejects_labels_whose_date_mismatches_the_day ... ok
+test export::tests::read_only_connection_rejects_writes ... ok
+test export::tests::day_bounds_are_24h_and_offset_is_consistent ... ok
+test export::tests::backup_refuses_destination_in_repo_tree ... ok
+test export::tests::day_marks_read ... ok
+test export::tests::day_frames_ordered_with_multimonitor_and_keyless ... ok
+test export::tests::survey_counts_signals ... ok
+test export::tests::backup_snapshots_and_verifies ... ok
+test export::tests::write_day_emits_all_files ... ok
+test export::tests::re_export_preserves_hand_edited_labels ... ok
+
+test result: ok. 119 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running unittests src\main.rs (target\debug\deps\harness-52d5ebe66e6a73f0.exe)
+
+running 1 test
+test tests::overlaps_any_excludes_self_copy_by_value ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\shipped_parity.rs (target\debug\deps\shipped_parity-d4f55a6b5929ecca.exe)
+
+running 3 tests
+test shipped_open_projection_keeps_the_parity_span_fields ... ok
+test shipped_matches_frozen_harness_concurrent_on_synthetic_day ... ok
+test shipped_parity_covers_none_meetings_gap_edges_density_and_qualification ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\inference-6c26c062e8096d06.exe)
+
+running 105 tests
+test answer::tests::handles_tag_split_across_chunks ... ok
+test answer::tests::truncate_to_tokens_never_splits_a_multibyte_char ... ok
+test answer::tests::builds_grounded_prompt_with_frame_tags ... ok
+test answer::tests::drops_chunks_that_exceed_the_context_budget ... ok
+test client::tests::http_error_handles_empty_body ... ok
+test answer::tests::estimate_tokens_does_not_undercount_cjk ... ok
+test answer::tests::reply_budget_leaves_room_for_grounding_in_a_small_context ... ok
+test answer::tests::report_model_label_extracts_the_gguf_filename ... ok
+test answer::tests::report_summary_drops_overflow_and_cites_only_what_fit ... ok
+test answer::tests::report_summary_messages_use_the_given_system_prompt_and_tag_frames ... ok
+test answer::tests::splits_inline_think_tags ... ok
+test answer::tests::pump_deltas_completes_when_stream_finishes ... ok
+test client::tests::http_error_includes_status_and_body ... ok
+test client::tests::http_error_truncates_long_body_on_char_boundary ... ok
+test answer::tests::truncates_an_oversized_top_chunk_instead_of_dropping_everything ... ok
+test answer::tests::plain_content_is_all_tokens ... ok
+test client::tests::response_format_is_omitted_from_body_when_none ... ok
+test client::tests::response_format_is_serialized_when_set ... ok
+test download::tests::answer_repo_needs_no_mmproj ... ok
+test download::tests::byte_counter_accumulates_streamed_bytes ... ok
+test download::tests::content_range_total_parses_suffix ... ok
+test download::tests::falls_back_to_first_gguf_when_no_q4_k_m ... ok
+test download::tests::lfs_sha256_trusts_only_x_linked_etag_not_cdn_etag ... ok
+test download::tests::no_vulkan_asset_returns_none ... ok
+test download::tests::no_vulkan_in_any_release_returns_none ... ok
+test download::tests::parse_sha256_normalizes_etag_forms ... ok
+test download::tests::picks_q4_k_m_weights_and_mmproj_for_vision ... ok
+test download::tests::picks_win_vulkan_x64_asset ... ok
+test download::tests::place_if_cached_returns_false_when_nothing_cached ... ok
+test download::tests::failed_binary_extraction_cleans_partial_install ... ok
+test download::tests::prefers_the_newest_release_that_has_vulkan ... ok
+test download::tests::range_plan_requires_ranges_and_known_size ... ok
+test download::tests::installed_binary_candidates_include_normal_and_overrides ... ok
+test download::tests::chunked_download_errors_when_server_ignores_range ... ok
+test download::tests::skips_release_with_incomplete_assets ... ok
+test download::tests::place_if_cached_short_circuits_when_dest_already_present ... ok
+test download::tests::stall_step_resets_on_progress_and_counts_otherwise ... ok
+test download::tests::stall_limit_is_timeout_over_poll_and_never_zero ... ok
+test flags::tests::conservative_fallback_only_pins_context ... ok
+test flags::tests::parses_legacy_boolean_flash_attn ... ok
+test flags::tests::detects_missing_flash_attn ... ok
+test flags::tests::parses_modern_value_taking_flash_attn ... ok
+test flags::tests::parses_parenthesised_value_taking_flash_attn ... ok
+test models::tests::answer_resolution_needs_no_mmproj ... ok
+test answer::tests::pump_deltas_cancels_and_aborts_sidecar_on_consumer_drop ... ok
+test models::tests::repo_mapping_matches_registry ... ok
+test download::tests::manifest_load_or_init_distinguishes_missing_valid_and_mismatched ... ok
+test download::tests::env_override_wins_over_existing_install ... ok
+test process::tests::escapes_embedded_quotes_and_trailing_backslashes ... ok
+test process::tests::query_private_bytes_is_none_for_pid_zero ... ok
+test models::tests::auto_ctx_size_resolves_per_lane_and_override_passes_through ... ok
+test process::tests::query_private_bytes_reports_for_self ... ok
+test process::tests::quotes_only_when_needed ... ok
+test process::tests::quotes_paths_with_spaces ... ok
+test process::tests::total_physical_ram_is_nonzero ... ok
+test supervisor::tests::auto_ceiling_is_half_ram_within_band ... ok
+test supervisor::tests::build_args_adds_device_when_configured ... ok
+test supervisor::tests::build_args_adds_mmproj_only_for_vision ... ok
+test supervisor::tests::build_args_distinguishes_auto_from_on_flash_attn ... ok
+test supervisor::tests::build_args_drops_explicit_on_flash_when_binary_unsupported ... ok
+test supervisor::tests::build_args_emits_full_tuning_when_supported ... ok
+test supervisor::tests::build_args_leaves_f16_kv_implicit ... ok
+test supervisor::tests::build_args_omits_ctx_when_unsupported ... ok
+test supervisor::tests::build_args_omits_kv_quant_without_flash ... ok
+test supervisor::tests::build_args_uses_bare_flash_attn_for_bool_flag ... ok
+test supervisor::tests::evict_predicate_respects_inflight_backfill_and_ttl ... ok
+test supervisor::tests::idle_predicate ... ok
+test models::tests::resolution_carries_device_selector ... ok
+test supervisor::tests::resolve_ceiling_branches ... ok
+test supervisor::tests::restart_on_tuning_change ... ok
+test supervisor::tests::restart_only_on_model_change ... ok
+test supervisor::tests::running_sidecar_is_reused_only_when_process_and_health_are_alive ... ok
+test supervisor::tests::should_recycle_disabled_when_ceiling_zero ... ok
+test supervisor::tests::should_recycle_only_at_or_above_ceiling ... ok
+test models::tests::vision_resolution_requires_mmproj ... ok
+test vision::tests::activity_type_is_normalised_case_and_space_insensitively ... ok
+test vision::tests::app_hint_is_trimmed_and_kept_when_real ... ok
+test models::tests::prefers_q4_k_m_and_excludes_mmproj ... ok
+test vision::tests::explicit_null_activity_type_becomes_none ... ok
+test vision::tests::falls_back_to_raw_text_on_non_json ... ok
+test vision::tests::missing_confidence_becomes_unknown_sentinel ... ok
+test vision::tests::null_app_hint_string_is_dropped_case_insensitively ... ok
+test vision::tests::off_enum_activity_type_becomes_none ... ok
+test vision::tests::out_of_range_confidence_becomes_unknown_sentinel ... ok
+test vision::tests::parses_well_formed_json ... ok
+test vision::tests::response_format_allows_null_activity_and_drops_it_from_required ... ok
+test download::tests::fresh_part_discards_stale_partial_manifest ... ok
+test vision::tests::tolerates_code_fences_and_prose ... ok
+test vision::tests::vlm_request_dims_match_encoded_output ... ok
+test vision::tests::zero_confidence_becomes_unknown_sentinel ... ok
+test download::tests::chunk_requests_follow_redirect_and_preserve_range ... ok
+test download::tests::fresh_part_discards_stale_all_done_manifest ... ok
+test download::tests::oversized_part_discards_stale_manifest ... ok
+test download::tests::truncated_part_discards_stale_partial_manifest ... ok
+test download::tests::chunked_download_assembles_byte_identical_file ... ok
+test download::tests::resume_skips_already_completed_chunks ... ok
+test download::tests::integrity_accepts_matching_sha256_and_rejects_a_wrong_one ... ok
+test supervisor::tests::request_gate_allows_concurrent_regular_requests ... ok
+test process::tests::spawn_suspended_captures_child_stdout_to_log ... ok
+test supervisor::tests::switch_gate_waits_for_active_request_to_drop ... ok
+test download::tests::chunked_download_fails_fast_on_stuck_chunk ... ok
+test vision::tests::small_frame_passes_through_at_native_size ... ok
+test download::tests::chunk_retries_transient_403_then_succeeds ... ok
+test vision::tests::downscales_oversized_frame_to_max_edge ... ok
+test download::tests::exhausted_transient_is_not_reported_as_ignored_range ... ok
+
+test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.04s
+
+     Running unittests src\bin\jobhelper.rs (target\debug\deps\jobhelper-cd7052ccf94ce638.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\no_orphan.rs (target\debug\deps\no_orphan-b040a5695761adba.exe)
+
+running 1 test
+test killing_parent_terminates_job_bound_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\reap.rs (target\debug\deps\reap-b98a2c932c290591.exe)
+
+running 3 tests
+test never_reaps_a_foreign_pid ... ok
+test reaps_a_matching_stray ... ok
+test reaps_a_matching_stray_from_any_owned_install_path ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\sidecar_client.rs (target\debug\deps\sidecar_client-d68a2248fbcd4151.exe)
+
+running 8 tests
+test health_reports_success ... ok
+test health_false_when_unavailable ... ok
+test vision_completion_returns_message_content ... ok
+test answer_stream_yields_ordered_pieces ... ok
+test health_times_out_quickly_when_sidecar_hangs ... ok
+test completion_times_out_when_sidecar_hangs ... ok
+test stream_times_out_when_no_sse_chunk_arrives ... ok
+test stream_connect_times_out_when_initial_post_hangs ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests\smoke.rs (target\debug\deps\smoke-c453c7d39f21397c.exe)
+
+running 2 tests
+test real_answer_streams_tokens ... ignored, downloads a multi-GB model and runs a real llama-server on a GPU
+test real_vision_tags_an_image ... ignored, downloads a multi-GB model + projector and runs a real llama-server on a GPU
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\kernel-10936c16b9f0a783.exe)
+
+running 59 tests
+test capture_loop::tests::image_paths_are_webp_and_day_sharded ... ok
+test reports::tests::plan_depth_floor_wins_over_global_cap_on_long_ranges ... ok
+test reports::tests::fits_single_pass_detects_overflow ... ok
+test reports::tests::grid_size_is_one_per_day_capped_at_max ... ok
+test reports::tests::plan_depth_gives_every_active_period_its_budget ... ok
+test reports::tests::split_chunks_batches_every_chunk_without_dropping ... ok
+test resume::tests::all_keyless_frames_is_none ... ok
+test resume::tests::brief_excursion_is_absorbed_into_the_run ... ok
+test resume::tests::browser_domain_parsing ... ok
+test resume::tests::distinct_browser_domains_are_distinct_contexts ... ok
+test resume::tests::dwell_exactly_at_threshold_qualifies ... ok
+test resume::tests::equal_timestamps_are_deterministic ... ok
+test capture_loop::tests::max_width_at_or_above_native_is_noop ... ok
+test resume::tests::excluded_app_is_skipped_for_next_candidate ... ok
+test resume::tests::fragmented_interrupter_reaching_dwell_splits ... ok
+test resume::tests::no_frames_is_none ... ok
+test resume::tests::returns_prior_sustained_run_with_span_and_last_frame ... ok
+test resume::tests::screensearch_context_never_qualifies ... ok
+test resume::tests::single_context_only_is_none ... ok
+test resume::tests::single_frame_run_fails_dwell ... ok
+test resume::tests::sustained_interruption_splits_the_run ... ok
+test sessions_intel::tests::even_sampling_includes_both_session_endpoints ... ok
+test sessions_scheduler_contract_tests::frozen_guard_treats_equal_last_frame_timestamp_as_overlap ... ok
+test sessions_scheduler_contract_tests::frozen_guard_trims_only_the_same_identity_track ... ok
+test sessions_scheduler_contract_tests::historical_cut_extends_to_the_next_global_merge_gap ... ok
+test sessions_scheduler_contract_tests::historical_cut_never_skips_unscanned_future_frames ... ok
+test sessions_scheduler_contract_tests::new_session_projection_keeps_open_rows_null_ended ... ok
+test sessions_scheduler_contract_tests::overlap_matching_does_not_reuse_a_merely_touching_session ... ok
+test sessions_scheduler_contract_tests::overlap_matching_reuses_one_unfrozen_id_per_draft ... ok
+test capture_loop::tests::native_max_width_zero_does_not_downscale ... ok
+test settings::tests::marks_hotkey_empty_falls_back_to_default ... ok
+test settings::tests::recycle_rss_mb_clamps_explicit_but_keeps_auto_zero ... ok
+test settings::tests::resume_min_dwell_secs_clamps_to_band ... ok
+test throttle::tests::enters_high_only_after_sustained_dwell ... ok
+test throttle::tests::escalates_to_sustained_after_continued_pressure ... ok
+test throttle::tests::exits_one_level_at_a_time_after_recovery_dwell ... ok
+test throttle::tests::flapping_spike_does_not_trip ... ok
+test throttle::tests::gpu_hot_blocks_exit_even_when_cpu_cool ... ok
+test throttle::tests::gpu_pressure_alone_can_throttle ... ok
+test throttle::tests::gpu_unmonitored_is_cpu_only ... ok
+test throttle::tests::hysteresis_band_holds_level ... ok
+test throttle::tests::normal_stays_normal_below_enter ... ok
+test worker_pool::tests::active_job_guard_tracks_in_flight_job_until_drop ... ok
+test worker_pool::tests::completion_info_only_for_changed_frame_jobs ... ok
+test reports::tests::session_recap_without_usable_content_makes_zero_model_calls ... ok
+test reports::tests::empty_range_is_honest_with_no_sidecar_call ... ok
+test reports::tests::daily_small_range_uses_single_pass ... ok
+test sessions_scheduler_contract_tests::incremental_reconciliation_keeps_the_unfrozen_id_stable ... ok
+test sessions_scheduler_contract_tests::successful_scheduler_pass_emits_sessions_changed_after_rows_commit ... ok
+test sessions_scheduler_contract_tests::no_op_scheduler_pass_does_not_emit_sessions_changed ... ok
+test reports::tests::cancellation_between_passes_returns_err ... ok
+test reports::tests::session_recap_with_overlapping_spans_cites_only_the_named_session ... ok
+test sessions_scheduler_contract_tests::delayed_backfill_trims_before_frozen_incremental_overlap ... ok
+test reports::tests::dense_single_period_splits_into_passes_without_truncating ... ok
+test reports::tests::reduce_overflow_preserves_all_days_via_hierarchical_reduce ... ok
+test reports::tests::weekly_covers_every_active_day_and_cites_first_and_last ... ok
+test sessions_scheduler_contract_tests::historical_backfill_reuses_an_exact_unfrozen_partial_row ... ok
+test sessions_scheduler_contract_tests::historical_backfill_retries_past_a_fixed_target_cutting_a_live_track ... ok
+test capture_loop::tests::positive_max_width_downscales_keeping_aspect ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+     Running tests\enrichment.rs (target\debug\deps\enrichment-3fad8fbdc7840796.exe)
+
+running 9 tests
+test process_job_vision_tag_retries_without_provider ... ok
+test process_job_dead_letters_missing_frame_id ... ok
+test process_job_vision_tag_writes_analysis ... ok
+test process_job_completes_on_empty_ocr_without_embedding ... ok
+test process_job_retries_then_dead_letters_on_persistent_embed_failure ... ok
+test process_job_embeds_text_and_completes ... ok
+test vision_tag_failure_records_full_error_chain ... ok
+test vision_jobs_drain_when_embeddings_disabled ... ok
+test attach_embedder_drains_backlog_and_vector_arm_finds_frame ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests\pipeline.rs (target\debug\deps\pipeline-2bca85d4b7e2e281.exe)
+
+running 12 tests
+test kernel_refuses_to_start_capture_when_ocr_is_unavailable ... ok
+test add_mark_by_frame_id_marks_directly_and_validates_source ... ok
+test add_mark_capture_now_fails_when_capture_off ... ok
+test kernel_start_then_stop_flips_capture_readiness ... ok
+test add_mark_capture_now_propagates_denial_and_inserts_no_mark ... ok
+test stop_capture_notifies_ocr_provider ... ok
+test capture_loop_skips_embed_jobs_when_disabled ... ok
+test reload_capture_restarts_loop_with_fresh_config ... ok
+test add_mark_capture_now_inserts_manual_frame_and_mark ... ok
+test capture_loop_stores_frames_ocr_jpegs_and_enqueues_embed_jobs ... ok
+test kernel_clears_capture_and_marks_error_when_source_shuts_down ... ok
+test source_shutdown_notifies_ocr_provider ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests\sessions_intel.rs (target\debug\deps\sessions_intel-b4dd4ed302db897e.exe)
+
+running 1 test
+test lazy_intelligence_calls_summarize_once_then_serves_the_cache ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\settings.rs (target\debug\deps\settings-aa36f96da5df33a9.exe)
+
+running 16 tests
+test save_settings_never_writes_retired_keys ... ok
+test round_trips_defaults ... ok
+test overlay_hotkey_empty_string_resets_to_default ... ok
+test unknown_tier_falls_back_to_default_without_rewrite ... ok
+test session_settings_round_trip_and_clamp_to_the_final_contract ... ok
+test load_drops_retired_event_keys_without_error ... ok
+test round_trips_non_default_values ... ok
+test overlay_hotkey_custom_value_survives ... ok
+test load_settings_sanitizes_persisted_numeric_values ... ok
+test sidecar_device_round_trips_empty_as_none ... ok
+test save_settings_persists_sanitized_numeric_values ... ok
+test persisted_beta_tier_remaps_to_quality_and_persists ... ok
+test overlay_hotkey_legacy_default_remaps_once ... ok
+test sidecar_ctx_size_zero_is_preserved_as_auto_sentinel ... ok
+test overlay_hotkey_failed_remap_is_retried_not_latched ... ok
+test overlay_hotkey_deliberate_legacy_survives_after_migration ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests\throttle.rs (target\debug\deps\throttle-a638624ad56f688d.exe)
+
+running 2 tests
+test throttle_disabled_drains_everything ... ok
+test throttle_pauses_heavy_enrichment_then_resumes_on_recovery ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.67s
+
+     Running unittests src\lib.rs (target\debug\deps\mcp-b92ba198223ba953.exe)
+
+running 35 tests
+test client::tests::api_error_is_code_colon_message ... ok
+test client::tests::not_reachable_and_no_token_carry_the_contract_phrase ... ok
+test client::tests::unauthorized_mentions_401_and_regeneration ... ok
+test config::tests::defaults_when_nothing_set ... ok
+test rpc::tests::notification_has_no_id ... ok
+test config::tests::equals_and_space_flag_forms ... ok
+test rpc::tests::malformed_object_with_id_is_invalid_request ... ok
+test config::tests::loopback_hosts_are_accepted ... ok
+test config::tests::trailing_slash_trimmed ... ok
+test config::tests::empty_token_is_none ... ok
+test config::tests::unknown_flag_and_missing_value_are_bad_usage ... ok
+test rpc::tests::batch_array_yields_32600 ... ok
+test rpc::tests::malformed_object_without_id_is_dropped ... ok
+test config::tests::flag_overrides_env_overrides_default ... ok
+test config::tests::help_and_version_short_circuit ... ok
+test rpc::tests::valid_request_is_parsed ... ok
+test config::tests::non_loopback_url_is_rejected ... ok
+test server::tests::downgrades_unknown_or_absent_version ... ok
+test rpc::tests::responses_are_single_line_even_with_newlines_in_strings ... ok
+test rpc::tests::parse_error_yields_32700_with_null_id ... ok
+test server::tests::echoes_each_supported_version ... ok
+test server::tests::initialize_result_shape ... ok
+test sse::tests::citations_deduped_in_arrival_order ... ok
+test sse::tests::crlf_is_stripped ... ok
+test sse::tests::done_and_error_terminate ... ok
+test sse::tests::empty_data_object_ignored ... ok
+test sse::tests::keepalives_and_blank_lines_ignored ... ok
+test sse::tests::thinking_discarded_tokens_concatenated ... ok
+test tools::tests::add_mark_body_captures_now_when_frame_id_absent_or_null ... ok
+test sse::tests::lines_reassemble_across_every_byte_boundary ... ok
+test tools::tests::add_mark_body_rejects_non_integer_frame_id ... ok
+test tools::tests::add_mark_body_uses_integer_frame_id ... ok
+test tools::tests::error_result_is_flagged ... ok
+test tools::tests::exactly_six_tools_with_object_schemas ... ok
+test tools::tests::required_fields_are_declared ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\screensearch_mcp-f064a446419bae45.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\stdio_mcp.rs (target\debug\deps\stdio_mcp-ff6686a65554a830.exe)
+
+running 19 tests
+test get_moment_unknown_frame_is_tool_error ... ok
+test malformed_line_is_parse_error ... ok
+test ask_without_model_is_tool_error ... ok
+test child_exits_zero_on_stdin_close ... ok
+test handshake_and_tools_list_over_stdio ... ok
+test batch_line_is_invalid_request ... ok
+test add_mark_frame_id_then_list_marks_roundtrip ... ok
+test unknown_method_is_method_not_found ... ok
+[screensearch-mcp] warning: no API token configured (SCREENSEARCH_API_TOKEN unset and --token not given); tool calls will return a guidance error until it is set.
+test get_moment_text_only_and_include_image ... ok
+test missing_token_still_serves_tools_list_but_calls_are_guided ... ok
+test ask_tool_aggregates_answer_and_citation ... ok
+test ping_returns_empty_result ... ok
+test add_mark_now_surfaces_unavailable ... ok
+test get_moment_purged_image_notes_purge_without_error ... ok
+test unknown_tool_is_protocol_error ... ok
+test where_was_i_null_returns_human_message ... ok
+test wrong_token_returns_guided_401_message ... ok
+test search_tool_roundtrips_fixture ... ok
+test api_off_tool_calls_return_guided_error ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.05s
+
+     Running unittests src\lib.rs (target\debug\deps\ocr-87f88b55c9cff589.exe)
+
+running 2 tests
+test tests::winrt_ocr_recognizes_blank_image ... ignored, requires WinRT OCR language pack; run locally
+test tests::normalize_rect_maps_and_clamps_to_unit_square ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\screensearch_lib-d40f226e2fda898f.exe)
+
+running 21 tests
+test tests::ipc_presentation_limits_are_clamped ... ok
+test local_api::tests::port_clamps_to_floor ... ok
+test tests::hydrate_ask_context_returns_clear_error_when_ocr_texts_fails ... ok
+test tests::parses_llama_cpp_device_ids ... ok
+test tests::safe_frame_path_accepts_only_relative_frames_children ... ok
+test tests::sanitize_report_stem_produces_a_safe_leaf_name ... ok
+test tests::session_query_normalizes_time_kind_tool_and_limit ... ok
+test tray::tests::capture_status_maps_to_visual ... ok
+test tests::open_store_reports_error_when_db_cannot_open ... ok
+test tray::tests::composed_icons_differ_per_state ... ok
+test tray::tests::labels_track_state ... ok
+test tests::db_file_family_size_includes_wal_and_shm ... ok
+test tests::unique_markdown_path_appends_2_3_on_collision ... ok
+test local_api::tests::fresh_profile_defaults_off ... ok
+test local_api::tests::bind_failure_keeps_enabled_with_error ... ok
+test tests::ui_resume_context_hydrates_session_without_changing_external_resume_shape ... ok
+test tests::session_recap_evidence_probe_rejects_missing_text_before_provider_acquisition ... ok
+test tests::merge_purged_spans_once_merges_backlog_then_watermarks_and_is_idempotent ... ok
+test local_api::tests::enabling_generates_token_once_and_persists ... ok
+test tests::session_detail_samples_24_frames_and_returns_only_exchanges_without_inference ... ok
+test tests::open_store_creates_db_file_and_reports_ready ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running unittests src\main.rs (target\debug\deps\screensearch-e067c9d301e668e6.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\config_guard.rs (target\debug\deps\config_guard-24418d3f8fbadcd1.exe)
+
+running 1 test
+test overlay_window_is_precreated_hidden_and_capture_protected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\e2e_capture.rs (target\debug\deps\e2e_capture-24b27b5439f666f3.exe)
+
+running 1 test
+test capture_pipeline_stores_frames_ocr_and_enqueues_embed_jobs ... ignored, real WGC + WinRT capture; requires a desktop session, run locally
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\sessions-693e335fd4aabc8e.exe)
+
+running 4 tests
+test contract_tests::confidence_tiers_keep_anchorless_below_anchored ... ok
+test taxonomy::tests::parsing_normalizes_match_inputs_once ... ok
+test taxonomy::tests::invalid_prefix_range_is_rejected ... ok
+test taxonomy::tests::seed_has_nine_entries ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\engine.rs (target\debug\deps\engine-9241b455e1799f98.exe)
+
+running 21 tests
+test empty_claude_prompt_does_not_capture_the_terminal_status_bar ... ok
+test claude_code_markers_extract_only_explicit_roles ... ok
+test no_marker_means_no_exchange_and_duplicates_collapse ... ok
+test desktop_and_browser_markers_extract_heading_blocks ... ok
+test codex_desktop_chrome_is_not_misclassified_as_an_agent_turn ... ok
+test same_track_splits_only_at_its_own_merge_gap ... ok
+test bundled_taxonomy_v3_parses_at_startup ... ok
+test windows_breadcrumb_chevrons_are_not_claude_code_prompts ... ok
+test meetings_never_absorb_and_can_overlap_ai_and_each_other ... ok
+test long_unrecognized_run_becomes_focus_material ... ok
+test consolidated_short_excursion_frames_belong_to_the_surviving_micro ... ok
+test browser_ai_requires_browser_stem_and_ai_title ... ok
+test spinner_prefix_recognizes_claude_code ... ok
+test exclusive_frame_ownership_survives_cross_track_overlap_and_none_absorption ... ok
+test sub_qualification_ai_track_is_dropped ... ok
+test two_tools_interleaved_form_overlapping_tracks ... ok
+test open_flag_tracks_inactivity_at_now ... ok
+test chatgpt_renamed_desktop_maps_to_codex_but_classic_does_not ... ok
+test sustained_foreign_identity_does_not_close_incumbent ... ok
+test sparse_focus_is_density_gated_but_ai_is_exempt ... ok
+test confidence_penalizes_absorbed_time_and_keeps_ai_above_focus ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\store-3d8c8c6035071314.exe)
+
+running 40 tests
+test marks::tests::insert_rejects_unknown_frame_with_clear_error ... ok
+test marks::tests::mark_survives_image_purge_with_text_kept ... ok
+test marks::tests::set_note_round_trips_and_rejects_unknown ... ok
+test frames::tests::recent_frame_contexts_newest_first_capped_with_id_tiebreak ... ok
+test marks::tests::list_orders_unresolved_first_then_newest_first ... ok
+test frames::tests::sample_degenerate_windows_are_empty ... ok
+test frames::tests::image_older_than_excludes_purged_and_recent ... ok
+test marks::tests::resolve_is_idempotent_but_errors_on_unknown ... ok
+test frames::tests::sample_returns_all_when_count_under_limit ... ok
+test migration_tests::migration_v10_adds_marks_with_cascade ... ok
+test frames::tests::purge_frame_image_drops_image_but_keeps_text_proof ... ok
+test records::tests::merge_spans_to_lines_empty_is_empty ... ok
+test records::tests::merge_spans_to_lines_collapses_words_and_unions_boxes ... ok
+test records::tests::merge_spans_to_lines_is_idempotent ... ok
+test records::tests::merge_spans_to_lines_prefers_content_role ... ok
+test frames::tests::sample_spreads_evenly_and_includes_the_earliest_frame ... ok
+test records::tests::primary_source_for_maps_engine_to_db_token ... ok
+test search::tests::escalating_knn_caps_at_the_k_ceiling ... ok
+test search::tests::escalating_knn_stops_at_window_count_not_ceiling ... ok
+test search::tests::escalating_knn_stops_when_table_exhausted ... ok
+test search::tests::escalating_knn_truncates_to_pool ... ok
+test search::tests::escalating_knn_widens_until_target_reached ... ok
+test search::tests::normalized_limit_clamps_to_the_backend_ceiling ... ok
+test migration_tests::migration_v11_adds_sessions_structure_only ... ok
+test sessions::tests::usable_content_query_bounds_results_inside_sqlite ... ok
+test frames::tests::sample_returns_full_quota_when_just_over_limit ... ok
+test frames::tests::sample_caps_at_limit_within_window ... ok
+test sessions::tests::sqlite_trim_character_set_matches_rust_trim ... ok
+test migration_tests::migration_v11_artifact_role_kind_coupling ... ok
+test migration_tests::migration_v8_indexes_image_retention_sweep ... ok
+test migration_tests::migration_v7_adds_image_purged_present_by_default ... ok
+test migration_tests::migration_v11_sessions_check_constraints ... ok
+test migration_tests::migration_v6_widens_capture_trigger_check_without_dropping_children ... ok
+test migration_tests::fresh_and_migrated_schemas_agree_at_latest ... ok
+test records::tests::filtered_insert_records_text_source_from_engine ... ok
+test search::tests::count_embedded_frames_dedups_chunks_caps_and_bounds_the_scan ... ok
+test migration_tests::migration_v9_drops_image_lane_and_embed_image_jobs ... ok
+test migration_tests::migration_v11_fk_set_null_and_cascade ... ok
+test search::tests::include_chrome_searches_raw_text_independently_of_content ... ok
+test migration_tests::migration_v11_preserves_frame_surfaces ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests\perf.rs (target\debug\deps\perf-1cadcb60d0bbcbc5.exe)
+
+running 1 test
+test hybrid_search_under_200ms_on_realistic_db ... ignored, seeds 10k frames + 768-dim vectors; run locally: cargo test -p store --test perf -- --ignored --nocapture
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\sessions.rs (target\debug\deps\sessions-275f51a9a0bc8140.exe)
+
+running 10 tests
+test title_summary_cache_updates_the_row_without_touching_boundaries ... ok
+test session_queries_use_half_open_overlap_and_request_time_for_open_rows ... ok
+test session_crud_is_unfrozen_only_and_ids_stay_stable ... ok
+test frozen_session_frames_cannot_be_cleared_or_reassigned ... ok
+test session_reference_for_frame_omits_deleted_session ... ok
+test frame_metadata_and_content_reads_are_chronological ... ok
+test artifact_checks_and_delete_by_kind_are_enforced ... ok
+test deleting_unfrozen_sessions_preserves_frames_text_and_marks ... ok
+test session_frame_sample_reports_total_and_even_chronological_endpoints_without_leakage ... ok
+test session_usable_content_matches_rust_trim_unicode_whitespace ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests\store.rs (target\debug\deps\store-7274e91ea5422cb5.exe)
+
+running 64 tests
+test completing_or_failing_an_unknown_job_is_an_error ... ok
+test complete_job_requires_running_state ... ok
+test cancel_pending_vision_jobs_removes_only_pending_vision ... ok
+test degrade_frame_to_text_purges_even_without_spans ... ok
+test claim_honors_not_before_schedule ... ok
+test claim_returns_highest_priority_first_and_marks_running ... ok
+test complete_job_moves_to_done ... ok
+test claim_filters_by_kind ... ok
+test degrade_frame_to_text_merges_spans_and_purges_atomically ... ok
+test export_frames_page_honors_half_open_time_window ... ok
+test empty_time_window_returns_nothing_via_vector_arm ... ok
+test delete_frame_cascades_and_purges_vectors ... ok
+test backfill_filter_version_invalidates_stale_text_embedding ... ok
+test backfill_filter_version_recleans_old_frames_against_warm_catalog ... ok
+test concurrent_claims_never_double_claim ... ok
+test dense_time_window_returns_the_pool_nearest_in_window_matches ... ok
+test export_frames_page_left_join_yields_none_content_for_textless_frames ... ok
+test export_frames_page_zero_limit_is_empty ... ok
+test fail_without_retry_at_dead_letters_immediately ... ok
+test fail_job_requires_running_state ... ok
+test frame_enrichment_input_reads_path_and_optional_text ... ok
+test frames_in_range_lists_window_recent_first ... ok
+test frames_older_than_lists_bounded_retention_candidates ... ok
+test frames_with_app_hint_matches_case_insensitively ... ok
+test fail_retries_with_backoff_then_dead_letters_at_max_attempts ... ok
+test live_db_copy_migrates_to_v11_fast_and_clean ... ignored, manual Gate 0: set SCREENSEARCH_MIGRATION_CHECK_DB to a THROWAWAY copy of the live DB
+test hybrid_search_empty_query_returns_nothing ... ok
+test hybrid_search_fts_only_without_embedder ... ok
+test hybrid_search_fuses_fts_and_vector_arms_via_rrf ... ok
+test hybrid_search_honors_time_range ... ok
+test insert_frame_then_get_frame_returns_context ... ok
+test hybrid_search_respects_limit ... ok
+test insert_ocr_persists_spans_with_pr2_defaults ... ok
+test insert_vision_then_get_frame_has_analysis ... ok
+test insights_summary_uses_requested_bucket_count ... ok
+test insights_summary_aggregates_truthfully ... ok
+test job_stats_splits_out_vision_pending_and_running ... ok
+test insert_ocr_then_get_frame_has_text ... ok
+test merge_frame_spans_to_lines_is_noop_without_spans ... ok
+test insert_ocr_filtered_suppresses_repeated_chrome_after_threshold ... ok
+test open_path_rejects_future_schema_version ... ok
+test nearest_frame_in_range_ignores_frames_outside_window ... ok
+test merge_frame_spans_to_lines_shrinks_rows_but_keeps_search_and_reconstruction ... ok
+test nearest_frame_picks_closest_with_after_winning_ties ... ok
+test neighbour_frames_brackets_anchor_with_closest_each_side ... ok
+test hybrid_search_clamps_excessive_limit ... ok
+test open_in_memory_migrates_to_latest_schema_version ... ok
+test ocr_texts_bulk_fetches_nonempty_only ... ok
+test purged_frame_ids_lists_only_purged_after_cursor ... ok
+test settings_round_trip_and_overwrite ... ok
+test reset_stale_running_jobs_spares_fresh_running ... ok
+test set_settings_batch_writes_all_and_overwrites ... ok
+test reset_stale_running_jobs_requeues_running ... ok
+test timeline_buckets_are_sparse_and_half_open ... ok
+test timeline_buckets_survives_extreme_ranges ... ok
+test text_embedding_knn_orders_by_cosine_distance ... ok
+test untagged_frame_ids_excludes_in_flight_vision_jobs ... ok
+test untagged_frame_ids_excludes_tagged_and_honors_range ... ok
+test upsert_text_embedding_replaces_vector_in_place ... ok
+test export_frames_page_pages_through_all_frames_in_id_order ... ok
+test wrong_dimension_embedding_is_rejected ... ok
+test sparse_time_window_returns_every_in_window_match ... ok
+test works_through_the_store_trait_object ... ok
+test vector_arm_finds_in_range_match_buried_beyond_pool ... ok
+
+test result: ok. 63 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+     Running unittests src\lib.rs (target\debug\deps\sysmon-af668d7fbcee06d0.exe)
+
+running 11 tests
+test cpu::tests::clamps_when_idle_exceeds_total ... ok
+test cpu::tests::half_idle_is_fifty_pct ... ok
+test cpu::tests::fully_idle_is_zero_pct ... ok
+test gpu::tests::ignores_non_finite ... ok
+test cpu::tests::zero_total_delta_returns_none ... ok
+test gpu::tests::clamps_to_hundred ... ok
+test gpu::tests::empty_is_zero ... ok
+test cpu::tests::fully_busy_is_hundred_pct ... ok
+test gpu::tests::sums_engines ... ok
+test cpu::tests::user_time_counts_as_busy ... ok
+test tests::sample_is_well_formed ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running unittests src\lib.rs (target\debug\deps\textfilter-f294f0d80943d220.exe)
+
+running 12 tests
+test tests::empty_spans_produce_empty_output ... ok
+test tests::reconcile_demotes_only_the_catalogued_region ... ok
+test tests::no_target_rect_never_suppresses_even_a_saturated_signature ... ok
+test tests::default_frame_drops_system_and_background_keeps_content ... ok
+test tests::no_target_rect_never_classifies_background_or_system ... ok
+test tests::short_interior_body_is_never_catalogued ... ok
+test tests::reconcile_with_cold_catalog_changes_nothing ... ok
+test tests::reconcile_is_idempotent ... ok
+test tests::reconcile_demotes_warm_catalog_chrome_preserving_content ... ok
+test tests::reconcile_cleans_catalogued_chrome_even_without_target_rect ... ok
+test tests::window_title_echoed_as_body_is_excluded ... ok
+test tests::toolbar_becomes_chrome_at_the_seen_threshold ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\traits-cce057699f881ff6.exe)
+
+running 78 tests
+test domain::tests::capture_trigger_db_str_round_trips ... ok
+test domain::tests::capture_trigger_from_unknown_db_str_is_none ... ok
+test domain::export_bindings_monitorinfo ... ok
+test domain::export_bindings_textsource ... ok
+test domain::export_bindings_capturetrigger ... ok
+test domain::export_bindings_suppressreason ... ok
+test ipc::export_bindings_appcount ... ok
+test ipc::export_bindings_answerdelta ... ok
+test domain::export_bindings_visionanalysis ... ok
+test ipc::export_bindings_askrequest ... ok
+test ipc::export_bindings_apistatus ... ok
+test ipc::export_bindings_appsuppression ... ok
+test ipc::export_bindings_capturecontrol ... ok
+test ipc::export_bindings_activitycount ... ok
+test ipc::export_bindings_capturetick ... ok
+test domain::export_bindings_textrole ... ok
+test ipc::export_bindings_componentstatus ... ok
+test ipc::export_bindings_exportrequest ... ok
+test ipc::export_bindings_exportresult ... ok
+test ipc::export_bindings_flashattnsetting ... ok
+test ipc::export_bindings_framemeta ... ok
+test ipc::export_bindings_answerevent ... ok
+test ipc::export_bindings_hotkeystatus ... ok
+test ipc::export_bindings_kvcachetype ... ok
+test ipc::export_bindings_mark ... ok
+test ipc::export_bindings_componentreadiness ... ok
+test ipc::export_bindings_modeldownloadphase ... ok
+test ipc::export_bindings_modellane ... ok
+test ipc::export_bindings_modeltier ... ok
+test ipc::export_bindings_openmoment ... ok
+test ipc::export_bindings_pressuresample ... ok
+test ipc::export_bindings_jobprogress ... ok
+test ipc::export_bindings_reportkind ... ok
+test ipc::export_bindings_reportprogress ... ok
+test ipc::export_bindings_marktoast ... ok
+test ipc::export_bindings_reportresponse ... ok
+test domain::export_bindings_textspan ... ok
+test ipc::export_bindings_resumecontext ... ok
+test ipc::export_bindings_searchhit ... ok
+test ipc::export_bindings_jobcompleted ... ok
+test ipc::export_bindings_sessionrecaprequest ... ok
+test ipc::export_bindings_modeldownloadstatus ... ok
+test ipc::export_bindings_sidecarstate ... ok
+test ipc::export_bindings_framedetail ... ok
+test ipc::export_bindings_storagestats ... ok
+test ipc::export_bindings_searchquery ... ok
+test ipc::export_bindings_insightssummary ... ok
+test ipc::export_bindings_readiness ... ok
+test ipc::export_bindings_timelinebucket ... ok
+test ipc::ts_number_guard::no_bigint_in_ipc_types ... ok
+test ipc::export_bindings_reportrequest ... ok
+test ipc::export_bindings_timerange ... ok
+test ipc::export_bindings_toastlevel ... ok
+test privacy::tests::allows_unrelated_apps ... ok
+test privacy::tests::empty_excluded_entry_never_matches ... ok
+test privacy::tests::matches_process_name_case_insensitively ... ok
+test privacy::tests::matches_window_title ... ok
+test ipc::export_bindings_updatestatus ... ok
+test ipc::export_bindings_visiontarget ... ok
+test ipc::export_bindings_throttlestatus ... ok
+test ipc::export_bindings_sessionquery ... ok
+test jobs::export_bindings_jobkind ... ok
+test ipc::export_bindings_sessionreference ... ok
+test ipc::export_bindings_setmodeltier ... ok
+test jobs::export_bindings_jobstate ... ok
+test jobs::export_bindings_jobstats ... ok
+test ipc::export_bindings_toast ... ok
+test ipc::export_bindings_sidecarstatus ... ok
+test sessions::export_bindings_sessionartifactrole ... ok
+test sessions::export_bindings_sessionartifactkind ... ok
+test sessions::export_bindings_sessionhost ... ok
+test sessions::export_bindings_sessionkind ... ok
+test ipc::export_bindings_settings ... ok
+test sessions::export_bindings_session ... ok
+test ipc::export_bindings_uiresumecontext ... ok
+test sessions::export_bindings_sessionartifact ... ok
+test ipc::export_bindings_sessiondetail ... ok
+test ipc::export_bindings_uiframedetail ... ok
+
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests\sessions_contract.rs (target\debug\deps\sessions_contract-7afba26c650911a0.exe)
+
+running 4 tests
+test session_database_tokens_match_schema_eleven ... ok
+test external_frame_and_resume_contracts_remain_session_free ... ok
+test shipped_segmentation_params_pin_the_pr2_gate_values ... ok
+test session_ui_contract_exports_without_bigint ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\uia-2c1113c675b32bee.exe)
+
+running 30 tests
+test breaker::tests::breaker_cooldown_expiry_closes_and_resets ... ok
+test breaker::tests::breaker_good_resets_the_streak ... ok
+test breaker::tests::threshold_is_clamped_to_at_least_one ... ok
+test breaker::tests::breaker_reports_transitions_once ... ok
+test breaker::tests::breaker_opens_after_three_consecutive_bad ... ok
+test classify::tests::input_gate_skips_timer_walks_during_active_input ... ok
+test breaker::tests::signal_bad_on_hard_timeout_and_over_budget ... ok
+test breaker::tests::signal_good_within_budget_ok ... ok
+test breaker::tests::signal_neutral_on_busy_and_within_budget_err ... ok
+test classify::tests::chromium_window_classes_are_detected_others_left_alone ... ok
+test classify::tests::containers_are_skipped_but_content_controls_emit ... ok
+test classify::tests::high_frequency_interactive_triggers_never_run_uia ... ok
+test classify::tests::input_gate_is_disabled_by_zero_window ... ok
+test classify::tests::input_gate_only_touches_timer_triggers ... ok
+test breaker::tests::breaker_isolates_apps ... ok
+test breaker::tests::breaker_neutral_neither_counts_nor_resets ... ok
+test classify::tests::low_frequency_triggers_run_uia ... ok
+test classify::tests::never_emits_password_or_offscreen_or_container ... ok
+test classify::tests::only_document_and_text_controls_want_textpattern ... ok
+test classify::tests::split_words_groups_lines_and_skips_blanks ... ok
+test geometry::tests::degenerate_inputs_are_zero ... ok
+test geometry::tests::left_top_straddling_box_reports_only_on_frame_extent ... ok
+test geometry::tests::overrunning_box_is_clamped_to_unit_square ... ok
+test input::tests::reports_an_idle_time ... ignored, requires a real desktop session
+test geometry::tests::primary_monitor_maps_proportionally ... ok
+test tests::uia_provider_spawns_and_recognizes_foreground ... ignored, requires a real desktop (UI Automation); run locally
+test geometry::tests::secondary_monitor_subtracts_its_origin ... ok
+test tests::uia_worker_exits_on_shutdown ... ignored, requires a real desktop (UI Automation); run locally
+test window::tests::live_hwnd_classification ... ignored, requires a real desktop; pass UIA_PROBE_HWND=<i64>
+test worker::tests::within_target_filters_by_center ... ok
+
+test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests api
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests capture
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests doctor
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests embeddings
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests harness
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests inference
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ocr
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests screensearch_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sessions
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sysmon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests textfilter
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests traits
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests uia
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+```
+
+### `git diff --exit-code -- ui/src/bindings` (exit 0)
+
+```text
+```

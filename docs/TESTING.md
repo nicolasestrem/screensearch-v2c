@@ -708,5 +708,12 @@ unchanged scheduler pass emits no `sessions_changed` event or redundant ownershi
 This is focused review verification only; the post-review full UI-first suite is recorded separately
 after it runs.
 
+**Post-review final clean suite (Pass 14, 2026-07-11):** the required color-disabled UI-first
+sequence passed after code `c360d7e` and review documentation `3f62479`: `npm ci` → `npm run test`
+→ lint → UI build → MCP staging → fmt → workspace clippy/build/test → generated-binding guard. All
+ten commands exited 0; the npm allow-scripts warning was non-failing. The ten fenced blocks in
+`specs/05_BUILD_REVIEW.md` Pass 14 were compared directly with their captured logs; all matched,
+including the complete 1,091-line workspace-test log and the empty fmt/binding-guard logs.
+
 The automated UI-first verification below this acceptance record remains the build/test evidence;
 the native observations above complete `03 §13c-5` without substituting mocks for the live app.
