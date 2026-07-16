@@ -276,6 +276,28 @@ cargo run -p doctor            # WebView2 / Vulkan / llama-server readiness (dia
 Windows 10/11 only (uses Windows-native capture, OCR, and WebView2 APIs). Cross-platform
 abstractions are intentionally **not** added (see `CLAUDE.md`).
 
+## Inspirations & prior art
+
+ScreenSearch stands on a small but real lineage of "record your screen, make it searchable"
+projects. A few that shaped the thinking here, in different ways:
+
+- [screenpipe](https://github.com/mediar-ai/screenpipe) - open-source, local-first continuous
+  screen (and audio) capture with search; the closest kin to this project's goals.
+- [Rewind.ai](https://www.rewind.ai/) - the macOS "perfect memory" app that popularized personal,
+  on-device screen recall and natural-language questions over what you've seen.
+- [Rem](https://github.com/jasonjmcghee/rem) - an open-source, local-first take on the same idea for
+  macOS.
+- [OpenRecall](https://github.com/openrecall/openrecall) - a privacy-first, cross-platform open
+  alternative in the same space.
+
+ScreenSearch's approach differs in a few key ways:
+
+- Windows-only by design: Uses native Windows APIs (capture, OCR, WebView2) and avoids cross-platform abstractions.
+- Rust-only ML runtime: Employs fastembed and a local llama.cpp sidecar, with no cloud calls.
+- Heuristic sessions: Groups frames into sessions using a pure on-device heuristic rather than a model.
+
+Everything runs on-device.
+
 ## License
 
 [MIT](./LICENSE) © 2026 Nicolas Estrem

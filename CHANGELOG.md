@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- README "Inspirations & prior art" section crediting screenpipe, Rewind.ai, Rem, and OpenRecall.
 
 ## Older versions
 
