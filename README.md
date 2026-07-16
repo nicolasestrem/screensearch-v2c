@@ -293,7 +293,6 @@ projects. A few that shaped the thinking here, in different ways:
 ScreenSearch's approach differs in a few key ways:
 
 - Windows-only by design: Uses native Windows APIs (capture, OCR, WebView2) and avoids cross-platform abstractions.
-- No audio: Audio processing is explicitly out of scope (see CLAUDE.md).
 - Rust-only ML runtime: Employs fastembed and a local llama.cpp sidecar, with no cloud calls.
 - Heuristic sessions: Groups frames into sessions using a pure on-device heuristic rather than a model.
 
