@@ -4,65 +4,89 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
-> **Status: v0.4.0 shipped (the sessions arc).** Capture → OCR/UIA text → deferred enrichment →
-> **hybrid search**, the **llama.cpp inference sidecar** (vision tagging + grounded streaming `ask`),
-> the full **Command-Deck UI**, and the global-hotkey **Flow overlay** all run on the live app.
-> The shipped 0.2.x arc added attention-first text filtering, Recall reports, opt-in event-driven
-> capture, and a smart enrichment throttle; the 0.3.0 arc trimmed invasive surfaces (event
-> triggers, Beta tier, image embeddings) and added flow recall — where-was-i + marks — plus an
-> opt-in **local HTTP API** and the bundled **`screensearch-mcp` MCP server**; the 0.3.1 patch
-> restored vision-tagging throughput to the pre-WebP baseline (#64) and added recall polish.
-> The 0.3.2 arc gave the app its product shell: **auto-update** (signed manifest on GitHub
-> Releases, background download, install only on your restart — v0.3.2 is the last manual
-> download), a **system tray** with a passive capture-state icon and quick actions
-> (close-to-tray on by default, run-at-startup off by default), a hardened one-scroll-context
-> layout, and a **two-tier Settings** page. The **0.3.3** hotfix (auto-delivered by the 0.3.2
-> updater — the first automatic release) skips Chromium/Electron windows in the UIA text source to
-> stop browser freezes. The **0.4.0 sessions arc** (shipped) groups frames into sessions
-> additively (zero frame-level behavior change) via a pure heuristic engine with no model calls,
-> behind its one schema migration (v10 → v11); sessions are reachable in the Timeline and the
-> read-only local API and MCP, and v0.4.0 is the first release auto-delivered to 0.3.2+ installs.
-> The **NSIS installer** is unsigned (SmartScreen will
-> warn — "More info → Run anyway"); **Authenticode code-signing** is the lone remaining packaging
-> follow-up (the updater's minisign signature is separate and already live). Design lives
-> in [`specs/`](./specs); the as-built architecture is in
-> [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project — no shared
-> code or data with any prior version.
+> **Status — v0.4.0 shipped (2026-07-11).** The full app is live: capture → OCR/UIA text →
+> deferred enrichment → **hybrid search**, an in-process **llama.cpp inference sidecar** for
+> vision tagging and grounded streaming answers, the six-screen **Command Deck** UI, a
+> global-hotkey **Flow overlay**, an opt-in **local HTTP API + MCP server**, **auto-update**,
+> and a native **system tray**. The latest arc groups captured frames into **sessions** with a
+> pure on-device heuristic. **Authenticode code-signing** is the one remaining packaging
+> follow-up — until then the NSIS installer is unsigned and SmartScreen warns ("More info →
+> Run anyway"). Full release history is in
+> [`CHANGELOG.md`](./CHANGELOG.md) / [`CHANGELOG-ARCHIVE.md`](./CHANGELOG-ARCHIVE.md); the
+> design lives in [`specs/`](./specs) and the as-built architecture in
+> [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md). A standalone, clean-slate project — it
+> shares no code or data with any prior version.
 
 ## Screenshots
 
-The **Command Deck** is six on-device screens over your screen history — Deck, Recall (grounded
-**Ask** with cited frames), Insights (activity analytics), Moment (frame detail + on-demand vision
-tagging), Timeline, and Settings. Nothing here touches the network: every frame, query, and answer
+The **Command Deck** is six on-device screens over your screen history — Deck, Recall, Insights,
+Moment, Timeline, and Settings. Nothing here touches the network: every frame, query, and answer
 stays on the machine.
 
 ![Deck — capture status, today's activity, where to jump back in](screenshots/deck.png)
 
-> **Deck** — the at-a-glance home: capture status, today's activity and top apps, where-was-I resume,
-> intentions (marks), and recent captures.
+> **Deck** — the at-a-glance home: capture status, today's activity and top apps, where-was-I
+> resume, intentions (marks), and recent captures.
 
 ![Timeline — a scanline of the day with session bands](screenshots/timeline.png)
 
-> **Timeline** — scrub a day / week / month of captures on a scanline, with additive **session bands**
-> (focus, meeting, and concurrent AI-tool sessions) layered over the density. `Enter` opens the Moment.
+> **Timeline** — scrub a day / week / month of captures on a scanline, with **session bands**
+> (focus, meeting, and concurrent AI-tool sessions) layered over the density. `Enter` opens the
+> Moment.
 
 ![Recall — hybrid search over screen history with highlighted matches](screenshots/recall.png)
 
-> **Recall** — hybrid text + semantic search over everything on screen (grounded **Ask** and recall
-> **Reports** share the screen). Matches are highlighted and link straight to the captured frame.
+> **Recall** — hybrid text + semantic search over everything on screen; grounded **Ask** and
+> recall **Reports** share the screen. Matches are highlighted and link straight to the captured
+> frame.
 
 ![Insights — capture density, top apps, and activity breakdown](screenshots/insights.png)
 
-> **Insights** — truthful aggregates over a range: captures over time, top foreground apps, and the
-> activity-type breakdown.
+> **Insights** — truthful aggregates over a range: captures over time, top foreground apps, and
+> the activity-type breakdown.
 
 ![Moment — one captured frame with context, recognized text, and vision tags](screenshots/moment.png)
 
-> **Moment** — a single capture in full: the image, its session, recognized text, vision tags, and the
-> neighbouring captures.
+> **Moment** — a single capture in full: the image, its session, recognized text, vision tags,
+> and the neighbouring captures.
 
 > **Note:** every screenshot above is rendered against **synthetic seed data** — invented frames,
 > sessions, and text with no personal content (see [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md)).
+
+## What it does
+
+- **Always-on, cheap capture.** Windows.Graphics.Capture writes changed frames straight to a local
+  SQLite store, behind diff and privacy gates. Capture runs on a timer by default, with opt-in
+  event-driven triggers (foreground + idle). Each frame is archived as lossless WebP.
+- **On-device text extraction.** Foreground-window text via **UI Automation**, falling back to
+  native **WinRT OCR**, then an **attention-first filter** that keeps content text over chrome
+  (raw text stays available opt-in).
+- **Deferred, user-controlled enrichment.** Embeddings run as durable jobs in a SQLite-backed
+  queue drained by a bounded worker pool; **vision tagging is on-demand / timed / idle only** —
+  never real-time. An optional CPU/GPU pressure throttle eases off background work under load
+  without ever pausing capture, OCR, or storage.
+- **Hybrid search.** FTS5 keyword + sqlite-vec semantic, fused with Reciprocal Rank Fusion —
+  **~33 ms p95 on a 10 000-frame database**. Embeddings are EmbeddingGemma-300M (768-dim) via
+  **fastembed** (in-process ONNX).
+- **Grounded answers & reports.** RAG over your screen history through the local **llama.cpp
+  sidecar**: streaming answers with cited frames, and Daily / Weekly / Custom **Recall reports**
+  that cite the frames they used. Vision tagging emits structured output with an honest confidence,
+  never a fabricated score.
+- **Sessions.** A pure on-device heuristic groups frames into focus, meeting, and concurrent
+  AI-tool sessions — additively, with no model calls and no change to frame-level behavior.
+  Sessions surface in the Timeline, the local API, and MCP.
+- **Fast recall overlay.** `Ctrl+Alt+Z` opens the **Flow overlay** — a second, capture-protected
+  Tauri window for quick Search/Ask without leaving your foreground app. `Esc` hides it; `Enter`
+  opens the selected Moment in the main Command Deck. `Ctrl+Alt+M` marks the current moment.
+- **Local API + MCP.** An opt-in localhost HTTP API (off by default, `127.0.0.1` + bearer token)
+  exposes search / ask / frames / marks / sessions and JSON export to local scripts and agents.
+  `screensearch-mcp.exe` — bundled in the installer — wraps it as a stdio **MCP server** for
+  Claude Desktop / Claude Code (see [`docs/API.md`](docs/API.md), [`docs/MCP.md`](docs/MCP.md)).
+- **Lives in the tray, updates itself.** A native system tray with a passive capture-state icon
+  and quick actions keeps capture running when you close the window (a one-time toast explains it;
+  run-at-startup is off by default). From v0.3.2 on the app auto-updates: a signed manifest is
+  checked at launch, the new installer downloads in the background, and it installs only when you
+  choose to restart — no modal, no nag.
 
 ## Build progress
 
@@ -70,109 +94,34 @@ stays on the machine.
 |---|---|---|
 | **P0** | Scaffold — Cargo workspace, `traits` contracts, Tauri 2 shell, React/TS UI, `ts-rs` IPC, CI, `doctor` | ✅ Complete |
 | **P1** | Data spine — SQLite (WAL) + FTS5 + sqlite-vec, forward-only migrations, durable job queue, hybrid search | ✅ Complete |
-| **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, minimal live timeline | ✅ Complete |
-| **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm live, `search` command, perf-verified | ✅ Complete |
+| **P2** | Capture happy path — WGC capture + diff/privacy gates, WinRT OCR, kernel event bus, live timeline | ✅ Complete |
+| **P3** | Deferred enrichment — fastembed embedding worker pool, vector arm, `search` command, perf-verified | ✅ Complete |
 | **P4** | Inference sidecar — llama.cpp (Job-Object-bound, no-orphan), vision tagging, grounded streaming `ask` | ✅ Complete |
-| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | 🚧 Feature-complete; live-verified (full keyboard/state/a11y matrix pending) |
-| **Pkg** | Unsigned **NSIS** installer shipped (v0.1.0); Inno/MSI/portable ZIP dropped; `onnxruntime.dll` static-linked (not bundled); **code-signing** the lone follow-up (DoD §13.9, `07` #26) | 🚧 Signing pending |
+| **P5** | Command-Deck UI (Deck, Recall, Timeline, Moment, Insights, Settings) + typed IPC | ✅ Feature-complete; live-verified |
+| **Pkg** | Unsigned **NSIS** installer shipped; **Authenticode code-signing** is the lone follow-up (DoD §13.9, `07` #26) | 🚧 Signing pending |
 
-The **0.2.x arc** builds on that v1.0 base — an attention-first text signal plus recall and
-capture refinements:
-
-| Feature | What it adds | Status |
-|---|---|---|
-| **Attention-first text** | Span-aware classifier so search/Ask/embeddings rank on content, not chrome (raw text still opt-in) | ✅ Shipped |
-| **Recall reports** | On-device Daily / Weekly / Custom summaries that cite the frames they used | ✅ Shipped |
-| **Event-driven capture** | Opt-in triggers — foreground + idle (timer stays the default) | ✅ Shipped |
-| **UIA text source** | Foreground-window text via UI Automation, with automatic OCR fallback | ✅ Shipped |
-| **Smart enrichment throttle** | Opt-in CPU/GPU backpressure that eases off background work under load — capture/OCR/storage never pause | ✅ Shipped |
-
-The **0.3.0 arc** (shipped) was the surface-reduction + flow-recall pass:
-
-| Feature | What it changes | Status |
-|---|---|---|
-| **Surface reduction** | Removes click/scroll/clipboard/typing triggers, the Beta model tier, and the unused image-embedding lane | ✅ Shipped |
-| **Flow overlay** | `Ctrl+Alt+Z` opens a protected always-on-top Search/Ask overlay over your current app | ✅ Shipped |
-| **Where-was-i + marks** | Resume context (`where_was_i`) and mark-this-moment (`Ctrl+Alt+M`, diff-gate-bypassing `capture_now`) | ✅ Shipped |
-| **Local API + MCP wrapper** | Opt-in localhost API (127.0.0.1 + bearer token), JSON export, and the `screensearch-mcp` stdio wrapper | ✅ Shipped |
-
-The **0.3.2 arc** (shipped) is the product-shell pass — lifecycle + interface:
-
-| Feature | What it adds | Status |
-|---|---|---|
-| **Auto-update** | Signed `latest.json` on GitHub Releases; check on launch + manual check; background download; install only on user-initiated restart — no modal, no nag | ✅ Shipped (v0.3.2 is the updater's genesis — the last manual download) |
-| **System tray + quick actions** | Passive capture-state icon (capturing / paused / error), six-item menu (open, pause/resume, load/unload model, start/stop vision, check for updates, quit); close-to-tray default on; run-at-startup default off | ✅ Shipped |
-| **Shell layout hardening** | One scroll context per route, no nested scrollbars, no layout shift on load; WebView2 ghost-rail mitigation | ✅ Shipped |
-| **Settings two-tier IA** | Essentials always visible; Advanced collapsed into seven groups; live hotkey-conflict warning; two dead settings retired (old configs still load) | ✅ Shipped |
-
-The **0.3.3 hotfix** (shipped, first auto-delivered release): the UIA text source skips
-Chromium/Electron windows to stop browser freezes.
-
-The **0.4.0 sessions arc** (shipped as `v0.4.0`, 2026-07-11) reframes frames into **sessions**,
-additively, with no frame-level behavior change:
-
-| Feature | What it adds | Status |
-|---|---|---|
-| **Sessions schema** | Migration v10 → v11: `sessions` + `session_artifacts` tables and a nullable `frames.session_id`, structure-only (no backfill) | ✅ Shipped (PR3) |
-| **Segmentation engine** | Pure heuristic `crates/sessions` — no model calls; per-identity-track segmentation + tool recognition from a seed taxonomy | ✅ Shipped (PR4) |
-| **Sessions in the UI** | Typed session commands and a sessions surface (pull-based, non-shaming; no new NavRail route) | ✅ Shipped (PR5) |
-| **Sessions API / MCP** | `list_sessions` / `get_session` / `ask_session` over the local API and MCP wrapper | ✅ Shipped (PR6) |
-
-> Detailed point-in-time PR audits live as local-only artifacts under `docs/audits/` (git-ignored,
-> not pushed).
-
-### Working today
-Start capture → each changed frame's text is read (foreground-window **UIA**, falling back to native
-**WinRT OCR**), stored, and archived as lossless WebP → an attention-first filter keeps content text over chrome
-→ an `embed_text` job is enqueued → a background worker pool embeds it with **fastembed**
-(EmbeddingGemma-300M, 768-dim) → **hybrid search** (FTS5 keyword + sqlite-vec semantic, fused with
-Reciprocal Rank Fusion) returns the right frames in **~33 ms p95 on a 10 000-frame database**.
-Capture runs on a timer by default, with **opt-in event-driven triggers** (foreground + idle).
-**Vision tagging** (on-demand / timer / idle — structured
-output with an honest confidence, never a fabricated score), **grounded streaming answers** with
-citations, and **Recall reports** (Daily / Weekly / Custom, citing their source frames) run on the
-local **llama.cpp sidecar**; the full Command-Deck UI surfaces all of it. An optional **enrichment
-throttle** eases off background work under sustained CPU/GPU pressure without ever pausing capture,
-OCR, or storage. Retention purges run at startup and hourly when enabled, and the StatusRail shows
-real DB/frame storage usage. `Ctrl+Alt+Z` opens the **Flow overlay**: a second, capture-protected
-Tauri window for quick Search/Ask without leaving the foreground app; `Esc` hides it and `Enter`
-opens the selected Moment in the main Command Deck. An **opt-in local HTTP API** (off by default,
-`127.0.0.1` + bearer token) exposes search/ask/frames/marks to local scripts and agents, and
-`screensearch-mcp.exe` — bundled in the installer — wraps it as a stdio **MCP server** for Claude
-Desktop / Claude Code (`docs/API.md`, `docs/MCP.md`). The app lives in the **system tray**
-(closing the window keeps capture running by default — a one-time toast explains it), and
-**updates itself** from v0.3.2 on: a signed manifest is checked at launch, the new installer
-downloads in the background, and it installs only when you choose to restart.
-
-## What it does (v1.0 target)
-
-- **Always-on, cheap capture** — screen capture (Windows.Graphics.Capture) + native WinRT OCR,
-  written straight to a local SQLite store. *(P2 — done)*
-- **Deferred, user-controlled enrichment** — embeddings run as durable jobs in a SQLite-backed
-  queue, drained by a background worker pool; vision tagging is **on-demand / timed / idle** only.
-  *(embeddings P3 — done; vision P4 — done)*
-- **Hybrid search** — FTS5 keyword + vector (sqlite-vec) semantic, fused with Reciprocal Rank
-  Fusion. *(P3 — done)*
-- **Grounded, reasoning answers** — RAG over your screen history via a local llama.cpp model with
-  a *thinking* mode. *(P4 — done)*
-- **Fast recall overlay** — a protected global-hotkey window for Search and Ask over the current
-  working context. *(0.3.0 — done)*
+Post-v1.0 arcs — attention-first text (0.2.x), surface reduction + flow recall + local API (0.3.0),
+the product shell (auto-update, tray, two-tier Settings — 0.3.2), and the sessions reframe (0.4.0) —
+have all shipped. Each arc's detailed record lives in its `docs/<version>.md` and in
+[`CHANGELOG-ARCHIVE.md`](./CHANGELOG-ARCHIVE.md); point-in-time PR audits live as local-only
+artifacts under `docs/audits/` (git-ignored, not pushed).
 
 ## Architecture (summary)
 
 - **Shell:** Tauri 2 + WebView2; React 18 + TypeScript UI; typed IPC via `ts-rs`; a main Command
   Deck window plus a pre-created protected Flow overlay summoned by a global shortcut.
 - **Core:** a modular Rust **kernel** — trait-bounded modules over a typed event bus; `src-tauri`
-  is the composition root that wires concrete impls in.
+  is the composition root that wires the concrete impls in.
 - **Processing:** *capture-cheap, enrich-deferred* — a durable SQLite **job queue** drained by a
-  bounded worker pool (with retry/backoff, dead-lettering, and stale-job recovery). An optional
-  CPU/GPU **pressure throttle** reduces background enrichment under load; capture/OCR/storage never pause.
+  bounded worker pool (retry/backoff, dead-lettering, stale-job recovery). An optional CPU/GPU
+  pressure throttle reduces background enrichment under load; capture/OCR/storage never pause.
 - **Text source:** foreground-window text via **UI Automation** with automatic fallback to native
   **WinRT OCR**, then an attention-first filter that keeps content over chrome.
-- **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine); forward-only migrations.
-- **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text.
-  **No Python in the runtime.**
-- **Inference (P4):** a single supervised, model-agnostic **llama.cpp sidecar** (Vulkan GPU + CPU
+- **Data:** SQLite (WAL) + FTS5 + sqlite-vec (768-dim, cosine); forward-only migrations
+  (current schema version 11).
+- **Embeddings:** **fastembed** (in-process ONNX) — EmbeddingGemma-300M text. **No Python in the
+  runtime.**
+- **Inference:** a single supervised, model-agnostic **llama.cpp sidecar** (Vulkan GPU + CPU
   fallback), **bound to the app via a Windows Job Object** so it can never orphan after a crash;
   advanced users can list/select llama.cpp devices when the default Vulkan device is wrong.
 
@@ -182,8 +131,8 @@ See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the as-built design and
 
 | Lane | Default | Quality |
 |---|---|---|
-| **Vision** (P4) | Qwen3-VL-4B-Instruct | Qwen3-VL-8B-Instruct |
-| **Answer** (P4) | Ministral-3-3B-Reasoning-2512 | Qwen3-4B-Thinking-2507 |
+| **Vision** | Qwen3-VL-4B-Instruct | Qwen3-VL-8B-Instruct |
+| **Answer** | Ministral-3-3B-Reasoning-2512 | Qwen3-4B-Thinking-2507 |
 | **Embeddings** | EmbeddingGemma-300M (text) | |
 
 Exact HF repos / quants are pinned in [`specs/MODEL_REGISTRY.md`](./specs/MODEL_REGISTRY.md).
@@ -195,15 +144,18 @@ Embedding models auto-download on first use into `<app-data>/models/fastembed`.
 CLAUDE.md          agent entry point (Claude Code) — mandatory reading order + hard rules
 AGENTS.md          agent entry point (Codex) — same contract, Codex-flavored
 README.md          this file
-CHANGELOG.md       human-facing changelog (Keep a Changelog)
+CHANGELOG.md       human-facing changelog (Keep a Changelog); older releases in CHANGELOG-ARCHIVE.md
 Cargo.toml         Cargo workspace (centralized dependency versions)
 docs/
   ARCHITECTURE.md          as-built system design + data flow
+  API.md / MCP.md          local HTTP API + MCP server reference
+  TESTING.md               test matrix and how to run the gated suites
+  <version>.md             per-arc design + build records (0.2.0 … 0.4.0)
   audits/                  point-in-time PR audit evidence (local-only, git-ignored)
 screenshots/       Command-Deck UI screenshots used by this README
-crates/
+crates/            15-crate Rust workspace (module crates depend on `traits` only):
   traits/          module contracts + shared domain/IPC/job types (no impls)
-  kernel/          orchestrator: event bus, capture loop, worker pool, settings
+  kernel/          orchestrator: event bus, capture loop, worker pool, settings, resume heuristic
   store/           data spine: SQLite + sqlite-vec + FTS5, job queue, hybrid search
   capture/         CaptureSource (WGC) + diff/privacy gates + event-driven triggers
   ocr/             OcrProvider (WinRT Media.Ocr, STA worker)
@@ -215,8 +167,8 @@ crates/
   doctor/          WebView2 / Vulkan / llama-server environment smoke-check
   api/             opt-in localhost HTTP API + JSON export (axum, 127.0.0.1 + bearer token)
   mcp/             screensearch-mcp.exe — stdio MCP wrapper over the local API
-  sessions/        0.4.0 — pure heuristic session segmentation + tool recognition (no model calls)
-  harness/         0.4.0 — dev-only, read-only segmentation validation harness (not shipped)
+  sessions/        pure heuristic session segmentation + tool recognition (no model calls)
+  harness/         dev-only, read-only segmentation validation harness (not shipped in the app)
 src-tauri/         Tauri 2 shell + composition root + command handlers + main()
 ui/                React 18 + TS + Vite — the full "Command Deck" (6 screens, typed IPC)
 specs/             spec-engineering pipeline (00 intake → 04 build prompt → 05–08 build/review)
@@ -226,7 +178,7 @@ specs/             spec-engineering pipeline (00 intake → 04 build prompt → 
 
 ## Build & run
 
-Prerequisites: **Windows 10/11**, a recent Rust toolchain (workspace MSRV **1.82**), Node.js +
+Prerequisites: **Windows 10/11**, a recent Rust toolchain (workspace MSRV **1.82**), Node.js 22 +
 npm, and WebView2 (preinstalled on current Windows). First run downloads the embedding model
 (~hundreds of MB) and an ONNX Runtime build at compile time.
 
@@ -265,6 +217,8 @@ cargo test -p ocr -- --ignored                              # WinRT OCR smoke (n
 cargo test -p inference --test smoke -- --ignored --nocapture  # real llama-server: vision tag + grounded ask (GPU)
 ```
 
+See [`docs/TESTING.md`](docs/TESTING.md) for the full test matrix.
+
 ## Environment check
 
 ```powershell
@@ -274,27 +228,29 @@ cargo run -p doctor            # WebView2 / Vulkan / llama-server readiness (dia
 ## Platform
 
 Windows 10/11 only (uses Windows-native capture, OCR, and WebView2 APIs). Cross-platform
-abstractions are intentionally **not** added (see `CLAUDE.md`).
+abstractions are intentionally **not** added (see [`CLAUDE.md`](./CLAUDE.md)).
 
 ## Inspirations & prior art
 
 ScreenSearch stands on a small but real lineage of "record your screen, make it searchable"
 projects. A few that shaped the thinking here, in different ways:
 
-- [screenpipe](https://github.com/mediar-ai/screenpipe) - open-source, local-first continuous
+- [screenpipe](https://github.com/mediar-ai/screenpipe) — open-source, local-first continuous
   screen (and audio) capture with search; the closest kin to this project's goals.
-- [Rewind.ai](https://www.rewind.ai/) - the macOS "perfect memory" app that popularized personal,
+- [Rewind.ai](https://www.rewind.ai/) — the macOS "perfect memory" app that popularized personal,
   on-device screen recall and natural-language questions over what you've seen.
-- [Rem](https://github.com/jasonjmcghee/rem) - an open-source, local-first take on the same idea for
+- [Rem](https://github.com/jasonjmcghee/rem) — an open-source, local-first take on the same idea for
   macOS.
-- [OpenRecall](https://github.com/openrecall/openrecall) - a privacy-first, cross-platform open
+- [OpenRecall](https://github.com/openrecall/openrecall) — a privacy-first, cross-platform open
   alternative in the same space.
 
 ScreenSearch's approach differs in a few key ways:
 
-- Windows-only by design: Uses native Windows APIs (capture, OCR, WebView2) and avoids cross-platform abstractions.
-- Rust-only ML runtime: Employs fastembed and a local llama.cpp sidecar, with no cloud calls.
-- Heuristic sessions: Groups frames into sessions using a pure on-device heuristic rather than a model.
+- **Windows-only by design** — native Windows APIs (capture, OCR, WebView2), no cross-platform
+  abstractions.
+- **Rust-only ML runtime** — fastembed and a local llama.cpp sidecar, with no cloud calls.
+- **Heuristic sessions** — frames are grouped into sessions by a pure on-device heuristic rather
+  than a model.
 
 Everything runs on-device.
 
