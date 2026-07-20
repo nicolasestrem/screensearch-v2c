@@ -5,8 +5,9 @@ searchable by **text and meaning**, and answers questions about what you've seen
 on-device, no cloud.
 
 > **Status — v0.4.0 shipped (2026-07-11).** The full app is live: capture → OCR/UIA text →
-> deferred enrichment → **hybrid search**, an in-process **llama.cpp inference sidecar** for
-> vision tagging and grounded streaming answers, the six-screen **Command Deck** UI, a
+> deferred enrichment → **hybrid search**, a supervised out-of-process **llama.cpp inference
+> sidecar** (Job-Object-bound) for vision tagging and grounded streaming answers, the six-screen
+> **Command Deck** UI, a
 > global-hotkey **Flow overlay**, an opt-in **local HTTP API + MCP server**, **auto-update**,
 > and a native **system tray**. The latest arc groups captured frames into **sessions** with a
 > pure on-device heuristic. **Authenticode code-signing** is the one remaining packaging
