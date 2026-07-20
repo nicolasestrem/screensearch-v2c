@@ -4,6 +4,13 @@ A local-first **Windows** desktop app that continuously captures your screen, ma
 searchable by **text and meaning**, and answers questions about what you've seen — fully
 on-device, no cloud.
 
+**It's also memory your agents can query.** Where most screen-recall tools stop at a search box for
+you, ScreenSearch exposes your screen history through an opt-in local **MCP server**
+(`screensearch-mcp`) — so Claude Desktop, Claude Code, or any MCP client can search your captures,
+ask grounded questions with cited frames, and, as of v0.4.0, reason over automatically segmented
+**work sessions** (`list_sessions`, `get_session`, `ask_session`). Every answer is drawn from the
+local database over `127.0.0.1`; nothing leaves the machine.
+
 > **Status — v0.4.0 shipped (2026-07-11).** The full app is live: capture → OCR/UIA text →
 > deferred enrichment → **hybrid search**, a supervised out-of-process **llama.cpp inference
 > sidecar** (Job-Object-bound) for vision tagging and grounded streaming answers, the six-screen
