@@ -706,8 +706,9 @@ const SESSIONS_GAP_CLOSE_MIGRATED_KEY: &str = "sessions.gap_close_secs_migrated"
 /// sweep's 120-second winner (usage review 2026-08-01 §6.7).
 ///
 /// The marker makes this a true one-shot: a user who deliberately chooses 300 after upgrade keeps
-/// it. Fresh installs and custom stored values latch without rewriting. A failed legacy-value write
-/// remains unlatched so the next load retries; this load still returns the safe new default.
+/// it. Fresh installs and custom stored values latch without rewriting. The legacy value and its
+/// marker commit atomically, so a failed migration has no partial state and the next load retries;
+/// this load still returns the safe new default.
 async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
     let migrated = matches!(
         store.get_setting(SESSIONS_GAP_CLOSE_MIGRATED_KEY).await,
@@ -754,13 +755,16 @@ async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
             "settings: retired session gap-close default remapped"
         );
         match store
-            .set_setting("sessions.gap_close_secs", &default.to_string())
+            .set_settings_batch(&[
+                ("sessions.gap_close_secs".to_string(), default.to_string()),
+                (SESSIONS_GAP_CLOSE_MIGRATED_KEY.to_string(), "1".to_string()),
+            ])
             .await
         {
-            Ok(()) => mark_sessions_gap_close_migrated(store).await,
+            Ok(()) => {}
             Err(e) => tracing::warn!(
                 error = %e,
-                "settings: failed to persist session gap-close remap; leaving migration un-latched to retry next load"
+                "settings: failed to atomically persist session gap-close remap; retrying next load"
             ),
         }
         default

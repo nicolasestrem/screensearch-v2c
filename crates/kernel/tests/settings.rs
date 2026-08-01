@@ -378,6 +378,17 @@ impl Store for FailSetSettingFor {
         }
         self.inner.set_setting(key, value).await
     }
+    async fn set_settings_batch(&self, kvs: &[(String, String)]) -> traits::Result<()> {
+        if self.fail_key == "__batch__" {
+            return Err(anyhow::anyhow!("injected atomic settings batch failure"));
+        }
+        if let Some((key, _)) = kvs.iter().find(|(key, _)| key == self.fail_key) {
+            return Err(anyhow::anyhow!(
+                "injected set_settings_batch failure for {key}"
+            ));
+        }
+        self.inner.set_settings_batch(kvs).await
+    }
     async fn get_setting(&self, key: &str) -> traits::Result<Option<String>> {
         self.inner.get_setting(key).await
     }
@@ -694,6 +705,43 @@ async fn failed_session_gap_close_remap_is_retried_not_latched() {
             .unwrap()
             .as_deref(),
         Some("120")
+    );
+}
+
+#[tokio::test]
+async fn session_gap_close_remap_batch_failure_leaves_no_partial_migration() {
+    let inner = SqliteStore::open_in_memory().expect("open in-memory store");
+    inner
+        .set_setting("sessions.gap_close_secs", "300")
+        .await
+        .unwrap();
+    let failing = FailSetSettingFor {
+        inner,
+        fail_key: "__batch__",
+    };
+
+    assert_eq!(
+        load_settings(&failing).await.sessions_gap_close_secs,
+        Settings::default().sessions_gap_close_secs
+    );
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("300"),
+        "an atomic migration failure must leave the legacy value untouched"
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_none(),
+        "an atomic migration failure must leave the marker absent"
     );
 }
 
