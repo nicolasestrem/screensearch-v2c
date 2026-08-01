@@ -116,15 +116,22 @@ async fn load_session_detail(
     else {
         return Ok(None);
     };
-    // A populated row is cacheable only when its summary passes the same D8 validity gate that
-    // protects persistence. Otherwise `include_summary` must reach the generator so a historic
-    // `"User"` cache is cleared/replaced rather than served forever (usage review 2026-08-01 §7.4).
-    let fully_cached = session.title.is_some()
-        && session.summary_model.is_some()
-        && session
-            .summary
-            .as_deref()
-            .is_some_and(kernel::sessions_intel::is_useful_session_summary);
+    // Redact a legacy invalid cache from every in-app detail response. The base detail request
+    // races summary generation in the Session route, so exposing `"User"` here would keep it
+    // visible while generation runs — or forever when inference is unavailable. An
+    // `include_summary` request continues into the kernel path, which clears/retries the durable
+    // cache (usage review 2026-08-01 §7.4).
+    let invalid_cached_summary = session
+        .summary
+        .as_deref()
+        .is_some_and(|summary| !kernel::sessions_intel::is_useful_session_summary(summary));
+    if invalid_cached_summary {
+        session.title = None;
+        session.summary = None;
+        session.summary_model = None;
+    }
+    let fully_cached =
+        session.title.is_some() && session.summary.is_some() && session.summary_model.is_some();
     if include_summary && !fully_cached {
         let answer = answer.ok_or_else(|| "inference sidecar not ready yet".to_string())?;
         session = kernel::sessions_intel::generate_session_title_summary(
@@ -395,8 +402,9 @@ async fn search(query: SearchQuery, state: State<'_, AppState>) -> Result<Vec<Se
     store.hybrid_search(&query).await.map_err(|e| e.to_string())
 }
 
-/// Start/stop the always-on capture loop (`capture_control`, `03 §7`). Capture is
-/// off until the user starts it (privacy-first, `07`).
+/// Starts or stops capture explicitly. Capture starts once backend boot wires a usable kernel
+/// (the 2026-08-01 production-usage hardening decision); Stop remains an immediate session-local
+/// privacy control (`capture_control`, `03 §7`).
 #[tauri::command]
 async fn capture_control(
     control: CaptureControl,
@@ -2965,7 +2973,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_detail_does_not_short_circuit_an_invalid_cached_summary() {
+    async fn session_detail_redacts_invalid_cached_summary_before_regeneration() {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
         let session_id = store
             .insert_session(traits::NewSession {
@@ -2984,6 +2992,17 @@ mod tests {
             .set_session_title_summary(session_id, "Speaker", "User", "bad-model.gguf")
             .await
             .unwrap();
+
+        let base = load_session_detail(store.clone(), session_id, false, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            base.session.title.is_none()
+                && base.session.summary.is_none()
+                && base.session.summary_model.is_none(),
+            "base detail responses must redact the invalid cache while summary generation runs"
+        );
 
         let error = load_session_detail(store, session_id, true, None)
             .await
