@@ -116,8 +116,15 @@ async fn load_session_detail(
     else {
         return Ok(None);
     };
-    let fully_cached =
-        session.title.is_some() && session.summary.is_some() && session.summary_model.is_some();
+    // A populated row is cacheable only when its summary passes the same D8 validity gate that
+    // protects persistence. Otherwise `include_summary` must reach the generator so a historic
+    // `"User"` cache is cleared/replaced rather than served forever (usage review 2026-08-01 §7.4).
+    let fully_cached = session.title.is_some()
+        && session.summary_model.is_some()
+        && session
+            .summary
+            .as_deref()
+            .is_some_and(kernel::sessions_intel::is_useful_session_summary);
     if include_summary && !fully_cached {
         let answer = answer.ok_or_else(|| "inference sidecar not ready yet".to_string())?;
         session = kernel::sessions_intel::generate_session_title_summary(
@@ -2955,6 +2962,33 @@ mod tests {
             detail.exchanges[0].kind,
             traits::SessionArtifactKind::Exchange
         );
+    }
+
+    #[tokio::test]
+    async fn session_detail_does_not_short_circuit_an_invalid_cached_summary() {
+        let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let session_id = store
+            .insert_session(traits::NewSession {
+                started_at: 0,
+                ended_at: Some(1),
+                kind: traits::SessionKind::Ai,
+                tool: Some("codex".to_string()),
+                host: Some(traits::SessionHost::Desktop),
+                context_key: "ai:codex".to_string(),
+                confidence: 0.9,
+                frozen: false,
+            })
+            .await
+            .unwrap();
+        store
+            .set_session_title_summary(session_id, "Speaker", "User", "bad-model.gguf")
+            .await
+            .unwrap();
+
+        let error = load_session_detail(store, session_id, true, None)
+            .await
+            .expect_err("the invalid summary must reach the generator, not the cached response");
+        assert_eq!(error, "inference sidecar not ready yet");
     }
 
     #[tokio::test]

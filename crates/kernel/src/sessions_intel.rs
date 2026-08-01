@@ -135,11 +135,10 @@ fn nonempty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
 }
-
 /// Accepts only non-blank summaries of at least 32 Unicode scalar values that are not
 /// standalone speaker labels. This blocks the cached `"User"` failure observed in production
-/// (usage review 2026-08-01 §7.5); per D8, omission is safer than persisting model garbage.
-fn is_useful_session_summary(value: &str) -> bool {
+/// (usage review 2026-08-01 §7.4); per D8, omission is safer than persisting model garbage.
+pub fn is_useful_session_summary(value: &str) -> bool {
     let value = value.trim();
     if value.chars().count() < MIN_USEFUL_SUMMARY_CHARS {
         return false;
