@@ -1619,22 +1619,22 @@ pub fn run() {
 
             // Capture is a backend lifecycle invariant, not a WebView mount side effect: 8 of
             // 75 measured launches never reached the frontend start command and captured
-            // nothing (usage review 2026-08-01 §3.4). Start only after the kernel, managed
-            // state, and tray are wired. `start_capture` is idempotent, so the frontend's
-            // later Start command remains a harmless no-op. OCR/source failures are loud but
-            // non-fatal; re-syncing from the resulting readiness snapshot also closes the
-            // startup event-subscription race for the tray without adding a poller.
+            // nothing (usage review 2026-08-01 §3.4). Start synchronously after the kernel,
+            // managed state, and tray are wired: a detached task could first run after
+            // `graceful_shutdown` stops capture during an immediate quit. `start_capture` is
+            // idempotent, so the frontend's later Start command remains a harmless no-op.
+            // OCR/source failures are loud but non-fatal; re-syncing from the resulting readiness
+            // snapshot also closes the startup event-subscription race for the tray without a
+            // poller.
             if let Some(kernel) = app.state::<AppState>().kernel.clone() {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = kernel.start_capture().await {
-                        tracing::warn!(
-                            error = %e,
-                            "capture autostart failed; app will continue without capture"
-                        );
-                    }
-                    tray::on_readiness(&handle, &kernel.readiness());
-                });
+                if let Err(e) = tauri::async_runtime::block_on(kernel.start_capture()) {
+                    tracing::warn!(
+                        error = %e,
+                        "capture autostart failed; app will continue without capture"
+                    );
+                }
+                tray::on_readiness(&handle, &kernel.readiness());
             }
 
             // Start the local API if it was left enabled (loud on a bind failure, D6).

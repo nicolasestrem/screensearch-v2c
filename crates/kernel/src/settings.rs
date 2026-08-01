@@ -706,9 +706,9 @@ const SESSIONS_GAP_CLOSE_MIGRATED_KEY: &str = "sessions.gap_close_secs_migrated"
 /// sweep's 120-second winner (usage review 2026-08-01 §6.7).
 ///
 /// The marker makes this a true one-shot: a user who deliberately chooses 300 after upgrade keeps
-/// it. Fresh installs and custom stored values latch without rewriting. The legacy value and its
-/// marker commit atomically, so a failed migration has no partial state and the next load retries;
-/// this load still returns the safe new default.
+/// it. A fresh install latches the default and marker together; custom stored values latch without
+/// rewriting. The value and marker commit atomically, so a failed migration has no partial state
+/// and the next load retries; this load still returns the safe new default.
 async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
     let migrated = matches!(
         store.get_setting(SESSIONS_GAP_CLOSE_MIGRATED_KEY).await,
@@ -718,7 +718,7 @@ async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
         Ok(Some(raw)) => raw,
         Ok(None) => {
             if !migrated {
-                mark_sessions_gap_close_migrated(store).await;
+                persist_sessions_gap_close_migration(store, default).await;
             }
             return default;
         }
@@ -754,23 +754,27 @@ async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
             new = default,
             "settings: retired session gap-close default remapped"
         );
-        match store
-            .set_settings_batch(&[
-                ("sessions.gap_close_secs".to_string(), default.to_string()),
-                (SESSIONS_GAP_CLOSE_MIGRATED_KEY.to_string(), "1".to_string()),
-            ])
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => tracing::warn!(
-                error = %e,
-                "settings: failed to atomically persist session gap-close remap; retrying next load"
-            ),
-        }
+        persist_sessions_gap_close_migration(store, default).await;
         default
     } else {
         mark_sessions_gap_close_migrated(store).await;
         stored
+    }
+}
+
+/// Atomically persists the effective gap-close value and one-shot migration marker.
+async fn persist_sessions_gap_close_migration(store: &dyn Store, value: u32) {
+    if let Err(e) = store
+        .set_settings_batch(&[
+            ("sessions.gap_close_secs".to_string(), value.to_string()),
+            (SESSIONS_GAP_CLOSE_MIGRATED_KEY.to_string(), "1".to_string()),
+        ])
+        .await
+    {
+        tracing::warn!(
+            error = %e,
+            "settings: failed to atomically persist session gap-close migration; retrying next load"
+        );
     }
 }
 

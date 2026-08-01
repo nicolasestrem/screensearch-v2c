@@ -659,6 +659,33 @@ async fn legacy_session_gap_close_default_migrates_once() {
 }
 
 #[tokio::test]
+async fn fresh_session_gap_close_default_latches_value_and_marker() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+
+    assert_eq!(
+        load_settings(&store).await.sessions_gap_close_secs,
+        Settings::default().sessions_gap_close_secs
+    );
+    assert_eq!(
+        store
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("120"),
+        "a fresh install must persist the default alongside its migration marker"
+    );
+    assert!(
+        store
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_some(),
+        "a fresh install must latch the one-shot marker with its default"
+    );
+}
+
+#[tokio::test]
 async fn failed_session_gap_close_remap_is_retried_not_latched() {
     let inner = SqliteStore::open_in_memory().expect("open in-memory store");
     inner
@@ -742,6 +769,37 @@ async fn session_gap_close_remap_batch_failure_leaves_no_partial_migration() {
             .unwrap()
             .is_none(),
         "an atomic migration failure must leave the marker absent"
+    );
+}
+
+#[tokio::test]
+async fn fresh_session_gap_close_batch_failure_leaves_no_partial_migration() {
+    let failing = FailSetSettingFor {
+        inner: SqliteStore::open_in_memory().expect("open in-memory store"),
+        fail_key: "__batch__",
+    };
+
+    assert_eq!(
+        load_settings(&failing).await.sessions_gap_close_secs,
+        Settings::default().sessions_gap_close_secs
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed fresh-install batch must not persist the default alone"
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed fresh-install batch must not latch the marker alone"
     );
 }
 
