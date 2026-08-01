@@ -804,6 +804,40 @@ async fn fresh_session_gap_close_batch_failure_leaves_no_partial_migration() {
 }
 
 #[tokio::test]
+async fn custom_session_gap_close_batch_failure_leaves_no_partial_migration() {
+    let inner = SqliteStore::open_in_memory().expect("open in-memory store");
+    inner
+        .set_setting("sessions.gap_close_secs", "600")
+        .await
+        .unwrap();
+    let failing = FailSetSettingFor {
+        inner,
+        fail_key: "__batch__",
+    };
+
+    assert_eq!(load_settings(&failing).await.sessions_gap_close_secs, 600);
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("600"),
+        "a failed custom-value batch must not rewrite the persisted choice"
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed custom-value batch must not persist the marker alone"
+    );
+}
+
+#[tokio::test]
 async fn custom_session_gap_close_survives_default_retune() {
     let store = SqliteStore::open_in_memory().expect("open in-memory store");
     let dyn_store: &dyn Store = &store;
@@ -821,6 +855,14 @@ async fn custom_session_gap_close_survives_default_retune() {
             .as_deref(),
         Some("600"),
         "a non-default persisted choice must not be rewritten"
+    );
+    assert!(
+        store
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_some(),
+        "a custom persisted choice must atomically latch its migration state"
     );
 }
 

@@ -757,7 +757,7 @@ async fn load_sessions_gap_close_secs(store: &dyn Store, default: u32) -> u32 {
         persist_sessions_gap_close_migration(store, default).await;
         default
     } else {
-        mark_sessions_gap_close_migrated(store).await;
+        persist_sessions_gap_close_migration(store, stored).await;
         stored
     }
 }
