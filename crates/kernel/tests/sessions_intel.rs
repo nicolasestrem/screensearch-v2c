@@ -204,13 +204,12 @@ async fn invalid_cached_summary_is_cleared_when_retry_fails() {
         calls: AtomicUsize::new(0),
     });
 
-    let rejected = generate_session_title_summary(store.clone(), answer.clone(), session_id)
+    let error = generate_session_title_summary(store.clone(), answer.clone(), session_id)
         .await
-        .unwrap();
-
-    assert!(rejected.title.is_none());
-    assert!(rejected.summary.is_none());
-    assert!(rejected.summary_model.is_none());
+        .expect_err("two rejected summaries must surface a terminal error");
+    assert!(error
+        .to_string()
+        .contains("summary was rejected twice; cache left empty"));
     assert_eq!(answer.calls.load(Ordering::SeqCst), 2);
     let persisted = store.get_session(session_id).await.unwrap().unwrap();
     assert!(persisted.title.is_none());

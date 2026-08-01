@@ -80,13 +80,15 @@ pub async fn generate_session_title_summary(
         };
         if attempt == 1 {
             // D8 favors omission over invented output: preserve the NULL cache rather than
-            // expose model garbage through the only value-delivery surface.
+            // expose model garbage through the only value-delivery surface. The caller must see
+            // a terminal error, not a successful empty response that renders as indefinite
+            // generation (usage review 2026-08-01 §7.4).
             tracing::warn!(
                 session_id,
                 summary_len = rejected_summary_len,
                 "session summary generation rejected twice; leaving cache empty"
             );
-            return Ok(current);
+            anyhow::bail!("session {session_id} summary was rejected twice; cache left empty");
         }
         attempt += 1;
     };
