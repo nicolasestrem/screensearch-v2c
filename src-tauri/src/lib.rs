@@ -118,9 +118,10 @@ async fn load_session_detail(
     };
     // Redact a legacy invalid cache from every in-app detail response. The base detail request
     // races summary generation in the Session route, so exposing `"User"` here would keep it
-    // visible while generation runs — or forever when inference is unavailable. An
-    // `include_summary` request continues into the kernel path, which clears/retries the durable
-    // cache (usage review 2026-08-01 §7.4).
+    // visible while generation runs — or forever when inference is unavailable. For an
+    // `include_summary` request, clear the durable cache before checking provider readiness:
+    // otherwise non-UI callers can continue reading the poisoned row after the unavailable-sidecar
+    // error (usage review 2026-08-01 §7.4).
     let invalid_cached_summary = session
         .summary
         .as_deref()
@@ -129,6 +130,16 @@ async fn load_session_detail(
         session.title = None;
         session.summary = None;
         session.summary_model = None;
+        if include_summary
+            && !store
+                .clear_session_title_summary(session_id)
+                .await
+                .map_err(|error| error.to_string())?
+        {
+            return Err(format!(
+                "session {session_id} disappeared before its invalid summary cache could be cleared"
+            ));
+        }
     }
     let fully_cached =
         session.title.is_some() && session.summary.is_some() && session.summary_model.is_some();
@@ -3004,10 +3015,17 @@ mod tests {
             "base detail responses must redact the invalid cache while summary generation runs"
         );
 
-        let error = load_session_detail(store, session_id, true, None)
+        let error = load_session_detail(store.clone(), session_id, true, None)
             .await
             .expect_err("the invalid summary must reach the generator, not the cached response");
         assert_eq!(error, "inference sidecar not ready yet");
+        let persisted = store.get_session(session_id).await.unwrap().unwrap();
+        assert!(
+            persisted.title.is_none()
+                && persisted.summary.is_none()
+                && persisted.summary_model.is_none(),
+            "an include-summary request must durably clear an invalid cache before provider readiness"
+        );
     }
 
     #[tokio::test]

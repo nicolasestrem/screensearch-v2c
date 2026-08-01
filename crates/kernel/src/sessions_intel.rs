@@ -142,12 +142,8 @@ fn nonempty(value: &str) -> Option<String> {
 /// (usage review 2026-08-01 §7.4); per D8, omission is safer than persisting model garbage.
 pub fn is_useful_session_summary(value: &str) -> bool {
     let value = value.trim();
-    if value.chars().count() < MIN_USEFUL_SUMMARY_CHARS {
-        return false;
-    }
-
     let speaker = value.trim_matches(|character: char| !character.is_alphanumeric());
-    ![
+    if [
         "User",
         "Assistant",
         "System",
@@ -158,6 +154,11 @@ pub fn is_useful_session_summary(value: &str) -> bool {
     ]
     .iter()
     .any(|role| speaker.eq_ignore_ascii_case(role))
+    {
+        return false;
+    }
+
+    value.chars().count() >= MIN_USEFUL_SUMMARY_CHARS
 }
 
 #[cfg(test)]
@@ -189,6 +190,14 @@ mod tests {
         for summary in ["User", "user.", " Assistant ", "", "   ", "Brief update."] {
             assert!(!is_useful_session_summary(summary), "{summary:?}");
         }
+    }
+
+    #[test]
+    fn punctuated_speaker_label_over_minimum_length_is_rejected() {
+        let summary = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!User!!!!";
+
+        assert!(summary.chars().count() >= MIN_USEFUL_SUMMARY_CHARS);
+        assert!(!is_useful_session_summary(summary));
     }
 
     #[test]
