@@ -559,9 +559,9 @@ async fn load_drops_retired_event_keys_without_error() {
     // event-trigger keys + the typing-pause threshold. `drop_retired_settings` purges
     // them (so the row doesn't linger) and load must not error or be perturbed by them.
     // 0.3.2 PR5 (D8): `storage.jpeg_quality` + `capture.uia_run_on_interactive` joined the
-    // retired list — this same test is the acceptance proof that a config persisted with
-    // the two removed keys loads without error (the seed loop covers every retired key,
-    // and the value-shape seeds below match what an upgraded install actually holds).
+    // retired list. The 2026-08-01 usage review adds the now-constant focus length/density
+    // parameters. This same test proves a persisted config drops every removed key without
+    // perturbing surviving settings (usage review 2026-08-01 §6.7).
     use kernel::settings::{drop_retired_settings, RETIRED_SETTINGS_KEYS};
 
     let store = SqliteStore::open_in_memory().expect("open in-memory store");
@@ -578,6 +578,14 @@ async fn load_drops_retired_event_keys_without_error() {
     // (`80`, not `true`) so the tolerance is proven against realistic data too.
     store
         .set_setting("storage.jpeg_quality", "80")
+        .await
+        .unwrap();
+    store
+        .set_setting("sessions.focus_min_len_secs", "600")
+        .await
+        .unwrap();
+    store
+        .set_setting("sessions.focus_min_density_fph", "90")
         .await
         .unwrap();
 
@@ -600,6 +608,114 @@ async fn load_drops_retired_event_keys_without_error() {
 
     // Idempotent: a second run finds nothing to drop (so it logs nothing — "once").
     drop_retired_settings(dyn_store).await;
+}
+
+#[tokio::test]
+async fn legacy_session_gap_close_default_migrates_once() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    store
+        .set_setting("sessions.gap_close_secs", "300")
+        .await
+        .unwrap();
+
+    let loaded = load_settings(dyn_store).await;
+    assert_eq!(loaded.sessions_gap_close_secs, 120);
+    assert_eq!(
+        store
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("120"),
+        "the old persisted default must be rewritten"
+    );
+    assert!(
+        store
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_some(),
+        "a successful remap must latch the one-shot marker"
+    );
+
+    // After the one-shot, 300 is a deliberate user choice and must survive future loads.
+    store
+        .set_setting("sessions.gap_close_secs", "300")
+        .await
+        .unwrap();
+    assert_eq!(load_settings(dyn_store).await.sessions_gap_close_secs, 300);
+}
+
+#[tokio::test]
+async fn failed_session_gap_close_remap_is_retried_not_latched() {
+    let inner = SqliteStore::open_in_memory().expect("open in-memory store");
+    inner
+        .set_setting("sessions.gap_close_secs", "300")
+        .await
+        .unwrap();
+    let failing = FailSetSettingFor {
+        inner,
+        fail_key: "sessions.gap_close_secs",
+    };
+
+    assert_eq!(
+        load_settings(&failing).await.sessions_gap_close_secs,
+        Settings::default().sessions_gap_close_secs
+    );
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("300")
+    );
+    assert!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs_migrated")
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed remap must remain unlatched for retry"
+    );
+
+    assert_eq!(
+        load_settings(&failing.inner).await.sessions_gap_close_secs,
+        Settings::default().sessions_gap_close_secs
+    );
+    assert_eq!(
+        failing
+            .inner
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("120")
+    );
+}
+
+#[tokio::test]
+async fn custom_session_gap_close_survives_default_retune() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory store");
+    let dyn_store: &dyn Store = &store;
+    store
+        .set_setting("sessions.gap_close_secs", "600")
+        .await
+        .unwrap();
+
+    assert_eq!(load_settings(dyn_store).await.sessions_gap_close_secs, 600);
+    assert_eq!(
+        store
+            .get_setting("sessions.gap_close_secs")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("600"),
+        "a non-default persisted choice must not be rewritten"
+    );
 }
 
 #[tokio::test]
@@ -735,5 +851,5 @@ async fn session_settings_round_trip_and_clamp_to_the_final_contract() {
     assert_eq!(low.sessions_min_len_secs, 30);
     assert_eq!(low.sessions_gap_close_secs, 3_600);
     assert_eq!(Settings::default().sessions_min_len_secs, 120);
-    assert_eq!(Settings::default().sessions_gap_close_secs, 300);
+    assert_eq!(Settings::default().sessions_gap_close_secs, 120);
 }
