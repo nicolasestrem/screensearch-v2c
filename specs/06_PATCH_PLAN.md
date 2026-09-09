@@ -18,3 +18,17 @@
 > Live rows: #15 (upstream llama.cpp leak), #23 (PDH blind to Vulkan).
 
 When the spec contradicts itself, stop, ask the user, and log the resolution here before coding.
+
+## Approved maintenance scope — 2026-09-09
+
+Maintainer approved a deletion-only pass: remove the unused `ScreenScaffold` file,
+`IconSearch` alias, `startOfLocalDay` helper, `useSetMarkNote` hook, workspace
+`thiserror` declaration, and OCR's direct `tracing` dependency. Preserve the live
+mark-note command and every generated binding/test. No architecture, schema,
+settings, dependency-version, or user-visible behavior change is authorized.
+
+The implementation and local regression gates are recorded in `05` Pass 1. The
+initial UI byte-parity failure was investigated, not waived: only the unused
+scaffold's Tailwind rule and resulting asset references changed. Independent review
+remains a separate gate. Broader event-hook/component consolidation and the npm
+audit findings (`07`) require a separately accepted scope, not opportunistic edits.

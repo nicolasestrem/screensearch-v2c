@@ -112,3 +112,20 @@ Manual steps still required (e.g. signing certs, first-run model download, CI se
     in `scripts/` is a later follow-up — it runs on the maintainer's machine, **never** in the app
     (not built in PR1, which is specs-only).
 
+## Maintenance follow-ups — 2026-09-09
+
+- **Development dependency advisories (owner: maintainer; before a separately scoped
+  dependency-maintenance change):** `npm audit --include=dev` reports four vulnerable
+  packages: `baseline-browser-mapping` (moderate), `brace-expansion`, `browserslist`,
+  and `js-yaml` (high). The production-only audit reports zero. These are observed
+  audit findings, not a demonstrated exploit in the shipped app. Reassess and update
+  the lockfile under a separate approval; the deletion-only cleanup did not run
+  `npm audit fix` or change versions.
+- **Regression coverage boundary:** the UI has two Node tests, not comprehensive
+  component/interaction tests. Report/event-hook or layout consolidation needs a
+  stronger behavior-specific regression net first. This cleanup instead deletes
+  unreferenced code and compares the real production builds (`05` Pass 1).
+- **Verification remains local:** Node 26.8.1 was used instead of CI's Node 22; no
+  remote CI, interactive app-wide QA, GPU/model smoke, installer or release check
+  was performed. Existing hardware/manual gates above remain open.
+
